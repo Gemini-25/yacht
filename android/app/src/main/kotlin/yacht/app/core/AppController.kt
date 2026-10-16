@@ -441,7 +441,9 @@ class AppController(
                     if (objective == Mode.WIN) {
                         val t0 = System.nanoTime()
                         val table = duelTable
-                        val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table) { p -> scope.launch { publish(key, p) } }
+                        val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table, allowDuel = !duelBuilding) { p ->
+                            scope.launch { publish(key, p) }
+                        }
                         if (!p.duel || table == null) calibrate(s.me, s.opp, p.depth, System.nanoTime() - t0)
                     } else {
                         val p = adv.planTurn(s.me, s.opp, Mode.EXPECTED_SCORE)

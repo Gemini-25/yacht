@@ -122,6 +122,8 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         deadlineNanos: Long,
         tieValue: Double = 0.0,
         table: DuelSearch? = null,
+        /** False when a duel table is already being built elsewhere (avoid doing it twice). */
+        allowDuel: Boolean = true,
         onImproved: (PlannedTurn) -> Unit = {},
     ): PlannedTurn {
         table?.after(me, opp)?.let {
@@ -151,7 +153,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
             onImproved(best)
         }
         // Exact to the end already: if time allows, also let later turns react to the opponent.
-        if (best.depth >= remaining && canDuel(me, opp)) {
+        if (allowDuel && best.depth >= remaining && canDuel(me, opp)) {
             val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS)
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
