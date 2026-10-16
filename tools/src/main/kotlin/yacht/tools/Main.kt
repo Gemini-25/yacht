@@ -36,7 +36,7 @@ fun main(args: Array<String>) {
         )
         "sim" -> sim(opts)
         "duel" -> duel(opts)
-        "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET)
+        "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"])
         else -> println(
             """
             usage:
@@ -139,13 +139,13 @@ private fun sim(opts: Map<String, String>) {
     println("  mean score $a %.2f, $b %.2f".format(scoreSum[0].toDouble() / games, scoreSum[1].toDouble() / games))
 }
 
-private fun bench(dir: File, budget: Long) {
+private fun bench(dir: File, budget: Long, only: String?) {
     val tables = loadTables(dir)
     val rng = Random(3)
     val advisor = Advisor(tables)
     val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
     val parallel = Advisor(tables, pool)
-    for (filled in listOf(0, 3, 6, 7, 8, 9, 10, 11)) {
+    for (filled in if (only == "duel") emptyList() else listOf(0, 3, 6, 7, 8, 9, 10, 11)) {
         var worst = 0.0
         var sum = 0.0
         var worstPar = 0.0
@@ -168,7 +168,7 @@ private fun bench(dir: File, budget: Long) {
         }
         println("filled=%2d depth=%s  avg %.0f ms, worst %.0f ms (1 thread), worst %.0f ms (pool)".format(filled, depths, sum / samples, worst, worstPar))
     }
-    for (filled in 6..11) {
+    for (filled in if (only == "search") emptyList() else (11 downTo 6).toList()) {
         var worst = 0.0
         var sum = 0.0
         var est = 0L
