@@ -170,7 +170,12 @@ private fun GameRow(c: AppController, g: GameState) {
         g.me.total == g.opp.total -> "무"
         else -> "패"
     }
-    Card(onClick = { c.openReview(g) }, modifier = Modifier.fillMaxWidth()) {
+    Card(
+        onClick = { c.openReview(g) },
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = cs.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 result,

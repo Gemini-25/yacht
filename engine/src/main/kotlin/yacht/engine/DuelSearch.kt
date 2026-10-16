@@ -116,7 +116,8 @@ class DuelSearch(
         val myU: IntArray, val myIdx: IntArray?,
         val oppU: IntArray, val oppIdx: IntArray?,
         val lo: Int, val width: Int,
-        val values: DoubleArray,
+        /** Win values stored in single precision: tables for 6 boxes stay in the tens of MB. */
+        val values: FloatArray,
     ) {
         /** Offset of the diff row for these upper sums, or -1 if unreachable. */
         fun rowOrNull(mu: Int, ou: Int): Int {
@@ -183,7 +184,7 @@ class DuelSearch(
     private fun valueOf(mm: Int, om: Int, mu: Int, ou: Int, diff: Int): Double {
         if (mm == Category.FULL_MASK && om == Category.FULL_MASK) return terminal(diff)
         val g = grids.getValue(key(mm, om))
-        return g.values[g.row(mu, ou) + (diff - g.lo).coerceIn(0, g.width - 1)]
+        return g.values[g.row(mu, ou) + (diff - g.lo).coerceIn(0, g.width - 1)].toDouble()
     }
 
     /** Root plan (only when it is my turn at the root). */
@@ -232,7 +233,7 @@ class DuelSearch(
     }
 
     /** Approximate memory held by the table, in bytes. */
-    val bytes: Long get() = grids.values.sumOf { it.values.size.toLong() * 8 }
+    val bytes: Long get() = grids.values.sumOf { it.values.size.toLong() * 4 }
 
     /** Most points still to come for a card once [m] is filled. */
     private fun remainingMax(m: Int, decided: Boolean): Int {
@@ -252,7 +253,7 @@ class DuelSearch(
         val lo = d0 - WinSearch.gainMax(tables, opp, oppDecided, om)
         val width = WinSearch.gainMax(tables, me, myDecided, mm) + (d0 - lo) + 1
         val slices = myU.size * oppU.size
-        val values = DoubleArray(slices * width)
+        val values = FloatArray(slices * width)
         // Undecided differences: I can still be caught (diff <= opponent's best) and can still
         // get ahead (diff + my best > 0). Everything else is closed form.
         val meBest = remainingMax(mm, myDecided)
@@ -265,7 +266,7 @@ class DuelSearch(
             for (di in 0 until width) {
                 if (di in wLo..wHi) continue
                 val diff = lo + di
-                values[base + di] = (if (diff > oppBest) 1.0 else 0.0) + WinCurve.SCORE_WEIGHT * (diff + future)
+                values[base + di] = ((if (diff > oppBest) 1.0 else 0.0) + WinCurve.SCORE_WEIGHT * (diff + future)).toFloat()
             }
         }
         val wLen = wHi - wLo + 1
@@ -278,7 +279,7 @@ class DuelSearch(
 
     private fun myNode(
         mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
-        wLo: Int, wLen: Int, values: DoubleArray, kernel: BlockKernel,
+        wLo: Int, wLen: Int, values: FloatArray, kernel: BlockKernel,
     ) {
         val slices = myU.size * oppU.size
         val open = (0 until Category.COUNT).filter { mm and (1 shl it) == 0 }
@@ -318,7 +319,7 @@ class DuelSearch(
                             val vals = g.values
                             val off = diffAtK + gain - g.lo - k
                             for (kk in k until rowEnd) {
-                                val v = vals[row + (kk + off).coerceIn(0, top)].toFloat()
+                                val v = vals[row + (kk + off).coerceIn(0, top)]
                                 if (v > e3[rb + kk]) e3[rb + kk] = v
                             }
                         }
@@ -327,37 +328,39 @@ class DuelSearch(
                 }
             }
         }
-        for (slice in 0 until slices) System.arraycopy(solved, slice * wLen, values, slice * width + wLo, wLen)
+        for (slice in 0 until slices) for (i in 0 until wLen) values[slice * width + wLo + i] = solved[slice * wLen + i].toFloat()
     }
 
     private fun oppNode(
         mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
-        wLo: Int, wLen: Int, values: DoubleArray,
+        wLo: Int, wLen: Int, values: FloatArray,
     ) {
+        val acc = DoubleArray(myU.size * wLen)
         for (b in oppU.indices) {
             val oc = outcomeOf(om, oppU[b])
-            for (a in myU.indices) {
-                val base = (a * oppU.size + b) * width + wLo
-                java.util.Arrays.fill(values, base, base + wLen, 0.0)
-            }
+            java.util.Arrays.fill(acc, 0.0)
             for (k in 0 until oc.size) {
                 val p = oc.prob[k]
                 val gain = oc.gain[k]
                 val child = om or (1 shl oc.category[k])
                 val g = if (mm == Category.FULL_MASK && child == Category.FULL_MASK) null else grids.getValue(key(mm, child))
                 for (a in myU.indices) {
-                    val base = (a * oppU.size + b) * width + wLo
+                    val base = a * wLen
                     val diff0 = lo + wLo - gain
                     if (g == null) {
-                        for (i in 0 until wLen) values[base + i] += p * terminal(diff0 + i)
+                        for (i in 0 until wLen) acc[base + i] += p * terminal(diff0 + i)
                     } else {
                         val row = g.row(myU[a], oc.u2[k])
                         val off = diff0 - g.lo
                         val top = g.width - 1
                         val vals = g.values
-                        for (i in 0 until wLen) values[base + i] += p * vals[row + (i + off).coerceIn(0, top)]
+                        for (i in 0 until wLen) acc[base + i] += p * vals[row + (i + off).coerceIn(0, top)]
                     }
                 }
+            }
+            for (a in myU.indices) {
+                val base = (a * oppU.size + b) * width + wLo
+                for (i in 0 until wLen) values[base + i] = acc[a * wLen + i].toFloat()
             }
         }
     }
