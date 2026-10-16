@@ -7,6 +7,7 @@ import yacht.engine.Category
 import yacht.engine.Dice
 import yacht.engine.DiceStream
 import yacht.engine.Duplicate
+import yacht.engine.DuelSearch
 import yacht.engine.Match
 import yacht.engine.Mode
 import yacht.engine.RuleSet
@@ -166,6 +167,23 @@ private fun bench(dir: File, budget: Long) {
             sum += ms
         }
         println("filled=%2d depth=%s  avg %.0f ms, worst %.0f ms (1 thread), worst %.0f ms (pool)".format(filled, depths, sum / samples, worst, worstPar))
+    }
+    for (filled in 6..11) {
+        var worst = 0.0
+        var sum = 0.0
+        var est = 0L
+        val samples = 4
+        repeat(samples) {
+            val me = randomBoard(tables, rng, filled)
+            val opp = randomBoard(tables, rng, filled)
+            est = maxOf(est, DuelSearch.estimateOps(tables, me, opp))
+            val t = System.nanoTime()
+            parallel.planTurn(me, opp, duel = true)
+            val ms = (System.nanoTime() - t) / 1e6
+            worst = maxOf(worst, ms)
+            sum += ms
+        }
+        println("duel filled=%2d avg %.0f ms, worst %.0f ms (pool), max estimate %.2e ops".format(filled, sum / samples, worst, est.toDouble()))
     }
     pool.shutdown()
 }

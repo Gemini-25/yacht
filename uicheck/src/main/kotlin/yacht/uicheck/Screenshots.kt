@@ -10,6 +10,7 @@ import org.jetbrains.skia.EncodedImageFormat
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.Screen
+import yacht.app.core.ThinkTime
 import yacht.app.ui.AppRoot
 import yacht.app.ui.YachtTheme
 import yacht.engine.Category
@@ -24,6 +25,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.util.Base64
 import java.util.Random
+import kotlin.system.exitProcess
 
 /**
  * Drives the real AppController through games and renders the Compose UI to images.
@@ -31,12 +33,26 @@ import java.util.Random
  * base64 between SHOT-BEGIN/SHOT-END markers (to read them back from CI logs).
  */
 fun main(args: Array<String>) {
+    // The controller's worker threads would keep the JVM alive after a failure: always exit.
+    val code = try {
+        run(args)
+        0
+    } catch (e: Throwable) {
+        e.printStackTrace()
+        1
+    }
+    System.out.flush()
+    exitProcess(code)
+}
+
+private fun run(args: Array<String>) {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
     val out = File(args.getOrElse(1) { "build/shots" }).apply { mkdirs() }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val c = AppController(scope, GameStorage(Files.createTempDirectory("yacht").toFile())) { load(tablesDir) }
     c.start()
     waitFor("tables") { c.tables != null }
+    c.changeThinkTime(ThinkTime.FAST)
     shot(c, out, "01_home")
 
     c.newGame(DiceSource.MANUAL, Side.OPP)
@@ -86,14 +102,13 @@ fun main(args: Array<String>) {
     shot(c, out, "10_vs_ai")
 
     c.screen = Screen.VERIFY
-    c.startVerify(6)
+    c.startVerify(4)
     waitFor("verify", 600_000) { !c.verifying }
     shot(c, out, "11_verify")
 
     val s = c.state!!
     println("verify: ${c.verify.games} games, diff ${c.verify.diff}, plan ${c.verify.avgPlanMs} ms; last game ${s.me.total}:${s.opp.total}")
     c.shutdown()
-    System.exit(0)
 }
 
 private fun waitPlan(c: AppController) =
@@ -108,6 +123,7 @@ private fun load(dir: File): Tables {
 }
 
 private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean) {
+    println("waiting for $what")
     val deadline = System.currentTimeMillis() + timeoutMs
     while (!cond()) {
         check(System.currentTimeMillis() < deadline) { "timed out waiting for $what" }

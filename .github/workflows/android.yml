@@ -63,6 +63,7 @@ jobs:
           tools/build/install/tools/bin/tools gen --out tables
 
       - name: Render UI screenshots
+        timeout-minutes: 12
         env:
           PRINT_SHOTS: "1"
           JAVA_OPTS: "-Djava.awt.headless=true"
