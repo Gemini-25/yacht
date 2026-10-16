@@ -442,7 +442,7 @@ class AppController(
                         val t0 = System.nanoTime()
                         val table = duelTable
                         val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table) { p -> scope.launch { publish(key, p) } }
-                        if (!p.duel || table == null) calibrate(s.me, p.depth, System.nanoTime() - t0)
+                        if (!p.duel || table == null) calibrate(s.me, s.opp, p.depth, System.nanoTime() - t0)
                     } else {
                         val p = adv.planTurn(s.me, s.opp, Mode.EXPECTED_SCORE)
                         scope.launch { publish(key, p) }
@@ -455,10 +455,10 @@ class AppController(
     }
 
     /** Updates the device speed estimate from a finished search (used to budget the duel table). */
-    private fun calibrate(me: Board, depth: Int, nanos: Long) {
+    private fun calibrate(me: Board, opp: Board, depth: Int, nanos: Long) {
         val t = tables ?: return
         if (nanos < 50_000_000L) return
-        val ops = yacht.engine.WinSearch.estimateOps(t, me, depth)
+        val ops = yacht.engine.WinSearch.estimateOps(t, me, depth, opp)
         if (ops <= 0) return
         val rate = ops / (nanos / 1e9)
         opsPerSecond = 0.7 * opsPerSecond + 0.3 * rate

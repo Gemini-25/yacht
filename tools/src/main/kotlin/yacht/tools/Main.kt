@@ -154,7 +154,7 @@ private fun bench(dir: File, budget: Long, only: String?) {
         repeat(samples) {
             val me = randomBoard(tables, rng, filled)
             val opp = randomBoard(tables, rng, filled)
-            val d = WinSearch.chooseDepth(tables, me, budget)
+            val d = WinSearch.chooseDepth(tables, me, budget, opp)
             depths.merge(d, 1, Int::plus)
             var t = System.nanoTime()
             advisor.planTurn(me, opp, depth = d)

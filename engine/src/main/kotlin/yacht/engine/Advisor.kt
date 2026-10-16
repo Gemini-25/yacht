@@ -106,7 +106,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true)
         }
         val curve = WinCurve.against(tables, opp, tieValue)
-        val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps)
+        val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps, opp)
         val search = WinSearch(tables, me, curve, d, pool, deadlineNanos)
         return PlannedTurn(me, Mode.WIN, d, evPlan, TurnPlan(me, search))
     }
@@ -134,10 +134,10 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         onImproved(best)
         if (best.mode != Mode.WIN) return best
         var lastNanos = System.nanoTime() - t0
-        var lastOps = WinSearch.estimateOps(tables, me, 1).coerceAtLeast(1)
+        var lastOps = WinSearch.estimateOps(tables, me, 1, opp).coerceAtLeast(1)
         val remaining = Category.COUNT - me.filledCount
         for (d in 2..remaining) {
-            val ops = WinSearch.estimateOps(tables, me, d)
+            val ops = WinSearch.estimateOps(tables, me, d, opp)
             t0 = System.nanoTime()
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (t0 + predicted > deadlineNanos) break

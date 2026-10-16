@@ -320,16 +320,36 @@ class WinSearch(
         private val KERNEL_OPS =
             2L * (Dice.addFace.size + Dice.ROLLS) + 2L * (Dice.downKeep.size + Dice.KEEPS + Dice.ROLLS) + Dice.ROLLS
 
-        /** Rough operation count of a search, used to pick the deepest affordable depth. */
-        fun estimateOps(tables: Tables, me: Board, depth: Int): Long {
+        /**
+         * Rough operation count of a search, used to pick the deepest affordable depth. With
+         * [opp] only the undecided score band is counted, as the search does.
+         */
+        fun estimateOps(tables: Tables, me: Board, depth: Int, opp: Board? = null): Long {
             val decided = bonusDecided(me)
             val levels = masksByLevel(me.mask)
             val d = minOf(depth, levels.size - 1)
+            var oppMin = Int.MIN_VALUE / 2
+            var oppMax = Int.MAX_VALUE / 2
+            if (opp != null && tables.dist != null) {
+                if (opp.isComplete) {
+                    oppMin = opp.total
+                    oppMax = opp.total
+                } else {
+                    oppMin = opp.total + tables.dist.lo(opp.mask, opp.u)
+                    oppMax = oppMin + tables.dist.len(opp.mask, opp.u) - 1
+                }
+            }
             var ops = 0L
             for (j in 1..d) for (m in levels[j]) {
                 if (m == Category.FULL_MASK) continue
                 val uList = upperRows(me, decided, m).values
-                val contexts = uList.size.toLong() * (gainMax(tables, me, decided, m) + 1)
+                val nS = gainMax(tables, me, decided, m) + 1
+                var rest = 0
+                for (c in 0 until Category.COUNT) if (m and (1 shl c) == 0) rest += tables.scores.maxPoints[c]
+                if (!decided && (m and Category.UPPER_MASK) != Category.UPPER_MASK) rest += me.rules.bonusPoints
+                val lo = maxOf(0, oppMin - rest - me.total)
+                val hi = minOf(nS - 1, oppMax - me.total)
+                val contexts = uList.size.toLong() * (hi - lo + 1).coerceAtLeast(0)
                 ops += if (j == d) {
                     contexts * tables.leafDists.sumOf { it.len(m, uList[0]).toLong() }
                 } else {
@@ -341,9 +361,9 @@ class WinSearch(
         }
 
         /** Deepest depth whose estimated cost fits in [budgetOps] (at least 1). */
-        fun chooseDepth(tables: Tables, me: Board, budgetOps: Long): Int {
+        fun chooseDepth(tables: Tables, me: Board, budgetOps: Long, opp: Board? = null): Int {
             val remaining = Category.COUNT - me.filledCount
-            for (d in remaining downTo 2) if (estimateOps(tables, me, d) <= budgetOps) return d
+            for (d in remaining downTo 2) if (estimateOps(tables, me, d, opp) <= budgetOps) return d
             return 1
         }
     }
