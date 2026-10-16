@@ -198,9 +198,9 @@ class WindowTest {
             for (depth in listOf(1, 2, Category.COUNT)) {
                 val fast = TurnPlan(me, WinSearch(tables, me, curve, depth)).startValue
                 val slow = TurnPlan(me, WinSearch(tables, me, full, depth)).startValue
-                // Decided leaves use the exact expected score; searched ones the stored (half
-                // precision) distribution's mean, so only the 1e-6 tie-break term may differ.
-                assertTrue(kotlin.math.abs(fast - slow) < 1e-8, "depth $depth: $fast vs $slow")
+                // Same values up to single-precision kernel rounding (and the 1e-6 tie-break term,
+                // which decided leaves take from the exact expected score).
+                assertTrue(kotlin.math.abs(fast - slow) < 1e-6, "depth $depth: $fast vs $slow")
             }
         }
     }

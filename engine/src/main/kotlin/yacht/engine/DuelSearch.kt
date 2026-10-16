@@ -138,15 +138,16 @@ class DuelSearch(
         val myLevels = WinSearch.masksByLevel(me.mask)
         val oppLevels = WinSearch.masksByLevel(opp.mask)
         for (h in halfMoves - 1 downTo 1) {
+            val levelStart = System.nanoTime()
             val myTurn = myMoveAt(h)
             val pairs = ArrayList<Pair<Int, Int>>()
             for (mm in myLevels[myLevel(h)]) for (om in oppLevels[oppLevel(h)]) pairs += mm to om
             if (!myTurn) for (om in oppLevels[oppLevel(h)]) for (u in rows(opp, oppDecided, om).values) outcomeOf(om, u)
             val results = if (pool == null || pairs.size < 2) {
-                val kernel = TurnKernel()
+                val kernel = BlockKernel()
                 pairs.map { (mm, om) -> checkStop(); key(mm, om) to node(mm, om, myTurn, kernel) }
             } else {
-                val kernels = ThreadLocal.withInitial { TurnKernel() }
+                val kernels = ThreadLocal.withInitial { BlockKernel() }
                 pool.invokeAll(pairs.map { (mm, om) ->
                     Callable { checkStop(); key(mm, om) to node(mm, om, myTurn, kernels.get()) }
                 }).map {
@@ -158,6 +159,10 @@ class DuelSearch(
                 }
             }
             for ((k, g) in results) grids[k] = g
+            if (PROFILE) {
+                val ctx = results.sumOf { it.second.values.size.toLong() }
+                System.err.println("duel h=$h ${if (myTurn) "me " else "opp"} pairs=${pairs.size} cells=$ctx t=${(System.nanoTime() - levelStart) / 1_000_000} ms")
+            }
         }
     }
 
@@ -237,7 +242,7 @@ class DuelSearch(
         return g
     }
 
-    private fun node(mm: Int, om: Int, myTurn: Boolean, kernel: TurnKernel): Grid {
+    private fun node(mm: Int, om: Int, myTurn: Boolean, kernel: BlockKernel): Grid {
         val myRows = rows(me, myDecided, mm)
         val oppRows = rows(opp, oppDecided, om)
         val myU = myRows.values
@@ -273,7 +278,7 @@ class DuelSearch(
 
     private fun myNode(
         mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
-        wLo: Int, wLen: Int, values: DoubleArray, kernel: TurnKernel,
+        wLo: Int, wLen: Int, values: DoubleArray, kernel: BlockKernel,
     ) {
         val slices = myU.size * oppU.size
         val open = (0 until Category.COUNT).filter { mm and (1 shl it) == 0 }
@@ -304,7 +309,7 @@ class DuelSearch(
                         val diffAtK = lo + wLo + (k - slice * wLen)
                         if (g == null) {
                             for (kk in k until rowEnd) {
-                                val v = terminal(diffAtK + (kk - k) + gain)
+                                val v = terminal(diffAtK + (kk - k) + gain).toFloat()
                                 if (v > e3[rb + kk]) e3[rb + kk] = v
                             }
                         } else {
@@ -313,7 +318,7 @@ class DuelSearch(
                             val vals = g.values
                             val off = diffAtK + gain - g.lo - k
                             for (kk in k until rowEnd) {
-                                val v = vals[row + (kk + off).coerceIn(0, top)]
+                                val v = vals[row + (kk + off).coerceIn(0, top)].toFloat()
                                 if (v > e3[rb + kk]) e3[rb + kk] = v
                             }
                         }
@@ -358,6 +363,7 @@ class DuelSearch(
     }
 
     companion object {
+        private val PROFILE = System.getProperty("yacht.profile") != null
         private const val KERNEL_OPS = 7_500L
 
         /**

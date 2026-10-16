@@ -96,13 +96,13 @@ class WinSearch(
             val masks = levels[j].filter { it != Category.FULL_MASK }
             val leaf = j == d
             if (pool == null || masks.size < 2) {
-                val kernel = TurnKernel()
+                val kernel = BlockKernel()
                 for (m in masks) {
                     checkDeadline()
                     grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernel)
                 }
             } else {
-                val kernels = ThreadLocal.withInitial { TurnKernel() }
+                val kernels = ThreadLocal.withInitial { BlockKernel() }
                 val tasks = masks.map { m ->
                     Callable {
                         checkDeadline()
@@ -196,7 +196,7 @@ class WinSearch(
         values
     }
 
-    private fun interiorGrid(m: Int, kernel: TurnKernel): Grid = newGrid(m) { uList, nS ->
+    private fun interiorGrid(m: Int, kernel: BlockKernel): Grid = newGrid(m) { uList, nS ->
         val nU = uList.size
         val values = DoubleArray(nU * nS)
         val w = window(m, nS)
@@ -226,7 +226,7 @@ class WinSearch(
                             val siStart = w.first + (k - ui * wLen)
                             if (g == null) {
                                 for (kk in k until rowEnd) {
-                                    val v = curveAt(s0 + siStart + (kk - k) + gain)
+                                    val v = curveAt(s0 + siStart + (kk - k) + gain).toFloat()
                                     if (v > e3[rb + kk]) e3[rb + kk] = v
                                 }
                             } else {
@@ -235,7 +235,7 @@ class WinSearch(
                                 val vals = g.values
                                 val off = siStart + gain - k
                                 for (kk in k until rowEnd) {
-                                    val v = vals[cb + minOf(kk + off, last)]
+                                    val v = vals[cb + minOf(kk + off, last)].toFloat()
                                     if (v > e3[rb + kk]) e3[rb + kk] = v
                                 }
                             }
