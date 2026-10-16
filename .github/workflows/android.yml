@@ -3,6 +3,10 @@ name: Android APK
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "prototype/**"
   workflow_dispatch:
 
 jobs:
