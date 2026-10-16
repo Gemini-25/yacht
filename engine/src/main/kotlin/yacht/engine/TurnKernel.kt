@@ -36,6 +36,24 @@ class TurnKernel(capacity: Int = 1) {
         best = DoubleArray(Dice.KEEPS * cap)
     }
 
+    /**
+     * Solves [total] contexts in blocks of at most [block] to bound memory: [fill] writes e3 for
+     * contexts start until start+len (layout r*len + i, pre-filled with -inf), and the start
+     * values land in out[start + i].
+     */
+    fun runBlocks(total: Int, out: DoubleArray, block: Int = BLOCK, fill: (start: Int, len: Int, e3: DoubleArray) -> Unit) {
+        var start = 0
+        while (start < total) {
+            val len = minOf(block, total - start)
+            resize(len)
+            java.util.Arrays.fill(e3, 0, Dice.ROLLS * len, Double.NEGATIVE_INFINITY)
+            fill(start, len, e3)
+            run()
+            System.arraycopy(this.start, 0, out, start, len)
+            start += len
+        }
+    }
+
     fun run() {
         expect(e3, k2)
         bestOfSubsets(k2, e2)
@@ -112,5 +130,8 @@ class TurnKernel(capacity: Int = 1) {
         /** Relative difference below which values are treated as ties (floating-point noise). */
         const val EPS = 1e-12
         private const val SIXTH = 1.0 / 6.0
+
+        /** Contexts per block: ~9 MB of work arrays per thread. */
+        const val BLOCK = 512
     }
 }

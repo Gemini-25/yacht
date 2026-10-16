@@ -13,8 +13,13 @@ object WinCurve {
      */
     const val SCORE_WEIGHT = 1e-6
 
-    /** curve[f] = P(opp final < f) + tieValue * P(opp final == f) + SCORE_WEIGHT * f. */
-    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0): DoubleArray {
+    /**
+     * values[f] = P(opp final < f) + tieValue * P(opp final == f) + SCORE_WEIGHT * f.
+     * The win part is 0 for f < oppMin and 1 for f > oppMax.
+     */
+    class Curve(val values: DoubleArray, val oppMin: Int, val oppMax: Int)
+
+    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0): Curve {
         val base = opp.total
         val pmf: DoubleArray
         val lo: Int
@@ -35,28 +40,33 @@ object WinCurve {
             curve[f] = below + tieValue * p + SCORE_WEIGHT * f
             below += p
         }
-        return curve
+        return Curve(curve, base + lo, base + lo + pmf.size - 1)
     }
 }
 
-/** Thrown when a search passes its deadline; the caller keeps its previous (shallower) plan. */
-class SearchTimeout : RuntimeException("search deadline passed", null, false, false)
+/** Thrown when a search passes its deadline or is cancelled; callers keep their previous plan. */
+class SearchTimeout : RuntimeException("search stopped", null, false, false)
 
 /**
  * Maximises P(win) for the current turn. The next [depth] - 1 turns are solved exactly with my
  * running score as part of the state; beyond that the max-expectation policy's score
  * distribution is used. With depth == remaining turns the result is exact for the given
  * opponent model.
+ *
+ * Scores whose outcome is already certain (ahead of the opponent's best final, or unable to
+ * reach its worst) are filled in closed form instead of searched.
  */
 class WinSearch(
     private val tables: Tables,
     private val me: Board,
-    private val curve: DoubleArray,
+    private val win: WinCurve.Curve,
     val depth: Int,
     private val pool: ExecutorService? = null,
     /** System.nanoTime() after which the search gives up with [SearchTimeout]. */
     private val deadline: Long = Long.MAX_VALUE,
+    private val stop: java.util.concurrent.atomic.AtomicBoolean? = null,
 ) : AfterTurn {
+    private val curve = win.values
     private val rules = me.rules
     private val cap = rules.bonusThreshold
     private val scores = tables.scores
@@ -111,20 +121,14 @@ class WinSearch(
     }
 
     private fun checkDeadline() {
-        if (deadline != Long.MAX_VALUE && System.nanoTime() > deadline) throw SearchTimeout()
+        if (stop?.get() == true || (deadline != Long.MAX_VALUE && System.nanoTime() > deadline)) throw SearchTimeout()
     }
 
     private fun newGrid(m: Int, values: (IntArray, Int) -> DoubleArray): Grid {
-        val uList = reachableUpper(me, bonusDecided, m)
-        val uIndex = if (uList.size == 1 && collapses(m)) null else IntArray(cap + 1) { -1 }.also { idx ->
-            uList.forEachIndexed { i, u -> idx[u] = i }
-        }
+        val rows = upperRows(me, bonusDecided, m)
         val nS = gainMax(tables, me, bonusDecided, m) + 1
-        return Grid(uList, uIndex, nS, values(uList, nS))
+        return Grid(rows.values, rows.index, nS, values(rows.values, nS))
     }
-
-    /** The upper sum stops mattering once the bonus is decided or every upper box is filled. */
-    private fun collapses(m: Int) = bonusDecided || (m and Category.UPPER_MASK) == Category.UPPER_MASK
 
     private fun curveAt(s: Int) = if (s < curve.size) curve[s] else curve[curve.size - 1]
 
@@ -138,17 +142,50 @@ class WinSearch(
     override fun value(c: Int, points: Int, bonus: Int, u2: Int): Double =
         valueOf(mask0 or (1 shl c), u2, s0 + points + bonus)
 
+    /** Most points still to come once [m] is filled (bonus included while still possible). */
+    private fun remainingMax(m: Int): Int {
+        var g = 0
+        for (c in 0 until Category.COUNT) if (m and (1 shl c) == 0) g += scores.maxPoints[c]
+        if (!bonusDecided && (m and Category.UPPER_MASK) != Category.UPPER_MASK) g += rules.bonusPoints
+        return g
+    }
+
+    /**
+     * Score offsets si (s = s0 + si) whose outcome is uncertain once [m] is filled; outside this
+     * range the game is decided and the value is closed-form (see [fillDecided]).
+     */
+    private fun window(m: Int, nS: Int): IntRange {
+        val lo = maxOf(0, win.oppMin - remainingMax(m) - s0)
+        val hi = minOf(nS - 1, win.oppMax - s0)
+        return lo..hi
+    }
+
+    /** Decided scores: certain loss below the window, certain win above; then max expectation. */
+    private fun fillDecided(m: Int, uList: IntArray, nS: Int, w: IntRange, values: DoubleArray) {
+        for (ui in uList.indices) {
+            val future = tables.ev[m, uList[ui]]
+            for (si in 0 until nS) {
+                if (si in w) continue
+                val s = s0 + si
+                values[ui * nS + si] = (if (s > win.oppMax) 1.0 else 0.0) + WinCurve.SCORE_WEIGHT * (s + future)
+            }
+        }
+    }
+
     /** Leaves continue with whichever stored policy (max expectation or a risk attitude) wins most. */
     private fun leafGrid(m: Int): Grid = newGrid(m) { uList, nS ->
         val dists = tables.leafDists
         require(dists.isNotEmpty()) { "depth-limited search needs the distribution table" }
-        val values = DoubleArray(uList.size * nS) { Double.NEGATIVE_INFINITY }
+        val values = DoubleArray(uList.size * nS)
+        val w = window(m, nS)
+        fillDecided(m, uList, nS, w, values)
         for (ui in uList.indices) {
             val u = uList[ui]
+            for (si in w) values[ui * nS + si] = Double.NEGATIVE_INFINITY
             for (dist in dists) {
                 val pmf = dist.pmf(m, u)
                 val lo = dist.lo(m, u)
-                for (si in 0 until nS) {
+                for (si in w) {
                     val base = s0 + si + lo
                     var v = 0.0
                     for (x in pmf.indices) v += pmf[x] * curveAt(base + x)
@@ -161,46 +198,55 @@ class WinSearch(
 
     private fun interiorGrid(m: Int, kernel: TurnKernel): Grid = newGrid(m) { uList, nS ->
         val nU = uList.size
-        val n = nU * nS
-        kernel.resize(n)
-        val e3 = kernel.e3
-        java.util.Arrays.fill(e3, 0, Dice.ROLLS * n, Double.NEGATIVE_INFINITY)
-        for (c in 0 until Category.COUNT) {
-            if (m and (1 shl c) != 0) continue
-            val child = m or (1 shl c)
-            val full = child == Category.FULL_MASK
-            val g = grids[child]
-            for (r in 0 until Dice.ROLLS) {
-                val pts = scores[r, c]
-                val rb = r * n
-                for (ui in 0 until nU) {
-                    val u = uList[ui]
-                    var gain = pts
-                    var u2 = u
-                    if (c < 6 && !bonusDecided) {
-                        u2 = minOf(cap, u + pts)
-                        if (u < cap && u + pts >= cap) gain += rules.bonusPoints
-                    }
-                    val ob = rb + ui * nS
-                    if (full) {
-                        for (si in 0 until nS) {
-                            val v = curveAt(s0 + si + gain)
-                            if (v > e3[ob + si]) e3[ob + si] = v
-                        }
-                    } else {
-                        g!!
-                        val cb = g.row(u2) * g.nS
-                        val last = g.nS - 1
-                        for (si in 0 until nS) {
-                            val v = g.values[cb + minOf(si + gain, last)]
-                            if (v > e3[ob + si]) e3[ob + si] = v
+        val values = DoubleArray(nU * nS)
+        val w = window(m, nS)
+        fillDecided(m, uList, nS, w, values)
+        val wLen = w.last - w.first + 1
+        if (wLen > 0) {
+            val open = (0 until Category.COUNT).filter { m and (1 shl it) == 0 }
+            val children = open.map { c -> grids[m or (1 shl c)] }
+            val solved = DoubleArray(nU * wLen)
+            kernel.runBlocks(nU * wLen, solved) { start, len, e3 ->
+                for ((ci, c) in open.withIndex()) {
+                    val g = children[ci]
+                    for (r in 0 until Dice.ROLLS) {
+                        val pts = scores[r, c]
+                        val rb = r * len - start
+                        var k = start
+                        while (k < start + len) {
+                            val ui = k / wLen
+                            val rowEnd = minOf(start + len, (ui + 1) * wLen)
+                            val u = uList[ui]
+                            var gain = pts
+                            var u2 = u
+                            if (c < 6 && !bonusDecided) {
+                                u2 = minOf(cap, u + pts)
+                                if (u < cap && u + pts >= cap) gain += rules.bonusPoints
+                            }
+                            val siStart = w.first + (k - ui * wLen)
+                            if (g == null) {
+                                for (kk in k until rowEnd) {
+                                    val v = curveAt(s0 + siStart + (kk - k) + gain)
+                                    if (v > e3[rb + kk]) e3[rb + kk] = v
+                                }
+                            } else {
+                                val cb = g.row(u2) * g.nS
+                                val last = g.nS - 1
+                                val vals = g.values
+                                val off = siStart + gain - k
+                                for (kk in k until rowEnd) {
+                                    val v = vals[cb + minOf(kk + off, last)]
+                                    if (v > e3[rb + kk]) e3[rb + kk] = v
+                                }
+                            }
+                            k = rowEnd
                         }
                     }
                 }
             }
+            for (ui in 0 until nU) System.arraycopy(solved, ui * wLen, values, ui * nS + w.first, wLen)
         }
-        kernel.run()
-        kernel.start.copyOf(n)
+        values
     }
 
     companion object {
@@ -243,6 +289,25 @@ class WinSearch(
             return (0..cap).filter { set[it] }.toIntArray()
         }
 
+        /**
+         * Rows of capped upper sums for a grid at mask [m]: the reachable values, with every value
+         * from which the bonus is out of reach merged into one row (they all play the same).
+         * [index] maps a capped upper sum to its row; null means a single row for any value.
+         */
+        class UpperRows(val values: IntArray, val index: IntArray?)
+
+        fun upperRows(me: Board, decided: Boolean, m: Int): UpperRows {
+            val cap = me.rules.bonusThreshold
+            val list = reachableUpper(me, decided, m)
+            if (list.size == 1) return UpperRows(list, null)
+            val remainingUpper = (0 until 6).sumOf { if (m and (1 shl it) == 0) 5 * (it + 1) else 0 }
+            val hopeless = list.filter { it < cap && it + remainingUpper < cap }
+            val rows = if (hopeless.size > 1) (list.filter { it !in hopeless } + hopeless.first()).sorted() else list.toList()
+            val index = IntArray(cap + 1) { -1 }
+            for (u in list) index[u] = rows.indexOf(if (u in hopeless) hopeless.first() else u)
+            return UpperRows(rows.toIntArray(), index)
+        }
+
         /** Most points that can have been added since [me] by the time mask [m] is filled. */
         fun gainMax(tables: Tables, me: Board, decided: Boolean, m: Int): Int {
             val added = m and me.mask.inv()
@@ -263,7 +328,7 @@ class WinSearch(
             var ops = 0L
             for (j in 1..d) for (m in levels[j]) {
                 if (m == Category.FULL_MASK) continue
-                val uList = reachableUpper(me, decided, m)
+                val uList = upperRows(me, decided, m).values
                 val contexts = uList.size.toLong() * (gainMax(tables, me, decided, m) + 1)
                 ops += if (j == d) {
                     contexts * tables.leafDists.sumOf { it.len(m, uList[0]).toLong() }

@@ -52,6 +52,17 @@ private fun loadTables(context: Context): Tables {
 class MainActivity : ComponentActivity() {
     private val vm: GameViewModel by viewModels()
 
+    override fun onStart() {
+        super.onStart()
+        vm.controller.onForeground()
+    }
+
+    override fun onStop() {
+        // Nothing runs in the background while the app is hidden (battery).
+        vm.controller.onBackground()
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

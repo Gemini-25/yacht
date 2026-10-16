@@ -89,15 +89,21 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         depth: Int? = null,
         deadlineNanos: Long = Long.MAX_VALUE,
         duel: Boolean = false,
+        /** A duel table built earlier in this game; used as is when it covers this position. */
+        table: DuelSearch? = null,
     ): PlannedTurn {
         require(me.rules == tables.rules)
         val evPlan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
         if (mode == Mode.EXPECTED_SCORE || opp == null || tables.dist == null) {
             return PlannedTurn(me, Mode.EXPECTED_SCORE, 0, evPlan, null)
         }
+        val remaining = Category.COUNT - me.filledCount
+        table?.after(me, opp)?.let { after ->
+            return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, after), duel = true)
+        }
         if (duel && canDuel(me, opp)) {
-            val search = DuelSearch(tables, me, opp, pool, deadlineNanos)
-            return PlannedTurn(me, Mode.WIN, Category.COUNT - me.filledCount, evPlan, TurnPlan(me, search), duel = true)
+            val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos)
+            return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true)
         }
         val curve = WinCurve.against(tables, opp, tieValue)
         val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps)
@@ -115,8 +121,14 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         opp: Board,
         deadlineNanos: Long,
         tieValue: Double = 0.0,
+        table: DuelSearch? = null,
         onImproved: (PlannedTurn) -> Unit = {},
     ): PlannedTurn {
+        table?.after(me, opp)?.let {
+            val p = planTurn(me, opp, Mode.WIN, tieValue = tieValue, table = table)
+            onImproved(p)
+            return p
+        }
         var t0 = System.nanoTime()
         var best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = 1)
         onImproved(best)
@@ -153,6 +165,18 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         }
         return best
     }
+
+    /**
+     * Builds a duel table rooted at this position ([meToMove] = whose turn it is) for reuse in
+     * all my later turns. Throws [SearchTimeout] when [stop] is set.
+     */
+    fun buildDuelTable(
+        me: Board,
+        opp: Board,
+        meToMove: Boolean,
+        executor: ExecutorService? = pool,
+        stop: java.util.concurrent.atomic.AtomicBoolean? = null,
+    ): DuelSearch = DuelSearch(tables, me, opp, meToMove, executor, stop = stop)
 
     /** The duel search needs it to be my turn: the opponent has as many boxes left as me, or one fewer. */
     fun canDuel(me: Board, opp: Board): Boolean {

@@ -21,10 +21,17 @@ class AdvisorPlayer(
 ) : Player {
     private lateinit var turn: PlannedTurn
 
+    /** Duel table built once it fits [duelOps], then reused for the rest of the game (as the app does). */
+    private var table: DuelSearch? = null
+
     override fun startTurn(me: Board, opp: Board) {
-        val duel = mode == Mode.WIN && duelOps > 0 && advisor.canDuel(me, opp) &&
+        if (me.filledCount == 0) table = null
+        if (mode == Mode.WIN && duelOps > 0 && table?.after(me, opp) == null && advisor.canDuel(me, opp) &&
             DuelSearch.estimateOps(advisor.tables, me, opp) <= duelOps
-        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth, duel = duel)
+        ) {
+            table = advisor.buildDuelTable(me, opp, meToMove = true)
+        }
+        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth, table = table)
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)

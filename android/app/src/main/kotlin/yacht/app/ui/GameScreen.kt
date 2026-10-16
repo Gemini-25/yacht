@@ -191,7 +191,7 @@ private fun depthLabel(c: AppController): String = when {
     c.searchExact -> "끝까지 정확 계산"
     c.searchDepth > 1 -> "앞 ${c.searchDepth}턴 정확 + 근사"
     else -> "이번 턴 정확 + 근사"
-}
+} + if (c.duelBuilding && !c.searchDuel) " · 끝까지 계산 준비 중" else ""
 
 @Composable
 private fun ScoreBadge(name: String, total: Int, color: Color, active: Boolean) {

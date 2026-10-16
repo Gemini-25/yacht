@@ -2,6 +2,7 @@ package yacht.engine
 
 import kotlin.math.sqrt
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /** Checks the exact end-game search against playing its own policy many times. */
@@ -173,5 +174,97 @@ class DuelSearchTest {
         val duel = advisor.planTurn(me, opp, duel = true).startValue
         println("fixed-opponent exact $fixed, duel $duel")
         assertTrue(duel >= fixed - 1e-3, "duel $duel < fixed $fixed")
+    }
+}
+
+class WindowTest {
+    private val tables get() = SolverTest.tables
+
+    @Test
+    fun decidedScoreShortcutDoesNotChangeValues() {
+        val rng = java.util.Random(21)
+        repeat(12) { i ->
+            val filled = 7 + i % 4
+            fun board(): Board {
+                var b = Board()
+                for (c in Category.ALL.shuffled(rng).take(filled)) b = b.with(c, tables.scores[Match.throwDice(rng, Dice.EMPTY_KEEP), c.ordinal])
+                return b
+            }
+            val me = board()
+            val opp = board()
+            val curve = WinCurve.against(tables, opp)
+            // Same curve but bounds that make every score look undecided: no shortcut.
+            val full = WinCurve.Curve(curve.values, -10_000, 10_000)
+            for (depth in listOf(1, 2, Category.COUNT)) {
+                val fast = TurnPlan(me, WinSearch(tables, me, curve, depth)).startValue
+                val slow = TurnPlan(me, WinSearch(tables, me, full, depth)).startValue
+                // Decided leaves use the exact expected score; searched ones the stored (half
+                // precision) distribution's mean, so only the 1e-6 tie-break term may differ.
+                assertTrue(kotlin.math.abs(fast - slow) < 1e-8, "depth $depth: $fast vs $slow")
+            }
+        }
+    }
+}
+
+class DuelTableReuseTest {
+    private val tables get() = SolverTest.tables
+
+    private fun play(advisor: Advisor, b: Board, opp: Board?, rng: java.util.Random): Board {
+        val turn = advisor.planTurn(b, opp, if (opp == null) Mode.EXPECTED_SCORE else Mode.WIN)
+        var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+        for (rolls in 1..2) {
+            val k = turn.bestKeep(rolls, r)
+            if (k == Dice.rollAsKeep[r]) break
+            r = Match.throwDice(rng, k)
+        }
+        val c = turn.bestCategory(r)
+        return b.with(c, tables.scores[r, c.ordinal])
+    }
+
+    private fun boards(rng: java.util.Random, mine: Int, theirs: Int): Pair<Board, Board> {
+        fun board(n: Int): Board {
+            var b = Board()
+            for (c in Category.ALL.shuffled(rng).take(n)) b = b.with(c, tables.scores[Match.throwDice(rng, Dice.EMPTY_KEEP), c.ordinal])
+            return b
+        }
+        return board(mine) to board(theirs)
+    }
+
+    @Test
+    fun tableRootedAtMyTurnAnswersLaterTurns() {
+        val rng = java.util.Random(5)
+        val advisor = Advisor(tables)
+        repeat(4) {
+            var (me, opp) = boards(rng, 9, 9)
+            val table = advisor.buildDuelTable(me, opp, meToMove = true)
+            assertEquals(
+                advisor.planTurn(me, opp, duel = true).startValue,
+                advisor.planTurn(me, opp, table = table).startValue, 1e-12,
+            )
+            me = play(advisor, me, opp, rng)
+            opp = play(advisor, opp, null, rng)
+            val reused = advisor.planTurn(me, opp, table = table)
+            assertTrue(reused.duel)
+            val fresh = advisor.planTurn(me, opp, duel = true)
+            assertEquals(fresh.startValue, reused.startValue, 1e-9)
+        }
+    }
+
+    @Test
+    fun tableRootedAtOpponentTurnAnswersMyNextTurn() {
+        val rng = java.util.Random(6)
+        val advisor = Advisor(tables)
+        repeat(4) {
+            // I just scored my 10th box; the opponent (9 boxes) is to move.
+            var (me, opp) = boards(rng, 10, 9)
+            val table = advisor.buildDuelTable(me, opp, meToMove = false)
+            opp = play(advisor, opp, null, rng)
+            val reused = advisor.planTurn(me, opp, table = table)
+            assertTrue(reused.duel)
+            val fresh = advisor.planTurn(me, opp, duel = true)
+            assertEquals(fresh.startValue, reused.startValue, 1e-9)
+            // A position not reachable from the root is refused.
+            assertEquals(null, table.after(Board(), opp))
+        }
     }
 }

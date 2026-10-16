@@ -16,6 +16,8 @@ import yacht.engine.AdvisorPlayer
 import yacht.engine.Board
 import yacht.engine.Category
 import yacht.engine.Dice
+import yacht.engine.DuelSearch
+import yacht.engine.SearchTimeout
 import yacht.engine.DiceStream
 import yacht.engine.Duplicate
 import yacht.engine.Match
@@ -31,6 +33,7 @@ import yacht.engine.game.label
 import java.io.File
 import java.util.Random
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 /** Saved games and settings on disk. Plain java.io so it works on Android and the desktop UI check. */
@@ -134,13 +137,38 @@ class AppController(
         private set
 
     private var advisor: Advisor? = null
-    private val pool = Executors.newFixedThreadPool(maxOf(2, Runtime.getRuntime().availableProcessors()))
+    private val cores = Runtime.getRuntime().availableProcessors()
+    private val pool = Executors.newFixedThreadPool(maxOf(2, cores)) { r ->
+        Thread(r, "yacht-search").apply { isDaemon = true }
+    }
+
+    /** Low-priority threads for the one-off duel table, so turn planning stays responsive. */
+    private val background = Executors.newFixedThreadPool(maxOf(1, cores - 1)) { r ->
+        Thread(r, "yacht-duel").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }
+    }
     private val rng = Random()
     private val undoStack = ArrayDeque<GameState>()
     private var planKey: Triple<Board, Board, Mode>? = null
     private var planJob: Job? = null
     private var aiJob: Job? = null
     private var verifyJob: Job? = null
+
+    /**
+     * Exact duel table for the rest of the current game, built once in the background as soon as
+     * it is affordable and then reused for every later turn (no per-turn search, less battery).
+     */
+    private var duelTable: DuelSearch? = null
+    private var duelJob: Job? = null
+    private var duelStop: AtomicBoolean? = null
+    private var duelRoot: Pair<Board, Board>? = null
+
+    /** Measured search speed of this device (operations per second), for the duel budget. */
+    private var opsPerSecond = 2e8
+    private var foreground = true
+
+    /** Status for the UI: building the exact end-game table in the background. */
+    var duelBuilding by mutableStateOf(false)
+        private set
 
     /** Holds currently equal the advisor's recommendation (re-applied when the plan refines). */
     private var autoHeld = false
@@ -174,7 +202,22 @@ class AppController(
 
     fun shutdown() {
         verifyJob?.cancel()
+        stopDuel()
         pool.shutdown()
+        background.shutdown()
+    }
+
+    /** App visible again: resume background work that was paused. */
+    fun onForeground() {
+        foreground = true
+        state?.let { maybeStartDuel(it) }
+    }
+
+    /** App hidden: stop background computation to save battery. */
+    fun onBackground() {
+        foreground = false
+        stopDuel()
+        verifyJob?.cancel()
     }
 
     private fun readHistory(): List<GameState> =
@@ -237,6 +280,8 @@ class AppController(
         canUndo = false
         aiJob?.cancel()
         aiThinking = false
+        stopDuel()
+        duelTable = null
         state = GameState.new(source, first, t.rules)
         screen = Screen.GAME
         onStateChanged()
@@ -307,9 +352,66 @@ class AppController(
             }
         }
         if (s.isOver) return
+        val table = duelTable
+        if (table != null && !table.contains(s.me, s.opp)) duelTable = null
         when (s.toMove) {
             Side.ME -> ensurePlan(s)
             Side.OPP -> if (s.source == DiceSource.RANDOM) runAi(s)
+        }
+        maybeStartDuel(s)
+    }
+
+    private fun stopDuel() {
+        duelStop?.set(true)
+        duelJob?.cancel()
+        duelJob = null
+        duelRoot = null
+        duelBuilding = false
+    }
+
+    /**
+     * Starts building the exact duel table from the current position when it is not covered yet
+     * and the estimated work fits [DUEL_SECONDS] on this device.
+     */
+    private fun maybeStartDuel(s: GameState) {
+        val adv = advisor ?: return
+        val t = tables ?: return
+        if (!foreground || objective != Mode.WIN || s.isOver || s.me.isComplete) return
+        if (duelTable?.contains(s.me, s.opp) == true) return
+        // A table being built from an earlier position of this game will cover this one too.
+        val root = duelRoot
+        if (root != null && s.me.mask and root.first.mask == root.first.mask &&
+            s.opp.mask and root.second.mask == root.second.mask
+        ) return
+        val meToMove = s.toMove == Side.ME
+        val ops = DuelSearch.estimateOps(t, s.me, s.opp, meToMove)
+        if (ops == Long.MAX_VALUE || ops > opsPerSecond * DUEL_SECONDS) return
+        stopDuel()
+        val stop = AtomicBoolean(false)
+        duelStop = stop
+        duelRoot = s.me to s.opp
+        duelBuilding = true
+        duelJob = scope.launch {
+            try {
+                val table = withContext(Dispatchers.Default) {
+                    adv.buildDuelTable(s.me, s.opp, meToMove, background, stop)
+                }
+                if (stop.get()) return@launch
+                duelTable = table
+                val cur = state
+                // A plan from the table replaces the current turn's searched plan right away.
+                if (cur != null && cur.toMove == Side.ME && !cur.isOver && table.after(cur.me, cur.opp) != null) {
+                    planKey = null
+                    ensurePlan(cur)
+                }
+            } catch (e: SearchTimeout) {
+                // stopped (new game, undo, app hidden)
+            } finally {
+                if (duelStop === stop) {
+                    duelBuilding = false
+                    duelRoot = null
+                }
+            }
         }
     }
 
@@ -337,7 +439,10 @@ class AppController(
             try {
                 withContext(Dispatchers.Default) {
                     if (objective == Mode.WIN) {
-                        adv.planTurnAnytime(s.me, s.opp, deadline) { p -> scope.launch { publish(key, p) } }
+                        val t0 = System.nanoTime()
+                        val table = duelTable
+                        val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table) { p -> scope.launch { publish(key, p) } }
+                        if (!p.duel || table == null) calibrate(s.me, p.depth, System.nanoTime() - t0)
                     } else {
                         val p = adv.planTurn(s.me, s.opp, Mode.EXPECTED_SCORE)
                         scope.launch { publish(key, p) }
@@ -347,6 +452,16 @@ class AppController(
                 if (planKey == key) refining = false
             }
         }
+    }
+
+    /** Updates the device speed estimate from a finished search (used to budget the duel table). */
+    private fun calibrate(me: Board, depth: Int, nanos: Long) {
+        val t = tables ?: return
+        if (nanos < 50_000_000L) return
+        val ops = yacht.engine.WinSearch.estimateOps(t, me, depth)
+        if (ops <= 0) return
+        val rate = ops / (nanos / 1e9)
+        opsPerSecond = 0.7 * opsPerSecond + 0.3 * rate
     }
 
     private fun publish(key: Triple<Board, Board, Mode>, p: PlannedTurn) {
@@ -475,5 +590,8 @@ class AppController(
     companion object {
         /** Search budget of the win AI in verification games (deterministic, a few hundred ms per turn). */
         const val VERIFY_BUDGET = 100_000_000L
+
+        /** Longest background computation allowed for the exact duel table (once per game). */
+        const val DUEL_SECONDS = 25.0
     }
 }
