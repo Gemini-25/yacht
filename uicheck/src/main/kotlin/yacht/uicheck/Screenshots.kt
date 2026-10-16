@@ -1,6 +1,5 @@
 package yacht.uicheck
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
@@ -12,6 +11,7 @@ import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.Screen
 import yacht.app.ui.AppRoot
+import yacht.app.ui.YachtTheme
 import yacht.engine.Category
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
@@ -22,11 +22,13 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.util.Base64
 import java.util.Random
 
 /**
- * Drives the real AppController through a manual-entry game and renders the Compose UI to PNGs.
- * Usage: uicheck <tables dir> <output dir>
+ * Drives the real AppController through games and renders the Compose UI to images.
+ * Usage: uicheck <tables dir> <output dir>. With PRINT_SHOTS=1 the JPEGs are also printed as
+ * base64 between SHOT-BEGIN/SHOT-END markers (to read them back from CI logs).
  */
 fun main(args: Array<String>) {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
@@ -35,48 +37,67 @@ fun main(args: Array<String>) {
     val c = AppController(scope, GameStorage(Files.createTempDirectory("yacht").toFile())) { load(tablesDir) }
     c.start()
     waitFor("tables") { c.tables != null }
-    shot(c, out, "1_home")
+    shot(c, out, "01_home")
 
     c.newGame(DiceSource.MANUAL, Side.OPP)
-    shot(c, out, "2_opponent_turn")
+    shot(c, out, "02_opponent_turn")
     c.opponentScore(Category.FULL_HOUSE, 23)
-    waitFor("plan") { c.plan != null && !c.refining }
+    waitPlan(c)
     for (f in listOf(6, 6, 3, 6, 2)) c.enterFace(f)
-    shot(c, out, "3_first_roll_advice")
+    waitPlan(c)
+    shot(c, out, "03_first_roll_advice")
     c.reroll()
-    shot(c, out, "4_entering_second_roll")
+    c.enterFace(6)
+    shot(c, out, "04_entering_second_roll")
 
     // Play on with random dice, following the advice, to reach the end game.
     val rng = Random(5)
     val oppCats = Category.ALL.filter { it != Category.FULL_HOUSE }.shuffled(rng)
     var oppIdx = 0
-    var rounds = 0
+    var shotEndgame = false
     while (!c.state!!.isOver) {
         val s = c.state!!
         if (s.toMove == Side.OPP) {
             val cat = oppCats[oppIdx++]
-            val pts = s.rules.score(List(5) { rng.nextInt(6) + 1 }, cat)
-            c.opponentScore(cat, pts)
+            c.opponentScore(cat, s.rules.score(List(5) { rng.nextInt(6) + 1 }, cat))
             continue
         }
-        waitFor("plan") { c.plan != null && !c.refining && c.plan!!.me == c.state!!.me }
-        if (s.me.filledCount == 9 && rounds == 0) {
-            rounds++
-            while (c.state!!.draft.dice.any { it == null }) c.enterFace(rng.nextInt(6) + 1)
-            shot(c, out, "5_endgame_exact_search")
-        }
+        waitPlan(c)
         while (c.state!!.draft.dice.any { it == null }) c.enterFace(rng.nextInt(6) + 1)
+        waitPlan(c)
+        if (s.me.filledCount == 9 && !shotEndgame) {
+            shotEndgame = true
+            shot(c, out, "05_endgame_exact")
+            shot(c, out, "06_endgame_dark", dark = true)
+        }
         val a = c.advice ?: error("no advice")
         if (a.shouldStop) c.score(a.bestCategory.category) else c.reroll()
     }
-    shot(c, out, "6_game_over")
+    shot(c, out, "07_game_over")
     c.openReview(c.state!!)
-    shot(c, out, "7_review")
+    shot(c, out, "08_review")
+    c.openHistory()
+    waitFor("history") { c.screen == Screen.HISTORY }
+    shot(c, out, "09_history")
+
+    c.newGame(DiceSource.RANDOM, Side.ME)
+    c.firstThrow()
+    waitPlan(c)
+    shot(c, out, "10_vs_ai")
+
+    c.screen = Screen.VERIFY
+    c.startVerify(6)
+    waitFor("verify", 600_000) { !c.verifying }
+    shot(c, out, "11_verify")
+
     val s = c.state!!
-    println("final ${s.me.total} : ${s.opp.total}, decisions ${s.decisions.size}")
+    println("verify: ${c.verify.games} games, diff ${c.verify.diff}, plan ${c.verify.avgPlanMs} ms; last game ${s.me.total}:${s.opp.total}")
     c.shutdown()
     System.exit(0)
 }
+
+private fun waitPlan(c: AppController) =
+    waitFor("plan") { c.plan != null && !c.refining && c.plan!!.me == c.state!!.me }
 
 private fun load(dir: File): Tables {
     val rules = RuleSet.NINTENDO
@@ -86,8 +107,8 @@ private fun load(dir: File): Tables {
     return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules))
 }
 
-private fun waitFor(what: String, cond: () -> Boolean) {
-    val deadline = System.currentTimeMillis() + 60_000
+private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean) {
+    val deadline = System.currentTimeMillis() + timeoutMs
     while (!cond()) {
         check(System.currentTimeMillis() < deadline) { "timed out waiting for $what" }
         Thread.sleep(20)
@@ -95,18 +116,23 @@ private fun waitFor(what: String, cond: () -> Boolean) {
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
-private fun shot(c: AppController, out: File, name: String) {
-    Thread.sleep(150)
+private fun shot(c: AppController, out: File, name: String, dark: Boolean = false) {
+    Thread.sleep(200)
     val density = 2f
-    val scene = ImageComposeScene(width = (400 * density).toInt(), height = (860 * density).toInt(), density = Density(density)) {
-        MaterialTheme { AppRoot(c) }
+    val scene = ImageComposeScene(width = (392 * density).toInt(), height = (850 * density).toInt(), density = Density(density)) {
+        YachtTheme(dark = dark) { AppRoot(c) }
     }
     scene.render(0)
-    val image = scene.render(1_000_000_000L)
+    val image = scene.render(2_000_000_000L)
     File(out, "$name.png").writeBytes(image.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+    val jpeg = image.encodeToData(EncodedImageFormat.JPEG, 72)!!.bytes
+    File(out, "$name.jpg").writeBytes(jpeg)
     scene.close()
-    println("wrote $name (screen=${c.screen})")
+    if (System.getenv("PRINT_SHOTS") == "1") {
+        val b64 = Base64.getEncoder().encodeToString(jpeg)
+        println("SHOT-BEGIN $name ${b64.length}")
+        b64.chunked(2000).forEach { println("SHOT|$it") }
+        println("SHOT-END $name")
+    }
+    println("wrote $name (${jpeg.size / 1024} KiB, screen=${c.screen})")
 }
-
-@Suppress("unused")
-private val keepScreenImport = Screen.HOME

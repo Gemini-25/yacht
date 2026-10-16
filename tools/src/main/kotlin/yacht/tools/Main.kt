@@ -5,6 +5,8 @@ import yacht.engine.AdvisorPlayer
 import yacht.engine.Board
 import yacht.engine.Category
 import yacht.engine.Dice
+import yacht.engine.DiceStream
+import yacht.engine.Duplicate
 import yacht.engine.Match
 import yacht.engine.Mode
 import yacht.engine.RuleSet
@@ -26,36 +28,60 @@ private val rules = RuleSet.NINTENDO
 fun main(args: Array<String>) {
     val opts = args.drop(1).chunked(2).associate { it[0].removePrefix("--") to it.getOrElse(1) { "" } }
     when (args.firstOrNull()) {
-        "gen" -> gen(File(opts["out"] ?: "tables"), if (opts["precision"] == "float") 4 else 2)
+        "gen" -> gen(
+            File(opts["out"] ?: "tables"),
+            if (opts["precision"] == "float") 4 else 2,
+            opts["risk"]?.split(',')?.filter { it.isNotBlank() }?.map { it.toDouble() } ?: DEFAULT_RISK,
+        )
         "sim" -> sim(opts)
+        "duel" -> duel(opts)
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET)
         else -> println(
             """
             usage:
-              gen   --out DIR [--precision half|float] build ev.bin and dist.bin
+              gen   --out DIR [--precision half|float] [--risk T1,T2,..]
+                    build ev.bin, dist.bin and risk_N.bin (risk-attitude policies for search leaves)
               sim   --tables DIR --games N --a win|ev --b win|ev [--budget OPS] [--depthA D] [--depthB D] [--seed S]
+              duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9 [--seed S]
+                    paired comparison against a max-expectation opponent with shared dice
               bench --tables DIR [--budget OPS]       time the win search at several game stages
             """.trimIndent(),
         )
     }
 }
 
-private fun gen(out: File, valueBytes: Int) {
+/**
+ * Risk attitudes stored for search leaves (see TableBuilder.theta). Off by default: with
+ * thetas -0.03, 0.03, 0.06 the paired duel measured -0.25%p ±0.28 against plain leaves.
+ */
+val DEFAULT_RISK = emptyList<Double>()
+
+private fun gen(out: File, valueBytes: Int, risk: List<Double>) {
     out.mkdirs()
-    val t0 = System.nanoTime()
+    out.listFiles()?.filter { it.name.startsWith("risk_") }?.forEach { it.delete() }
+    var t0 = System.nanoTime()
     val b = TableBuilder(rules).build(withDist = true)
-    val secs = (System.nanoTime() - t0) / 1e9
+    println("built in %.1fs; optimal expected score %.4f".format((System.nanoTime() - t0) / 1e9, b.ev[0]))
     File(out, "ev.bin").outputStream().use { TableIO.writeEv(it, rules, b.ev) }
     File(out, "dist.bin").outputStream().use { TableIO.writeDist(it, rules, b.distLo, b.dist, valueBytes) }
-    println("built in %.1fs; optimal expected score %.4f".format(secs, b.ev[0]))
     for (f in listOf("ev.bin", "dist.bin")) println("  $f ${File(out, f).length() / 1024} KiB")
+    risk.forEachIndexed { i, theta ->
+        t0 = System.nanoTime()
+        val rb = TableBuilder(rules, theta = theta).build(withDist = true)
+        val f = File(out, "risk_$i.bin")
+        f.outputStream().use { TableIO.writeDist(it, rules, rb.distLo, rb.dist, valueBytes, theta) }
+        val mean = rb.distTable().mean(0, 0)
+        println("  ${f.name} theta=$theta mean %.2f, %.1fs, ${f.length() / 1024} KiB".format(mean, (System.nanoTime() - t0) / 1e9))
+    }
 }
 
 fun loadTables(dir: File): Tables {
     fun map(name: String) = RandomAccessFile(File(dir, name), "r").use {
         it.channel.map(FileChannel.MapMode.READ_ONLY, 0, it.length())
     }
-    return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules))
+    val risk = dir.listFiles()?.filter { it.name.startsWith("risk_") && it.name.endsWith(".bin") }
+        ?.sortedBy { it.name }?.map { TableIO.readDist(map(it.name), rules) } ?: emptyList()
+    return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules), risk)
 }
 
 private fun sim(opts: Map<String, String>) {
@@ -63,7 +89,7 @@ private fun sim(opts: Map<String, String>) {
     val games = opts["games"]?.toInt() ?: 1000
     val budget = opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET
     val seed = opts["seed"]?.toLong() ?: 1L
-    val advisor = Advisor(tables)
+    val advisor = Advisor(tables.withoutRisk())
     fun player(kind: String, depth: String?): AdvisorPlayer = when (kind) {
         "ev" -> AdvisorPlayer(advisor, Mode.EXPECTED_SCORE, name = "ev")
         "win" -> AdvisorPlayer(advisor, Mode.WIN, budget, depth?.toInt(), name = "win" + (depth?.let { "-d$it" } ?: ""))
@@ -150,4 +176,77 @@ private fun randomBoard(tables: Tables, rng: Random, filled: Int): Board {
         b = b.with(c, tables.scores[Match.throwDice(rng, Dice.EMPTY_KEEP), c.ordinal])
     }
     return b
+}
+
+/**
+ * "ev", "win" (default budget), "win-dN" (fixed depth), "win-bX" (ops budget, e.g. 1e9).
+ * A leading "r" ("rwin", "rwin-d1") also uses the risk-attitude tables at search leaves.
+ */
+private fun parsePlayer(plain: Advisor, risky: Advisor, spec: String): AdvisorPlayer {
+    val advisor = if (spec.startsWith("r")) risky else plain
+    val s = spec.removePrefix("r")
+    return when {
+        s == "ev" -> AdvisorPlayer(advisor, Mode.EXPECTED_SCORE, name = spec)
+        s == "win" -> AdvisorPlayer(advisor, Mode.WIN, name = spec)
+        s.startsWith("win-d") -> AdvisorPlayer(advisor, Mode.WIN, fixedDepth = s.removePrefix("win-d").toInt(), name = spec)
+        s.startsWith("win-b") -> AdvisorPlayer(advisor, Mode.WIN, budgetOps = s.removePrefix("win-b").toDouble().toLong(), name = spec)
+        else -> error("unknown player $spec")
+    }
+}
+
+private fun duel(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables"))
+    val games = opts["games"]?.toInt() ?: 2000
+    val seed = opts["seed"]?.toLong() ?: 7L
+    val specs = (opts["players"] ?: "ev,win").split(',')
+    val advisor = Advisor(tables.withoutRisk())
+    val risky = Advisor(tables)
+    val n = specs.size
+    // wins[player][seat] and per-game outcomes for paired differences
+    val outcome = Array(n) { Array(2) { ByteArray(games) } }
+    val scoreSum = LongArray(n)
+    val oppSum = LongArray(1)
+    val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+    val done = AtomicInteger()
+    val t0 = System.nanoTime()
+    val tasks = (0 until games).map { g ->
+        Callable {
+            val oppStream = DiceStream(DiceStream.mix(seed, g.toLong(), 1))
+            val myStream = DiceStream(DiceStream.mix(seed, g.toLong(), 0))
+            val opp = Duplicate.independentGame(rules, AdvisorPlayer(advisor, Mode.EXPECTED_SCORE), oppStream)
+            val oppFinal = opp.last().total
+            synchronized(oppSum) { oppSum[0] += oppFinal.toLong() }
+            for (i in 0 until n) for (seat in 0..1) {
+                val player = parsePlayer(advisor, risky, specs[i])
+                // seat 0: I move first and see the opponent before its turn; seat 1: after it.
+                val me = Duplicate.playTurns(rules, player, myStream) { turn -> opp[turn + seat] }
+                outcome[i][seat][g] = if (me.total > oppFinal) 1 else if (me.total == oppFinal) 2 else 0
+                synchronized(scoreSum) { scoreSum[i] += me.total.toLong() }
+            }
+            val d = done.incrementAndGet()
+            if (d % 500 == 0) System.err.println("  $d/$games")
+        }
+    }
+    pool.invokeAll(tasks).forEach { it.get() }
+    pool.shutdown()
+    println("duel vs max-expectation opponent: $games games x 2 seats in %.0fs (opp mean %.2f)".format((System.nanoTime() - t0) / 1e9, oppSum[0].toDouble() / games))
+    fun winRate(i: Int, seat: Int?) = (if (seat == null) listOf(0, 1) else listOf(seat))
+        .sumOf { s -> outcome[i][s].count { it == 1.toByte() } }.toDouble() / (games * (if (seat == null) 2 else 1))
+    for (i in 0 until n) {
+        val p = winRate(i, null)
+        val line = StringBuilder("  %-10s win %.2f%% (first %.2f%%, second %.2f%%) mean %.2f".format(
+            specs[i], 100 * p, 100 * winRate(i, 0), 100 * winRate(i, 1), scoreSum[i].toDouble() / (2 * games)))
+        if (i > 0) {
+            // Paired difference against the first player over the same games and seats.
+            val diffs = DoubleArray(2 * games) { k ->
+                val seat = k % 2
+                val g = k / 2
+                (if (outcome[i][seat][g] == 1.toByte()) 1.0 else 0.0) - (if (outcome[0][seat][g] == 1.toByte()) 1.0 else 0.0)
+            }
+            val mean = diffs.average()
+            val sd = sqrt(diffs.sumOf { (it - mean) * (it - mean) } / (diffs.size - 1))
+            line.append("  vs %s: %+.2f%%p ±%.2f".format(specs[0], 100 * mean, 100 * 1.96 * sd / sqrt(diffs.size.toDouble())))
+        }
+        println(line)
+    }
 }

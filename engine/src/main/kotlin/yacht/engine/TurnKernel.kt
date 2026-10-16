@@ -16,6 +16,7 @@ class TurnKernel(capacity: Int = 1) {
     var k1 = DoubleArray(0); private set
     var e1 = DoubleArray(0); private set
     var start = DoubleArray(0); private set
+    private var best = DoubleArray(0)
     private var cap = 0
 
     init {
@@ -32,6 +33,7 @@ class TurnKernel(capacity: Int = 1) {
         k1 = DoubleArray(Dice.KEEPS * cap)
         e1 = DoubleArray(Dice.ROLLS * cap)
         start = DoubleArray(cap)
+        best = DoubleArray(Dice.KEEPS * cap)
     }
 
     fun run() {
@@ -48,38 +50,47 @@ class TurnKernel(capacity: Int = 1) {
         }
     }
 
+    /**
+     * Value of each keep = mean over the next die of the keep with that die added: throwing the
+     * missing dice one at a time gives the same distribution (1260 terms instead of 4368).
+     */
     private fun expect(e: DoubleArray, k: DoubleArray) {
         val n = n
-        val tStart = Dice.tStart
-        val tRoll = Dice.tRoll
-        val tProb = Dice.tProb
-        for (keep in 0 until Dice.KEEPS) {
+        for (r in 0 until Dice.ROLLS) System.arraycopy(e, r * n, k, Dice.rollAsKeep[r] * n, n)
+        val add = Dice.addFace
+        for (keep in Dice.PARTIAL_KEEPS - 1 downTo 0) {
             val kb = keep * n
-            java.util.Arrays.fill(k, kb, kb + n, 0.0)
-            for (j in tStart[keep] until tStart[keep + 1]) {
-                val p = tProb[j]
-                val rb = tRoll[j] * n
-                for (i in 0 until n) k[kb + i] += p * e[rb + i]
+            val a = keep * 6
+            val b0 = add[a] * n
+            val b1 = add[a + 1] * n
+            val b2 = add[a + 2] * n
+            val b3 = add[a + 3] * n
+            val b4 = add[a + 4] * n
+            val b5 = add[a + 5] * n
+            for (i in 0 until n) {
+                k[kb + i] = (k[b0 + i] + k[b1 + i] + k[b2 + i] + k[b3 + i] + k[b4 + i] + k[b5 + i]) * SIXTH
             }
         }
     }
 
+    /** Best keep value over all sub-multisets of each roll, propagated up the subset lattice. */
     private fun bestOfSubsets(k: DoubleArray, e: DoubleArray) {
         val n = n
-        val subStart = Dice.subStart
-        val subKeep = Dice.subKeep
-        for (r in 0 until Dice.ROLLS) {
-            val rb = r * n
-            val j0 = subStart[r]
-            System.arraycopy(k, subKeep[j0] * n, e, rb, n)
-            for (j in j0 + 1 until subStart[r + 1]) {
-                val kb = subKeep[j] * n
+        val m = best
+        val downStart = Dice.downStart
+        val downKeep = Dice.downKeep
+        for (keep in 0 until Dice.KEEPS) {
+            val kb = keep * n
+            System.arraycopy(k, kb, m, kb, n)
+            for (j in downStart[keep] until downStart[keep + 1]) {
+                val cb = downKeep[j] * n
                 for (i in 0 until n) {
-                    val v = k[kb + i]
-                    if (v > e[rb + i]) e[rb + i] = v
+                    val v = m[cb + i]
+                    if (v > m[kb + i]) m[kb + i] = v
                 }
             }
         }
+        for (r in 0 until Dice.ROLLS) System.arraycopy(m, Dice.rollAsKeep[r] * n, e, r * n, n)
     }
 
     /** Best keep for roll [r] in context [i] given keep values [k] (k1 or k2). Ties keep more dice. */
@@ -89,7 +100,7 @@ class TurnKernel(capacity: Int = 1) {
         for (j in Dice.subStart[r] until Dice.subStart[r + 1]) {
             val keep = Dice.subKeep[j]
             val v = k[keep * n + i]
-            if (v > bestV + EPS) {
+            if (best < 0 || v > bestV + EPS * Math.abs(bestV)) {
                 bestV = v
                 best = keep
             }
@@ -98,7 +109,8 @@ class TurnKernel(capacity: Int = 1) {
     }
 
     companion object {
-        /** Values closer than this are treated as ties (floating-point noise). */
+        /** Relative difference below which values are treated as ties (floating-point noise). */
         const val EPS = 1e-12
+        private const val SIXTH = 1.0 / 6.0
     }
 }

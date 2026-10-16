@@ -48,6 +48,8 @@ class DistTable(
     private val len: IntArray,
     private val data: ByteBuffer,
     private val valueBytes: Int,
+    /** Risk attitude of the policy the distribution follows (0 = max expectation). */
+    val theta: Double = 0.0,
 ) {
     private fun state(mask: Int, u: Int) = mask * rules.upperStates + u
 
@@ -75,8 +77,23 @@ class DistTable(
     }
 }
 
-class Tables(val rules: RuleSet, val ev: EvTable, val dist: DistTable?) {
+/**
+ * [dist] is the max-expectation policy's distribution (the opponent model and the default leaf).
+ * [riskDists] are extra policies (theta != 0); the win search continues with whichever of all
+ * these policies wins most often from each leaf.
+ */
+class Tables(
+    val rules: RuleSet,
+    val ev: EvTable,
+    val dist: DistTable?,
+    val riskDists: List<DistTable> = emptyList(),
+) {
     val scores: ScoreTable = ScoreTable.of(rules)
+
+    /** Policies available for evaluating search leaves. */
+    val leafDists: List<DistTable> = listOfNotNull(dist) + riskDists
+
+    fun withoutRisk(): Tables = Tables(rules, ev, dist)
 }
 
 /** IEEE 754 half precision for non-negative values up to 1 (probabilities). */
@@ -106,7 +123,7 @@ internal object Half {
 
 object TableIO {
     private const val EV_MAGIC = 0x59455631 // "YEV1"
-    private const val DIST_MAGIC = 0x59445333 // "YDS3"
+    private const val DIST_MAGIC = 0x59445334 // "YDS4"
 
     fun writeEv(out: OutputStream, rules: RuleSet, values: DoubleArray) {
         val buf = ByteBuffer.allocate(12 + values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
@@ -125,11 +142,18 @@ object TableIO {
     }
 
     /** [valueBytes] 2 stores half floats (compact), 4 single floats. */
-    fun writeDist(out: OutputStream, rules: RuleSet, lo: IntArray, pmfs: Array<DoubleArray?>, valueBytes: Int = 2) {
+    fun writeDist(
+        out: OutputStream,
+        rules: RuleSet,
+        lo: IntArray,
+        pmfs: Array<DoubleArray?>,
+        valueBytes: Int = 2,
+        theta: Double = 0.0,
+    ) {
         require(valueBytes == 2 || valueBytes == 4)
         val n = pmfs.size
         val data = DataOutputStream(out.buffered(1 shl 20))
-        val header = ByteBuffer.allocate(20 + n * 12).order(ByteOrder.LITTLE_ENDIAN)
+        val header = ByteBuffer.allocate(28 + n * 12).order(ByteOrder.LITTLE_ENDIAN)
         // States sharing one pmf array (u-independent states) are stored once.
         val seen = java.util.IdentityHashMap<DoubleArray, Int>()
         var total = 0
@@ -142,7 +166,7 @@ object TableIO {
                 total.also { total += p.size }
             }
         }
-        header.putInt(DIST_MAGIC).putInt(rules.fingerprint).putInt(rules.upperStates).putInt(total).putInt(valueBytes)
+        header.putInt(DIST_MAGIC).putInt(rules.fingerprint).putInt(rules.upperStates).putInt(total).putInt(valueBytes).putDouble(theta)
         for (s in 0 until n) header.putInt(offsets[s]).putInt(lo[s]).putInt(pmfs[s]!!.size)
         data.write(header.array())
         val chunk = ByteBuffer.allocate(4 * 4096).order(ByteOrder.LITTLE_ENDIAN)
@@ -165,6 +189,7 @@ object TableIO {
         check(b.getInt() == rules.upperStates)
         val total = b.getInt()
         val valueBytes = b.getInt()
+        val theta = b.getDouble()
         val n = Category.FULL_MASK.inc() * rules.upperStates
         val offset = IntArray(n)
         val lo = IntArray(n)
@@ -176,6 +201,6 @@ object TableIO {
         }
         val data = b.slice().order(ByteOrder.LITTLE_ENDIAN)
         check(data.remaining() >= total.toLong() * valueBytes) { "distribution table truncated" }
-        return DistTable(rules, offset, lo, len, data, valueBytes)
+        return DistTable(rules, offset, lo, len, data, valueBytes, theta)
     }
 }

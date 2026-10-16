@@ -4,13 +4,19 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
 /**
- * Builds the max-expectation value table and, optionally, the distribution of remaining points
- * under that policy, by backward induction over (filled mask, capped upper sum).
+ * Builds a value table and, optionally, the distribution of remaining points under its policy,
+ * by backward induction over (filled mask, capped upper sum).
+ *
+ * [theta] = 0 maximises expected points. Otherwise the policy maximises E[exp(theta * points)]
+ * (risk seeking for theta > 0, risk averse for theta < 0); [ev] then holds
+ * sign(theta) * E[exp(theta * remaining)], not points.
  */
 class TableBuilder(
     val rules: RuleSet = RuleSet.NINTENDO,
     private val threads: Int = Runtime.getRuntime().availableProcessors(),
+    val theta: Double = 0.0,
 ) {
+    private val expGain = DoubleArray(GAIN_SLOTS) { Math.exp(theta * it) }
     private val cap = rules.bonusThreshold
     private val nu = rules.upperStates
     private val scores = ScoreTable.of(rules)
@@ -38,6 +44,7 @@ class TableBuilder(
         val full = Category.FULL_MASK
         val terminal = doubleArrayOf(1.0)
         for (u in 0 until nu) dist[full * nu + u] = terminal
+        if (theta != 0.0) java.util.Arrays.fill(ev, full * nu, full * nu + nu, Math.signum(theta))
 
         val levels = (0 until full).groupBy { Integer.bitCount(it) }.toSortedMap(compareByDescending { it })
         val workers = ThreadLocal.withInitial { Worker() }
@@ -72,11 +79,14 @@ class TableBuilder(
         }
     }
 
-    fun evTable() = EvTable(rules, ev)
+    fun evTable(): EvTable {
+        check(theta == 0.0) { "only the theta = 0 table holds expected points" }
+        return EvTable(rules, ev)
+    }
 
     fun distTable(valueBytes: Int = 2): DistTable {
         val bytes = java.io.ByteArrayOutputStream()
-        TableIO.writeDist(bytes, rules, distLo, dist, valueBytes)
+        TableIO.writeDist(bytes, rules, distLo, dist, valueBytes, theta)
         return TableIO.readDist(java.nio.ByteBuffer.wrap(bytes.toByteArray()), rules)
     }
 
@@ -104,13 +114,13 @@ class TableBuilder(
                     val s = scores[r, c]
                     val child = (m or (1 shl c)) * nu
                     for (i in 0 until n) {
-                        val v = if (c < 6) {
-                            val u2 = minOf(cap, i + s)
-                            val bonus = if (i < cap && i + s >= cap) rules.bonusPoints else 0
-                            s + bonus + ev[child + u2]
-                        } else {
-                            s + ev[child + i]
+                        var u2 = i
+                        var g = s
+                        if (c < 6) {
+                            u2 = minOf(cap, i + s)
+                            if (i < cap && i + s >= cap) g += rules.bonusPoints
                         }
+                        val v = if (theta == 0.0) g + ev[child + u2] else expGain[g] * ev[child + u2]
                         if (v > e3[rb + i]) {
                             e3[rb + i] = v
                             bestCat[rb + i] = c

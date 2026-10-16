@@ -85,6 +85,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         budgetOps: Long = DEFAULT_BUDGET,
         tieValue: Double = 0.0,
         depth: Int? = null,
+        deadlineNanos: Long = Long.MAX_VALUE,
     ): PlannedTurn {
         require(me.rules == tables.rules)
         val evPlan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
@@ -93,12 +94,48 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         }
         val curve = WinCurve.against(tables, opp, tieValue)
         val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps)
-        val search = WinSearch(tables, me, curve, d, pool)
+        val search = WinSearch(tables, me, curve, d, pool, deadlineNanos)
         return PlannedTurn(me, Mode.WIN, d, evPlan, TurnPlan(me, search))
     }
 
+    /**
+     * Win-mode plan that deepens the exact search until [deadlineNanos] (System.nanoTime()).
+     * The one-turn plan is always produced first; [onImproved] receives every finished depth.
+     * A depth is only started when the previous depth's speed predicts it will finish in time.
+     */
+    fun planTurnAnytime(
+        me: Board,
+        opp: Board,
+        deadlineNanos: Long,
+        tieValue: Double = 0.0,
+        onImproved: (PlannedTurn) -> Unit = {},
+    ): PlannedTurn {
+        var t0 = System.nanoTime()
+        var best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = 1)
+        onImproved(best)
+        if (best.mode != Mode.WIN) return best
+        var lastNanos = System.nanoTime() - t0
+        var lastOps = WinSearch.estimateOps(tables, me, 1).coerceAtLeast(1)
+        val remaining = Category.COUNT - me.filledCount
+        for (d in 2..remaining) {
+            val ops = WinSearch.estimateOps(tables, me, d)
+            t0 = System.nanoTime()
+            val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
+            if (t0 + predicted > deadlineNanos) break
+            try {
+                best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = d, deadlineNanos = deadlineNanos)
+            } catch (e: SearchTimeout) {
+                break
+            }
+            lastNanos = (System.nanoTime() - t0).coerceAtLeast(1)
+            lastOps = ops.coerceAtLeast(1)
+            onImproved(best)
+        }
+        return best
+    }
+
     companion object {
-        /** About a second of work on a mid-range phone; tuned with the benchmark tool. */
+        /** Ops budget for deterministic depth choice (simulations); the app uses a deadline instead. */
         const val DEFAULT_BUDGET = 300_000_000L
     }
 }

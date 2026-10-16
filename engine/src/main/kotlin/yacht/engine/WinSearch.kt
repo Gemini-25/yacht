@@ -45,17 +45,21 @@ object WinCurve {
  * distribution is used. With depth == remaining turns the result is exact for the given
  * opponent model.
  */
+/** Thrown when a search passes its deadline; the caller keeps its previous (shallower) plan. */
+class SearchTimeout : RuntimeException("search deadline passed", null, false, false)
+
 class WinSearch(
     private val tables: Tables,
     private val me: Board,
     private val curve: DoubleArray,
     val depth: Int,
     private val pool: ExecutorService? = null,
+    /** System.nanoTime() after which the search gives up with [SearchTimeout]. */
+    private val deadline: Long = Long.MAX_VALUE,
 ) : AfterTurn {
     private val rules = me.rules
     private val cap = rules.bonusThreshold
     private val scores = tables.scores
-    private val dist = tables.dist
     private val mask0 = me.mask
     private val u0 = me.u
     private val s0 = me.total
@@ -79,15 +83,31 @@ class WinSearch(
             val leaf = j == d
             if (pool == null || masks.size < 2) {
                 val kernel = TurnKernel()
-                for (m in masks) grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernel)
+                for (m in masks) {
+                    checkDeadline()
+                    grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernel)
+                }
             } else {
                 val kernels = ThreadLocal.withInitial { TurnKernel() }
                 val tasks = masks.map { m ->
-                    Callable { grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernels.get()) }
+                    Callable {
+                        checkDeadline()
+                        grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernels.get())
+                    }
                 }
-                pool.invokeAll(tasks).forEach { it.get() }
+                for (f in pool.invokeAll(tasks)) {
+                    try {
+                        f.get()
+                    } catch (e: java.util.concurrent.ExecutionException) {
+                        throw e.cause ?: e
+                    }
+                }
             }
         }
+    }
+
+    private fun checkDeadline() {
+        if (deadline != Long.MAX_VALUE && System.nanoTime() > deadline) throw SearchTimeout()
     }
 
     private fun remainingUpperMax(mask: Int): Int =
@@ -120,20 +140,24 @@ class WinSearch(
     override fun value(c: Int, points: Int, bonus: Int, u2: Int): Double =
         valueOf(mask0 or (1 shl c), u2, s0 + points + bonus)
 
+    /** Leaves continue with whichever stored policy (max expectation or a risk attitude) wins most. */
     private fun leafGrid(m: Int): Grid {
-        val dist = requireNotNull(dist) { "depth-limited search needs the distribution table" }
+        val dists = tables.leafDists
+        require(dists.isNotEmpty()) { "depth-limited search needs the distribution table" }
         val nU = nU(m)
         val nS = gainMax(m) + 1
-        val values = DoubleArray(nU * nS)
+        val values = DoubleArray(nU * nS) { Double.NEGATIVE_INFINITY }
         for (ui in 0 until nU) {
             val u = if (nU == 1) (if (u0 >= cap) cap else u0) else u0 + ui
-            val pmf = dist.pmf(m, u)
-            val lo = dist.lo(m, u)
-            for (si in 0 until nS) {
-                val base = s0 + si + lo
-                var v = 0.0
-                for (x in pmf.indices) v += pmf[x] * curveAt(base + x)
-                values[ui * nS + si] = v
+            for (dist in dists) {
+                val pmf = dist.pmf(m, u)
+                val lo = dist.lo(m, u)
+                for (si in 0 until nS) {
+                    val base = s0 + si + lo
+                    var v = 0.0
+                    for (x in pmf.indices) v += pmf[x] * curveAt(base + x)
+                    if (v > values[ui * nS + si]) values[ui * nS + si] = v
+                }
             }
         }
         return Grid(nU, nS, values)
@@ -197,7 +221,8 @@ class WinSearch(
             return levels
         }
 
-        private val KERNEL_OPS = 2L * Dice.tProb.size + 2L * Dice.subKeep.size + Dice.ROLLS
+        private val KERNEL_OPS =
+            2L * (Dice.addFace.size + Dice.ROLLS) + 2L * (Dice.downKeep.size + Dice.KEEPS + Dice.ROLLS) + Dice.ROLLS
 
         /** Rough operation count of a search, used to pick the deepest affordable depth. */
         fun estimateOps(tables: Tables, me: Board, depth: Int): Long {
@@ -219,7 +244,7 @@ class WinSearch(
                 if (!decided && added and Category.UPPER_MASK != 0) g += rules.bonusPoints
                 val contexts = nU.toLong() * (g + 1)
                 ops += if (j == d) {
-                    contexts * (tables.dist?.len(m, minOf(u0, cap)) ?: 0)
+                    contexts * tables.leafDists.sumOf { it.len(m, minOf(u0, cap)).toLong() }
                 } else {
                     val open = Category.COUNT - Integer.bitCount(m)
                     contexts * (KERNEL_OPS + Dice.ROLLS.toLong() * open)

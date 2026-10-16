@@ -28,6 +28,16 @@ object Dice {
     /** Probability of each roll when throwing all five dice. */
     val firstRoll: DoubleArray
 
+    /** Keeps are indexed by size; indices below this have fewer than 5 dice. */
+    val PARTIAL_KEEPS: Int
+
+    /** addFace[k * 6 + f]: keep k plus one die showing face f+1 (only for partial keeps). */
+    val addFace: IntArray
+
+    /** Keep k minus one die of each distinct face: rows downStart[k] until downStart[k+1]. */
+    val downStart: IntArray
+    val downKeep: IntArray
+
     private val keepByKey = IntArray(46656) { -1 }
     private val rollByKey = IntArray(46656) { -1 }
 
@@ -140,5 +150,27 @@ object Dice {
 
         firstRoll = DoubleArray(ROLLS)
         for (j in tStart[EMPTY_KEEP] until tStart[EMPTY_KEEP + 1]) firstRoll[tRoll[j]] += tProb[j]
+
+        PARTIAL_KEEPS = keepSize.count { it < 5 }
+        check((0 until KEEPS).all { (keepSize[it] < 5) == (it < PARTIAL_KEEPS) })
+        addFace = IntArray(PARTIAL_KEEPS * 6) { i ->
+            val c = keepCounts[i / 6].copyOf()
+            c[i % 6]++
+            keepByKey[key(c)]
+        }
+        val dStart = IntArray(KEEPS + 1)
+        val down = ArrayList<Int>()
+        for (k in 0 until KEEPS) {
+            dStart[k] = down.size
+            for (f in 0 until 6) {
+                if (keepCounts[k][f] == 0) continue
+                val c = keepCounts[k].copyOf()
+                c[f]--
+                down.add(keepByKey[key(c)])
+            }
+        }
+        dStart[KEEPS] = down.size
+        downStart = dStart
+        downKeep = down.toIntArray()
     }
 }
