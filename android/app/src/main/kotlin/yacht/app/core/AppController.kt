@@ -255,7 +255,7 @@ class AppController(
                     if (autoHeld) autoHold()
                 }
             } finally {
-                refining = false
+                if (planKey == key) refining = false
             }
         }
     }

@@ -161,7 +161,7 @@ fun HomeScreen(c: AppController) {
             }
         }
         Text(
-            "선후공을 고를 수 있으면 후공을 추천합니다. 마지막 턴에 상대의 최종 점수를 보고 둘 수 있어 승률이 약 2%p 높습니다 (시뮬레이션 기준).",
+            "선후공을 고를 수 있으면 후공을 추천합니다. 마지막 턴에 상대의 최종 점수를 보고 둘 수 있어 정보상 유리합니다.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
