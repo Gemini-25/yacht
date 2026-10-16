@@ -473,7 +473,7 @@ private fun RecommendationCard(c: AppController, s: GameState, a: Advice?) {
 
 @Composable
 private fun ValueLine(mode: Mode, value: Double, expectedFinal: Double) {
-    val text = if (mode == Mode.WIN) "승률 ${pct(value)} · 기대 최종 %.1f점".format(expectedFinal)
+    val text = if (mode == Mode.WIN) "승률 ${pct(value)} · 기대 최종 ${"%.1f".format(expectedFinal)}점"
     else "기대 최종 %.1f점".format(value)
     Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
 }

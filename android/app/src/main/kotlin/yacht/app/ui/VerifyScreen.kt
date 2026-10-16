@@ -67,7 +67,7 @@ fun VerifyScreen(c: AppController) {
                         ResultRow("승률 AI", v.winRateAi, v.scoreAi.toDouble() / (2 * v.games))
                         ResultRow("기대점수 AI", v.winRateEv, v.scoreEv.toDouble() / (2 * v.games))
                         Text(
-                            "차이 ${fmtDelta(yacht.engine.Mode.WIN, v.diff)} (95% 범위 ±%.1f%%p)".format(v.diffCi * 100),
+                            "차이 ${fmtDelta(yacht.engine.Mode.WIN, v.diff)} (95% 범위 ±${"%.1f".format(v.diffCi * 100)}%p)",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = if (v.diff - v.diffCi > 0) gameColors.me else cs.onSurface,

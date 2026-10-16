@@ -268,7 +268,7 @@ private fun DecisionCard(d: DecisionRecord) {
                 HorizontalDivider(color = cs.error.copy(alpha = 0.3f))
                 Text("추천: ${d.best}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "손실 ${fmtDelta(d.mode, -d.loss)} · 기대점수 %+.1f점".format(-d.expectedLoss),
+                    "손실 ${fmtDelta(d.mode, -d.loss)} · 기대점수 ${"%+.1f".format(-d.expectedLoss)}점",
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.error,
                 )
