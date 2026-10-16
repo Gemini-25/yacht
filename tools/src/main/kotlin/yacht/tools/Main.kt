@@ -42,7 +42,7 @@ fun main(args: Array<String>) {
               gen   --out DIR [--precision half|float] [--risk T1,T2,..]
                     build ev.bin, dist.bin and risk_N.bin (risk-attitude policies for search leaves)
               sim   --tables DIR --games N --a win|ev --b win|ev [--budget OPS] [--depthA D] [--depthB D] [--seed S]
-              duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9 [--seed S]
+              duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9,duel-1e9 [--seed S]
                     paired comparison against a max-expectation opponent with shared dice
               bench --tables DIR [--budget OPS]       time the win search at several game stages
             """.trimIndent(),
@@ -190,6 +190,8 @@ private fun parsePlayer(plain: Advisor, risky: Advisor, spec: String): AdvisorPl
         s == "win" -> AdvisorPlayer(advisor, Mode.WIN, name = spec)
         s.startsWith("win-d") -> AdvisorPlayer(advisor, Mode.WIN, fixedDepth = s.removePrefix("win-d").toInt(), name = spec)
         s.startsWith("win-b") -> AdvisorPlayer(advisor, Mode.WIN, budgetOps = s.removePrefix("win-b").toDouble().toLong(), name = spec)
+        // "duel-X": default budget, plus the exact duel search when it costs at most X ops.
+        s.startsWith("duel-") -> AdvisorPlayer(advisor, Mode.WIN, duelOps = s.removePrefix("duel-").toDouble().toLong(), name = spec)
         else -> error("unknown player $spec")
     }
 }

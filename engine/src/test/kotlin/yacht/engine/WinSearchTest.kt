@@ -103,3 +103,75 @@ class WinSearchTest {
         assertTrue(kotlin.math.abs(exact - sim) < 4 * sd + 4e-4, "exact $exact vs simulated $sim (sd $sd)")
     }
 }
+
+class DuelSearchTest {
+    private val tables get() = SolverTest.tables
+
+    /** Plays my remaining turns (re-planning with the duel search) against the max-expectation opponent. */
+    private fun simulate(me0: Board, opp0: Board, meFirst: Boolean, games: Int, seed: Long): Double {
+        val advisor = Advisor(tables)
+        val rng = java.util.Random(seed)
+        val plans = HashMap<Pair<Board, Board>, PlannedTurn>()
+        val oppPlans = HashMap<Board, PlannedTurn>()
+        fun play(turn: PlannedTurn, b: Board): Board {
+            var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+            for (rolls in 1..2) {
+                val k = turn.bestKeep(rolls, r)
+                if (k == Dice.rollAsKeep[r]) break
+                r = Match.throwDice(rng, k)
+            }
+            val c = turn.bestCategory(r)
+            return b.with(c, tables.scores[r, c.ordinal])
+        }
+        var wins = 0
+        repeat(games) {
+            var me = me0
+            var opp = opp0
+            var myMove = true
+            if (!meFirst) check(Category.COUNT - opp.filledCount == Category.COUNT - me.filledCount - 1)
+            while (!me.isComplete || !opp.isComplete) {
+                if (myMove && !me.isComplete) {
+                    val p = plans.getOrPut(me to opp) { advisor.planTurn(me, opp, duel = true) }
+                    me = play(p, me)
+                } else if (!myMove && !opp.isComplete) {
+                    val p = oppPlans.getOrPut(opp) { advisor.planTurn(opp, null, Mode.EXPECTED_SCORE) }
+                    opp = play(p, opp)
+                }
+                myMove = !myMove
+            }
+            if (me.total > opp.total) wins++
+        }
+        return wins.toDouble() / games
+    }
+
+    private fun boards(): Pair<Board, Board> {
+        // Two boxes left each: Yacht and Choice for me, Large Straight and Sixes for the opponent.
+        var me = Board()
+        for (c in Category.ALL) if (c != Category.YACHT && c != Category.CHOICE) me = me.with(c, if (c.isUpper) 3 * c.face else 0)
+        var opp = Board()
+        for (c in Category.ALL) if (c != Category.LARGE_STRAIGHT && c != Category.SIXES) opp = opp.with(c, if (c == Category.CHOICE) 100 else 0)
+        return me to opp
+    }
+
+    @Test
+    fun duelMatchesSimulationOfItsOwnPolicy() {
+        val (me, opp) = boards()
+        val turn = Advisor(tables).planTurn(me, opp, duel = true)
+        assertTrue(turn.duel)
+        val n = 100_000
+        val sim = simulate(me, opp, meFirst = true, n, 3)
+        val sd = sqrt(sim * (1 - sim) / n)
+        println("duel exact ${turn.startValue} vs simulated $sim (sd $sd)")
+        assertTrue(kotlin.math.abs(turn.startValue - sim) < 4 * sd + 1e-3, "duel ${turn.startValue} vs simulated $sim")
+    }
+
+    @Test
+    fun duelIsAtLeastTheFixedOpponentSearch() {
+        val (me, opp) = boards()
+        val advisor = Advisor(tables)
+        val fixed = advisor.planTurn(me, opp, depth = Category.COUNT).startValue
+        val duel = advisor.planTurn(me, opp, duel = true).startValue
+        println("fixed-opponent exact $fixed, duel $duel")
+        assertTrue(duel >= fixed - 1e-3, "duel $duel < fixed $fixed")
+    }
+}

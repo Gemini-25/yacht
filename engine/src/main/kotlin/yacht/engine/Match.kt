@@ -16,11 +16,15 @@ class AdvisorPlayer(
     private val budgetOps: Long = Advisor.DEFAULT_BUDGET,
     private val fixedDepth: Int? = null,
     override val name: String = mode.name.lowercase(),
+    /** Use the exact duel search once its estimated cost is below this many operations. */
+    private val duelOps: Long = 0,
 ) : Player {
     private lateinit var turn: PlannedTurn
 
     override fun startTurn(me: Board, opp: Board) {
-        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth)
+        val duel = mode == Mode.WIN && duelOps > 0 && advisor.canDuel(me, opp) &&
+            DuelSearch.estimateOps(advisor.tables, me, opp) <= duelOps
+        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth, duel = duel)
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)

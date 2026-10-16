@@ -43,6 +43,8 @@ class PlannedTurn internal constructor(
     val depth: Int,
     private val evPlan: TurnPlan,
     private val winPlan: TurnPlan?,
+    /** Exact to the end with the opponent's turns inside the search (DuelSearch). */
+    val duel: Boolean = false,
 ) {
     private val plan get() = winPlan ?: evPlan
     private val total = me.total
@@ -86,11 +88,16 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         tieValue: Double = 0.0,
         depth: Int? = null,
         deadlineNanos: Long = Long.MAX_VALUE,
+        duel: Boolean = false,
     ): PlannedTurn {
         require(me.rules == tables.rules)
         val evPlan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
         if (mode == Mode.EXPECTED_SCORE || opp == null || tables.dist == null) {
             return PlannedTurn(me, Mode.EXPECTED_SCORE, 0, evPlan, null)
+        }
+        if (duel && canDuel(me, opp)) {
+            val search = DuelSearch(tables, me, opp, pool, deadlineNanos)
+            return PlannedTurn(me, Mode.WIN, Category.COUNT - me.filledCount, evPlan, TurnPlan(me, search), duel = true)
         }
         val curve = WinCurve.against(tables, opp, tieValue)
         val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps)
@@ -131,11 +138,34 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
             lastOps = ops.coerceAtLeast(1)
             onImproved(best)
         }
+        // Exact to the end already: if time allows, also let later turns react to the opponent.
+        if (best.depth >= remaining && canDuel(me, opp)) {
+            val ops = DuelSearch.estimateOps(tables, me, opp)
+            val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
+            if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
+                try {
+                    best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = deadlineNanos, duel = true)
+                    onImproved(best)
+                } catch (e: SearchTimeout) {
+                    // keep the exact fixed-opponent plan
+                }
+            }
+        }
         return best
+    }
+
+    /** The duel search needs it to be my turn: the opponent has as many boxes left as me, or one fewer. */
+    fun canDuel(me: Board, opp: Board): Boolean {
+        val kMe = Category.COUNT - me.filledCount
+        val kOpp = Category.COUNT - opp.filledCount
+        return kMe > 0 && (kOpp == kMe || kOpp == kMe - 1)
     }
 
     companion object {
         /** Ops budget for deterministic depth choice (simulations); the app uses a deadline instead. */
         const val DEFAULT_BUDGET = 300_000_000L
+
+        /** Never start a duel search above this many operations, whatever the time budget. */
+        const val DUEL_MAX_OPS = 3_000_000_000L
     }
 }

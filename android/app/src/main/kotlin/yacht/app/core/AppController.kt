@@ -204,6 +204,7 @@ class AppController(
 
     /** Turns searched exactly by the current plan, and whether that reaches the end of the game. */
     val searchDepth: Int get() = currentPlan?.depth ?: 0
+    val searchDuel: Boolean get() = currentPlan?.duel == true
     val searchExact: Boolean
         get() {
             val p = currentPlan ?: return false

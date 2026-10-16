@@ -187,6 +187,7 @@ private fun MatchHeader(c: AppController, s: GameState) {
 
 private fun depthLabel(c: AppController): String = when {
     c.plan?.mode == Mode.EXPECTED_SCORE -> "기대점수 최적"
+    c.searchDuel -> "끝까지 정확 · 상대 결과에 대응"
     c.searchExact -> "끝까지 정확 계산"
     c.searchDepth > 1 -> "앞 ${c.searchDepth}턴 정확 + 근사"
     else -> "이번 턴 정확 + 근사"
