@@ -369,34 +369,47 @@ class DuelSearch(
         private val PROFILE = System.getProperty("yacht.profile") != null
         private const val KERNEL_OPS = 7_500L
 
+        /** Duel tables are never considered with more boxes left than this (cost explodes). */
+        const val MAX_BOXES = 7
+
         /**
          * Rough operation count (undecided contexts only), to decide whether the duel table
-         * fits the time budget. [meToMove] as for the constructor.
+         * fits the time budget. [meToMove] as for the constructor. Cheap enough for the UI
+         * thread: positions with many boxes left are rejected at once, and counting stops as
+         * soon as [limit] is passed (returning [Long.MAX_VALUE]).
          */
-        fun estimateOps(tables: Tables, me: Board, opp: Board, meToMove: Boolean = true): Long {
+        fun estimateOps(tables: Tables, me: Board, opp: Board, meToMove: Boolean = true, limit: Long = Long.MAX_VALUE): Long {
             val kMe = Category.COUNT - me.filledCount
             val kOpp = Category.COUNT - opp.filledCount
             val ok = if (meToMove) kOpp == kMe || kOpp == kMe - 1 else kMe == kOpp || kMe == kOpp - 1
-            if (!ok || kMe + kOpp == 0) return Long.MAX_VALUE
+            if (!ok || kMe + kOpp == 0 || maxOf(kMe, kOpp) > MAX_BOXES) return Long.MAX_VALUE
             val myDecided = WinSearch.bonusDecided(me)
             val oppDecided = WinSearch.bonusDecided(opp)
             val myLevels = WinSearch.masksByLevel(me.mask)
             val oppLevels = WinSearch.masksByLevel(opp.mask)
             val d0 = me.total - opp.total
+            class Info(val rows: Int, val gain: Int, val rest: Int)
+            val myInfo = HashMap<Int, Info>()
+            val oppInfo = HashMap<Int, Info>()
+            fun info(map: HashMap<Int, Info>, b: Board, decided: Boolean, m: Int) = map.getOrPut(m) {
+                Info(WinSearch.upperRows(b, decided, m).values.size, WinSearch.gainMax(tables, b, decided, m), remaining(tables, m, decided))
+            }
             var ops = 0L
             for (h in kMe + kOpp - 1 downTo 1) {
                 val myTurn = (h % 2 == 0) == meToMove
                 val jm = if (meToMove) (h + 1) / 2 else h / 2
                 val jo = if (meToMove) h / 2 else (h + 1) / 2
-                for (mm in myLevels[jm]) for (om in oppLevels[jo]) {
-                    val slices = WinSearch.upperRows(me, myDecided, mm).values.size.toLong() *
-                        WinSearch.upperRows(opp, oppDecided, om).values.size
-                    val lo = d0 - WinSearch.gainMax(tables, opp, oppDecided, om)
-                    val hi = d0 + WinSearch.gainMax(tables, me, myDecided, mm)
-                    val meBest = remaining(tables, mm, myDecided)
-                    val oppBest = remaining(tables, om, oppDecided)
-                    val w = (minOf(hi, oppBest) - maxOf(lo, -meBest + 1) + 1).coerceAtLeast(0)
-                    ops += slices * w * if (myTurn) KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(mm)) else 120L
+                for (mm in myLevels[jm]) {
+                    val mi = info(myInfo, me, myDecided, mm)
+                    for (om in oppLevels[jo]) {
+                        val oi = info(oppInfo, opp, oppDecided, om)
+                        val lo = d0 - oi.gain
+                        val hi = d0 + mi.gain
+                        val w = (minOf(hi, oi.rest) - maxOf(lo, -mi.rest + 1) + 1).coerceAtLeast(0)
+                        ops += mi.rows.toLong() * oi.rows * w *
+                            if (myTurn) KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(mm)) else 120L
+                        if (ops > limit) return Long.MAX_VALUE
+                    }
                 }
             }
             return ops

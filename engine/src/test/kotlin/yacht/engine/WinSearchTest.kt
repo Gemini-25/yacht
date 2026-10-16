@@ -268,3 +268,14 @@ class DuelTableReuseTest {
         }
     }
 }
+
+class EstimateSpeedTest {
+    @Test
+    fun duelEstimateIsCheapAtGameStart() {
+        val tables = SolverTest.tables
+        val t0 = System.nanoTime()
+        repeat(100) { assertEquals(Long.MAX_VALUE, DuelSearch.estimateOps(tables, Board(), Board())) }
+        val ms = (System.nanoTime() - t0) / 1e6
+        assertTrue(ms < 50, "estimate took $ms ms for 100 calls")
+    }
+}

@@ -152,7 +152,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         }
         // Exact to the end already: if time allows, also let later turns react to the opponent.
         if (best.depth >= remaining && canDuel(me, opp)) {
-            val ops = DuelSearch.estimateOps(tables, me, opp)
+            val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS)
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
                 try {

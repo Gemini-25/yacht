@@ -384,8 +384,8 @@ class AppController(
             s.opp.mask and root.second.mask == root.second.mask
         ) return
         val meToMove = s.toMove == Side.ME
-        val ops = DuelSearch.estimateOps(t, s.me, s.opp, meToMove)
-        if (ops == Long.MAX_VALUE || ops > opsPerSecond * DUEL_SECONDS) return
+        val budget = (opsPerSecond * DUEL_SECONDS).toLong()
+        if (DuelSearch.estimateOps(t, s.me, s.opp, meToMove, limit = budget) == Long.MAX_VALUE) return
         stopDuel()
         val stop = AtomicBoolean(false)
         duelStop = stop
