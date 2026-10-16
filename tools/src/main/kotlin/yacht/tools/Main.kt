@@ -43,7 +43,7 @@ fun main(args: Array<String>) {
               gen   --out DIR [--precision half|float] [--risk T1,T2,..]
                     build ev.bin, dist.bin and risk_N.bin (risk-attitude policies for search leaves)
               sim   --tables DIR --games N --a win|ev --b win|ev [--budget OPS] [--depthA D] [--depthB D] [--seed S]
-              duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9,duel-1e9 [--seed S]
+              duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9,duel-1e9 [--seed S] [--from F --csv FILE]
                     paired comparison against a max-expectation opponent with shared dice
               bench --tables DIR [--budget OPS]       time the win search at several game stages
             """.trimIndent(),
@@ -221,6 +221,9 @@ private fun duel(opts: Map<String, String>) {
     val games = opts["games"]?.toInt() ?: 2000
     val seed = opts["seed"]?.toLong() ?: 7L
     val specs = (opts["players"] ?: "ev,win").split(',')
+    // --from F: play games F until F+games of this seed (runs can be split and merged via --csv).
+    val from = opts["from"]?.toInt() ?: 0
+    val csv = opts["csv"]?.let { File(it) }
     val advisor = Advisor(tables.withoutRisk())
     val risky = Advisor(tables)
     val n = specs.size
@@ -233,18 +236,22 @@ private fun duel(opts: Map<String, String>) {
     val t0 = System.nanoTime()
     val tasks = (0 until games).map { g ->
         Callable {
-            val oppStream = DiceStream(DiceStream.mix(seed, g.toLong(), 1))
-            val myStream = DiceStream(DiceStream.mix(seed, g.toLong(), 0))
+            val gid = (from + g).toLong()
+            val oppStream = DiceStream(DiceStream.mix(seed, gid, 1))
+            val myStream = DiceStream(DiceStream.mix(seed, gid, 0))
             val opp = Duplicate.independentGame(rules, AdvisorPlayer(advisor, Mode.EXPECTED_SCORE), oppStream)
             val oppFinal = opp.last().total
             synchronized(oppSum) { oppSum[0] += oppFinal.toLong() }
+            val line = StringBuilder("${from + g},$oppFinal")
             for (i in 0 until n) for (seat in 0..1) {
                 val player = parsePlayer(advisor, risky, specs[i])
                 // seat 0: I move first and see the opponent before its turn; seat 1: after it.
                 val me = Duplicate.playTurns(rules, player, myStream) { turn -> opp[turn + seat] }
                 outcome[i][seat][g] = if (me.total > oppFinal) 1 else if (me.total == oppFinal) 2 else 0
                 synchronized(scoreSum) { scoreSum[i] += me.total.toLong() }
+                line.append(",${me.total}")
             }
+            if (csv != null) synchronized(csv) { csv.appendText(line.append('\n').toString()) }
             val d = done.incrementAndGet()
             if (d % 500 == 0) System.err.println("  $d/$games")
         }

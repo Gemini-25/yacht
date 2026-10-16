@@ -593,7 +593,11 @@ class AppController(
         /** Search budget of the win AI in verification games (deterministic, a few hundred ms per turn). */
         const val VERIFY_BUDGET = 100_000_000L
 
-        /** Longest background computation allowed for the exact duel table (once per game). */
-        const val DUEL_SECONDS = 25.0
+        /**
+         * Longest background computation allowed for the exact duel table (once per game). Kept
+         * short: its win-rate gain over the per-turn exact search was not measurable (-0.20%p ±0.44), while
+         * later turns then need no search at all (battery).
+         */
+        const val DUEL_SECONDS = 10.0
     }
 }
