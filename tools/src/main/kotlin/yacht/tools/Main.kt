@@ -543,7 +543,19 @@ private fun arena(opts: Map<String, String>) {
     // --from F --csv FILE: deals F until F+games, one line per deal (merge chunks with a script).
     val from = opts["from"]?.toInt() ?: 0
     val csv = opts["csv"]?.let { File(it) }
+    // --me app:S plays my side exactly as the app's AI opponent does: anytime planning with an
+    // S-second deadline per turn (instead of a fixed ops budget).
+    val appSeconds = opts["me"]?.takeIf { it.startsWith("app:") }?.removePrefix("app:")?.toDouble()
     val advisor = Advisor(tables)
+    fun mine(): yacht.engine.Player = if (appSeconds == null) AdvisorPlayer(advisor, Mode.WIN, budget) else object : yacht.engine.Player {
+        override val name = "app"
+        private lateinit var turn: yacht.engine.PlannedTurn
+        override fun startTurn(me: Board, opp: Board) {
+            turn = advisor.planTurnAnytime(me, opp, System.nanoTime() + (appSeconds * 1e9).toLong())
+        }
+        override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)
+        override fun chooseCategory(r: Int) = turn.bestCategory(r)
+    }
     fun opponent(spec: String, gid: Long): yacht.engine.Player = when {
         spec == "ev" -> AdvisorPlayer(advisor, Mode.EXPECTED_SCORE, name = "ev")
         spec == "greedy" -> yacht.engine.GreedyPlayer()
@@ -585,7 +597,7 @@ private fun arena(opts: Map<String, String>) {
                     val oppFinal = oppGame.last().total
                     val stream = DiceStream(DiceStream.mix(seed, gid, 0))
                     for (seat in 0..1) {
-                        val me = Duplicate.playTurns(rules, AdvisorPlayer(advisor, Mode.WIN, budget), stream) { t -> oppGame[t + seat] }
+                        val me = Duplicate.playTurns(rules, mine(), stream) { t -> oppGame[t + seat] }
                         val ev = Duplicate.playTurns(rules, AdvisorPlayer(advisor, Mode.EXPECTED_SCORE), stream) { t -> oppGame[t + seat] }
                         ours[seat][g] = outcome(me.total, oppFinal)
                         evs[seat][g] = outcome(ev.total, oppFinal)
