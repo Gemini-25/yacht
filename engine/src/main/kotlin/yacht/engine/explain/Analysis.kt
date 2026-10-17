@@ -75,7 +75,7 @@ class TurnAnalysis(private val tables: Tables, val turn: PlannedTurn) {
     private val rules = tables.rules
     private val cap = rules.bonusThreshold
     private val scores = tables.scores
-    private val leafCache = HashMap<Int, DoubleArray>()
+    private val leafCache = java.util.concurrent.ConcurrentHashMap<Int, DoubleArray>()
 
     /** After [rollsDone] throws holding [keep] (holding all five = stop now). */
     fun keepProfile(rollsDone: Int, keep: Int): Profile = profileOf(plan.finalRolls(rollsDone, keep))
