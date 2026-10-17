@@ -362,7 +362,7 @@ class AppController(
     }
 
     /** Note for holding the current dice and throwing again, if that differs from the advice. */
-    private fun keepNote(): String? {
+    private fun keepNote(): yacht.engine.explain.Deviation? {
         val e = explainer ?: return null
         val s = state ?: return null
         val p = currentPlan ?: return null
@@ -371,7 +371,7 @@ class AppController(
         return runCatching { e.keepDeviation(p, s.opp, a, opt) }.getOrNull()
     }
 
-    private fun scoreNote(c: Category): String? {
+    private fun scoreNote(c: Category): yacht.engine.explain.Deviation? {
         val e = explainer ?: return null
         val s = state ?: return null
         val p = currentPlan ?: return null
@@ -432,8 +432,8 @@ class AppController(
     fun reroll() {
         val note = keepNote()
         val before = state
-        act { Game.reroll(it, advice, rng, note) }
-        if (state !== before) lastNote = note
+        act { Game.reroll(it, advice, rng, note?.reason) }
+        if (state !== before) lastNote = note?.full
     }
 
     fun firstThrow() = act { Game.firstThrow(it, rng) }
@@ -441,8 +441,8 @@ class AppController(
     fun score(c: Category) {
         val note = scoreNote(c)
         val before = state
-        act { Game.score(it, c, advice, note) }
-        if (state !== before) lastNote = note
+        act { Game.score(it, c, advice, note?.reason) }
+        if (state !== before) lastNote = note?.full
     }
 
     fun opponentScore(c: Category, points: Int) {

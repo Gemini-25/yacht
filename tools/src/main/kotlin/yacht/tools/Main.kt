@@ -341,7 +341,7 @@ private fun explain(opts: Map<String, String>) {
                         val pick = if (strayNow && a.categories.size > 1) a.categories[1] else a.bestCategory
                         if (pick != a.bestCategory) {
                             show("비교 ${pick.category.name} ${pick.points}", ex.categoryOption(turn, s.opp, a, pick))
-                            println("  [기록] " + ex.categoryDeviation(turn, s.opp, a, pick))
+                            println("  [기록] " + ex.categoryDeviation(turn, s.opp, a, pick)?.full)
                         }
                         lastMyWin = pick.value
                         s = yacht.engine.game.Game.score(s, pick.category, a)
@@ -350,7 +350,7 @@ private fun explain(opts: Map<String, String>) {
                     val pick = if (strayNow) a.keeps[1 + rng.nextInt(minOf(3, a.keeps.size - 1))] else a.bestKeep!!
                     if (pick != a.bestKeep) {
                         show("비교 ${pick.held}", ex.keepOption(turn, s.opp, a, pick))
-                        println("  [기록] " + ex.keepDeviation(turn, s.opp, a, pick))
+                        println("  [기록] " + ex.keepDeviation(turn, s.opp, a, pick)?.full)
                     }
                     if (pick.held.size == 5) {
                         val c = a.bestCategory

@@ -18,6 +18,11 @@ import kotlin.math.abs
 /** One explanation: a line that is always shown and a few sentences behind "왜?". */
 data class Explanation(val summary: String, val details: List<String> = emptyList())
 
+/** A move that differed from the advice: what was recommended (with the loss) and why. */
+data class Deviation(val head: String, val reason: String?) {
+    val full: String get() = listOfNotNull(head, reason).joinToString(" ")
+}
+
 /**
  * Turns the engine's numbers into plain Korean (해요체). Every number in a sentence is computed
  * by the engine; a reason is only stated when the numbers show it carries the difference.
@@ -115,21 +120,19 @@ class Explainer(private val tables: Tables) {
     }
 
     /** A short note for the record when the player chose [x] over the recommendation; null if it was fine. */
-    fun keepDeviation(turn: PlannedTurn, opp: Board, a: Advice, x: KeepOption): String? {
+    fun keepDeviation(turn: PlannedTurn, opp: Board, a: Advice, x: KeepOption): Deviation? {
         val best = a.bestKeep ?: return null
         if (x.held == best.held || tiny(a.mode, best.value - x.value)) return null
         val head = "추천은 ${Ko.ieosseoyo(keepNoun(best))}(${lossText(a.mode, best.value - x.value)})."
-        val why = keepOption(turn, opp, a, x).details.firstOrNull()
-        return listOfNotNull(head, why).joinToString(" ")
+        return Deviation(head, keepOption(turn, opp, a, x).details.firstOrNull())
     }
 
-    fun categoryDeviation(turn: PlannedTurn, opp: Board, a: Advice, x: CategoryOption): String? {
+    fun categoryDeviation(turn: PlannedTurn, opp: Board, a: Advice, x: CategoryOption): Deviation? {
         val bestValue = a.value
         if (tiny(a.mode, bestValue - x.value)) return null
         val bestNoun = if (a.shouldStop) catNoun(a.bestCategory) else keepNoun(a.bestKeep!!)
         val head = "추천은 ${Ko.ieosseoyo(bestNoun)}(${lossText(a.mode, bestValue - x.value)})."
-        val why = categoryOption(turn, opp, a, x).details.firstOrNull()
-        return listOfNotNull(head, why).joinToString(" ")
+        return Deviation(head, categoryOption(turn, opp, a, x).details.firstOrNull())
     }
 
     // ---- keep comparison -------------------------------------------------------------------------
@@ -634,9 +637,9 @@ class Explainer(private val tables: Tables) {
         val outlook = if (!opp.isComplete && !me.isComplete) {
             val e = eMe - eOpp
             when {
-                abs(e) < 1.5 -> "남은 칸까지 따진 예상 점수는 거의 같아요."
-                e > 0 -> "남은 칸까지 따지면 예상 점수가 ${Ko.int(e)}점쯤 앞서요."
-                else -> "남은 칸까지 따지면 예상 점수가 ${Ko.int(-e)}점쯤 밀려요."
+                abs(e) < 1.5 -> "점수판만 보면 예상 최종 점수는 거의 같아요."
+                e > 0 -> "점수판만 보면 예상 최종 점수가 ${Ko.int(e)}점쯤 앞서요."
+                else -> "점수판만 보면 예상 최종 점수가 ${Ko.int(-e)}점쯤 밀려요."
             }
         } else null
         var summary = when {
@@ -804,7 +807,8 @@ class Explainer(private val tables: Tables) {
                 val mode = mistakes.first().mode
                 val sum = mistakes.filter { it.mode == mode }.sumOf { it.loss }
                 val total = if (mode == Mode.WIN) "승률 ${Ko.eul(Ko.pp(sum))}" else "기대 점수 ${Ko.num(sum)}점을"
-                var line = "추천과 다르게 둔 수가 ${mistakes.size}번 있었고, 모두 합쳐 $total 손해 봤어요."
+                val all = if (mistakes.size > 1) "모두 합쳐 " else ""
+                var line = "추천과 다르게 둔 수가 ${mistakes.size}번 있었고, $all$total 손해 봤어요."
                 val worst = mistakes.maxBy { it.loss }
                 if (mistakes.size > 1 && (mode != Mode.WIN || worst.loss >= 0.005)) {
                     line += " 가장 아까운 수는 ${worst.turn}턴의 ${Ko.ieosseoyo("‘${worst.chosen}’")}(추천: ${worst.best})."

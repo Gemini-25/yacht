@@ -64,7 +64,7 @@ data class DecisionRecord(
     val bestValue: Double,
     val chosenExpected: Double,
     val bestExpected: Double,
-    /** Why the recommendation was better, written when the choice differed from it. */
+    /** Why the recommendation was better (reason only), written when the choice differed from it. */
     val note: String? = null,
 ) {
     val loss: Double get() = (bestValue - chosenValue).coerceAtLeast(0.0)

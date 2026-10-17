@@ -125,12 +125,12 @@ class ExplainTest {
                     add(ex.advice(turn, s.opp, a))
                     for (k in a.keeps.take(4)) add(ex.keepOption(turn, s.opp, a, k))
                     for (c in a.categories.take(4)) add(ex.categoryOption(turn, s.opp, a, c))
-                    a.keeps.getOrNull(1)?.let { k -> ex.keepDeviation(turn, s.opp, a, k)?.let { texts += it } }
-                    a.categories.getOrNull(1)?.let { c -> ex.categoryDeviation(turn, s.opp, a, c)?.let { texts += it } }
+                    a.keeps.getOrNull(1)?.let { k -> ex.keepDeviation(turn, s.opp, a, k)?.let { texts += it.full } }
+                    a.categories.getOrNull(1)?.let { c -> ex.categoryDeviation(turn, s.opp, a, c)?.let { texts += it.full } }
                     val stray = rng.nextInt(6) == 0
                     if (a.shouldStop) {
                         val pick = if (stray && a.categories.size > 1) a.categories[1] else a.bestCategory
-                        val note = if (pick != a.bestCategory) ex.categoryDeviation(turn, s.opp, a, pick) else null
+                        val note = if (pick != a.bestCategory) ex.categoryDeviation(turn, s.opp, a, pick)?.reason else null
                         lastWin = pick.value
                         s = Game.score(s, pick.category, a, note)
                         break
@@ -141,7 +141,7 @@ class ExplainTest {
                         s = Game.score(s, a.bestCategory.category, a)
                         break
                     }
-                    val note = if (pick != a.bestKeep) ex.keepDeviation(turn, s.opp, a, pick) else null
+                    val note = if (pick != a.bestKeep) ex.keepDeviation(turn, s.opp, a, pick)?.reason else null
                     s = Game.holdFaces(s, pick.held)
                     s = Game.reroll(s, a, rng, note)
                 }
