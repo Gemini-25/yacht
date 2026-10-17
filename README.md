@@ -10,6 +10,8 @@
 - **AI와 대전**: 앱이 주사위를 굴리고 승률 최대화 AI와 겨룬다.
 - **설명**: 왜 그 수가 좋은지, 다른 선택지는 왜 못한지, 지금 상황이 어떤지, 상대 턴이 내 승률에 어떤 영향을 줬는지를 자연스러운 한국어로 알려 준다. 문장 속 숫자는 모두 엔진이 계산한 값이다.
 - **기록·복기**: 실전 승률과 95% 신뢰구간, AI 예측 승률이 실제와 맞는지(보정), 판마다 추천과 다르게 둔 수와 그 이유, 게임 총평을 보여 준다.
+- **습관 분석**: 최근 30판의 실수를 유형별(너무 일찍 멈춤, 초이스를 일찍 씀, 불리할 때 너무 안전하게 둠 등)로 묶어 잃은 승률 순으로 보여 주고, 그 국면을 다시 풀게 한다.
+- **연습 퀴즈**: 직관과 정답이 다른 국면만 골라 출제하고, 답하면 승률 손해와 해설을 보여 준다.
 - **승률 검증**: 같은 주사위로 승률 AI와 기대점수 AI를 휴대폰에서 직접 겨뤄 차이를 측정한다.
 
 ## 계산 방식 요약
@@ -28,6 +30,8 @@ tools/build/install/tools/bin/tools gen --out tables     # 계산 표 생성 (�
 tools/build/install/tools/bin/tools duel --tables tables --games 2000 --players ev,win,duel-4e9   # 같은 주사위 비교
 tools/build/install/tools/bin/tools bench --tables tables [--only search|duel]                    # 계산 시간
 tools/build/install/tools/bin/tools explain --tables tables --games 2                             # 샘플 게임의 설명 문장 전부 출력
+tools/build/install/tools/bin/tools quiz --tables tables --n 6                                    # 퀴즈 문제 샘플과 통과율
+tools/build/install/tools/bin/tools headroom --tables tables --games 100 --strong 3e9,1e10        # 더 깊은 탐색이 더해 줄 승률 추정
 ./gradlew -p uicheck compileKotlin                        # 안드로이드 SDK 없이 UI 컴파일 검사
 # APK (안드로이드 SDK 필요)
 tools/build/install/tools/bin/tools gen --out android/app/src/main/assets
