@@ -3,6 +3,7 @@ package yacht.engine
 import yacht.engine.explain.Explainer
 import yacht.engine.explain.Explanation
 import yacht.engine.explain.Ko
+import yacht.engine.game.DecisionNote
 import yacht.engine.game.DiceSource
 import yacht.engine.game.Game
 import yacht.engine.game.GameCodec
@@ -98,6 +99,7 @@ class ExplainTest {
             texts += e.summary
             texts += e.details
         }
+        val finished = ArrayList<GameState>()
         repeat(2) { g ->
             var s = GameState.new(DiceSource.RANDOM, if (g == 0) Side.ME else Side.OPP)
             var lastWin: Double? = null
@@ -130,7 +132,7 @@ class ExplainTest {
                     val stray = rng.nextInt(6) == 0
                     if (a.shouldStop) {
                         val pick = if (stray && a.categories.size > 1) a.categories[1] else a.bestCategory
-                        val note = if (pick != a.bestCategory) ex.categoryDeviation(turn, s.opp, a, pick)?.reason else null
+                        val note = if (pick != a.bestCategory) ex.categoryDeviation(turn, s.opp, a, pick)?.let { DecisionNote(it.reason, it.chosenSd, it.bestSd) } else null
                         lastWin = pick.value
                         s = Game.score(s, pick.category, a, note)
                         break
@@ -138,10 +140,11 @@ class ExplainTest {
                     val pick = if (stray) a.keeps[1] else a.bestKeep!!
                     if (pick.held.size == 5) {
                         lastWin = a.bestCategory.value
-                        s = Game.score(s, a.bestCategory.category, a)
+                        val note = ex.categoryDeviation(turn, s.opp, a, a.bestCategory)?.let { DecisionNote(it.reason, it.chosenSd, it.bestSd) }
+                        s = Game.score(s, a.bestCategory.category, a, note)
                         break
                     }
-                    val note = if (pick != a.bestKeep) ex.keepDeviation(turn, s.opp, a, pick)?.reason else null
+                    val note = if (pick != a.bestKeep) ex.keepDeviation(turn, s.opp, a, pick)?.let { DecisionNote(it.reason, it.chosenSd, it.bestSd) } else null
                     s = Game.holdFaces(s, pick.held)
                     s = Game.reroll(s, a, rng, note)
                 }
@@ -149,7 +152,17 @@ class ExplainTest {
             add(ex.gameSummary(s))
             assertEquals(s, GameCodec.decode(GameCodec.encode(s)))
             assertEquals(24, s.moves.size)
+            finished += s
         }
+        val report = yacht.engine.explain.Habits.analyze(finished)
+        texts += report.summary
+        texts += report.details
+        for (h in report.habits) {
+            assertTrue(h.title.isNotBlank())
+            texts += h.detail
+        }
+        assertTrue(report.mistakes > 0)
+        assertTrue(finished.flatMap { it.decisions }.filter { it.isMistake }.all { it.me != null && it.chosenSd != null })
         assertTrue(texts.size > 500)
         val bad = Regex("""null|NaN|Infinity|을/를|이/가|\$\{|\s{2,}|\.\.|-\d""")
         for (t in texts) {
@@ -157,5 +170,56 @@ class ExplainTest {
             assertTrue(!bad.containsMatchIn(t), "malformed: $t")
             assertTrue(t.last() in ".!)", "unfinished sentence: $t")
         }
+    }
+}
+
+class HabitsAndQuizTest {
+    private val tables get() = SolverTest.tables
+
+    private fun record(
+        kind: yacht.engine.game.DecisionKind,
+        rollsDone: Int,
+        dice: List<Int>,
+        chosenHeld: List<Int>? = null,
+        bestHeld: List<Int>? = null,
+        chosenCategory: Category? = null,
+        bestCategory: Category? = null,
+        win: Double = 0.5,
+        chosenSd: Double? = null,
+        bestSd: Double? = null,
+    ) = yacht.engine.game.DecisionRecord(
+        5, rollsDone, dice, kind, "x", "y", Mode.WIN, win - 0.02, win, 190.0, 190.0,
+        chosenHeld = chosenHeld, bestHeld = bestHeld, chosenCategory = chosenCategory, bestCategory = bestCategory,
+        chosenSd = chosenSd, bestSd = bestSd,
+    )
+
+    @Test
+    fun mistakesAreTagged() {
+        val k = yacht.engine.game.DecisionKind.KEEP
+        val sc = yacht.engine.game.DecisionKind.SCORE
+        val h = yacht.engine.explain.Habits
+        assertEquals(listOf("dropped_dice"), h.tags(record(k, 1, listOf(2, 6, 6, 6, 5), listOf(6, 6), listOf(6, 6, 6))))
+        assertEquals(listOf("extra_dice"), h.tags(record(k, 1, listOf(2, 6, 6, 6, 5), listOf(5, 6, 6, 6), listOf(6, 6, 6))))
+        assertEquals(listOf("greedy_reroll"), h.tags(record(k, 2, listOf(2, 3, 4, 5, 6), listOf(2, 3, 4, 5), bestCategory = Category.LARGE_STRAIGHT)))
+        assertEquals(listOf("early_stop"), h.tags(record(sc, 1, listOf(1, 3, 3, 4, 6), chosenCategory = Category.CHOICE, bestHeld = listOf(3, 3))))
+        assertEquals(listOf("choice_early"), h.tags(record(sc, 3, listOf(2, 2, 3, 3, 3), chosenCategory = Category.CHOICE, bestCategory = Category.FULL_HOUSE)))
+        assertEquals(listOf("avoid_sacrifice"), h.tags(record(sc, 3, listOf(1, 2, 4, 4, 6), chosenCategory = Category.ACES, bestCategory = Category.YACHT)))
+        assertEquals(
+            listOf("other_target", "too_safe"),
+            h.tags(record(k, 1, listOf(1, 2, 3, 6, 6), listOf(6, 6), listOf(1, 2, 3), win = 0.3, chosenSd = 20.0, bestSd = 24.0)),
+        )
+    }
+
+    @Test
+    fun quizFindsAndGradesQuestions() {
+        val quiz = yacht.engine.explain.Quiz(Advisor(tables), Explainer(tables))
+        val (q, plan) = quiz.generate(java.util.Random(1), tries = 60) ?: error("no question")
+        val a = quiz.advice(plan, q)
+        val right = if (a.shouldStop) quiz.gradeCategory(plan, q, a.bestCategory.category) else quiz.gradeKeep(plan, q, a.bestKeep!!.held)
+        assertTrue(right.correct)
+        val wrong = a.categories.first { !(a.shouldStop && it.category == a.bestCategory.category) }
+        val graded = quiz.gradeCategory(plan, q, wrong.category)
+        assertEquals(a.value - wrong.value, graded.loss, 1e-12)
+        assertTrue(graded.explanation.summary.isNotBlank())
     }
 }

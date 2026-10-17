@@ -50,6 +50,9 @@ data class TurnDraft(
 
 enum class DecisionKind { KEEP, SCORE }
 
+/** What the explainer says about a decision that differed from the advice. */
+data class DecisionNote(val reason: String?, val chosenSd: Double? = null, val bestSd: Double? = null)
+
 /** One of my decisions with what the advisor thought of it, for the review screen. */
 data class DecisionRecord(
     val turn: Int,
@@ -66,6 +69,17 @@ data class DecisionRecord(
     val bestExpected: Double,
     /** Why the recommendation was better (reason only), written when the choice differed from it. */
     val note: String? = null,
+    /** The position (for replaying the decision as a quiz). */
+    val me: Board? = null,
+    val opp: Board? = null,
+    /** What was chosen and recommended: dice held for a throw, or the box written. */
+    val chosenHeld: List<Int>? = null,
+    val chosenCategory: Category? = null,
+    val bestHeld: List<Int>? = null,
+    val bestCategory: Category? = null,
+    /** Spread (standard deviation) of my final score after each, when the choice differed. */
+    val chosenSd: Double? = null,
+    val bestSd: Double? = null,
 ) {
     val loss: Double get() = (bestValue - chosenValue).coerceAtLeast(0.0)
     val expectedLoss: Double get() = (bestExpected - chosenExpected).coerceAtLeast(0.0)
@@ -161,7 +175,7 @@ object Game {
      * Throw the non-held dice again. MANUAL clears them for typing; RANDOM throws with [rng].
      * [advice] (for the current dice) is used to record the decision.
      */
-    fun reroll(s: GameState, advice: Advice?, rng: Random? = null, note: String? = null): GameState {
+    fun reroll(s: GameState, advice: Advice?, rng: Random? = null, note: DecisionNote? = null): GameState {
         val d = s.draft
         if (s.toMove != Side.ME || !d.deciding || d.rollsDone >= 3 || d.held.all { it }) return s
         val decisions = if (advice != null) s.decisions + keepRecord(s, advice, note) else s.decisions
@@ -189,7 +203,7 @@ object Game {
         return s.copy(draft = TurnDraft(rollsDone = 1, dice = List(5) { rng.nextInt(6) + 1 }))
     }
 
-    fun score(s: GameState, c: Category, advice: Advice?, note: String? = null): GameState {
+    fun score(s: GameState, c: Category, advice: Advice?, note: DecisionNote? = null): GameState {
         val d = s.draft
         if (s.toMove != Side.ME || !d.deciding || s.me.isFilled(c)) return s
         val points = s.rules.score(d.faces, c)
@@ -228,20 +242,28 @@ object Game {
     private fun bestExpected(a: Advice): Double =
         if (a.shouldStop) a.bestCategory.expectedFinal else a.bestKeep!!.expectedFinal
 
-    private fun keepRecord(s: GameState, a: Advice, note: String?): DecisionRecord {
+    private fun keepRecord(s: GameState, a: Advice, note: DecisionNote?): DecisionRecord {
         val held = s.draft.heldFaces
         val opt = a.keeps.first { it.held == held }
         return DecisionRecord(
             s.myTurnNumber, s.draft.rollsDone, s.draft.faces.sorted(), DecisionKind.KEEP,
-            keepText(held), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a), note,
+            keepText(held), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a),
+            note?.reason, s.me, s.opp, chosenHeld = held, chosenCategory = null,
+            bestHeld = if (a.shouldStop) null else a.bestKeep?.held,
+            bestCategory = if (a.shouldStop) a.bestCategory.category else null,
+            chosenSd = note?.chosenSd, bestSd = note?.bestSd,
         )
     }
 
-    private fun scoreRecord(s: GameState, c: Category, a: Advice, note: String?): DecisionRecord {
+    private fun scoreRecord(s: GameState, c: Category, a: Advice, note: DecisionNote?): DecisionRecord {
         val opt = a.categories.first { it.category == c }
         return DecisionRecord(
             s.myTurnNumber, s.draft.rollsDone, s.draft.faces.sorted(), DecisionKind.SCORE,
-            scoreText(c, opt.points), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a), note,
+            scoreText(c, opt.points), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a),
+            note?.reason, s.me, s.opp, chosenHeld = null, chosenCategory = c,
+            bestHeld = if (a.shouldStop) null else a.bestKeep?.held,
+            bestCategory = if (a.shouldStop) a.bestCategory.category else null,
+            chosenSd = note?.chosenSd, bestSd = note?.bestSd,
         )
     }
 }

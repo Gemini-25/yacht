@@ -129,7 +129,7 @@ fun GameScreen(c: AppController) {
         Column(Modifier.padding(pad).fillMaxSize()) {
             MatchHeader(c, s)
             Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-                ScoreSheet(c, s, onOppCell = { oppPick = it })
+                GameScoreSheet(c, s, onOppCell = { oppPick = it })
             }
             if (s.isOver) GameOverPanel(c, s) else ActionArea(c, s)
         }
@@ -255,11 +255,30 @@ private fun ScoreBadge(name: String, total: Int, color: Color, active: Boolean) 
 // ---- score sheet -----------------------------------------------------------------------------
 
 @Composable
-private fun ScoreSheet(c: AppController, s: GameState, onOppCell: (Category) -> Unit) {
+private fun GameScoreSheet(c: AppController, s: GameState, onOppCell: (Category) -> Unit) {
     val advice = shownAdvice(c, s)
-    val deciding = s.toMove == Side.ME && s.draft.deciding && !s.isOver
-    val recommended = advice?.takeIf { it.shouldStop }?.bestCategory?.category
-    val oppInput = s.toMove == Side.OPP && s.source == DiceSource.MANUAL && !s.isOver
+    ScoreSheet(
+        s,
+        oppLabel = oppName(s),
+        deciding = s.toMove == Side.ME && s.draft.deciding && !s.isOver,
+        recommended = advice?.takeIf { it.shouldStop }?.bestCategory?.category,
+        oppInput = s.toMove == Side.OPP && s.source == DiceSource.MANUAL && !s.isOver,
+        onMyCell = { c.score(it) },
+        onOppCell = onOppCell,
+    )
+}
+
+/** Both score columns; my open boxes show the points of the dice and take a tap while [deciding]. */
+@Composable
+fun ScoreSheet(
+    s: GameState,
+    oppLabel: String,
+    deciding: Boolean,
+    recommended: Category?,
+    oppInput: Boolean,
+    onMyCell: (Category) -> Unit,
+    onOppCell: (Category) -> Unit,
+) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (half in listOf(Category.ALL.take(6), Category.ALL.drop(6))) {
             Card(
@@ -271,7 +290,7 @@ private fun ScoreSheet(c: AppController, s: GameState, onOppCell: (Category) -> 
                     Row {
                         HeadCell("", 1.25f)
                         HeadCell("나", 1f, gameColors.me)
-                        HeadCell(oppName(s), 1f, gameColors.opp)
+                        HeadCell(oppLabel, 1f, gameColors.opp)
                     }
                     for (cat in half) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -279,7 +298,7 @@ private fun ScoreSheet(c: AppController, s: GameState, onOppCell: (Category) -> 
                                 if (cat.isUpper) Box(Modifier.padding(start = 4.dp)) { MiniDie(cat.face, 20.dp) }
                                 else Text(cat.short, style = MaterialTheme.typography.labelMedium, maxLines = 1)
                             }
-                            MyCell(c, s, cat, deciding, cat == recommended)
+                            MyCell(s, cat, deciding, cat == recommended) { onMyCell(cat) }
                             OppCell(s, cat, oppInput) { onOppCell(cat) }
                         }
                     }
@@ -322,7 +341,7 @@ private fun RowScope.Cell(
 }
 
 @Composable
-private fun RowScope.MyCell(c: AppController, s: GameState, cat: Category, deciding: Boolean, recommended: Boolean) {
+private fun RowScope.MyCell(s: GameState, cat: Category, deciding: Boolean, recommended: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val mine = s.me[cat]
     when {
@@ -330,14 +349,14 @@ private fun RowScope.MyCell(c: AppController, s: GameState, cat: Category, decid
         deciding -> {
             val pts = s.rules.score(s.draft.faces, cat)
             if (recommended) {
-                Cell("$pts", bg = gameColors.recommend, color = gameColors.onRecommend, bold = true, onClick = { c.score(cat) })
+                Cell("$pts", bg = gameColors.recommend, color = gameColors.onRecommend, bold = true, onClick = onClick)
             } else {
                 Cell(
                     "$pts",
                     bg = cs.surfaceVariant,
                     color = if (pts == 0) cs.outline else cs.onSurfaceVariant,
                     border = cs.outlineVariant,
-                    onClick = { c.score(cat) },
+                    onClick = onClick,
                 )
             }
         }

@@ -65,6 +65,7 @@ fun AppRoot(c: AppController) {
                 Screen.HISTORY -> HistoryScreen(c)
                 Screen.REVIEW -> ReviewScreen(c)
                 Screen.VERIFY -> VerifyScreen(c)
+                Screen.QUIZ -> QuizScreen(c)
             }
         }
     }
@@ -170,7 +171,12 @@ fun HomeScreen(c: AppController) {
         }
 
         SectionTitle("기록과 검증")
-        MenuCard("기록 · 통계 · 복기", "실전 승률(신뢰구간), 판별 실수와 승률 그래프") { c.openHistory() }
+        MenuCard("기록 · 통계 · 복기", "실전 승률(신뢰구간), 내 습관 분석, 판별 실수와 승률 그래프") { c.openHistory() }
+        val qs = c.quizStats
+        MenuCard(
+            "연습 퀴즈",
+            "헷갈리기 쉬운 국면을 풀고 해설 보기" + if (qs.answered > 0) " · 정답 ${qs.correct}/${qs.answered}" else "",
+        ) { c.openQuiz() }
         MenuCard("승률 검증", "같은 주사위로 승률 AI와 기대점수 AI를 겨뤄 차이를 직접 측정") { c.screen = Screen.VERIFY }
 
         Text(

@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +25,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +84,7 @@ fun HistoryScreen(c: AppController) {
         ) {
             item { StatsCard("실전 (스위치)", games.filter { it.source == DiceSource.MANUAL }) }
             item { StatsCard("앱에서 AI와 대전", games.filter { it.source == DiceSource.RANDOM }) }
+            item { HabitsCard(c) }
             item { CalibrationCard(games) }
             if (games.isEmpty()) {
                 item { Text("끝난 게임이 아직 없습니다.", modifier = Modifier.padding(12.dp)) }
@@ -118,6 +128,50 @@ private fun StatsCard(title: String, games: List<GameState>) {
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+/** Patterns in my recent mistakes, with a way to practise them again. */
+@Composable
+private fun HabitsCard(c: AppController) {
+    val r = c.habits ?: return
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("내 습관 분석", fontWeight = FontWeight.Bold)
+            Text(r.summary, style = MaterialTheme.typography.bodyMedium)
+            if (r.details.isNotEmpty()) Bullets(r.details, cs.onSurfaceVariant)
+            for (h in r.habits.take(4)) HabitRow(c, h)
+            val replayable = r.habits.flatMap { it.examples }.distinct().filter { it.me != null && it.opp != null }
+            if (replayable.isNotEmpty()) {
+                Button(onClick = { c.openQuiz(replayable) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("내 실수 다시 풀기 (${replayable.size}문제)")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HabitRow(c: AppController, h: yacht.engine.explain.Habit) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant.copy(alpha = 0.6f))
+            .clickable { open = !open }.padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(h.title, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("${h.count}번 · -${"%.1f".format(100 * h.loss)}%p", style = MaterialTheme.typography.labelMedium, color = cs.error)
+        }
+        if (open) {
+            Text(h.detail, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            val replayable = h.examples.filter { it.me != null && it.opp != null }
+            if (replayable.isNotEmpty()) {
+                TextButton(onClick = { c.openQuiz(replayable) }) { Text("이 유형만 다시 풀기 (${replayable.size}문제)") }
             }
         }
     }

@@ -4,7 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -28,6 +30,13 @@ import yacht.engine.PlannedTurn
 import yacht.engine.Tables
 import yacht.engine.explain.Explainer
 import yacht.engine.explain.Explanation
+import yacht.engine.explain.HabitReport
+import yacht.engine.explain.Habits
+import yacht.engine.explain.Quiz
+import yacht.engine.explain.QuizQuestion
+import yacht.engine.explain.QuizResult
+import yacht.engine.game.DecisionRecord
+import yacht.engine.game.DecisionNote
 import yacht.engine.game.DiceSource
 import yacht.engine.game.Game
 import yacht.engine.game.GameCodec
@@ -64,7 +73,10 @@ class GameStorage(private val dir: File) {
         settings.writeText(values.entries.joinToString("\n") { "${it.key}=${it.value}" })
 }
 
-enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY }
+enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ }
+
+/** Practice record (saved). */
+data class QuizStats(val answered: Int = 0, val correct: Int = 0, val lossSum: Double = 0.0)
 
 /** How long the app may think about one turn (the first answer is always immediate). */
 enum class ThinkTime(val seconds: Double, val label: String) {
@@ -150,6 +162,7 @@ class AppController(
 
     private var advisor: Advisor? = null
     private var explainer: Explainer? = null
+    private var quizEngine: Quiz? = null
     private val cores = Runtime.getRuntime().availableProcessors()
     private val pool = Executors.newFixedThreadPool(maxOf(2, cores)) { r ->
         Thread(r, "yacht-search").apply { isDaemon = true }
@@ -191,13 +204,18 @@ class AppController(
             try {
                 val t = withContext(Dispatchers.IO) { loadTables() }
                 advisor = Advisor(t, pool)
-                explainer = Explainer(t)
+                explainer = Explainer(t).also { quizEngine = Quiz(Advisor(t, pool), it) }
                 tables = t
                 val settings = withContext(Dispatchers.IO) { storage.loadSettings() }
                 settings["objective"]?.let { v -> Mode.entries.firstOrNull { it.name == v }?.let { objective = it } }
                 settings["think"]?.let { v -> ThinkTime.entries.firstOrNull { it.name == v }?.let { thinkTime = it } }
                 settings["hints"]?.let { showHints = it == "1" }
                 settings["why"]?.let { whyOpen = it == "1" }
+                quizStats = QuizStats(
+                    settings["quizAnswered"]?.toIntOrNull() ?: 0,
+                    settings["quizCorrect"]?.toIntOrNull() ?: 0,
+                    settings["quizLoss"]?.toDoubleOrNull() ?: 0.0,
+                )
                 val saved = withContext(Dispatchers.IO) {
                     storage.loadCurrent()?.let { runCatching { GameCodec.decode(it, t.rules) }.getOrNull() }
                 }
@@ -233,6 +251,8 @@ class AppController(
         foreground = false
         stopDuel()
         verifyJob?.cancel()
+        prefetch?.cancel()
+        prefetch = null
     }
 
     private fun readHistory(): List<GameState> =
@@ -245,6 +265,9 @@ class AppController(
             "think" to thinkTime.name,
             "hints" to if (showHints) "1" else "0",
             "why" to if (whyOpen) "1" else "0",
+            "quizAnswered" to quizStats.answered.toString(),
+            "quizCorrect" to quizStats.correct.toString(),
+            "quizLoss" to quizStats.lossSum.toString(),
         )
         scope.launch(Dispatchers.IO) { storage.saveSettings(values) }
     }
@@ -352,6 +375,13 @@ class AppController(
         return cached(listOf("summary", g.createdAt, g.moves.size, g.decisions.size)) { e.gameSummary(g) }
     }
 
+    /** Patterns in my recent mistakes (finished games). */
+    val habits: HabitReport?
+        get() {
+            val h = history
+            return cached(listOf("habits", h.size, h.firstOrNull()?.createdAt)) { Habits.analyze(h) }
+        }
+
     fun toggleWhy() {
         whyOpen = !whyOpen
         saveSettings()
@@ -432,7 +462,7 @@ class AppController(
     fun reroll() {
         val note = keepNote()
         val before = state
-        act { Game.reroll(it, advice, rng, note?.reason) }
+        act { Game.reroll(it, advice, rng, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }) }
         if (state !== before) lastNote = note?.full
     }
 
@@ -441,7 +471,7 @@ class AppController(
     fun score(c: Category) {
         val note = scoreNote(c)
         val before = state
-        act { Game.score(it, c, advice, note?.reason) }
+        act { Game.score(it, c, advice, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }) }
         if (state !== before) lastNote = note?.full
     }
 
@@ -659,6 +689,111 @@ class AppController(
         val text = "턴 ${s.opp.filledCount + 1}: " + throws.joinToString(" → ") { it.joinToString("") } +
             " ⇒ ${Game.scoreText(c, points)}"
         return Triple(c, points, text)
+    }
+
+    // ---- practice quiz -------------------------------------------------------------------------
+
+    var quiz by mutableStateOf<QuizQuestion?>(null)
+        private set
+    var quizHeld by mutableStateOf(List(5) { false })
+        private set
+    var quizResult by mutableStateOf<QuizResult?>(null)
+        private set
+    var quizLoading by mutableStateOf(false)
+        private set
+    var quizStats by mutableStateOf(QuizStats())
+        private set
+
+    /** Replaying my own past mistakes (with how many are left), or null for generated questions. */
+    var quizReplayLeft by mutableStateOf<Int?>(null)
+        private set
+
+    private var quizPlan: PlannedTurn? = null
+    private var quizJob: Job? = null
+    private var prefetch: Deferred<Pair<QuizQuestion, PlannedTurn>?>? = null
+    private var replays = ArrayDeque<QuizQuestion>()
+
+    /** Opens the quiz: generated questions, or a replay of [mistakes] from my games. */
+    fun openQuiz(mistakes: List<DecisionRecord>? = null) {
+        replays = ArrayDeque(mistakes?.let { Quiz.replays(it) } ?: emptyList())
+        quizReplayLeft = if (mistakes != null) replays.size else null
+        screen = Screen.QUIZ
+        nextQuiz()
+    }
+
+    fun closeQuiz() {
+        quizJob?.cancel()
+        prefetch?.cancel()
+        prefetch = null
+        screen = Screen.HOME
+    }
+
+    fun nextQuiz() {
+        val engine = quizEngine ?: return
+        quizJob?.cancel()
+        quizResult = null
+        quiz = null
+        quizLoading = true
+        val replay = quizReplayLeft != null
+        quizJob = scope.launch {
+            val next = if (replay) {
+                val q = replays.removeFirstOrNull()
+                quizReplayLeft = replays.size
+                q?.let { withContext(Dispatchers.Default) { it to engine.plan(it) } }
+            } else {
+                val ready = prefetch
+                prefetch = null
+                ready?.await() ?: withContext(Dispatchers.Default) { engine.generate(Random()) }
+            }
+            quizLoading = false
+            if (next == null) return@launch
+            quizPlan = next.second
+            quizHeld = List(5) { false }
+            quiz = next.first
+            // Prepare the next generated question while this one is being answered.
+            if (!replay && foreground) prefetch = scope.async(Dispatchers.Default) { engine.generate(Random()) }
+        }
+    }
+
+    fun quizToggle(slot: Int) {
+        val q = quiz ?: return
+        if (quizResult != null || q.rollsDone >= 3) return
+        quizHeld = quizHeld.toMutableList().also { it[slot] = !it[slot] }
+    }
+
+    /** Answer: hold the selected dice and throw the rest. */
+    fun quizKeep() {
+        val engine = quizEngine ?: return
+        val q = quiz ?: return
+        val p = quizPlan ?: return
+        if (quizResult != null || q.rollsDone >= 3) return
+        val held = q.dice.indices.filter { quizHeld[it] }.map { q.dice[it] }
+        if (held.size == 5) return
+        grade(engine.gradeKeep(p, q, held))
+    }
+
+    /** Answer: write the dice into [c] now. */
+    fun quizScore(c: Category) {
+        val engine = quizEngine ?: return
+        val q = quiz ?: return
+        val p = quizPlan ?: return
+        if (quizResult != null || q.me.isFilled(c)) return
+        grade(engine.gradeCategory(p, q, c))
+    }
+
+    private fun grade(r: QuizResult) {
+        quizResult = r
+        quizStats = quizStats.copy(
+            answered = quizStats.answered + 1,
+            correct = quizStats.correct + if (r.correct) 1 else 0,
+            lossSum = quizStats.lossSum + r.loss,
+        )
+        saveSettings()
+    }
+
+    fun resetQuizStats() {
+        quizStats = QuizStats()
+        saveSettings()
     }
 
     // ---- on-device verification ---------------------------------------------------------------

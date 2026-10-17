@@ -106,6 +106,13 @@ class TurnAnalysis(private val tables: Tables, val turn: PlannedTurn) {
         )
     }
 
+    /** Spread of my final score after writing roll [r] into [c] (max-expectation play afterwards). */
+    fun categorySd(r: Int, c: Category): Double {
+        val (_, u2) = after(c.ordinal, scores[r, c.ordinal])
+        val l = leaf(me.mask or c.bit, u2) ?: return Double.NaN
+        return sqrt(l[1].coerceAtLeast(0.0))
+    }
+
     /** P(upper bonus) now, with max-expectation play; NaN without the table. */
     val bonusProbNow: Double get() = bonusAt(me.mask, me.u)
 

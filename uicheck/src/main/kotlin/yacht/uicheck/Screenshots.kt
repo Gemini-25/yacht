@@ -111,6 +111,16 @@ private fun run(args: Array<String>) {
     waitFor("history") { c.screen == Screen.HISTORY }
     shot(c, out, "09_history")
 
+    c.openQuiz()
+    waitFor("quiz", 120_000) { c.quiz != null }
+    shot(c, out, "12_quiz")
+    val q = c.quiz!!
+    // Answer with the most points now (a common mistake the quiz is built around).
+    val greedy = Category.ALL.filter { !q.me.isFilled(it) }.maxBy { q.me.rules.score(q.dice, it) }
+    c.quizScore(greedy)
+    shot(c, out, "13_quiz_result")
+    c.closeQuiz()
+
     c.newGame(DiceSource.RANDOM, Side.ME)
     c.firstThrow()
     waitPlan(c)

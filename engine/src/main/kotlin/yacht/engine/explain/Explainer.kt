@@ -18,8 +18,11 @@ import kotlin.math.abs
 /** One explanation: a line that is always shown and a few sentences behind "왜?". */
 data class Explanation(val summary: String, val details: List<String> = emptyList())
 
-/** A move that differed from the advice: what was recommended (with the loss) and why. */
-data class Deviation(val head: String, val reason: String?) {
+/**
+ * A move that differed from the advice: what was recommended (with the loss) and why, and the
+ * spread of my final score after the chosen and the recommended move (for habit analysis).
+ */
+data class Deviation(val head: String, val reason: String?, val chosenSd: Double? = null, val bestSd: Double? = null) {
     val full: String get() = listOfNotNull(head, reason).joinToString(" ")
 }
 
@@ -124,15 +127,30 @@ class Explainer(private val tables: Tables) {
         val best = a.bestKeep ?: return null
         if (x.held == best.held || tiny(a.mode, best.value - x.value)) return null
         val head = "추천은 ${Ko.ieosseoyo(keepNoun(best))}(${lossText(a.mode, best.value - x.value)})."
-        return Deviation(head, keepOption(turn, opp, a, x).details.firstOrNull())
+        val an = analysis(turn)
+        val r = Dice.rollIndex(a.dice)
+        return Deviation(
+            head, keepOption(turn, opp, a, x).details.firstOrNull(),
+            keepSd(an, a, r, x), keepSd(an, a, r, best),
+        )
     }
+
+    private fun keepSd(an: TurnAnalysis, a: Advice, r: Int, k: KeepOption): Double? =
+        (if (k.held.size == 5) an.categorySd(r, a.bestCategory.category)
+        else an.keepProfile(a.rollsDone, keepIndex(k)).finalSd).takeIf { !it.isNaN() }
 
     fun categoryDeviation(turn: PlannedTurn, opp: Board, a: Advice, x: CategoryOption): Deviation? {
         val bestValue = a.value
         if (tiny(a.mode, bestValue - x.value)) return null
         val bestNoun = if (a.shouldStop) catNoun(a.bestCategory) else keepNoun(a.bestKeep!!)
         val head = "추천은 ${Ko.ieosseoyo(bestNoun)}(${lossText(a.mode, bestValue - x.value)})."
-        return Deviation(head, categoryOption(turn, opp, a, x).details.firstOrNull())
+        val an = analysis(turn)
+        val r = Dice.rollIndex(a.dice)
+        val bestSd = if (a.shouldStop) an.categorySd(r, a.bestCategory.category) else an.keepProfile(a.rollsDone, keepIndex(a.bestKeep!!)).finalSd
+        return Deviation(
+            head, categoryOption(turn, opp, a, x).details.firstOrNull(),
+            an.categorySd(r, x.category).takeIf { !it.isNaN() }, bestSd.takeIf { !it.isNaN() },
+        )
     }
 
     // ---- keep comparison -------------------------------------------------------------------------

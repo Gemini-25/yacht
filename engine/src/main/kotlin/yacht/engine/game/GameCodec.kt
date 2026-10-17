@@ -26,6 +26,10 @@ object GameCodec {
                 "decision=" + listOf(
                     d.turn, d.rollsDone, d.dice.joinToString(","), d.kind, clean(d.chosen), clean(d.best), d.mode,
                     d.chosenValue, d.bestValue, d.chosenExpected, d.bestExpected, clean(d.note.orEmpty()),
+                    d.me?.let { board(it) }.orEmpty(), d.opp?.let { board(it) }.orEmpty(),
+                    d.chosenHeld?.joinToString(",") ?: "-", d.chosenCategory?.name.orEmpty(),
+                    d.bestHeld?.joinToString(",") ?: "-", d.bestCategory?.name.orEmpty(),
+                    d.chosenSd ?: "", d.bestSd ?: "",
                 ).joinToString("|"),
             )
         }
@@ -46,7 +50,7 @@ object GameCodec {
             val k = line.substring(0, i)
             val v = line.substring(i + 1)
             when (k) {
-                "decision" -> decisions += decision(v)
+                "decision" -> decisions += decision(v, rules)
                 "opplog" -> oppLog += v
                 "move" -> v.split('|').let { f ->
                     moves += MoveRecord(Side.valueOf(f[0]), Category.valueOf(f[1]), f[2].toInt(), f[3].toDoubleOrNull())
@@ -85,8 +89,15 @@ object GameCodec {
         return Board.of(rules, cells)
     }
 
-    private fun decision(v: String): DecisionRecord {
+    private fun held(v: String?): List<Int>? = when (v) {
+        null, "-" -> null
+        "" -> emptyList()
+        else -> v.split(',').map { it.toInt() }
+    }
+
+    private fun decision(v: String, rules: RuleSet): DecisionRecord {
         val f = v.split('|')
+        fun opt(i: Int) = f.getOrNull(i)?.takeIf { it.isNotEmpty() }
         return DecisionRecord(
             turn = f[0].toInt(),
             rollsDone = f[1].toInt(),
@@ -99,7 +110,15 @@ object GameCodec {
             bestValue = f[8].toDouble(),
             chosenExpected = f[9].toDouble(),
             bestExpected = f[10].toDouble(),
-            note = f.getOrNull(11)?.takeIf { it.isNotEmpty() },
+            note = opt(11),
+            me = opt(12)?.let { parseBoard(rules, it) },
+            opp = opt(13)?.let { parseBoard(rules, it) },
+            chosenHeld = held(f.getOrNull(14)),
+            chosenCategory = opt(15)?.let { Category.valueOf(it) },
+            bestHeld = held(f.getOrNull(16)),
+            bestCategory = opt(17)?.let { Category.valueOf(it) },
+            chosenSd = opt(18)?.toDouble(),
+            bestSd = opt(19)?.toDouble(),
         )
     }
 }

@@ -37,6 +37,8 @@ fun main(args: Array<String>) {
         "sim" -> sim(opts)
         "duel" -> duel(opts)
         "explain" -> explain(opts)
+        "headroom" -> headroom(opts)
+        "quiz" -> quizSamples(opts)
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"])
         else -> println(
             """
@@ -47,6 +49,9 @@ fun main(args: Array<String>) {
               duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9,duel-1e9 [--seed S] [--from F --csv FILE]
                     paired comparison against a max-expectation opponent with shared dice
               bench --tables DIR [--budget OPS]       time the win search at several game stages
+              headroom --tables DIR --games N [--base 3e8] [--strong 3e9,1e10] [--seed S] [--from F --csv FILE]
+                    how much P(win) per game deeper searches would add: plays the base policy and sums,
+                    at every decision, the loss of its choice as valued by each stronger search
               explain --tables DIR [--games N] [--seed S] [--stray P]
                     print the Korean explanations of whole games (P = chance of not following advice)
             """.trimIndent(),
@@ -366,5 +371,140 @@ private fun explain(opts: Map<String, String>) {
         }
     } finally {
         pool.shutdown()
+    }
+}
+
+/**
+ * Estimates the gain of a deeper search without playing it out: the base policy plays, and at
+ * each of its decisions every stronger search values the base choice against its own best one.
+ * By the performance difference lemma the per-game sum estimates P(win)(strong) - P(win)(base),
+ * with far less noise than comparing game results.
+ */
+private fun headroom(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+    val games = opts["games"]?.toInt() ?: 200
+    val seed = opts["seed"]?.toLong() ?: 41L
+    val from = opts["from"]?.toInt() ?: 0
+    val csv = opts["csv"]?.let { File(it) }
+    val base = opts["base"]?.toDouble()?.toLong() ?: Advisor.DEFAULT_BUDGET
+    val strong = (opts["strong"] ?: "3e9,1e10").split(',').map { it.toDouble().toLong() }
+    val advisor = Advisor(tables)
+    val k = strong.size
+    val lossSum = DoubleArray(k)
+    val differ = IntArray(k)
+    val wins = AtomicInteger()
+    val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+    val t0 = System.nanoTime()
+    val tasks = (0 until games).map { g ->
+        Callable {
+            val gid = (from + g).toLong()
+            val opp = Duplicate.independentGame(rules, AdvisorPlayer(advisor, Mode.EXPECTED_SCORE), DiceStream(DiceStream.mix(seed, gid, 1)))
+            val stream = DiceStream(DiceStream.mix(seed, gid, 0))
+            val line = StringBuilder()
+            for (seat in 0..1) {
+                val loss = DoubleArray(k)
+                val diffs = IntArray(k)
+                var me = Board(rules)
+                for (turn in 0 until Category.COUNT) {
+                    val o = opp[turn + seat]
+                    val baseDepth = WinSearch.chooseDepth(tables, me, base, o)
+                    val plan = advisor.planTurn(me, o, Mode.WIN, base)
+                    val strongPlans = strong.map { b ->
+                        if (WinSearch.chooseDepth(tables, me, b, o) == baseDepth) null else advisor.planTurn(me, o, Mode.WIN, b)
+                    }
+                    if (System.getenv("HEADROOM_DEBUG") != null) {
+                        System.err.println("game $gid seat $seat turn $turn depth $baseDepth -> " + strong.map { WinSearch.chooseDepth(tables, me, it, o) })
+                    }
+                    fun judge(rollsDone: Int, r: Int, chosenKeep: Int?, chosenCat: Category?) {
+                        val faces = Dice.rollFaces(r)
+                        for ((i, sp) in strongPlans.withIndex()) {
+                            if (sp == null) continue
+                            val a = sp.advise(rollsDone, faces)
+                            val best = if (a.keeps.isNotEmpty()) a.keeps.first().value else a.bestCategory.value
+                            val mine = if (chosenKeep != null) {
+                                a.keeps.first { it.held == Dice.keepFaces(chosenKeep) }.value
+                            } else {
+                                a.categories.first { it.category == chosenCat }.value
+                            }
+                            val l = best - mine
+                            if (l > 1e-9) {
+                                loss[i] += l
+                                diffs[i]++
+                            }
+                        }
+                    }
+                    var r = stream.throwDice(Dice.EMPTY_KEEP, turn, 0)
+                    var stopped = false
+                    for (rollsDone in 1..2) {
+                        val keep = plan.bestKeep(rollsDone, r)
+                        judge(rollsDone, r, keep, null)
+                        if (keep == Dice.rollAsKeep[r]) {
+                            stopped = true
+                            break
+                        }
+                        r = stream.throwDice(keep, turn, rollsDone)
+                    }
+                    val c = plan.bestCategory(r)
+                    // After stopping early the category is part of the stop decision already judged.
+                    if (!stopped) judge(3, r, null, c)
+                    me = me.with(c, tables.scores[r, c.ordinal])
+                }
+                val oppFinal = opp.last().total
+                if (me.total > oppFinal) wins.incrementAndGet()
+                synchronized(lossSum) {
+                    for (i in 0 until k) {
+                        lossSum[i] += loss[i]
+                        differ[i] += diffs[i]
+                    }
+                }
+                line.append("${from + g},$seat,${me.total},$oppFinal")
+                for (i in 0 until k) line.append(",%.7f,%d".format(loss[i], diffs[i]))
+                line.append('\n')
+            }
+            if (csv != null) synchronized(csv) { csv.appendText(line.toString()) }
+        }
+    }
+    pool.invokeAll(tasks).forEach { it.get() }
+    pool.shutdown()
+    val n = 2 * games
+    println("headroom: $games games x 2 seats in %.0fs; base budget %.0e wins %.2f%%".format((System.nanoTime() - t0) / 1e9, base.toDouble(), 100.0 * wins.get() / n))
+    for (i in 0 until k) {
+        println("  strong %.0e: estimated gain %+.3f%%p per game, differing decisions %.2f per game".format(
+            strong[i].toDouble(), 100 * lossSum[i] / n, differ[i].toDouble() / n))
+    }
+}
+
+/** Prints generated practice questions with their answers, to check what the quiz asks. */
+private fun quizSamples(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+    val n = opts["n"]?.toInt() ?: 6
+    val rng = Random(opts["seed"]?.toLong() ?: 9L)
+    val advisor = Advisor(tables)
+    val ex = yacht.engine.explain.Explainer(tables)
+    val quiz = yacht.engine.explain.Quiz(advisor, ex)
+    var tries = 0
+    var found = 0
+    val tStart = System.nanoTime()
+    while (found < 40 && tries < 400) {
+        tries++
+        if (quiz.generate(rng, tries = 1) != null) found++
+    }
+    println("acceptance: $found / $tries, %.2fs per try".format((System.nanoTime() - tStart) / 1e9 / tries))
+    repeat(n) {
+        val t0 = System.nanoTime()
+        val (q, plan) = quiz.generate(rng) ?: run { println("no question"); return@repeat }
+        val a = quiz.advice(plan, q)
+        println("--- me ${q.me.total} (${q.me.filledCount} filled) vs opp ${q.opp.total} (${q.opp.filledCount}); roll ${q.rollsDone}: ${q.dice}  [%.1fs]".format((System.nanoTime() - t0) / 1e9))
+        println("    me:  ${q.me}")
+        println("    opp: ${q.opp}")
+        val e = ex.advice(plan, q.opp, a)
+        val best = if (a.shouldStop) "${a.bestCategory.category} ${a.bestCategory.points}" else "keep ${a.bestKeep!!.held}"
+        println("  best: $best  P(win) %.3f".format(a.value))
+        println("  why: ${e.summary} / ${e.details.joinToString(" / ")}")
+        val wrong = a.categories.maxBy { it.points }
+        if (!(a.shouldStop && a.bestCategory.category == wrong.category)) {
+            val g = quiz.gradeCategory(plan, q, wrong.category)
+            println("  if ${g.chosen}: correct=${g.correct} loss " + "%.4f".format(g.loss) + " / ${g.explanation.summary} / ${g.explanation.details.joinToString(" / ")}")
+        }
     }
 }
