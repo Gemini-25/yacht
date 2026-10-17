@@ -482,12 +482,17 @@ private fun quizSamples(opts: Map<String, String>) {
     val quiz = yacht.engine.explain.Quiz(advisor, ex)
     var tries = 0
     var found = 0
+    val kinds = HashMap<String, Int>()
     val tStart = System.nanoTime()
-    while (found < 40 && tries < 400) {
+    while (found < 60 && tries < 600) {
         tries++
-        if (quiz.generate(rng, tries = 1) != null) found++
+        val got = quiz.generate(rng, tries = 1, wantKeep = if (tries % 2 == 0) true else null) ?: continue
+        found++
+        val a = quiz.advice(got.second, got.first)
+        val k = "roll ${got.first.rollsDone} " + if (a.shouldStop) "box" else "keep"
+        kinds[k] = (kinds[k] ?: 0) + 1
     }
-    println("acceptance: $found / $tries, %.2fs per try".format((System.nanoTime() - tStart) / 1e9 / tries))
+    println("acceptance: $found / $tries, %.2fs per try; ".format((System.nanoTime() - tStart) / 1e9 / tries) + kinds.toSortedMap())
     repeat(n) {
         val t0 = System.nanoTime()
         val (q, plan) = quiz.generate(rng) ?: run { println("no question"); return@repeat }

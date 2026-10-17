@@ -713,6 +713,12 @@ class AppController(
     private var prefetch: Deferred<Pair<QuizQuestion, PlannedTurn>?>? = null
     private var replays = ArrayDeque<QuizQuestion>()
 
+    /** Alternates questions about holding dice and about choosing a box. */
+    private var quizCount = 0
+
+    private fun generateQuiz(engine: Quiz): Pair<QuizQuestion, PlannedTurn>? =
+        engine.generate(Random(), wantKeep = quizCount++ % 2 == 0)
+
     /** Opens the quiz: generated questions, or a replay of [mistakes] from my games. */
     fun openQuiz(mistakes: List<DecisionRecord>? = null) {
         replays = ArrayDeque(mistakes?.let { Quiz.replays(it) } ?: emptyList())
@@ -743,7 +749,7 @@ class AppController(
             } else {
                 val ready = prefetch
                 prefetch = null
-                ready?.await() ?: withContext(Dispatchers.Default) { engine.generate(Random()) }
+                ready?.await() ?: withContext(Dispatchers.Default) { generateQuiz(engine) }
             }
             quizLoading = false
             if (next == null) return@launch
@@ -751,7 +757,7 @@ class AppController(
             quizHeld = List(5) { false }
             quiz = next.first
             // Prepare the next generated question while this one is being answered.
-            if (!replay && foreground) prefetch = scope.async(Dispatchers.Default) { engine.generate(Random()) }
+            if (!replay && foreground) prefetch = scope.async(Dispatchers.Default) { generateQuiz(engine) }
         }
     }
 

@@ -52,18 +52,25 @@ class Quiz(private val advisor: Advisor, private val explainer: Explainer) {
 
     fun advice(plan: PlannedTurn, q: QuizQuestion): Advice = plan.advise(q.rollsDone, q.dice)
 
-    /** A new question with its plan, or null if none was found in [tries] attempts. */
-    fun generate(rng: Random, tries: Int = 16): Pair<QuizQuestion, PlannedTurn>? {
+    /**
+     * A new question with its plan, or null if none was found in [tries] attempts. [wantKeep]
+     * asks for a question whose answer is to hold dice and throw again (true) or to write a box
+     * (false); null takes either.
+     */
+    fun generate(rng: Random, tries: Int = 40, wantKeep: Boolean? = null): Pair<QuizQuestion, PlannedTurn>? {
         repeat(tries) {
-            val q = randomPosition(rng)
+            val q = randomPosition(rng, if (wantKeep == true) 1 + rng.nextInt(2) else 1 + rng.nextInt(3))
             val plan = plan(q)
-            if (plan.mode == Mode.WIN && isInteresting(advice(plan, q))) return q to plan
+            if (plan.mode != Mode.WIN) return@repeat
+            val a = advice(plan, q)
+            if (wantKeep != null && a.shouldStop == wantKeep) return@repeat
+            if (isInteresting(a)) return q to plan
         }
-        return null
+        return if (wantKeep != null) generate(rng, tries, null) else null
     }
 
     /** A realistic position: both sides played for max expectation so far, on random dice. */
-    private fun randomPosition(rng: Random): QuizQuestion {
+    private fun randomPosition(rng: Random, rollsDone: Int): QuizQuestion {
         val filled = rng.nextInt(Category.COUNT)
         val meFirst = rng.nextBoolean()
         var me = Board(rules)
@@ -71,7 +78,6 @@ class Quiz(private val advisor: Advisor, private val explainer: Explainer) {
         val oppTurns = if (meFirst) filled else minOf(Category.COUNT, filled + 1)
         repeat(filled) { me = playTurn(me, rng) }
         repeat(oppTurns) { opp = playTurn(opp, rng) }
-        val rollsDone = 1 + rng.nextInt(3)
         val plan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
         var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
         for (k in 1 until rollsDone) {
