@@ -64,11 +64,21 @@ data class DecisionRecord(
     val bestValue: Double,
     val chosenExpected: Double,
     val bestExpected: Double,
+    /** Why the recommendation was better, written when the choice differed from it. */
+    val note: String? = null,
 ) {
     val loss: Double get() = (bestValue - chosenValue).coerceAtLeast(0.0)
     val expectedLoss: Double get() = (bestExpected - chosenExpected).coerceAtLeast(0.0)
     val isMistake: Boolean get() = if (mode == Mode.WIN) loss > 0.0005 else loss > 0.05
 }
+
+/** One box written by either side, with my P(win) right after it when known (WIN mode). */
+data class MoveRecord(
+    val side: Side,
+    val category: Category,
+    val points: Int,
+    val winAfter: Double? = null,
+)
 
 data class GameState(
     val source: DiceSource,
@@ -80,6 +90,8 @@ data class GameState(
     val decisions: List<DecisionRecord> = emptyList(),
     /** Human-readable log of the opponent's turns (vs AI). */
     val oppLog: List<String> = emptyList(),
+    /** Every box written, in order. */
+    val moves: List<MoveRecord> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
 ) {
     val rules: RuleSet get() = me.rules
@@ -149,10 +161,10 @@ object Game {
      * Throw the non-held dice again. MANUAL clears them for typing; RANDOM throws with [rng].
      * [advice] (for the current dice) is used to record the decision.
      */
-    fun reroll(s: GameState, advice: Advice?, rng: Random? = null): GameState {
+    fun reroll(s: GameState, advice: Advice?, rng: Random? = null, note: String? = null): GameState {
         val d = s.draft
         if (s.toMove != Side.ME || !d.deciding || d.rollsDone >= 3 || d.held.all { it }) return s
-        val decisions = if (advice != null) s.decisions + keepRecord(s, advice) else s.decisions
+        val decisions = if (advice != null) s.decisions + keepRecord(s, advice, note) else s.decisions
         val next = when (s.source) {
             DiceSource.MANUAL -> d.copy(
                 dice = d.dice.mapIndexed { i, f -> if (d.held[i]) f else null },
@@ -177,44 +189,59 @@ object Game {
         return s.copy(draft = TurnDraft(rollsDone = 1, dice = List(5) { rng.nextInt(6) + 1 }))
     }
 
-    fun score(s: GameState, c: Category, advice: Advice?): GameState {
+    fun score(s: GameState, c: Category, advice: Advice?, note: String? = null): GameState {
         val d = s.draft
         if (s.toMove != Side.ME || !d.deciding || s.me.isFilled(c)) return s
         val points = s.rules.score(d.faces, c)
-        val decisions = if (advice != null) s.decisions + scoreRecord(s, c, advice) else s.decisions
+        val decisions = if (advice != null) s.decisions + scoreRecord(s, c, advice, note) else s.decisions
+        val win = advice?.takeIf { it.mode == Mode.WIN }?.categories?.firstOrNull { it.category == c }?.value
         val me = s.me.with(c, points)
-        val moved = s.copy(me = me, draft = TurnDraft(), decisions = decisions)
+        val moved = s.copy(me = me, draft = TurnDraft(), decisions = decisions, moves = s.moves + MoveRecord(Side.ME, c, points, win))
         return moved.copy(toMove = nextToMove(moved, Side.ME))
     }
 
     fun opponentScore(s: GameState, c: Category, points: Int, log: String? = null): GameState {
         if (s.toMove != Side.OPP || s.opp.isFilled(c)) return s
-        val moved = s.copy(opp = s.opp.with(c, points), oppLog = if (log != null) s.oppLog + log else s.oppLog)
+        val moved = s.copy(
+            opp = s.opp.with(c, points),
+            oppLog = if (log != null) s.oppLog + log else s.oppLog,
+            moves = s.moves + MoveRecord(Side.OPP, c, points),
+        )
         return moved.copy(toMove = nextToMove(moved, Side.OPP))
     }
 
-    private fun keepText(held: List<Int>) = if (held.isEmpty()) "모두 다시" else held.joinToString(" ") + " 고정"
+    /** Records my P(win) after the opponent's last move, once my next turn has been planned. */
+    fun noteWinAfterOpponent(s: GameState, win: Double): GameState {
+        val last = s.moves.lastOrNull() ?: return s
+        if (last.side != Side.OPP || last.winAfter == win) return s
+        return s.copy(moves = s.moves.dropLast(1) + last.copy(winAfter = win))
+    }
+
+    fun keepText(held: List<Int>) = if (held.isEmpty()) "모두 다시" else held.joinToString(" ") + " 고정"
+
+    /** "초이스 23점", "‘6’ 18점" (upper boxes are numbers, so they are quoted). */
+    fun scoreText(c: Category, points: Int) = (if (c.isUpper) "‘${c.face}’" else c.label) + " ${points}점"
 
     private fun bestText(a: Advice): String =
-        if (a.shouldStop) "${a.bestCategory.category.label} ${a.bestCategory.points}점" else keepText(a.bestKeep!!.held)
+        if (a.shouldStop) scoreText(a.bestCategory.category, a.bestCategory.points) else keepText(a.bestKeep!!.held)
 
     private fun bestExpected(a: Advice): Double =
         if (a.shouldStop) a.bestCategory.expectedFinal else a.bestKeep!!.expectedFinal
 
-    private fun keepRecord(s: GameState, a: Advice): DecisionRecord {
+    private fun keepRecord(s: GameState, a: Advice, note: String?): DecisionRecord {
         val held = s.draft.heldFaces
         val opt = a.keeps.first { it.held == held }
         return DecisionRecord(
             s.myTurnNumber, s.draft.rollsDone, s.draft.faces.sorted(), DecisionKind.KEEP,
-            keepText(held), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a),
+            keepText(held), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a), note,
         )
     }
 
-    private fun scoreRecord(s: GameState, c: Category, a: Advice): DecisionRecord {
+    private fun scoreRecord(s: GameState, c: Category, a: Advice, note: String?): DecisionRecord {
         val opt = a.categories.first { it.category == c }
         return DecisionRecord(
             s.myTurnNumber, s.draft.rollsDone, s.draft.faces.sorted(), DecisionKind.SCORE,
-            "${c.label} ${opt.points}점", bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a),
+            scoreText(c, opt.points), bestText(a), a.mode, opt.value, a.value, opt.expectedFinal, bestExpected(a), note,
         )
     }
 }

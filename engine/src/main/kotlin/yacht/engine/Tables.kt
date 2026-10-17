@@ -37,6 +37,15 @@ class EvTable(val rules: RuleSet, val values: DoubleArray) {
     operator fun get(mask: Int, u: Int): Double = values[mask * rules.upperStates + u]
 }
 
+/** P(upper bonus by the end of the game) from (mask, u) under the max-expectation policy. */
+class BonusTable(val rules: RuleSet, private val values: FloatArray) {
+    init {
+        require(values.size == Category.FULL_MASK.inc() * rules.upperStates)
+    }
+
+    operator fun get(mask: Int, u: Int): Double = values[mask * rules.upperStates + u].toDouble()
+}
+
 /**
  * Distribution of remaining points from (mask, u) when playing the max-expectation policy.
  * Stored sparsely as half or single precision floats: pmf over [lo, lo + len).
@@ -87,13 +96,15 @@ class Tables(
     val ev: EvTable,
     val dist: DistTable?,
     val riskDists: List<DistTable> = emptyList(),
+    /** For explanations only (never used by the search). */
+    val bonus: BonusTable? = null,
 ) {
     val scores: ScoreTable = ScoreTable.of(rules)
 
     /** Policies available for evaluating search leaves. */
     val leafDists: List<DistTable> = listOfNotNull(dist) + riskDists
 
-    fun withoutRisk(): Tables = Tables(rules, ev, dist)
+    fun withoutRisk(): Tables = Tables(rules, ev, dist, bonus = bonus)
 }
 
 /** IEEE 754 half precision for non-negative values up to 1 (probabilities). */
@@ -124,21 +135,37 @@ internal object Half {
 object TableIO {
     private const val EV_MAGIC = 0x59455631 // "YEV1"
     private const val DIST_MAGIC = 0x59445334 // "YDS4"
+    private const val BONUS_MAGIC = 0x59424e31 // "YBN1"
 
-    fun writeEv(out: OutputStream, rules: RuleSet, values: DoubleArray) {
+    private fun writeFloats(out: OutputStream, magic: Int, rules: RuleSet, values: DoubleArray) {
         val buf = ByteBuffer.allocate(12 + values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
-        buf.putInt(EV_MAGIC).putInt(rules.fingerprint).putInt(rules.upperStates)
+        buf.putInt(magic).putInt(rules.fingerprint).putInt(rules.upperStates)
         for (v in values) buf.putFloat(v.toFloat())
         out.write(buf.array())
     }
 
-    fun readEv(buf: ByteBuffer, rules: RuleSet): EvTable {
+    private fun readFloats(buf: ByteBuffer, magic: Int, rules: RuleSet, what: String): ByteBuffer {
         val b = buf.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        check(b.getInt() == EV_MAGIC) { "not an EV table" }
-        check(b.getInt() == rules.fingerprint) { "EV table was built for different rules" }
+        check(b.getInt() == magic) { "not a $what table" }
+        check(b.getInt() == rules.fingerprint) { "$what table was built for different rules" }
         check(b.getInt() == rules.upperStates)
+        return b
+    }
+
+    fun writeEv(out: OutputStream, rules: RuleSet, values: DoubleArray) = writeFloats(out, EV_MAGIC, rules, values)
+
+    fun readEv(buf: ByteBuffer, rules: RuleSet): EvTable {
+        val b = readFloats(buf, EV_MAGIC, rules, "EV")
         val n = Category.FULL_MASK.inc() * rules.upperStates
         return EvTable(rules, DoubleArray(n) { b.getFloat().toDouble() })
+    }
+
+    fun writeBonus(out: OutputStream, rules: RuleSet, values: DoubleArray) = writeFloats(out, BONUS_MAGIC, rules, values)
+
+    fun readBonus(buf: ByteBuffer, rules: RuleSet): BonusTable {
+        val b = readFloats(buf, BONUS_MAGIC, rules, "bonus")
+        val n = Category.FULL_MASK.inc() * rules.upperStates
+        return BonusTable(rules, FloatArray(n) { b.getFloat() })
     }
 
     /** [valueBytes] 2 stores half floats (compact), 4 single floats. */

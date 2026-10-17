@@ -36,6 +36,7 @@ fun main(args: Array<String>) {
         )
         "sim" -> sim(opts)
         "duel" -> duel(opts)
+        "explain" -> explain(opts)
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"])
         else -> println(
             """
@@ -46,6 +47,8 @@ fun main(args: Array<String>) {
               duel  --tables DIR --games N --players ev,win,win-d1,win-b1e9,duel-1e9 [--seed S] [--from F --csv FILE]
                     paired comparison against a max-expectation opponent with shared dice
               bench --tables DIR [--budget OPS]       time the win search at several game stages
+              explain --tables DIR [--games N] [--seed S] [--stray P]
+                    print the Korean explanations of whole games (P = chance of not following advice)
             """.trimIndent(),
         )
     }
@@ -65,7 +68,9 @@ private fun gen(out: File, valueBytes: Int, risk: List<Double>) {
     println("built in %.1fs; optimal expected score %.4f".format((System.nanoTime() - t0) / 1e9, b.ev[0]))
     File(out, "ev.bin").outputStream().use { TableIO.writeEv(it, rules, b.ev) }
     File(out, "dist.bin").outputStream().use { TableIO.writeDist(it, rules, b.distLo, b.dist, valueBytes) }
-    for (f in listOf("ev.bin", "dist.bin")) println("  $f ${File(out, f).length() / 1024} KiB")
+    File(out, "bonus.bin").outputStream().use { TableIO.writeBonus(it, rules, b.bonus) }
+    println("  P(bonus) at the start %.4f".format(b.bonus[0]))
+    for (f in listOf("ev.bin", "dist.bin", "bonus.bin")) println("  $f ${File(out, f).length() / 1024} KiB")
     risk.forEachIndexed { i, theta ->
         t0 = System.nanoTime()
         val rb = TableBuilder(rules, theta = theta).build(withDist = true)
@@ -82,7 +87,8 @@ fun loadTables(dir: File): Tables {
     }
     val risk = dir.listFiles()?.filter { it.name.startsWith("risk_") && it.name.endsWith(".bin") }
         ?.sortedBy { it.name }?.map { TableIO.readDist(map(it.name), rules) } ?: emptyList()
-    return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules), risk)
+    val bonus = File(dir, "bonus.bin").takeIf { it.exists() }?.let { TableIO.readBonus(map(it.name), rules) }
+    return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules), risk, bonus)
 }
 
 private fun sim(opts: Map<String, String>) {
@@ -277,5 +283,88 @@ private fun duel(opts: Map<String, String>) {
             line.append("  vs %s: %+.2f%%p ±%.2f".format(specs[0], 100 * mean, 100 * 1.96 * sd / sqrt(diffs.size.toDouble())))
         }
         println(line)
+    }
+}
+
+/** Plays games (win AI vs max-expectation AI) and prints every explanation the app would show. */
+private fun explain(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+    val games = opts["games"]?.toInt() ?: 2
+    val stray = opts["stray"]?.toDouble() ?: 0.15
+    val mode = if (opts["mode"] == "ev") Mode.EXPECTED_SCORE else Mode.WIN
+    val rng = Random(opts["seed"]?.toLong() ?: 3L)
+    val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+    val advisor = Advisor(tables, pool)
+    val ex = yacht.engine.explain.Explainer(tables)
+    fun show(tag: String, e: yacht.engine.explain.Explanation) {
+        println("  [$tag] ${e.summary}")
+        for (d in e.details) println("        - $d")
+    }
+    try {
+        repeat(games) { g ->
+            println("==================== game ${g + 1} ====================")
+            var s = yacht.engine.game.GameState.new(
+                yacht.engine.game.DiceSource.RANDOM,
+                if (g % 2 == 0) yacht.engine.game.Side.ME else yacht.engine.game.Side.OPP,
+                rules,
+            )
+            var lastMyWin: Double? = null
+            while (!s.isOver) {
+                if (s.toMove == yacht.engine.game.Side.OPP) {
+                    val turn = advisor.planTurn(s.opp, s.me, Mode.EXPECTED_SCORE)
+                    var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+                    for (rollsDone in 1..2) {
+                        val k = turn.bestKeep(rollsDone, r)
+                        if (k == Dice.rollAsKeep[r]) break
+                        r = Match.throwDice(rng, k)
+                    }
+                    val c = turn.bestCategory(r)
+                    s = yacht.engine.game.Game.opponentScore(s, c, tables.scores[r, c.ordinal])
+                    continue
+                }
+                val turn = advisor.planTurn(s.me, s.opp, mode)
+                val win = turn.startValue.takeIf { mode == Mode.WIN }
+                if (win != null) s = yacht.engine.game.Game.noteWinAfterOpponent(s, win)
+                println("--- my turn ${s.myTurnNumber}: me ${s.me.total} vs opp ${s.opp.total} (depth ${turn.depth})")
+                val last = s.moves.lastOrNull()
+                if (last != null && last.side == yacht.engine.game.Side.OPP) {
+                    println("  [상대] " + ex.opponentMove(s.opp, last, lastMyWin))
+                }
+                show("상황", ex.situation(s.me, s.opp, win))
+                s = yacht.engine.game.Game.firstThrow(s, rng)
+                while (true) {
+                    val a = turn.advise(s.draft.rollsDone, s.draft.faces)
+                    println("  roll ${a.rollsDone}: ${a.dice.joinToString("")}")
+                    show("추천", ex.advice(turn, s.opp, a))
+                    val strayNow = rng.nextDouble() < stray
+                    if (a.shouldStop) {
+                        val pick = if (strayNow && a.categories.size > 1) a.categories[1] else a.bestCategory
+                        if (pick != a.bestCategory) {
+                            show("비교 ${pick.category.name} ${pick.points}", ex.categoryOption(turn, s.opp, a, pick))
+                            println("  [기록] " + ex.categoryDeviation(turn, s.opp, a, pick))
+                        }
+                        lastMyWin = pick.value
+                        s = yacht.engine.game.Game.score(s, pick.category, a)
+                        break
+                    }
+                    val pick = if (strayNow) a.keeps[1 + rng.nextInt(minOf(3, a.keeps.size - 1))] else a.bestKeep!!
+                    if (pick != a.bestKeep) {
+                        show("비교 ${pick.held}", ex.keepOption(turn, s.opp, a, pick))
+                        println("  [기록] " + ex.keepDeviation(turn, s.opp, a, pick))
+                    }
+                    if (pick.held.size == 5) {
+                        val c = a.bestCategory
+                        lastMyWin = c.value
+                        s = yacht.engine.game.Game.score(s, c.category, a)
+                        break
+                    }
+                    s = yacht.engine.game.Game.holdFaces(s, pick.held)
+                    s = yacht.engine.game.Game.reroll(s, a, rng)
+                }
+            }
+            show("결과", ex.gameSummary(s))
+        }
+    } finally {
+        pool.shutdown()
     }
 }

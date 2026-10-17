@@ -75,4 +75,23 @@ class TurnPlan(val board: Board, private val after: AfterTurn) {
     }
 
     fun bestKeep(rollsDone: Int, r: Int): Int = kernel.argBestKeep(if (rollsDone == 1) kernel.k1 else kernel.k2, r)
+
+    /**
+     * Distribution of the turn's final roll after holding [keep] following [rollsDone] (1 or 2)
+     * throws, when the rest of the turn follows this plan. Holding all five dice ends the turn.
+     */
+    fun finalRolls(rollsDone: Int, keep: Int): DoubleArray {
+        require(rollsDone == 1 || rollsDone == 2)
+        val next = DoubleArray(Dice.ROLLS)
+        for (j in Dice.tStart[keep] until Dice.tStart[keep + 1]) next[Dice.tRoll[j]] += Dice.tProb[j]
+        if (rollsDone == 2 || Dice.keepSize[keep] == 5) return next
+        val out = DoubleArray(Dice.ROLLS)
+        for (r in 0 until Dice.ROLLS) {
+            val p = next[r]
+            if (p == 0.0) continue
+            val k = bestKeep(2, r)
+            for (j in Dice.tStart[k] until Dice.tStart[k + 1]) out[Dice.tRoll[j]] += p * Dice.tProb[j]
+        }
+        return out
+    }
 }

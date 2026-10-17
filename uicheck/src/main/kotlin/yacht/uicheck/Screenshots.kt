@@ -119,7 +119,8 @@ private fun load(dir: File): Tables {
     fun map(name: String) = RandomAccessFile(File(dir, name), "r").use {
         it.channel.map(FileChannel.MapMode.READ_ONLY, 0, it.length())
     }
-    return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules))
+    val bonus = File(dir, "bonus.bin").takeIf { it.exists() }?.let { TableIO.readBonus(map(it.name), rules) }
+    return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules), bonus = bonus)
 }
 
 private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean) {

@@ -49,10 +49,14 @@ class PlannedTurn internal constructor(
     private val plan get() = winPlan ?: evPlan
     private val total = me.total
 
+    /** The plan whose decisions are followed (win plan in WIN mode). */
+    internal val active: TurnPlan get() = plan
+
+    /** Plan values in the units shown to the player (P(win), or expected final score). */
+    internal fun shown(v: Double) = if (winPlan != null) v else total + v
+
     /** Value before the first throw of the turn. */
     val startValue: Double get() = if (winPlan != null) winPlan.startValue else total + evPlan.startValue
-
-    private fun shown(v: Double) = if (winPlan != null) v else total + v
 
     fun advise(rollsDone: Int, dice: List<Int>): Advice {
         require(rollsDone in 1..3)
@@ -61,7 +65,12 @@ class PlannedTurn internal constructor(
         val keeps = if (rollsDone == 3) emptyList() else {
             (Dice.subStart[r] until Dice.subStart[r + 1]).map { j ->
                 val k = Dice.subKeep[j]
-                KeepOption(Dice.keepFaces(k), shown(plan.keepValue(rollsDone, k)), total + evPlan.keepValue(rollsDone, k))
+                if (Dice.keepSize[k] == 5) {
+                    // Holding everything ends the turn now (the kernel's value would allow a later reroll).
+                    KeepOption(Dice.keepFaces(k), shown(plan.rollValue(3, r)), total + evPlan.rollValue(3, r))
+                } else {
+                    KeepOption(Dice.keepFaces(k), shown(plan.keepValue(rollsDone, k)), total + evPlan.keepValue(rollsDone, k))
+                }
             }.sortedWith(compareByDescending<KeepOption> { it.value }.thenByDescending { it.held.size })
         }
         val categories = me.openCategories.map { c ->

@@ -8,7 +8,7 @@ class SolverTest {
     companion object {
         val tables: Tables by lazy {
             val b = TableBuilder(RuleSet.NINTENDO).build(withDist = true)
-            Tables(RuleSet.NINTENDO, b.evTable(), b.distTable())
+            Tables(RuleSet.NINTENDO, b.evTable(), b.distTable(), bonus = b.bonusTable())
         }
     }
 

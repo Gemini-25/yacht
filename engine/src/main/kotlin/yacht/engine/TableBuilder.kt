@@ -26,6 +26,9 @@ class TableBuilder(
     val distLo = IntArray(states)
     val dist = arrayOfNulls<DoubleArray>(states)
 
+    /** P(upper bonus by the end of the game) under the same policy (filled with the distribution). */
+    val bonus = DoubleArray(states)
+
     /** reachableU[upperMask * nu + u]: can the filled upper boxes sum (capped) to u? */
     private val reachableU = BooleanArray(64 * nu).also { reach ->
         for (sub in 0 until 64) {
@@ -43,7 +46,10 @@ class TableBuilder(
     fun build(withDist: Boolean): TableBuilder {
         val full = Category.FULL_MASK
         val terminal = doubleArrayOf(1.0)
-        for (u in 0 until nu) dist[full * nu + u] = terminal
+        for (u in 0 until nu) {
+            dist[full * nu + u] = terminal
+            bonus[full * nu + u] = if (u >= cap) 1.0 else 0.0
+        }
         if (theta != 0.0) java.util.Arrays.fill(ev, full * nu, full * nu + nu, Math.signum(theta))
 
         val levels = (0 until full).groupBy { Integer.bitCount(it) }.toSortedMap(compareByDescending { it })
@@ -74,6 +80,7 @@ class TableBuilder(
                 else {
                     dist[base + u] = dist[base + alias]
                     distLo[base + u] = distLo[base + alias]
+                    bonus[base + u] = bonus[base + alias]
                 }
             }
         }
@@ -82,6 +89,11 @@ class TableBuilder(
     fun evTable(): EvTable {
         check(theta == 0.0) { "only the theta = 0 table holds expected points" }
         return EvTable(rules, ev)
+    }
+
+    fun bonusTable(): BonusTable {
+        check(theta == 0.0)
+        return BonusTable(rules, FloatArray(states) { bonus[it].toFloat() })
     }
 
     fun distTable(valueBytes: Int = 2): DistTable {
@@ -141,6 +153,8 @@ class TableBuilder(
                 for (u in 0 until nu) {
                     dist[base + u] = d
                     distLo[base + u] = lastLo
+                    // Every upper box is filled: the bonus is already decided.
+                    bonus[base + u] = if (u >= cap) 1.0 else 0.0
                 }
             } else {
                 val upper = m and Category.UPPER_MASK
@@ -148,11 +162,13 @@ class TableBuilder(
                     if (!reachableU[upper * nu + i]) continue
                     dist[base + i] = distribution(m, i, n)
                     distLo[base + i] = lastLo
+                    bonus[base + i] = lastBonus
                 }
             }
         }
 
         var lastLo = 0
+        var lastBonus = 0.0
 
         private fun push(k: DoubleArray, pin: DoubleArray, pout: DoubleArray, i: Int) {
             java.util.Arrays.fill(q, 0.0)
@@ -177,6 +193,7 @@ class TableBuilder(
             var touchedCount = 0
             var lo = Int.MAX_VALUE
             var hi = Int.MIN_VALUE
+            var pBonus = 0.0
             for (r in 0 until Dice.ROLLS) {
                 val p = p3[r]
                 if (p == 0.0) continue
@@ -188,6 +205,7 @@ class TableBuilder(
                     u2 = minOf(cap, i + s)
                     if (i < cap && i + s >= cap) gain += rules.bonusPoints
                 }
+                pBonus += p * bonus[(m or (1 shl c)) * nu + u2]
                 val key = (c * nu + u2) * GAIN_SLOTS + gain
                 if (group[key] == 0.0) {
                     if (touchedCount == touched.size) error("too many outcomes")
@@ -213,6 +231,7 @@ class TableBuilder(
                 val off = gain + distLo[child] - lo
                 for (x in d.indices) out[off + x] += w * d[x]
             }
+            lastBonus = pBonus
             var a = 0
             var b = out.size - 1
             while (a < b && out[a] < TRIM) a++

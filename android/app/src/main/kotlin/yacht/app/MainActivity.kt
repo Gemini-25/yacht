@@ -46,7 +46,10 @@ private fun loadTables(context: Context): Tables {
             ch.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
         }
     }
-    return Tables(rules, TableIO.readEv(ev, rules), TableIO.readDist(dist, rules))
+    val bonus = runCatching {
+        context.assets.open("bonus.bin").use { TableIO.readBonus(ByteBuffer.wrap(it.readBytes()), rules) }
+    }.getOrNull()
+    return Tables(rules, TableIO.readEv(ev, rules), TableIO.readDist(dist, rules), bonus = bonus)
 }
 
 class MainActivity : ComponentActivity() {
