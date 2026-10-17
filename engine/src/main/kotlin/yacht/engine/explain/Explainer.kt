@@ -630,12 +630,20 @@ class Explainer(private val tables: Tables) {
         val d = me.total - opp.total
         val left = Category.COUNT - me.filledCount
 
+        // The header already shows the probability: say what it means and why.
+        val outlook = if (!opp.isComplete && !me.isComplete) {
+            val e = eMe - eOpp
+            when {
+                abs(e) < 1.5 -> "남은 칸까지 따진 예상 점수는 거의 같아요."
+                e > 0 -> "남은 칸까지 따지면 예상 점수가 ${Ko.int(e)}점쯤 앞서요."
+                else -> "남은 칸까지 따지면 예상 점수가 ${Ko.int(-e)}점쯤 밀려요."
+            }
+        } else null
         var summary = when {
             opp.isComplete && d > 0 -> "이미 상대 점수를 넘었어요. 이긴 판이에요!"
             opp.isComplete && win != null && win < 0.0005 -> "아쉽지만 남은 칸으로는 상대 점수를 넘기 어려워요."
-            opp.isComplete -> "남은 칸에서 ${opp.total - me.total + 1}점 이상 내면 이겨요" +
-                (if (win != null) "(승률 ${Ko.pct(win)})." else ".")
-            win != null -> scale(win)
+            opp.isComplete -> "남은 칸에서 ${opp.total - me.total + 1}점 이상 내면 이겨요."
+            win != null -> scale(win) + (outlook?.let { " $it" } ?: "")
             else -> "예상 최종 점수는 나 ${Ko.int(eMe)}점, 상대 ${Ko.int(eOpp)}점이에요."
         }
 
@@ -647,17 +655,23 @@ class Explainer(private val tables: Tables) {
                 d < 0 -> "지금 점수는 ${-d}점 뒤져 있어요"
                 else -> "지금 점수는 같아요"
             }
+            val nowAnd = when {
+                d > 0 -> "지금 점수는 ${d}점 앞서 있고"
+                d < 0 -> "지금 점수는 ${-d}점 뒤져 있고"
+                else -> "지금 점수는 같고"
+            }
             if (opp.isComplete) {
                 details += "$now. 상대는 ${opp.total}점으로 끝났어요."
             } else if (!me.isComplete) {
                 val e = eMe - eOpp
                 val flips = (d > 0 && e < -1.5) || (d < 0 && e > 1.5)
                 val finals = "예상 최종 점수는 나 ${Ko.int(eMe)}점, 상대 ${Ko.int(eOpp)}점"
-                details += if (flips) {
-                    val nowBut = if (d > 0) "지금 점수는 ${d}점 앞서 있지만" else "지금 점수는 ${-d}점 뒤져 있지만"
-                    "$nowBut, 남은 칸까지 따지면 ${Ko.ro(finals)} 오히려 ${if (e > 0) "앞서요" else "밀려요"}."
-                } else {
-                    "$now. 남은 칸까지 따지면 ${Ko.ieyo(finals)}."
+                details += when {
+                    flips -> {
+                        val nowBut = if (d > 0) "지금 점수는 ${d}점 앞서 있지만" else "지금 점수는 ${-d}점 뒤져 있지만"
+                        "$nowBut, ${Ko.ieyo(finals)}."
+                    }
+                    else -> "$nowAnd, ${Ko.ieyo(finals)}."
                 }
                 val gap = evMe - evOpp
                 if (abs(gap) >= 8) {
@@ -681,19 +695,17 @@ class Explainer(private val tables: Tables) {
         return Explanation(summary, details.take(3))
     }
 
-    private fun scale(p: Double): String {
-        val s = Ko.pct(p)
-        return when {
-            p >= 0.995 -> "승률 $s, 사실상 이긴 판이에요."
-            p >= 0.9 -> "승률 ${Ko.ro(s)} 아주 유리해요."
-            p >= 0.72 -> "승률 ${Ko.ro(s)} 꽤 유리해요."
-            p >= 0.57 -> "승률 ${Ko.ro(s)} 조금 유리해요."
-            p > 0.43 -> "승률 $s, 팽팽한 승부예요."
-            p > 0.28 -> "승률 ${Ko.ro(s)} 조금 불리해요."
-            p > 0.1 -> "승률 ${Ko.ro(s)} 꽤 불리해요."
-            p > 0.005 -> "승률 $s, 역전하려면 운이 꽤 따라야 해요."
-            else -> "승률 $s, 뒤집기는 사실상 어려워요."
-        }
+    /** What a win probability means, in words (the number itself is shown next to it). */
+    private fun scale(p: Double): String = when {
+        p >= 0.995 -> "사실상 이긴 판이에요."
+        p >= 0.9 -> "아주 유리해요."
+        p >= 0.72 -> "꽤 유리해요."
+        p >= 0.57 -> "조금 유리해요."
+        p > 0.43 -> "팽팽한 승부예요."
+        p > 0.28 -> "조금 불리해요."
+        p > 0.1 -> "꽤 불리해요."
+        p > 0.005 -> "역전하려면 운이 꽤 따라야 해요."
+        else -> "뒤집기는 사실상 어려워요."
     }
 
     private fun bonusLine(me: Board): String? {

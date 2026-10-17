@@ -95,7 +95,7 @@ private fun run(args: Array<String>) {
         }
         val a = c.advice ?: error("no advice")
         val second = a.categories.getOrNull(1)
-        if (a.shouldStop && !shotNote && s.me.filledCount >= 4 && second != null && second.value < a.value - 0.002) {
+        if (a.shouldStop && !shotNote && s.me.filledCount >= 1 && second != null && second.value < a.value - 0.002) {
             // Write into the second-best box once to show the note on a move that differs from the advice.
             shotNote = true
             c.score(second.category)

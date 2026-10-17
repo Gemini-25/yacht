@@ -87,7 +87,7 @@ object Ko {
         val pa = pct(a)
         val pb = pct(b)
         if (pa != pb || abs(a - b) < 0.0005) return pa to pb
-        return trimZero(fmt("%.1f", a.coerceIn(0.0, 1.0) * 100)) + "%" to trimZero(fmt("%.1f", b.coerceIn(0.0, 1.0) * 100)) + "%"
+        return fmt("%.1f", a.coerceIn(0.0, 1.0) * 100) + "%" to fmt("%.1f", b.coerceIn(0.0, 1.0) * 100) + "%"
     }
 
     /** A difference of probabilities in percentage points (positive input). */

@@ -44,6 +44,7 @@ class KoreanTest {
         assertEquals("2.1%p", Ko.pp(0.021))
         assertEquals("12%p", Ko.pp(0.12))
         assertEquals("54.4%" to "53.6%", Ko.pctPair(0.544, 0.536))
+        assertEquals("47.0%" to "46.9%", Ko.pctPair(0.4703, 0.469))
     }
 }
 
