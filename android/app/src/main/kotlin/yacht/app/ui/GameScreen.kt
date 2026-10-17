@@ -56,6 +56,7 @@ import yacht.app.core.Screen
 import yacht.engine.Advice
 import yacht.engine.Category
 import yacht.engine.Mode
+import yacht.engine.explain.Explanation
 import yacht.engine.game.DiceSource
 import yacht.engine.game.GameState
 import yacht.engine.game.Side
@@ -181,6 +182,47 @@ private fun MatchHeader(c: AppController, s: GameState) {
                 ScoreBadge(oppName(s), s.opp.total, gameColors.opp, active = s.toMove == Side.OPP && !s.isOver)
             }
             if (value != null && mode == Mode.WIN) WinBar(value)
+            val situation = if (!hidden && s.toMove == Side.ME) c.situation else null
+            if (situation != null) SituationLine(situation)
+        }
+    }
+}
+
+/** One line about the game; tap for the details. */
+@Composable
+private fun SituationLine(e: Explanation) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = e.details.isNotEmpty()) { open = !open }
+            .padding(vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(e.summary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (e.details.isNotEmpty()) {
+                Text(
+                    if (open) "  접기" else "  자세히",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        if (open) Bullets(e.details, cs.onSurfaceVariant)
+    }
+}
+
+/** Explanation sentences as a list. */
+@Composable
+fun Bullets(lines: List<String>, color: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        for (l in lines) {
+            Row {
+                Text("•  ", style = MaterialTheme.typography.bodySmall, color = color)
+                Text(l, style = MaterialTheme.typography.bodySmall, color = color)
+            }
         }
     }
 }
@@ -391,6 +433,8 @@ private fun OpponentTurnCard(c: AppController, s: GameState) {
             s.oppLog.lastOrNull()?.let {
                 Text("최근 AI: $it", style = MaterialTheme.typography.bodySmall, color = cs.onTertiaryContainer)
             }
+            val note = c.lastNote
+            if (note != null && !c.hintsHidden) NoteLine(note) { c.dismissNote() }
         }
     }
 }
@@ -402,6 +446,7 @@ private fun RecommendationCard(c: AppController, s: GameState, a: Advice?) {
     var open by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            c.lastNote?.let { NoteLine(it) { c.dismissNote() } }
             when {
                 !d.deciding -> {
                     Text(
@@ -411,6 +456,11 @@ private fun RecommendationCard(c: AppController, s: GameState, a: Advice?) {
                         color = cs.onSecondaryContainer,
                     )
                     if (c.plan == null) Text("AI가 이번 턴을 계산하는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
+                    if (d.rollsDone == 0) {
+                        c.opponentComment?.let {
+                            Text("직전 상대 턴 · $it", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
+                        }
+                    }
                 }
                 a == null -> Text("AI 계산 중…", color = cs.onSecondaryContainer)
                 a.shouldStop -> {
@@ -458,16 +508,50 @@ private fun RecommendationCard(c: AppController, s: GameState, a: Advice?) {
                 }
             }
             if (a != null) {
-                Text(
-                    if (open) "▴ 선택지 접기" else "▾ 다른 선택지와 비교",
-                    modifier = Modifier.clickable { open = !open }.padding(vertical = 2.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = cs.onSecondaryContainer,
-                    fontWeight = FontWeight.Bold,
-                )
-                if (open) OptionsList(a)
+                val why = c.adviceExplanation
+                if (why != null) {
+                    Text(
+                        why.summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSecondaryContainer,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    if (why != null && why.details.isNotEmpty()) {
+                        Toggle(if (c.whyOpen) "▴ 왜? 접기" else "▾ 왜?") { c.toggleWhy() }
+                    }
+                    Toggle(if (open) "▴ 선택지 접기" else "▾ 다른 선택지와 비교") { open = !open }
+                }
+                if (why != null && c.whyOpen) Bullets(why.details, cs.onSecondaryContainer)
+                if (open) OptionsList(c, a)
             }
         }
+    }
+}
+
+@Composable
+private fun Toggle(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(vertical = 3.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
+/** Why my last move differed from the advice; tap to dismiss. */
+@Composable
+private fun NoteLine(note: String, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.errorContainer)
+            .clickable(onClick = onDismiss).padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text("방금 선택 · $note", style = MaterialTheme.typography.bodySmall, color = cs.onErrorContainer, modifier = Modifier.weight(1f))
+        Text("  ✕", style = MaterialTheme.typography.labelSmall, color = cs.onErrorContainer)
     }
 }
 
@@ -479,9 +563,12 @@ private fun ValueLine(mode: Mode, value: Double, expectedFinal: Double) {
 }
 
 @Composable
-private fun OptionsList(a: Advice) {
+private fun OptionsList(c: AppController, a: Advice) {
     val cs = MaterialTheme.colorScheme
+    var pickedKeep by remember(a.rollsDone, a.dice) { mutableStateOf<List<Int>?>(null) }
+    var pickedCat by remember(a.rollsDone, a.dice) { mutableStateOf<Category?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("선택지를 누르면 추천과 비교해 설명해 드려요", style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer.copy(alpha = 0.75f))
         if (a.keeps.isNotEmpty()) {
             Text("고정 선택", style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer)
             for (k in a.keeps.take(5)) {
@@ -495,7 +582,11 @@ private fun OptionsList(a: Advice) {
                     },
                     value = fmtValue(a.mode, k.value),
                     delta = fmtDelta(a.mode, k.value - a.value),
-                )
+                    selected = pickedKeep == k.held,
+                ) {
+                    pickedCat = null
+                    pickedKeep = if (pickedKeep == k.held) null else k.held
+                }
             }
         }
         Text("지금 기록한다면", style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer)
@@ -504,14 +595,42 @@ private fun OptionsList(a: Advice) {
                 label = { Text("${o.category.label} ${o.points}점", style = MaterialTheme.typography.bodySmall) },
                 value = fmtValue(a.mode, o.value),
                 delta = fmtDelta(a.mode, o.value - a.value),
-            )
+                selected = pickedCat == o.category,
+            ) {
+                pickedKeep = null
+                pickedCat = if (pickedCat == o.category) null else o.category
+            }
+        }
+        val e = pickedKeep?.let { h -> a.keeps.firstOrNull { it.held == h }?.let { c.keepExplanation(it) } }
+            ?: pickedCat?.let { p -> a.categories.firstOrNull { it.category == p }?.let { c.categoryExplanation(it) } }
+        if (e != null) {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(10.dp))
+                    .background(cs.surface.copy(alpha = 0.7f)).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(e.summary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                Bullets(e.details, cs.onSurfaceVariant)
+            }
         }
     }
 }
 
 @Composable
-private fun OptionRow(label: @Composable () -> Unit, value: String, delta: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+private fun OptionRow(
+    label: @Composable () -> Unit,
+    value: String,
+    delta: String,
+    selected: Boolean = false,
+    onClick: () -> Unit = {},
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+            .background(if (selected) cs.surface.copy(alpha = 0.7f) else Color.Transparent)
+            .clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 1.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(Modifier.weight(1f)) { label() }
         Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
         Text(
@@ -646,7 +765,10 @@ private fun GameOverPanel(c: AppController, s: GameState) {
                 fontWeight = FontWeight.ExtraBold,
             )
             Text("나 $me : $opp ${oppName(s)}", style = MaterialTheme.typography.titleMedium)
-            if (s.decisions.isNotEmpty()) {
+            val summary = c.gameSummary(s)
+            if (summary != null && summary.details.isNotEmpty()) {
+                Bullets(summary.details, cs.onSurface)
+            } else if (s.decisions.isNotEmpty()) {
                 Text("AI 추천과 다르게 둔 수 ${mistakes}번", style = MaterialTheme.typography.bodySmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

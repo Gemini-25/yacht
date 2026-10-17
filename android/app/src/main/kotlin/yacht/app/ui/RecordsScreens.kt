@@ -232,6 +232,7 @@ fun ReviewScreen(c: AppController) {
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onSurfaceVariant,
                         )
+                        c.gameSummary(g)?.details?.takeIf { it.isNotEmpty() }?.let { Bullets(it, cs.onSurface) }
                         val trace = winTrace(g)
                         if (trace.size >= 2) {
                             SectionTitle("턴별 내 승률 (첫 굴림 직후)")
@@ -277,6 +278,7 @@ private fun DecisionCard(d: DecisionRecord) {
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.error,
                 )
+                d.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onErrorContainer) }
             }
         }
     }

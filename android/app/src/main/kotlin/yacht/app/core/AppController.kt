@@ -15,15 +15,19 @@ import yacht.engine.Advisor
 import yacht.engine.AdvisorPlayer
 import yacht.engine.Board
 import yacht.engine.Category
+import yacht.engine.CategoryOption
 import yacht.engine.Dice
 import yacht.engine.DuelSearch
 import yacht.engine.SearchTimeout
 import yacht.engine.DiceStream
 import yacht.engine.Duplicate
+import yacht.engine.KeepOption
 import yacht.engine.Match
 import yacht.engine.Mode
 import yacht.engine.PlannedTurn
 import yacht.engine.Tables
+import yacht.engine.explain.Explainer
+import yacht.engine.explain.Explanation
 import yacht.engine.game.DiceSource
 import yacht.engine.game.Game
 import yacht.engine.game.GameCodec
@@ -136,7 +140,16 @@ class AppController(
     var verifying by mutableStateOf(false)
         private set
 
+    /** "왜?" details stay open across turns once opened (saved). */
+    var whyOpen by mutableStateOf(false)
+        private set
+
+    /** Why the recommendation was better, for my last move when it differed; cleared by the next move. */
+    var lastNote by mutableStateOf<String?>(null)
+        private set
+
     private var advisor: Advisor? = null
+    private var explainer: Explainer? = null
     private val cores = Runtime.getRuntime().availableProcessors()
     private val pool = Executors.newFixedThreadPool(maxOf(2, cores)) { r ->
         Thread(r, "yacht-search").apply { isDaemon = true }
@@ -178,11 +191,13 @@ class AppController(
             try {
                 val t = withContext(Dispatchers.IO) { loadTables() }
                 advisor = Advisor(t, pool)
+                explainer = Explainer(t)
                 tables = t
                 val settings = withContext(Dispatchers.IO) { storage.loadSettings() }
                 settings["objective"]?.let { v -> Mode.entries.firstOrNull { it.name == v }?.let { objective = it } }
                 settings["think"]?.let { v -> ThinkTime.entries.firstOrNull { it.name == v }?.let { thinkTime = it } }
                 settings["hints"]?.let { showHints = it == "1" }
+                settings["why"]?.let { whyOpen = it == "1" }
                 val saved = withContext(Dispatchers.IO) {
                     storage.loadCurrent()?.let { runCatching { GameCodec.decode(it, t.rules) }.getOrNull() }
                 }
@@ -225,7 +240,12 @@ class AppController(
             .sortedByDescending { it.createdAt }
 
     private fun saveSettings() {
-        val values = mapOf("objective" to objective.name, "think" to thinkTime.name, "hints" to if (showHints) "1" else "0")
+        val values = mapOf(
+            "objective" to objective.name,
+            "think" to thinkTime.name,
+            "hints" to if (showHints) "1" else "0",
+            "why" to if (whyOpen) "1" else "0",
+        )
         scope.launch(Dispatchers.IO) { storage.saveSettings(values) }
     }
 
@@ -254,6 +274,112 @@ class AppController(
             return p.mode == Mode.WIN && p.depth >= Category.COUNT - p.me.filledCount
         }
 
+    // ---- explanations ------------------------------------------------------------------------
+
+    /** AI information is hidden while playing against the AI with hints off. */
+    val hintsHidden: Boolean get() = state?.source == DiceSource.RANDOM && !showHints
+
+    private val explainCache = object : LinkedHashMap<Any, Any>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, Any>?) = size > 64
+    }
+
+    /** Explanations are cheap (a few forward passes) but asked for on every recomposition: memoised. */
+    @Suppress("UNCHECKED_CAST")
+    private fun <T : Any> cached(key: Any, make: () -> T?): T? = synchronized(explainCache) {
+        explainCache[key]?.let { return it as T }
+        val v = try {
+            make()
+        } catch (e: RuntimeException) {
+            null
+        } ?: return null
+        explainCache[key] = v
+        v
+    }
+
+    /** Why the current recommendation is the best move. */
+    val adviceExplanation: Explanation?
+        get() {
+            val e = explainer ?: return null
+            val s = state ?: return null
+            val p = currentPlan ?: return null
+            val a = advice ?: return null
+            return cached(listOf("advice", p, a.rollsDone, a.dice)) { e.advice(p, s.opp, a) }
+        }
+
+    /** How keeping [k] compares with the recommendation. */
+    fun keepExplanation(k: KeepOption): Explanation? {
+        val e = explainer ?: return null
+        val s = state ?: return null
+        val p = currentPlan ?: return null
+        val a = advice ?: return null
+        return cached(listOf("keep", p, a.rollsDone, a.dice, k.held)) { e.keepOption(p, s.opp, a, k) }
+    }
+
+    /** How writing into [o] now compares with the recommendation. */
+    fun categoryExplanation(o: CategoryOption): Explanation? {
+        val e = explainer ?: return null
+        val s = state ?: return null
+        val p = currentPlan ?: return null
+        val a = advice ?: return null
+        return cached(listOf("category", p, a.rollsDone, a.dice, o.category)) { e.categoryOption(p, s.opp, a, o) }
+    }
+
+    /** The game from my side during my turn, with my current P(win) in WIN mode. */
+    val situation: Explanation?
+        get() {
+            val e = explainer ?: return null
+            val s = state ?: return null
+            if (s.isOver || s.toMove != Side.ME) return null
+            val p = currentPlan
+            val win = if (p != null && p.mode == Mode.WIN) advice?.value ?: p.startValue else null
+            if (objective == Mode.WIN && win == null) return null
+            return cached(listOf("situation", s.me, s.opp, win)) { e.situation(s.me, s.opp, win) }
+        }
+
+    /** Comment on the opponent's last move, until my turn starts. */
+    val opponentComment: String?
+        get() {
+            val e = explainer ?: return null
+            val s = state ?: return null
+            val last = s.moves.lastOrNull() ?: return null
+            if (last.side != Side.OPP) return null
+            val before = s.moves.dropLast(1).lastOrNull { it.side == Side.ME }?.winAfter
+            return cached(listOf("opponent", s.moves.size, last, before)) { e.opponentMove(s.opp, last, before) }
+        }
+
+    fun gameSummary(g: GameState): Explanation? {
+        val e = explainer ?: return null
+        return cached(listOf("summary", g.createdAt, g.moves.size, g.decisions.size)) { e.gameSummary(g) }
+    }
+
+    fun toggleWhy() {
+        whyOpen = !whyOpen
+        saveSettings()
+    }
+
+    fun dismissNote() {
+        lastNote = null
+    }
+
+    /** Note for holding the current dice and throwing again, if that differs from the advice. */
+    private fun keepNote(): String? {
+        val e = explainer ?: return null
+        val s = state ?: return null
+        val p = currentPlan ?: return null
+        val a = advice ?: return null
+        val opt = a.keeps.firstOrNull { it.held == s.draft.heldFaces } ?: return null
+        return runCatching { e.keepDeviation(p, s.opp, a, opt) }.getOrNull()
+    }
+
+    private fun scoreNote(c: Category): String? {
+        val e = explainer ?: return null
+        val s = state ?: return null
+        val p = currentPlan ?: return null
+        val a = advice ?: return null
+        val opt = a.categories.firstOrNull { it.category == c } ?: return null
+        return runCatching { e.categoryDeviation(p, s.opp, a, opt) }.getOrNull()
+    }
+
     // ---- settings ----------------------------------------------------------------------------
 
     fun changeObjective(mode: Mode) {
@@ -280,6 +406,7 @@ class AppController(
         canUndo = false
         aiJob?.cancel()
         aiThinking = false
+        lastNote = null
         stopDuel()
         duelTable = null
         state = GameState.new(source, first, t.rules)
@@ -302,16 +429,33 @@ class AppController(
         autoHeld = true
     }
 
-    fun reroll() = act { Game.reroll(it, advice, rng) }
+    fun reroll() {
+        val note = keepNote()
+        val before = state
+        act { Game.reroll(it, advice, rng, note) }
+        if (state !== before) lastNote = note
+    }
+
     fun firstThrow() = act { Game.firstThrow(it, rng) }
-    fun score(c: Category) = act { Game.score(it, c, advice) }
-    fun opponentScore(c: Category, points: Int) = act { Game.opponentScore(it, c, points) }
+
+    fun score(c: Category) {
+        val note = scoreNote(c)
+        val before = state
+        act { Game.score(it, c, advice, note) }
+        if (state !== before) lastNote = note
+    }
+
+    fun opponentScore(c: Category, points: Int) {
+        lastNote = null
+        act { Game.opponentScore(it, c, points) }
+    }
 
     fun undo() {
         val prev = undoStack.removeLastOrNull() ?: return
         canUndo = undoStack.isNotEmpty()
         state = prev
         autoHeld = false
+        lastNote = null
         onStateChanged()
     }
 
@@ -470,7 +614,12 @@ class AppController(
         if (planKey != key) return
         val first = plan == null
         plan = p
-        val st = state ?: return
+        var st = state ?: return
+        // My P(win) right after the opponent's move (for its comment and the game summary).
+        if (p.mode == Mode.WIN && p.me == st.me) {
+            st = Game.noteWinAfterOpponent(st, p.startValue)
+            state = st
+        }
         if (st.draft.deciding && (autoHeld || (first && st.draft.held.none { it }))) autoHold()
     }
 
@@ -483,6 +632,7 @@ class AppController(
                 delay(350)
                 val (c, points, log) = withContext(Dispatchers.Default) { aiTurn(adv, s) }
                 if (state == s) {
+                    lastNote = null
                     state = Game.opponentScore(s, c, points, log)
                     onStateChanged()
                 }
@@ -507,7 +657,7 @@ class AppController(
         val c = turn.bestCategory(r)
         val points = adv.tables.scores[r, c.ordinal]
         val text = "턴 ${s.opp.filledCount + 1}: " + throws.joinToString(" → ") { it.joinToString("") } +
-            " ⇒ ${c.label} ${points}점"
+            " ⇒ ${Game.scoreText(c, points)}"
         return Triple(c, points, text)
     }
 

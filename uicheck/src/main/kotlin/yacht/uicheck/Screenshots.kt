@@ -53,6 +53,7 @@ private fun run(args: Array<String>) {
     c.start()
     waitFor("tables") { c.tables != null }
     c.changeThinkTime(ThinkTime.FAST)
+    if (!c.whyOpen) c.toggleWhy()
     shot(c, out, "01_home")
 
     c.newGame(DiceSource.MANUAL, Side.OPP)
@@ -71,6 +72,8 @@ private fun run(args: Array<String>) {
     val oppCats = Category.ALL.filter { it != Category.FULL_HOUSE }.shuffled(rng)
     var oppIdx = 0
     var shotEndgame = false
+    var shotComment = false
+    var shotNote = false
     while (!c.state!!.isOver) {
         val s = c.state!!
         if (s.toMove == Side.OPP) {
@@ -79,6 +82,10 @@ private fun run(args: Array<String>) {
             continue
         }
         waitPlan(c)
+        if (!shotComment && s.me.filledCount >= 6) {
+            shotComment = true
+            shot(c, out, "05a_turn_start_comment")
+        }
         while (c.state!!.draft.dice.any { it == null }) c.enterFace(rng.nextInt(6) + 1)
         waitPlan(c)
         if (s.me.filledCount == 9 && !shotEndgame) {
@@ -87,6 +94,14 @@ private fun run(args: Array<String>) {
             shot(c, out, "06_endgame_dark", dark = true)
         }
         val a = c.advice ?: error("no advice")
+        val second = a.categories.getOrNull(1)
+        if (a.shouldStop && !shotNote && s.me.filledCount >= 4 && second != null && second.value < a.value - 0.002) {
+            // Write into the second-best box once to show the note on a move that differs from the advice.
+            shotNote = true
+            c.score(second.category)
+            shot(c, out, "05b_deviation_note")
+            continue
+        }
         if (a.shouldStop) c.score(a.bestCategory.category) else c.reroll()
     }
     shot(c, out, "07_game_over")
