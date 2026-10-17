@@ -38,6 +38,7 @@ fun main(args: Array<String>) {
         "duel" -> duel(opts)
         "explain" -> explain(opts)
         "headroom" -> headroom(opts)
+        "arena" -> arena(opts)
         "quiz" -> quizSamples(opts)
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"])
         else -> println(
@@ -52,6 +53,9 @@ fun main(args: Array<String>) {
               headroom --tables DIR --games N [--base 3e8] [--strong 3e9,1e10] [--seed S] [--from F --csv FILE]
                     how much P(win) per game deeper searches would add: plays the base policy and sums,
                     at every decision, the loss of its choice as valued by each stronger search
+              arena --tables DIR --games N [--opp rule,greedy,slip10,ev,self] [--budget OPS] [--seed S]
+                    head-to-head win rate of the win AI against other AIs, both seats, with the
+                    max-expectation AI on the same games as a paired reference
               explain --tables DIR [--games N] [--seed S] [--stray P]
                     print the Korean explanations of whole games (P = chance of not following advice)
             """.trimIndent(),
@@ -509,5 +513,115 @@ private fun quizSamples(opts: Map<String, String>) {
             val g = quiz.gradeCategory(plan, q, wrong.category)
             println("  if ${g.chosen}: correct=${g.correct} loss " + "%.4f".format(g.loss) + " / ${g.explanation.summary} / ${g.explanation.details.joinToString(" / ")}")
         }
+    }
+}
+
+/** One player's turn on [stream] (turn index [turn]); returns the board after it. */
+private fun playOneTurn(rules: RuleSet, p: yacht.engine.Player, me: Board, opp: Board, stream: DiceStream, turn: Int): Board {
+    p.startTurn(me, opp)
+    var r = stream.throwDice(Dice.EMPTY_KEEP, turn, 0)
+    for (rollsDone in 1..2) {
+        val keep = p.chooseKeep(rollsDone, r)
+        if (keep == Dice.rollAsKeep[r]) break
+        r = stream.throwDice(keep, turn, rollsDone)
+    }
+    val c = p.chooseCategory(r)
+    return me.with(c, rules.score(Dice.rollCounts[r], c))
+}
+
+/**
+ * Head-to-head: the win AI against other AIs. Opponents that ignore my card (all but "self") play
+ * their game once per deal; I play it from both seats, and so does the max-expectation AI, which
+ * gives a paired reference on the same dice. "self" plays the win AI against itself.
+ */
+private fun arena(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+    val games = opts["games"]?.toInt() ?: 1000
+    val seed = opts["seed"]?.toLong() ?: 2026L
+    val budget = opts["budget"]?.toDouble()?.toLong() ?: 100_000_000L
+    val opps = (opts["opp"] ?: "rule,greedy,slip10,ev,self").split(',')
+    // --from F --csv FILE: deals F until F+games, one line per deal (merge chunks with a script).
+    val from = opts["from"]?.toInt() ?: 0
+    val csv = opts["csv"]?.let { File(it) }
+    val advisor = Advisor(tables)
+    fun opponent(spec: String, gid: Long): yacht.engine.Player = when {
+        spec == "ev" -> AdvisorPlayer(advisor, Mode.EXPECTED_SCORE, name = "ev")
+        spec == "greedy" -> yacht.engine.GreedyPlayer()
+        spec == "rule" -> yacht.engine.RulePlayer(rules)
+        spec.startsWith("slip") -> yacht.engine.SlipPlayer(
+            tables.ev, spec.removePrefix("slip").toInt() / 100.0, Random(DiceStream.mix(seed, gid, 7)), spec,
+        )
+        else -> error("unknown opponent $spec")
+    }
+    for (spec in opps) {
+        val ours = Array(2) { IntArray(games) } // 1 win, 2 tie, 0 loss, per seat
+        val evs = Array(2) { IntArray(games) }
+        val myScore = LongArray(games)
+        val oppScore = LongArray(games)
+        val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+        val t0 = System.nanoTime()
+        val tasks = (0 until games).map { g ->
+            Callable {
+                val gid = (from + g).toLong()
+                fun outcome(a: Int, b: Int) = if (a > b) 1 else if (a == b) 2 else 0
+                if (spec == "self") {
+                    // Seat 0 of "ours" = the first player; both are the win AI.
+                    val sa = DiceStream(DiceStream.mix(seed, gid, 0))
+                    val sb = DiceStream(DiceStream.mix(seed, gid, 1))
+                    val pa = AdvisorPlayer(advisor, Mode.WIN, budget)
+                    val pb = AdvisorPlayer(advisor, Mode.WIN, budget)
+                    var a = Board(rules)
+                    var b = Board(rules)
+                    for (turn in 0 until Category.COUNT) {
+                        a = playOneTurn(rules, pa, a, b, sa, turn)
+                        b = playOneTurn(rules, pb, b, a, sb, turn)
+                    }
+                    ours[0][g] = outcome(a.total, b.total)
+                    ours[1][g] = outcome(b.total, a.total)
+                    myScore[g] = (a.total + b.total).toLong()
+                    oppScore[g] = (a.total + b.total).toLong()
+                } else {
+                    val oppGame = Duplicate.independentGame(rules, opponent(spec, gid), DiceStream(DiceStream.mix(seed, gid, 1)))
+                    val oppFinal = oppGame.last().total
+                    val stream = DiceStream(DiceStream.mix(seed, gid, 0))
+                    for (seat in 0..1) {
+                        val me = Duplicate.playTurns(rules, AdvisorPlayer(advisor, Mode.WIN, budget), stream) { t -> oppGame[t + seat] }
+                        val ev = Duplicate.playTurns(rules, AdvisorPlayer(advisor, Mode.EXPECTED_SCORE), stream) { t -> oppGame[t + seat] }
+                        ours[seat][g] = outcome(me.total, oppFinal)
+                        evs[seat][g] = outcome(ev.total, oppFinal)
+                        myScore[g] += me.total.toLong()
+                    }
+                    oppScore[g] = 2L * oppFinal
+                }
+                if (csv != null) synchronized(csv) {
+                    csv.appendText("$spec,$gid,${ours[0][g]},${ours[1][g]},${evs[0][g]},${evs[1][g]},${myScore[g]},${oppScore[g]}\n")
+                }
+            }
+        }
+        pool.invokeAll(tasks).forEach { it.get() }
+        pool.shutdown()
+        fun rate(o: Array<IntArray>, seat: Int?, v: Int) =
+            (if (seat == null) listOf(0, 1) else listOf(seat)).sumOf { s -> o[s].count { it == v } }.toDouble() / (games * (if (seat == null) 2 else 1))
+        // 95% interval with the two seats of a deal as one cluster.
+        fun ci(perGame: DoubleArray): Double {
+            val m = perGame.average()
+            return 1.96 * sqrt(perGame.sumOf { (it - m) * (it - m) } / (perGame.size - 1) / perGame.size)
+        }
+        val winPerGame = DoubleArray(games) { g -> ((if (ours[0][g] == 1) 1 else 0) + (if (ours[1][g] == 1) 1 else 0)) / 2.0 }
+        println("=== vs $spec: $games deals x 2 seats in %.0fs".format((System.nanoTime() - t0) / 1e9))
+        if (spec == "self") {
+            println("  first player wins %.2f%%, second %.2f%%, ties %.2f%% (±%.2f)".format(
+                100 * rate(ours, 0, 1), 100 * rate(ours, 1, 1), 100 * rate(ours, 0, 2),
+                100 * 1.96 * sqrt(rate(ours, 0, 1) * (1 - rate(ours, 0, 1)) / games)))
+            continue
+        }
+        println("  win AI: win %.2f%% ±%.2f, tie %.2f%%, loss %.2f%% (first %.2f%%, second %.2f%%); mean %.1f vs %.1f".format(
+            100 * rate(ours, null, 1), 100 * ci(winPerGame), 100 * rate(ours, null, 2), 100 * rate(ours, null, 0),
+            100 * rate(ours, 0, 1), 100 * rate(ours, 1, 1), myScore.sum() / (2.0 * games), oppScore.sum() / (2.0 * games)))
+        val diff = DoubleArray(games) { g ->
+            (0..1).sumOf { s -> (if (ours[s][g] == 1) 1.0 else 0.0) - (if (evs[s][g] == 1) 1.0 else 0.0) } / 2
+        }
+        println("  max-expectation AI on the same deals: win %.2f%%, tie %.2f%%; win AI - it: %+.2f%%p ±%.2f".format(
+            100 * rate(evs, null, 1), 100 * rate(evs, null, 2), 100 * diff.average(), 100 * ci(diff)))
     }
 }
