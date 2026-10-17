@@ -99,19 +99,20 @@ private fun androidx.compose.foundation.layout.ColumnScope.QuizBody(c: AppContro
         Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         colors = CardDefaults.cardColors(containerColor = cs.surface),
     ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "내 턴 ${q.me.filledCount + 1}/12 · ${q.rollsDone}번째 굴림 후",
                     fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
                 )
-                Text(
-                    if (q.replay != null) "지난 게임에서 내가 둔 국면이에요" else "상대는 ${q.opp.filledCount}칸을 채웠어요",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant,
-                )
+                Text("${q.me.total} : ${q.opp.total}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
             }
-            Text("나 ${q.me.total} : ${q.opp.total} 상대", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+            Text(
+                (if (q.replay != null) "지난 게임에서 내가 둔 국면이에요" else "상대는 ${q.opp.filledCount}칸을 채웠어요") + " · 점수는 나 : 상대",
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant,
+            )
         }
     }
     Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
