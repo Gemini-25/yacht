@@ -386,7 +386,10 @@ private fun headroom(opts: Map<String, String>) {
     val seed = opts["seed"]?.toLong() ?: 41L
     val from = opts["from"]?.toInt() ?: 0
     val csv = opts["csv"]?.let { File(it) }
-    val base = opts["base"]?.toDouble()?.toLong() ?: Advisor.DEFAULT_BUDGET
+    // --base d1: fixed one-turn search (as the win-d1 duel player); otherwise an ops budget.
+    val baseFixed = opts["base"]?.takeIf { it.startsWith("d") }?.removePrefix("d")?.toInt()
+    val baseEv = opts["base"] == "ev"
+    val base = if (baseFixed != null || baseEv) 0L else opts["base"]?.toDouble()?.toLong() ?: Advisor.DEFAULT_BUDGET
     val strong = (opts["strong"] ?: "3e9,1e10").split(',').map { it.toDouble().toLong() }
     val advisor = Advisor(tables)
     val k = strong.size
@@ -407,8 +410,8 @@ private fun headroom(opts: Map<String, String>) {
                 var me = Board(rules)
                 for (turn in 0 until Category.COUNT) {
                     val o = opp[turn + seat]
-                    val baseDepth = WinSearch.chooseDepth(tables, me, base, o)
-                    val plan = advisor.planTurn(me, o, Mode.WIN, base)
+                    val baseDepth = if (baseEv) 0 else baseFixed ?: WinSearch.chooseDepth(tables, me, base, o)
+                    val plan = if (baseEv) advisor.planTurn(me, o, Mode.EXPECTED_SCORE) else advisor.planTurn(me, o, Mode.WIN, base, depth = baseFixed)
                     val strongPlans = strong.map { b ->
                         if (WinSearch.chooseDepth(tables, me, b, o) == baseDepth) null else advisor.planTurn(me, o, Mode.WIN, b)
                     }
@@ -434,19 +437,14 @@ private fun headroom(opts: Map<String, String>) {
                         }
                     }
                     var r = stream.throwDice(Dice.EMPTY_KEEP, turn, 0)
-                    var stopped = false
                     for (rollsDone in 1..2) {
                         val keep = plan.bestKeep(rollsDone, r)
                         judge(rollsDone, r, keep, null)
-                        if (keep == Dice.rollAsKeep[r]) {
-                            stopped = true
-                            break
-                        }
+                        if (keep == Dice.rollAsKeep[r]) break
                         r = stream.throwDice(keep, turn, rollsDone)
                     }
                     val c = plan.bestCategory(r)
-                    // After stopping early the category is part of the stop decision already judged.
-                    if (!stopped) judge(3, r, null, c)
+                    judge(3, r, null, c)
                     me = me.with(c, tables.scores[r, c.ordinal])
                 }
                 val oppFinal = opp.last().total

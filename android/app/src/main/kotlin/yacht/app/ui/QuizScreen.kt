@@ -118,7 +118,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.QuizBody(c: AppContro
         ScoreSheet(
             s,
             oppLabel = "상대",
-            deciding = result == null,
+            // Points stay visible after answering so the recommended box can be highlighted.
+            deciding = true,
             recommended = result?.bestCategory,
             oppInput = false,
             onMyCell = { c.quizScore(it) },
