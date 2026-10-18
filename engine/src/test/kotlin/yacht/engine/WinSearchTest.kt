@@ -279,3 +279,36 @@ class EstimateSpeedTest {
         assertTrue(ms < 50, "estimate took $ms ms for 100 calls")
     }
 }
+
+class AdversarialDuelTest {
+    private val tables get() = SolverTest.tables
+    private val rules = RuleSet.NINTENDO
+
+    @Test
+    fun lastTurnsMatchTheOpponentsBestReply() {
+        // I write my last box (Choice), then the opponent plays its last box (4 of a Kind) to beat me.
+        val me = Board.of(rules, listOf(3, 6, 9, 12, 15, 18, null, 20, 25, 15, 30, 0))
+        val opp = Board.of(rules, listOf(3, 6, 9, 12, 15, 18, 22, null, 25, 15, 30, 0))
+        val adv = DuelSearch(tables, me, opp, true, adversarial = true)
+        val ev = DuelSearch(tables, me, opp, true)
+        for (points in listOf(10, 18, 22, 25, 30)) {
+            val myFinal = me.total + points
+            // The opponent's best chance to reach at least my total (a tie is not my win).
+            val reply = TurnPlan(opp) { _, pts, bonus, _ -> if (opp.total + pts + bonus >= myFinal) 1.0 else 0.0 }
+            val v = adv.value(Category.CHOICE.ordinal, points, 0, me.u)
+            assertEquals(1 - reply.startValue, v, 5e-4, "Choice $points")
+            assertTrue(v <= ev.value(Category.CHOICE.ordinal, points, 0, me.u) + 1e-6)
+        }
+    }
+
+    @Test
+    fun guaranteedValueNeverExceedsTheMaxExpectationModel() {
+        val me = Board.of(rules, listOf(3, 6, null, 12, 15, 18, null, 20, 25, 15, null, 0))
+        val opp = Board.of(rules, listOf(3, 6, 9, null, 15, 18, 22, null, 25, 15, 30, null))
+        val adv = DuelSearch(tables, me, opp, true, adversarial = true)
+        val ev = DuelSearch(tables, me, opp, true)
+        val a = TurnPlan(me, adv).startValue
+        val e = TurnPlan(me, ev).startValue
+        assertTrue(a <= e + 1e-6 && a > 0.0, "adversarial $a vs max-expectation opponent $e")
+    }
+}

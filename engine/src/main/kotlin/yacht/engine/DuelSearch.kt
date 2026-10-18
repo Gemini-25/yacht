@@ -77,10 +77,13 @@ class TurnOutcomes(val category: IntArray, val gain: IntArray, val u2: IntArray,
 }
 
 /**
- * Exact P(win) for the rest of the game against a max-expectation opponent, with the
- * opponent's turns inside the search: before each of my later turns I know what the opponent
- * scored, and the plan uses that. State: (my mask, my upper sum, opponent mask, opponent upper
- * sum, my total - opponent total).
+ * Exact P(win) for the rest of the game with the opponent's turns inside the search: before each
+ * of my later turns I know what the opponent scored, and the plan uses that. State: (my mask, my
+ * upper sum, opponent mask, opponent upper sum, my total - opponent total).
+ *
+ * The opponent either plays for max expectation, or ([adversarial]) makes every choice that
+ * lowers my P(win) the most: then the values are what I can guarantee against any opponent
+ * (the minimax solution of the end game), and my plan is the best reply to the strongest one.
  *
  * The root may be my turn or the opponent's ([meToMove]). The table covers every position
  * reachable from the root, so once built it answers all my remaining turns ([after]) without
@@ -94,6 +97,7 @@ class DuelSearch(
     private val pool: ExecutorService? = null,
     private val deadline: Long = Long.MAX_VALUE,
     private val stop: java.util.concurrent.atomic.AtomicBoolean? = null,
+    val adversarial: Boolean = false,
 ) : AfterTurn {
     private val rules = me.rules
     private val cap = rules.bonusThreshold
@@ -143,7 +147,7 @@ class DuelSearch(
             val myTurn = myMoveAt(h)
             val pairs = ArrayList<Pair<Int, Int>>()
             for (mm in myLevels[myLevel(h)]) for (om in oppLevels[oppLevel(h)]) pairs += mm to om
-            if (!myTurn) for (om in oppLevels[oppLevel(h)]) for (u in rows(opp, oppDecided, om).values) outcomeOf(om, u)
+            if (!myTurn && !adversarial) for (om in oppLevels[oppLevel(h)]) for (u in rows(opp, oppDecided, om).values) outcomeOf(om, u)
             val results = if (pool == null || pairs.size < 2) {
                 val kernel = BlockKernel()
                 pairs.map { (mm, om) -> checkStop(); key(mm, om) to node(mm, om, myTurn, kernel) }
@@ -272,6 +276,7 @@ class DuelSearch(
         val wLen = wHi - wLo + 1
         if (wLen > 0) {
             if (myTurn) myNode(mm, om, myU, oppU, lo, width, wLo, wLen, values, kernel)
+            else if (adversarial) oppMinNode(mm, om, myU, oppU, lo, width, wLo, wLen, values, kernel)
             else oppNode(mm, om, myU, oppU, lo, width, wLo, wLen, values)
         }
         return Grid(myU, myIdx, oppU, oppIdx, lo, width, values)
@@ -331,6 +336,63 @@ class DuelSearch(
         for (slice in 0 until slices) for (i in 0 until wLen) values[slice * width + wLo + i] = solved[slice * wLen + i].toFloat()
     }
 
+    /**
+     * The opponent's turn played to minimise my value: the same turn search as mine on negated
+     * values (keeps and box chosen against me, with its own upper bonus).
+     */
+    private fun oppMinNode(
+        mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
+        wLo: Int, wLen: Int, values: FloatArray, kernel: BlockKernel,
+    ) {
+        val slices = myU.size * oppU.size
+        val open = (0 until Category.COUNT).filter { om and (1 shl it) == 0 }
+        val children = open.map { c ->
+            val child = om or (1 shl c)
+            if (child == Category.FULL_MASK && mm == Category.FULL_MASK) null else grids.getValue(key(mm, child))
+        }
+        val solved = DoubleArray(slices * wLen)
+        kernel.runBlocks(slices * wLen, solved) { start, len, e3 ->
+            for ((ci, c) in open.withIndex()) {
+                val g = children[ci]
+                for (r in 0 until Dice.ROLLS) {
+                    val pts = scores[r, c]
+                    val rb = r * len - start
+                    var k = start
+                    while (k < start + len) {
+                        val slice = k / wLen
+                        val rowEnd = minOf(start + len, (slice + 1) * wLen)
+                        val u = myU[slice / oppU.size]
+                        val ou = oppU[slice % oppU.size]
+                        var gain = pts
+                        var ou2 = ou
+                        if (c < 6 && !oppDecided) {
+                            ou2 = minOf(cap, ou + pts)
+                            if (ou < cap && ou + pts >= cap) gain += rules.bonusPoints
+                        }
+                        val diffAtK = lo + wLo + (k - slice * wLen)
+                        if (g == null) {
+                            for (kk in k until rowEnd) {
+                                val v = (-terminal(diffAtK + (kk - k) - gain)).toFloat()
+                                if (v > e3[rb + kk]) e3[rb + kk] = v
+                            }
+                        } else {
+                            val row = g.row(u, ou2)
+                            val top = g.width - 1
+                            val vals = g.values
+                            val off = diffAtK - gain - g.lo - k
+                            for (kk in k until rowEnd) {
+                                val v = -vals[row + (kk + off).coerceIn(0, top)]
+                                if (v > e3[rb + kk]) e3[rb + kk] = v
+                            }
+                        }
+                        k = rowEnd
+                    }
+                }
+            }
+        }
+        for (slice in 0 until slices) for (i in 0 until wLen) values[slice * width + wLo + i] = (-solved[slice * wLen + i]).toFloat()
+    }
+
     private fun oppNode(
         mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
         wLo: Int, wLen: Int, values: FloatArray,
@@ -378,7 +440,14 @@ class DuelSearch(
          * thread: positions with many boxes left are rejected at once, and counting stops as
          * soon as [limit] is passed (returning [Long.MAX_VALUE]).
          */
-        fun estimateOps(tables: Tables, me: Board, opp: Board, meToMove: Boolean = true, limit: Long = Long.MAX_VALUE): Long {
+        fun estimateOps(
+            tables: Tables,
+            me: Board,
+            opp: Board,
+            meToMove: Boolean = true,
+            limit: Long = Long.MAX_VALUE,
+            adversarial: Boolean = false,
+        ): Long {
             val kMe = Category.COUNT - me.filledCount
             val kOpp = Category.COUNT - opp.filledCount
             val ok = if (meToMove) kOpp == kMe || kOpp == kMe - 1 else kMe == kOpp || kMe == kOpp - 1
@@ -406,8 +475,11 @@ class DuelSearch(
                         val lo = d0 - oi.gain
                         val hi = d0 + mi.gain
                         val w = (minOf(hi, oi.rest) - maxOf(lo, -mi.rest + 1) + 1).coerceAtLeast(0)
-                        ops += mi.rows.toLong() * oi.rows * w *
-                            if (myTurn) KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(mm)) else 120L
+                        ops += mi.rows.toLong() * oi.rows * w * when {
+                            myTurn -> KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(mm))
+                            adversarial -> KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(om))
+                            else -> 120L
+                        }
                         if (ops > limit) return Long.MAX_VALUE
                     }
                 }

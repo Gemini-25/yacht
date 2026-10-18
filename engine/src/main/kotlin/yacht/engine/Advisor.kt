@@ -84,7 +84,11 @@ class PlannedTurn internal constructor(
     fun bestCategory(r: Int): Category = plan.bestCategory(r)
 }
 
-class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
+/**
+ * [adversarial]: in the exact end-game search the opponent plays to beat me (minimax) instead of
+ * for max expectation, so the plan maximises the P(win) I can guarantee against any opponent.
+ */
+class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val adversarial: Boolean = false) {
     /**
      * Plans my turn. With [opp] and the distribution table it maximises P(win) (ties count as
      * [tieValue]); otherwise it maximises expected score. [budgetOps] bounds the exact search.
@@ -111,7 +115,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, after), duel = true)
         }
         if (duel && canDuel(me, opp)) {
-            val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos)
+            val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos, adversarial = adversarial)
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true)
         }
         val curve = WinCurve.against(tables, opp, tieValue)
@@ -163,7 +167,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         }
         // Exact to the end already: if time allows, also let later turns react to the opponent.
         if (allowDuel && best.depth >= remaining && canDuel(me, opp)) {
-            val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS)
+            val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS, adversarial = adversarial)
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
                 try {
@@ -187,7 +191,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null) {
         meToMove: Boolean,
         executor: ExecutorService? = pool,
         stop: java.util.concurrent.atomic.AtomicBoolean? = null,
-    ): DuelSearch = DuelSearch(tables, me, opp, meToMove, executor, stop = stop)
+    ): DuelSearch = DuelSearch(tables, me, opp, meToMove, executor, stop = stop, adversarial = adversarial)
 
     /** The duel search needs it to be my turn: the opponent has as many boxes left as me, or one fewer. */
     fun canDuel(me: Board, opp: Board): Boolean {

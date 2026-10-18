@@ -27,7 +27,7 @@ class AdvisorPlayer(
     override fun startTurn(me: Board, opp: Board) {
         if (me.filledCount == 0) table = null
         if (mode == Mode.WIN && duelOps > 0 && table?.after(me, opp) == null && advisor.canDuel(me, opp) &&
-            DuelSearch.estimateOps(advisor.tables, me, opp, limit = duelOps) <= duelOps
+            DuelSearch.estimateOps(advisor.tables, me, opp, limit = duelOps, adversarial = advisor.adversarial) <= duelOps
         ) {
             table = advisor.buildDuelTable(me, opp, meToMove = true)
         }
