@@ -852,6 +852,10 @@ private fun reviewSamples(opts: Map<String, String>) {
             }
             println("=== result ${s.me.total}:${s.opp.total}")
             val r = luck.of(s)
+            r.luckFree?.let { f ->
+                println("  [운을 빼면] ${f.summary}")
+                f.details.forEach { println("        - $it") }
+            }
             println("  [운] ${r.summary}")
             r.details.forEach { println("        - $it") }
             r.moments.forEach { println("        * ${it.text} ${"%+.1f".format(100 * it.delta)}%p") }

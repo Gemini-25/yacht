@@ -112,23 +112,25 @@ class OutlookAnalysis(private val tables: Tables) {
         val yachtMatters = yacht != null && yacht.second < low - 0.005
         val flat = high - low < 0.005 && !yachtMatters
         val summary = when {
-            flat && high < 0.0005 -> "상대 턴 결과와 상관없이 역전은 어려워요."
-            flat && low > 0.9995 -> "상대 턴 결과와 상관없이 이긴 판이에요."
-            flat -> "상대 턴 결과와 상관없이 내 승률은 ${about}${Ko.pct(typical)} 그대로예요."
+            flat && high < 0.0005 -> "상대가 어떻게 두든 역전은 어려워요."
+            flat && low > 0.9995 -> "상대가 어떻게 두든 이긴 판이에요."
+            flat -> "상대가 어떻게 두든 내 승률은 ${about}${Ko.pct(typical)} 그대로예요."
             high - low < 0.005 -> "상대가 요트를 만들지 않으면 내 승률은 ${about}${Ko.pct(typical)} 그대로예요."
-            else -> "상대 턴 결과에 따라 내 승률이 ${about}$a~$b 사이로 움직여요."
+            else -> "상대 결과에 따라 내 승률은 ${about}$a~${Ko.ro(b)} 바뀌어요."
         }
         val details = ArrayList<String>()
         val last = Category.COUNT - opp.filledCount == 1
         if (last) details += "상대의 마지막 턴이에요."
         if (high - low >= 0.005) {
-            details += "상대가 무난하게 두면 내 승률은 ${Ko.pct(typical)}쯤이에요. 상대가 잘 풀리면 ${a}, 꼬이면 ${b}가 돼요."
+            details += "상대가 평범하게 두면 ${Ko.pct(typical)}쯤이에요. 상대가 잘 풀리면 ${a}, 안 풀리면 ${Ko.ieyo(b)}."
         }
         if (yacht != null && yachtMatters) {
             details += "상대가 요트를 만들면(확률 ${Ko.pct(yacht.first)}) ${Ko.ro(Ko.pct(yacht.second))} 떨어져요."
         }
         if (targets.isNotEmpty() && !last) {
-            details += "상대는 주로 " + targets.joinToString(", ") { "${box(it.first)}(${Ko.pct(it.second)})" } + " 쪽에 넣게 될 거예요."
+            val names = targets.map { "${box(it.first)}(${Ko.pct(it.second)})" }
+            details += if (names.size == 1) "상대는 이번에 ${names[0]}에 넣을 가능성이 커요."
+            else "상대는 이번에 ${Ko.ina(names[0])} ${names[1]}에 넣을 가능성이 커요."
         }
         return summary to details
     }

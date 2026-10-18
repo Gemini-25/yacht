@@ -92,7 +92,7 @@ fun HistoryScreen(c: AppController) {
             item { HabitsCard(c) }
             item { CalibrationCard(games) }
             if (games.isEmpty()) {
-                item { Text("끝난 게임이 아직 없습니다.", modifier = Modifier.padding(12.dp)) }
+                item { Text("끝난 게임이 아직 없어요.", modifier = Modifier.padding(12.dp)) }
             }
             items(shown) { g -> GameRow(c, g) }
         }
@@ -186,7 +186,7 @@ private fun StatsCard(title: String, games: List<GameState>) {
             )
             if (n < 30) {
                 Text(
-                    "판 수가 적으면 운의 영향이 큽니다. 30판 이상부터 비교해 보세요.",
+                    "판 수가 적으면 운의 영향이 커요. 30판 이상부터 비교해 보세요.",
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onSurfaceVariant,
                 )
@@ -252,7 +252,7 @@ private fun CalibrationCard(games: List<GameState>) {
             Text("AI 예측 검증 (7턴째 예측 승률 vs 실제)", fontWeight = FontWeight.Bold)
             if (points.size < 5) {
                 Text(
-                    "게임이 5판 이상 쌓이면 표시됩니다. 예측 승률과 실제 승률이 비슷하면 AI의 확률 계산이 맞다는 뜻입니다.",
+                    "게임이 5판 이상 쌓이면 보여 드려요. 예측 승률과 실제 승률이 비슷하면 AI의 확률 계산이 맞다는 뜻이에요.",
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onSurfaceVariant,
                 )
@@ -347,7 +347,7 @@ fun ReviewScreen(c: AppController) {
                         val winLoss = mistakes.filter { it.mode == Mode.WIN }.sumOf { it.loss }
                         val evLoss = g.decisions.sumOf { it.expectedLoss }
                         Text(
-                            "승률 손실 합계 %.1f%%p · 기대점수 손실 합계 %.1f점".format(winLoss * 100, evLoss),
+                            "승률 손실 합계 %.1f%%p · 평균 점수 손실 합계 %.1f점".format(winLoss * 100, evLoss),
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onSurfaceVariant,
                         )
@@ -383,15 +383,25 @@ private fun LuckCard(g: GameState, r: yacht.engine.explain.LuckReport) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text("운 분석", fontWeight = FontWeight.Bold)
+            r.luckFree?.let { f ->
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.primaryContainer.copy(alpha = 0.6f)).padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text("운을 빼면 누가 이겼을까?", style = MaterialTheme.typography.labelMedium, color = cs.onPrimaryContainer)
+                    Text(f.summary, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
+                    Bullets(f.details, cs.onPrimaryContainer)
+                }
+            }
             Text(r.summary, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
             Bullets(r.details, cs.onSurfaceVariant)
             if (r.rounds.count { it.me != null || it.opp != null } >= 2) {
-                SectionTitle("턴별 누적 운 (기대 점수 대비)")
+                SectionTitle("턴별 누적 운 (평균 대비)")
                 LuckChart(r.rounds)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("● 나", style = MaterialTheme.typography.labelSmall, color = gameColors.me)
                     Text("● ${oppName(g)}" + if (r.oppWithSkill) " (운+실력)" else "", style = MaterialTheme.typography.labelSmall, color = gameColors.opp)
-                    Text("가운데 선 = 기대만큼", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    Text("가운데 선 = 평균", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 }
             }
             if (r.moments.isNotEmpty()) {
@@ -459,7 +469,7 @@ private fun DecisionCard(c: AppController, d: DecisionRecord) {
                 HorizontalDivider(color = cs.error.copy(alpha = 0.3f))
                 Text("추천: ${d.best}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "손실 ${fmtDelta(d.mode, -d.loss)} · 기대점수 ${"%+.1f".format(-d.expectedLoss)}점",
+                    "손실 ${fmtDelta(d.mode, -d.loss)} · 평균 점수 ${"%+.1f".format(-d.expectedLoss)}점",
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.error,
                 )

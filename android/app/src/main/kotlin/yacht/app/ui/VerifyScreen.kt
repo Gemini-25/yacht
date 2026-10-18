@@ -45,8 +45,8 @@ fun VerifyScreen(c: AppController) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "같은 주사위 흐름으로 \"승률 AI\"와 \"기대점수 AI\"를 각각 같은 상대(기대점수 최적 AI)와 붙입니다. " +
-                    "선공·후공 둘 다 둡니다. 운이 같으니 두 AI의 승률 차이가 곧 전략의 차이입니다.",
+                "같은 주사위 흐름으로 \"승률 AI\"와 \"기대점수 AI\"를 각각 같은 상대(기대점수 최적 AI)와 붙여요. " +
+                    "선공·후공 둘 다 둬요. 운이 같으니 두 AI의 승률 차이가 곧 전략의 차이예요.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -74,10 +74,10 @@ fun VerifyScreen(c: AppController) {
                         )
                         Text(
                             when {
-                                v.games < 50 -> "판 수가 더 쌓여야 판단할 수 있습니다."
-                                v.diff - v.diffCi > 0 -> "승률 AI가 통계적으로 유의하게 더 많이 이깁니다."
-                                v.diff + v.diffCi < 0 -> "기대점수 AI가 더 많이 이겼습니다 (예상 밖 결과)."
-                                else -> "아직 차이가 오차 범위 안입니다. 판 수를 늘려 보세요."
+                                v.games < 50 -> "판 수가 더 쌓여야 판단할 수 있어요."
+                                v.diff - v.diffCi > 0 -> "승률 AI가 통계적으로 확실하게 더 많이 이겨요."
+                                v.diff + v.diffCi < 0 -> "기대점수 AI가 더 많이 이겼어요(예상 밖 결과예요)."
+                                else -> "아직 차이가 오차 범위 안이에요. 판 수를 늘려 보세요."
                             },
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -90,8 +90,8 @@ fun VerifyScreen(c: AppController) {
                 }
             }
             Text(
-                "참고: 상대가 사람이면 기대점수 최적보다 약하므로 실제 승률은 이보다 높게 나옵니다. " +
-                    "실전 기록 화면의 승률과 'AI 예측 검증' 표로 실제 결과도 확인할 수 있습니다.",
+                "참고: 상대가 사람이면 보통 기대점수 최적보다 약해서, 실제 승률은 이보다 높게 나와요. " +
+                    "실전 기록 화면의 승률과 'AI 예측 검증' 표로 실제 결과도 확인할 수 있어요.",
                 style = MaterialTheme.typography.bodySmall,
                 color = cs.onSurfaceVariant,
             )

@@ -66,6 +66,9 @@ object Ko {
     /** 이지만/지만 */
     fun ijiman(w: String) = pick(w, "이지만", "지만")
 
+    /** (이)나 */
+    fun ina(w: String) = pick(w, "이나", "나")
+
     /** (이)라도 */
     fun irado(w: String) = pick(w, "이라도", "라도")
 
@@ -116,6 +119,14 @@ object Ko {
         5 -> "다섯"
         else -> "$n"
     }
+
+    /** 첫, 두, 세 번째 (throws of a turn). */
+    fun nth(n: Int): String = when (n) {
+        1 -> "첫"
+        2 -> "두"
+        3 -> "세"
+        else -> "$n"
+    } + " 번째"
 
     /** "열 번에 한 번꼴" when [p] is close to 1/n for a round n, else null. */
     fun oneIn(p: Double): String? {

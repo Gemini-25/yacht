@@ -54,7 +54,7 @@ fun AppRoot(c: AppController) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         val error = c.loadError
         when {
-            error != null -> CenterText("계산 표를 불러오지 못했습니다\n$error")
+            error != null -> CenterText("계산 표를 불러오지 못했어요\n$error")
             c.tables == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
@@ -126,13 +126,13 @@ fun HomeScreen(c: AppController) {
         ModeCard(
             selected = source == DiceSource.MANUAL,
             title = "실전 도우미",
-            desc = "스위치 화면의 주사위와 상대 점수를 입력하면 승률이 가장 높은 수를 알려줍니다.",
+            desc = "스위치 화면의 주사위와 상대 점수를 입력하면, 승률이 가장 높은 수를 알려 줘요.",
             onClick = { source = DiceSource.MANUAL },
         )
         ModeCard(
             selected = source == DiceSource.RANDOM,
             title = "AI와 대전",
-            desc = "앱이 주사위를 굴립니다. 승률 최대화 AI와 1:1 연습.",
+            desc = "앱이 주사위를 굴려요. 승률을 최대로 두는 AI와 1:1로 연습해요.",
             onClick = { source = DiceSource.RANDOM },
         )
         Text("순서", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
@@ -149,7 +149,7 @@ fun HomeScreen(c: AppController) {
             ) { Text("내가 후공 (추천)") }
         }
         Text(
-            "고를 수 있으면 후공: 마지막 턴에 상대 최종 점수를 보고 둘 수 있어 정보상 유리합니다.",
+            "고를 수 있다면 후공이 좋아요. 마지막 턴에 상대 최종 점수를 보고 둘 수 있거든요.",
             style = MaterialTheme.typography.bodySmall,
             color = cs.onSurfaceVariant,
         )

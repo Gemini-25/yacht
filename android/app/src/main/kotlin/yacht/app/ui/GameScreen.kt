@@ -481,7 +481,7 @@ private fun OpponentTurnCard(c: AppController, s: GameState) {
             } else {
                 Text("상대 차례", fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)
                 Text(
-                    "상대가 기록한 칸의 + 를 눌러 점수를 입력하세요. 입력하는 즉시 AI가 내 턴을 계산합니다.",
+                    "상대가 기록한 칸의 +를 눌러 점수를 입력하세요. 입력하면 바로 내 턴을 계산해요.",
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onTertiaryContainer,
                 )
@@ -640,7 +640,7 @@ private fun RecommendationCard(c: AppController, s: GameState, a: Advice?) {
                             Text("추천", style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (k.held.isEmpty()) {
-                                    Text("전부 다시 굴리기", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = cs.onSecondaryContainer)
+                                    Text("모두 다시 굴리기", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = cs.onSecondaryContainer)
                                 } else {
                                     MiniDice(k.held, 22.dp)
                                     Text(" 고정 후 다시", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = cs.onSecondaryContainer)
@@ -729,7 +729,7 @@ private fun OptionsList(c: AppController, a: Advice) {
                 OptionRow(
                     label = {
                         when {
-                            k.held.isEmpty() -> Text("전부 다시", style = MaterialTheme.typography.bodySmall)
+                            k.held.isEmpty() -> Text("모두 다시", style = MaterialTheme.typography.bodySmall)
                             k.held.size == 5 -> Text("멈추고 기록", style = MaterialTheme.typography.bodySmall)
                             else -> MiniDice(k.held, 16.dp)
                         }
@@ -833,7 +833,7 @@ private fun ManualPad(c: AppController, s: GameState) {
     } else {
         Text(
             when {
-                d.deciding -> "3번 다 굴렸습니다. 점수표에서 기록할 칸을 누르세요" + if (c.hintsHidden) "" else " (노란 칸 = 추천)"
+                d.deciding -> "세 번 다 굴렸어요. 점수표에서 기록할 칸을 누르세요" + if (c.hintsHidden) "" else " (노란 칸 = 추천)"
                 d.dice.any { it != null } -> "주사위를 잘못 넣었으면 그 주사위를 눌러 지우세요"
                 else -> "주사위 눈 버튼을 왼쪽 주사위부터 차례로 누르세요"
             },

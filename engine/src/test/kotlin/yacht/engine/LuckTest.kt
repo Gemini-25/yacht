@@ -86,7 +86,28 @@ class LuckTest {
             assertEquals(r.me!!, r.rounds.last().me!!, 1e-9)
             assertTrue(r.split == null)
             assertTrue(r.summary.endsWith("."))
+            // Average dice for both: max-expectation play scores exactly the average.
+            val free = assertNotNull(r.luckFree)
+            assertEquals(e0, free.me, 1e-6)
+            assertEquals(e0, free.opp!!, 1e-6)
+            assertTrue(free.summary.startsWith("운을 빼면 거의 비긴"), free.summary)
         }
+    }
+
+    @Test
+    fun luckFreeUsesATaggedOpponentsUsualResult() {
+        val luck = LuckAnalysis(tables)
+        // Real games: the opponent's dice are unknown.
+        fun real(g: GameState) = g.copy(source = DiceSource.MANUAL, moves = g.moves.map { it.copy(throws = null, held = null) })
+        val games = (20L..25L).map { real(play(Mode.EXPECTED_SCORE, it, Side.ME)) }
+        val g = games.last()
+        val alone = luck.of(g).luckFree!!
+        assertTrue(alone.opp == null && alone.details.isNotEmpty())
+        val withHistory = luck.of(g, games.dropLast(1).mapIndexed { i, x -> x.copy(createdAt = i.toLong()) }).luckFree!!
+        assertEquals(5, withHistory.oppGames)
+        assertTrue(withHistory.opp != null)
+        println(withHistory.summary)
+        withHistory.details.forEach { println("  $it") }
     }
 
     @Test

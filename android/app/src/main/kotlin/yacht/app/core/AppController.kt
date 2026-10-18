@@ -422,7 +422,8 @@ class AppController(
     fun luck(g: GameState): LuckReport? {
         val t = tables ?: return null
         if (!g.isOver) return null
-        return cached(listOf("luck", g.createdAt, g.moves.size, g.decisions.size)) { LuckAnalysis(t).of(g) }
+        val h = history
+        return cached(listOf("luck", g.createdAt, g.moves.size, g.decisions.size, h.size)) { LuckAnalysis(t).of(g, h) }
     }
 
     /** Starts computing "추천대로 뒀다면?" for [d] (review); the result lands in [whatIfs]. */

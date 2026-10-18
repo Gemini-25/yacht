@@ -91,17 +91,20 @@ class WhatIfAnalysis(private val tables: Tables) {
         val chosen = side(d.chosenHeld, d.chosenCategory, d.chosenValue) ?: return null
         val win = d.mode == Mode.WIN
         val (vb, vc) = if (win) Ko.pctPair(best.value, chosen.value) else Ko.num(best.value) + "점" to Ko.num(chosen.value) + "점"
-        val what = if (win) "승률" else "기대 점수"
+        val what = if (win) "승률이" else "평균 최종 점수는"
+        val held = d.bestHeld
+        val cat = d.bestCategory
         val doing = when {
-            d.bestHeld != null && best.outcomes.size > 1 && best.move == Game.keepText(emptyList()) -> "모두 다시 굴렸다면"
-            d.bestHeld != null && best.outcomes.size > 1 -> "${best.move}하고 다시 굴렸다면"
-            else -> "${Ko.ro(best.move)} 기록했다면"
+            held != null && best.outcomes.size > 1 && held.isEmpty() -> "모두 다시 굴렸다면"
+            held != null && best.outcomes.size > 1 -> "${Ko.eul(held.joinToString(" "))} 남기고 다시 굴렸다면"
+            cat != null -> "${if (cat.isUpper) "‘${cat.face}’" else cat.label}에 ${best.turnPoints.toInt()}점을 넣었다면"
+            else -> "뒀다면"
         }
-        val summary = "추천대로 $doing $what ${Ko.ieosseoyo(vb)}(실제 선택은 $vc)."
+        val summary = "추천대로 $doing $what ${Ko.ieosseoyo(vb)}(실제로는 $vc)."
         val details = ArrayList<String>()
         val bothRolls = best.outcomes.size > 1 || chosen.outcomes.size > 1
         if (bothRolls) {
-            details += "이번 턴 평균 점수는 추천 ${Ko.num(best.turnPoints)}점, 내 선택 ${Ko.num(chosen.turnPoints)}점이에요."
+            details += "이번 턴에 얻는 점수는 평균으로 추천 ${Ko.num(best.turnPoints)}점, 내 선택 ${Ko.num(chosen.turnPoints)}점이에요."
         }
         if (!best.bonusProb.isNaN() && !chosen.bonusProb.isNaN() && kotlin.math.abs(best.bonusProb - chosen.bonusProb) >= 0.03) {
             val (a, b) = Ko.pctPair(best.bonusProb, chosen.bonusProb)

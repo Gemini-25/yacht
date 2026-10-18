@@ -53,11 +53,11 @@ class Explainer(private val tables: Tables) {
         val summary = keepSummary(c, a.mode)
         val details = ArrayList<String>()
         if (decided(a.mode, best.value, other.value)) {
-            details += evFraming(best.expectedFinal, other.expectedFinal, keepNoun(other))
+            details += evFraming(best.expectedFinal, other.expectedFinal, keepThan(other))
             details += mainSentences(c, keepIf(best), keepIf(other)).take(1)
             return Explanation(summary, details)
         }
-        details += framing(a.mode, best.value, other.value, keepNoun(other))
+        details += framing(a.mode, best.value, other.value, keepThan(other))
         if (tiny(a.mode, c.diff)) {
             balanceSentence(c, keepIf(best))?.let { details += it }
             return Explanation(summary, details)
@@ -66,7 +66,7 @@ class Explainer(private val tables: Tables) {
         details += mains.take(1)
         if (mains.isEmpty()) spreadSentence(c, best, other)?.let { details += it }
         if (strategic) {
-            details += strategy(a.mode, a.value, keepNoun(other), other.expectedFinal - best.expectedFinal, c.pa.finalSd, c.pb.finalSd, opp)
+            details += strategy(a.mode, a.value, keepThan(other), other.expectedFinal - best.expectedFinal, c.pa.finalSd, c.pb.finalSd, opp)
         } else {
             (mains.getOrNull(1) ?: tradeSentence(c))?.let { details += it }
         }
@@ -265,7 +265,7 @@ class Explainer(private val tables: Tables) {
         val c = Outcome.category(o)
         val kind = Outcome.kind(o)
         return when {
-            kind == Outcome.ZERO -> "${box(c)}에 0점을 넣게 될"
+            kind == Outcome.ZERO -> "${Ko.eul(box(c))} 0점으로 지우게 될"
             c == Category.CHOICE -> if (good) "초이스에 넣게 될" else "초이스로 때우게 될"
             c.isUpper && kind == Outcome.MADE && good -> "${Ko.eul("${c.face}")} 세 개 이상 모을"
             c.isUpper && kind == Outcome.FEW -> "${box(c)}에 한두 개만 넣게 될"
@@ -277,7 +277,7 @@ class Explainer(private val tables: Tables) {
         }
     }
 
-    /** What an outcome aims at, for "…를 노리는 수예요"; null for outcomes that are not targets. */
+    /** What an outcome aims at, for "…를 노려요"; null for outcomes that are not targets. */
     private fun target(o: Int): String? {
         if (o < 0 || Outcome.kind(o) != Outcome.MADE) return null
         val c = Outcome.category(o)
@@ -289,37 +289,37 @@ class Explainer(private val tables: Tables) {
     }
 
     private fun keepSummary(c: Compare, mode: Mode): String {
-        if (decided(mode, c.pa.value, c.pb.value)) return "승패는 사실상 정해져서, 최종 점수를 조금이라도 높이는 쪽을 골랐어요."
+        if (decided(mode, c.pa.value, c.pb.value)) return "승부는 사실상 났어요. 점수를 조금이라도 더 내는 쪽을 골랐어요."
         if (tiny(mode, c.diff)) return "다른 선택과 거의 차이가 없어요."
         val mains = mainReasons(c)
         val r = mains.firstOrNull() ?: run {
             val boxes = spreadBoxes(c)
             return when (boxes.size) {
-                2 -> "${Ko.wa(box(boxes[0]))} ${box(boxes[1])} 쪽 결과가 조금씩 함께 좋아지는 수예요."
-                1 -> "${box(boxes[0])} 쪽 결과가 조금씩 좋아지는 수예요."
-                else -> "한 가지 결과 때문이라기보다, 나올 수 있는 경우를 모두 합쳐 보면 조금씩 더 나은 수예요."
+                2 -> "${Ko.wa(box(boxes[0]))} ${box(boxes[1])} 쪽이 골고루 조금씩 나아져요."
+                1 -> "${box(boxes[0])} 쪽 결과가 전반적으로 조금씩 나아져요."
+                else -> "어느 한 결과 때문이 아니라, 나올 수 있는 경우를 모두 합치면 조금씩 더 나아요."
             }
         }
         if (r.quality) {
-            return "같은 ${Ko.irado(box(Outcome.category(r.o)))} 점수를 평균 ${Ko.num(r.ptsA - r.ptsB)}점 더 받는 수예요."
+            return "${box(Outcome.category(r.o))}에 넣을 점수를 평균 ${Ko.num(r.ptsA - r.ptsB)}점 더 올려요."
         }
         if (r.pA > r.pB) {
             val t1 = target(r.o)
             val second = mains.getOrNull(1)
             val t2 = second?.takeIf { !it.quality && it.pA > it.pB }?.let { target(it.o) }
-            if (t1 != null && t2 != null && r.weight < 0.6 * c.diff) return "${Ko.wa(t1)} $t2 쪽을 함께 노리는 수예요."
+            if (t1 != null && t2 != null && r.weight < 0.6 * c.diff) return "${Ko.wa(t1)} ${Ko.eul(t2)} 함께 노려요."
             val cat = Outcome.category(r.o)
-            val chance = "(이번 턴 확률 ${Ko.pct(r.pA)})"
+            val chance = "(이번 턴에 될 확률 ${Ko.pct(r.pA)})"
             if (t1 != null && r.pA < 0.08) {
-                val goal = if (cat.isUpper) "${Ko.eul("${cat.face}")} 세 개 이상 모을" else t1
-                return "확률은 낮지만 $goal 기회를 살리는 수예요$chance."
+                val goal = if (cat.isUpper) "${Ko.eul("${cat.face}")} 세 개 이상 모아 볼" else "${Ko.eul(t1)} 노려 볼"
+                return "확률은 ${Ko.ro(Ko.pct(r.pA))} 낮지만 $goal 만해요."
             }
-            if (t1 != null && cat.isUpper) return "${Ko.eul("${cat.face}")} 세 개 이상 모으는 수예요$chance."
-            if (t1 != null) return "${Ko.eul(t1)} 노리는 수예요$chance."
-            return "${clause(r.o, true)} 확률을 ${Ko.ro(Ko.pct(r.pA))} 높이는 수예요."
+            if (t1 != null && cat.isUpper) return "${Ko.eul("${cat.face}")} 세 개 이상 모으는 게 목표예요$chance."
+            if (t1 != null) return "${Ko.i(t1)} 목표예요$chance."
+            return "${clause(r.o, true)} 확률을 ${Ko.pct(r.pA)}까지 높여요."
         }
-        if (r.pA < 0.005) return "${clause(r.o, false)} 위험을 피하는 수예요."
-        return "${clause(r.o, false)} 확률을 ${Ko.ro(Ko.pct(r.pA))} 줄이는 수예요."
+        if (r.pA < 0.005) return "${clause(r.o, false)} 위험을 피해요."
+        return "${clause(r.o, false)} 확률을 ${Ko.pct(r.pA)}까지 줄여요."
     }
 
     /** Boxes whose results improve the most, when no single outcome carries the difference. */
@@ -346,8 +346,8 @@ class Explainer(private val tables: Tables) {
             else -> keepIf(a)
         }
         val names = boxes.joinToString(", ") { box(it) }
-        val tail = if (boxes.size > 1) "결과가 조금씩 함께 좋아져요." else "결과가 조금씩 좋아져요."
-        return "$prefix$lead $names 쪽 $tail"
+        val tail = if (boxes.size > 1) "쪽이 골고루 조금씩 나아져요." else "쪽 결과가 조금씩 나아져요."
+        return "$prefix$lead $names $tail"
     }
 
     /** One reason as a sentence. [doingA]/[doingB] say what each option does ("6 6 6을 남기면"). */
@@ -360,7 +360,7 @@ class Explainer(private val tables: Tables) {
         }
         val cl = clause(r.o, r.good)
         if (!r.good && r.pA < 0.005) {
-            return if (also) "$doingB $cl 확률도 ${Ko.pct(r.pB)}나 돼요." else "$doingB $cl 확률이 ${Ko.pct(r.pB)}나 되거든요."
+            return if (also) "$doingB $cl 확률도 ${Ko.pct(r.pB)}나 돼요." else "$doingB $cl 확률이 ${Ko.pct(r.pB)}나 돼요."
         }
         val verb = if (r.pA > r.pB) "올라가요" else "줄어요"
         val subject = if (also) "$cl 확률$too" else "$doingA $cl 확률이"
@@ -387,10 +387,10 @@ class Explainer(private val tables: Tables) {
     private fun rivalMerit(c: Compare): String? {
         val r = tradeReason(c, mainReasons(c)) ?: return null
         if (r.quality) {
-            return "물론 이렇게 하면 ${box(Outcome.category(r.o))}에 넣을 때 점수가 평균 ${Ko.num(r.ptsB - r.ptsA)}점 높긴 해요."
+            return "이렇게 하면 ${box(Outcome.category(r.o))}에 넣을 때 점수가 평균 ${Ko.num(r.ptsB - r.ptsA)}점 높긴 해요."
         }
         val cmp = if (r.pB > r.pA) "높긴" else "낮긴"
-        return "물론 이렇게 하면 ${clause(r.o, r.good)} 확률이 ${Ko.ro(Ko.pct(r.pB))} 추천(${Ko.pct(r.pA)})보다 $cmp 해요."
+        return "이렇게 하면 ${clause(r.o, r.good)} 확률이 ${Ko.pct(r.pB)}로, 추천(${Ko.pct(r.pA)})보다 $cmp 해요."
     }
 
     /** Both sides of a near tie: what the recommendation gains and what it gives up. */
@@ -398,10 +398,10 @@ class Explainer(private val tables: Tables) {
         val sorted = c.reasons.filter { sayable(it) && !it.quality }.sortedByDescending { abs(it.weight) }
         val plus = sorted.firstOrNull { it.weight > 0 } ?: return null
         val minus = sorted.firstOrNull { it.weight < 0 && it.o != plus.o && !overlaps(plus, it) } ?: return null
-        val v1 = if (plus.pA > plus.pB) "올라가는" else "줄어드는"
-        val v2 = if (minus.pA > minus.pB) "늘어나서" else "줄어들어서"
-        return "$doingA ${clause(plus.o, plus.good)} 확률이 ${Ko.pct(plus.pB)}에서 ${Ko.ro(Ko.pct(plus.pA))} $v1 대신 " +
-            "${clause(minus.o, minus.good)} 확률은 ${Ko.pct(minus.pB)}에서 ${Ko.ro(Ko.pct(minus.pA))} $v2, 장단점이 거의 맞먹어요."
+        val v1 = if (plus.pA > plus.pB) "올라가요" else "줄어요"
+        val v2 = if (minus.pA > minus.pB) "늘어서" else "줄어서"
+        return "$doingA ${clause(plus.o, plus.good)} 확률이 ${Ko.pct(plus.pB)}에서 ${Ko.ro(Ko.pct(plus.pA))} $v1. 대신 " +
+            "${clause(minus.o, minus.good)} 확률도 ${Ko.pct(minus.pB)}에서 ${Ko.ro(Ko.pct(minus.pA))} $v2 장단점이 거의 비슷해요."
     }
 
     // ---- stopping ---------------------------------------------------------------------------------
@@ -416,13 +416,13 @@ class Explainer(private val tables: Tables) {
         val diff = stop.value - reroll.value
         val summary = if (tiny(a.mode, diff)) "더 굴려도 거의 차이가 없어서, 여기서 기록해도 돼요."
         else "더 굴리지 말고 지금 점수를 챙기는 게 나아요."
-        details += framing(a.mode, stop.value, reroll.value, rerollNoun(reroll))
+        details += framing(a.mode, stop.value, reroll.value, rerollThan(reroll))
         if (!tiny(a.mode, diff)) details += worseSentence(an, a, r, reroll, stop.value)
         cat.details.drop(1).firstOrNull()?.let { details += it }
         return Explanation(summary, details.take(3))
     }
 
-    /** "다시 굴려서 요트를 노려도 성공 확률은 9%지만, 지금보다 나빠질 확률은 62%예요." */
+    /** "요트를 노리고 다시 굴려도 성공 확률은 9%이고, 오히려 지금보다 나빠질 확률이 62%예요." */
     private fun worseSentence(an: TurnAnalysis, a: Advice, r: Int, reroll: KeepOption, stopValue: Double): String {
         val k = keepIndex(reroll)
         val worse = an.probWorse(a.rollsDone, k, stopValue)
@@ -442,11 +442,14 @@ class Explainer(private val tables: Tables) {
                 bestO = o
             }
         }
-        val tail = "지금보다 나빠질 확률은 ${Ko.ieyo(Ko.pct(worse))}"
         if (bestO < 0) return "다시 굴리면 지금보다 나빠질 확률이 ${Ko.ieyo(Ko.pct(worse))}."
         val c = Outcome.category(bestO)
-        val goal = if (c.isUpper) "${Ko.eul("${c.face}")} 더 모아도" else if (c == Category.CHOICE) "초이스 점수를 노려도" else "${Ko.eul(c.label)} 노려도"
-        return "다시 굴려서 $goal 성공 확률은 ${Ko.ijiman(Ko.pct(prof.p(bestO)))}, $tail."
+        val goal = when {
+            c.isUpper -> "${Ko.eul("${c.face}")} 더 모으려고"
+            c == Category.CHOICE -> "초이스 점수를 올리려고"
+            else -> "${Ko.eul(c.label)} 노리고"
+        }
+        return "$goal 다시 굴려도 성공 확률은 ${Ko.pct(prof.p(bestO))}이고, 오히려 지금보다 나빠질 확률이 ${Ko.ieyo(Ko.pct(worse))}."
     }
 
     // ---- categories -------------------------------------------------------------------------------
@@ -482,39 +485,40 @@ class Explainer(private val tables: Tables) {
         val bOther = box(other.category)
         val bBest = box(best.category)
         val summary = when {
-            isDecided -> "승패는 사실상 정해져서, 최종 점수를 조금이라도 높이는 칸을 골랐어요."
-            tiny(a.mode, diff) -> "${Ko.wa(catNoun(other))} 거의 차이가 없어요."
-            best.points == 0 -> "${bBest}에 0점을 넣는 게 손해가 가장 적어요."
+            isDecided -> "승부는 사실상 났어요. 점수를 조금이라도 더 받는 칸을 골랐어요."
+            tiny(a.mode, diff) -> "${Ko.wa(catThan(other))} 거의 차이가 없어요."
+            best.points == 0 -> "${Ko.eul(bBest)} 0점으로 지우는 게 가장 손해가 적어요."
+            best.category == Category.YACHT && best.points > 0 -> "요트예요! 요트 칸에 ${best.points}점을 넣는 게 가장 좋아요."
             fa.bonusNow > 0 -> "${bBest}에 넣으면 보너스 ${rules.bonusPoints}점이 바로 확정돼요."
-            bonusMatters && dPb >= 0.08 -> "보너스 받을 확률을 ${Ko.ro(Ko.pct(fa.bonusProb))} 지키는 선택이에요."
-            dNow < -0.5 && dFut > 0.5 -> "지금 ${Ko.num(-dNow)}점을 덜 받더라도 ${Ko.eul(bOther)} 아껴 두는 선택이에요."
-            dNow > 0.5 && dFut < -0.5 -> "남은 칸이 조금 아쉬워지더라도 지금 점수를 챙기는 선택이에요."
-            else -> "${bBest}에 ${best.points}점 넣는 게 가장 좋아요."
+            bonusMatters && dPb >= 0.08 -> "보너스를 받을 확률을 ${Ko.ro(Ko.pct(fa.bonusProb))} 지켜요."
+            dNow < -0.5 && dFut > 0.5 -> "지금 ${Ko.num(-dNow)}점을 덜 받더라도 ${Ko.eun(bOther)} 아껴 두는 게 나아요."
+            dNow > 0.5 && dFut < -0.5 && -dFut > 0.25 * dNow -> "앞으로 조금 손해 보더라도 지금 점수를 챙기는 게 나아요."
+            else -> "${bBest}에 ${best.points}점을 넣는 게 가장 좋아요."
         }
 
         val details = ArrayList<String>()
-        details += if (isDecided) evFraming(best.expectedFinal, other.expectedFinal, catNoun(other))
-        else framing(a.mode, best.value, other.value, catNoun(other))
+        details += if (isDecided) evFraming(best.expectedFinal, other.expectedFinal, catThan(other))
+        else framing(a.mode, best.value, other.value, catThan(other))
         val reasons = ArrayList<String>()
         when {
             dNow < -0.5 && dFut > 0.5 && dEf > 0 -> {
-                reasons += "${bOther}에 넣으면 지금 ${Ko.num(-dNow)}점을 더 받지만, ${Ko.eul(bOther)} 비워 두면 남은 게임에서 평균 ${Ko.num(dFut)}점을 더 기대할 수 있어요."
-                if (other.category == Category.CHOICE) reasons += "초이스는 나중에 안 풀린 턴을 받아 주는 칸이거든요."
+                reasons += "${bOther}에 넣으면 지금 ${Ko.num(-dNow)}점을 더 받아요. 하지만 ${Ko.eul(bOther)} 비워 두면 앞으로 평균 ${Ko.num(dFut)}점을 더 받을 수 있어요."
+                if (other.category == Category.CHOICE) reasons += "초이스는 나중에 주사위가 안 풀린 턴을 받아 주는 칸이에요."
             }
             dNow > 0.5 && dFut < -0.5 && dEf > 0 ->
-                reasons += "${bBest}에 넣으면 지금 ${Ko.num(dNow)}점을 더 받아요. 남은 칸의 기대 점수는 ${Ko.num(-dFut)}점 줄지만, 그보다 이득이 커요."
+                reasons += "${bBest}에 넣으면 지금 ${Ko.num(dNow)}점을 더 받아요. 앞으로 받을 점수는 평균 ${Ko.num(-dFut)}점 줄지만, 지금 얻는 게 더 커요."
             dNow >= 1 && dFut >= 0.5 ->
-                reasons += "${bBest}에 넣으면 지금 점수도 ${Ko.num(dNow)}점 더 받고, 남은 칸도 더 좋게 남아요."
+                reasons += "${bBest}에 넣으면 지금 ${Ko.num(dNow)}점을 더 받고, 남은 칸도 더 좋아요."
             abs(dNow) < 1 && dFut >= 0.5 ->
-                reasons += "받는 점수는 비슷하지만, 남은 칸이 더 좋게 남아요(남은 게임 기대 점수 ${Ko.num(dFut)}점 차이)."
+                reasons += "지금 받는 점수는 비슷하지만, 남은 칸이 더 좋아서 앞으로 평균 ${Ko.num(dFut)}점을 더 받아요."
             dNow >= 1 && dEf > 0 ->
-                reasons += "${bBest}에 넣으면 지금 점수를 ${Ko.num(dNow)}점 더 받아요."
+                reasons += "${bBest}에 넣으면 지금 ${Ko.num(dNow)}점을 더 받아요."
             dNow > 0.5 && dFut < -0.5 ->
-                reasons += "${bBest}에 넣으면 지금 ${Ko.num(dNow)}점을 더 받는 대신 남은 칸의 기대 점수가 ${Ko.num(-dFut)}점 줄어요." +
-                    if (strategic) "" else " 평균으로 따지면 거의 비슷해요."
+                reasons += "${bBest}에 넣으면 지금 ${Ko.num(dNow)}점을 더 받는 대신, 앞으로 받을 점수가 평균 ${Ko.num(-dFut)}점 줄어요." +
+                    if (strategic) "" else " 평균으로는 거의 비슷해요."
             dNow < -0.5 && dFut > 0.5 ->
-                reasons += "${bOther}에 넣으면 지금 ${Ko.num(-dNow)}점을 더 받지만, ${Ko.eul(bOther)} 비워 두면 남은 칸의 기대 점수가 ${Ko.num(dFut)}점 높아져요." +
-                    if (strategic) "" else " 평균으로 따지면 거의 비슷해요."
+                reasons += "${bOther}에 넣으면 지금 ${Ko.num(-dNow)}점을 더 받아요. 하지만 ${Ko.eul(bOther)} 비워 두면 앞으로 평균 ${Ko.num(dFut)}점을 더 받아요." +
+                    if (strategic) "" else " 평균으로는 거의 비슷해요."
         }
         if (best.points == 0) sacrificeNote(best.category)?.let { reasons += it }
         if (fb.bonusNow > 0 && fa.bonusNow == 0 && !fa.bonusProb.isNaN()) {
@@ -525,11 +529,11 @@ class Explainer(private val tables: Tables) {
         }
         val extras = ArrayList<String>()
         if (strategic || (asOption && a.mode == Mode.WIN && other.expectedFinal - best.expectedFinal >= 0.3)) {
-            val who = if (asOption) "이 선택" else catNoun(other)
+            val who = if (asOption) "이 선택" else catThan(other)
             extras += strategy(a.mode, a.value, who, other.expectedFinal - best.expectedFinal, Double.NaN, Double.NaN, opp)
         }
         if (bonusMatters) {
-            extras += if (dPb > 0) "${bBest}에 넣으면 보너스 받을 확률이 ${Ko.pct(fa.bonusProb)}, ${bOther}에 넣으면 ${Ko.ieyo(Ko.pct(fb.bonusProb))}."
+            extras += if (dPb > 0) "보너스를 받을 확률은 ${bBest}에 넣으면 ${Ko.pct(fa.bonusProb)}, ${bOther}에 넣으면 ${Ko.ieyo(Ko.pct(fb.bonusProb))}."
             else "보너스만 보면 ${bOther}에 넣는 쪽이 낫지만(${Ko.pct(fb.bonusProb)} 대 ${Ko.pct(fa.bonusProb)}), 전체로는 이쪽이 이득이에요."
         }
         parNote(me, best.category, a.dice)?.let { extras += it }
@@ -549,40 +553,40 @@ class Explainer(private val tables: Tables) {
         if (c == Category.CHOICE) return null
         val p = TurnAnalysis.chance(tables, c)
         if (p >= 0.35) return null
-        return "${Ko.eun(c.label)} 한 턴에 작정하고 노려도 성공 확률이 ${Ko.pct(p)} 정도라, 지우는 부담이 비교적 작아요."
+        return "${Ko.eun(c.label)} 한 턴을 통째로 노려도 성공 확률이 ${Ko.pct(p)} 정도예요. 그래서 지워도 부담이 작아요."
     }
 
-    /** "6 네 개면 보너스 기준(눈마다 세 개)보다 6점 앞서요." */
+    /** "6이 네 개면 보너스 기준(눈마다 세 개)보다 6점 앞서요." */
     private fun parNote(me: Board, c: Category, dice: List<Int>): String? {
         if (!c.isUpper || me.u >= cap) return null
         val n = dice.count { it == c.face }
         if (n < 3) return null
         val tail = if (n == 3) "에 딱 맞아요" else "보다 ${(n - 3) * c.face}점 앞서요"
-        return "${c.face} ${Ko.count(n)} 개면 보너스 기준(눈마다 세 개)$tail."
+        return "${Ko.i("${c.face}")} ${Ko.count(n)} 개면 보너스 기준(눈마다 세 개)$tail."
     }
 
     // ---- shared sentences -------------------------------------------------------------------------
 
-    /** "기대 최종 점수로는 ‘5’에 10점 넣기보다 3점 높아요." */
+    /** "‘5’에 10점을 넣는 것보다 평균 최종 점수가 3점 높아요." */
     private fun evFraming(a: Double, b: Double, than: String): String =
-        if (a - b < 0.05) "${Ko.wa(than)} 기대 점수도 거의 같아요."
-        else "기대 최종 점수로는 ${than}보다 ${Ko.num(a - b)}점 높아요."
+        if (a - b < 0.05) "${Ko.wa(than)} 평균 최종 점수도 거의 같아요."
+        else "${than}보다 평균 최종 점수가 ${Ko.num(a - b)}점 높아요."
 
     private fun tiny(mode: Mode, d: Double) = if (mode == Mode.WIN) d < 0.0005 else d < 0.05
 
     private fun decided(mode: Mode, a: Double, b: Double) =
         mode == Mode.WIN && ((a > 0.9995 && b > 0.9995) || (a < 0.0005 && b < 0.0005))
 
-    /** "6 6 5 5 남기기보다 승률이 2.1%p 높아요(54% 대 52%)." */
+    /** "6 6 5 5를 남기는 것보다 승률이 2.1%p 높아요(54% 대 52%)." */
     private fun framing(mode: Mode, a: Double, b: Double, than: String): String {
         val d = a - b
         if (mode == Mode.WIN) {
-            if (d < 0.0005) return "${Ko.wa(than)} 승률 차이가 0.1%p도 안 돼서 사실상 같아요."
+            if (d < 0.0005) return "${Ko.wa(than)} 승률 차이가 0.1%p도 안 돼요. 사실상 같아요."
             val (pa, pb) = Ko.pctPair(a, b)
             return "${than}보다 승률이 ${Ko.pp(d)} 높아요($pa 대 $pb)."
         }
-        if (d < 0.05) return "${Ko.wa(than)} 기대 점수 차이가 거의 없어요."
-        return "${than}보다 기대 최종 점수가 ${Ko.num(d)}점 높아요."
+        if (d < 0.05) return "${Ko.wa(than)} 평균 점수 차이가 거의 없어요."
+        return "${than}보다 평균 최종 점수가 ${Ko.num(d)}점 높아요."
     }
 
     private fun optionSummary(mode: Mode, best: Double, x: Double, bestNoun: String): String {
@@ -592,23 +596,23 @@ class Explainer(private val tables: Tables) {
             val (pb, px) = Ko.pctPair(best, x)
             return "추천(${bestNoun})보다 승률이 ${Ko.pp(d)} 낮아요($px 대 $pb)."
         }
-        return "추천(${bestNoun})보다 기대 최종 점수가 ${Ko.num(d)}점 낮아요."
+        return "추천(${bestNoun})보다 평균 최종 점수가 ${Ko.num(d)}점 낮아요."
     }
 
     private fun lossText(mode: Mode, d: Double) =
-        if (mode == Mode.WIN) "승률 ${Ko.pp(d)} 손해" else "기대 점수 ${Ko.num(d)}점 손해"
+        if (mode == Mode.WIN) "승률 ${Ko.pp(d)} 손해" else "평균 점수 ${Ko.num(d)}점 손해"
 
     /** Why the win-maximising move differs from the max-expectation one ([rival] scores [dEf] more on average). */
     private fun strategy(mode: Mode, win: Double, rival: String, dEf: Double, sdA: Double, sdB: Double, opp: Board): String {
-        val lead = "기대 점수만 보면 ${Ko.i(rival)} ${Ko.num(dEf)}점 높지만"
-        if (mode != Mode.WIN) return "$lead, 이쪽이 더 나아요."
+        val lead = "평균 점수만 보면 ${Ko.i(rival)} ${Ko.num(dEf)}점 높아요. 하지만"
+        if (mode != Mode.WIN) return "$lead 이쪽이 더 나아요."
         return when {
-            opp.isComplete -> "$lead, 상대가 ${opp.total}점으로 끝난 지금은 그 점수를 넘을 확률이 더 중요해요."
-            !sdA.isNaN() && sdA > sdB + 0.7 && win < 0.5 -> "$lead, 지금은 불리한 상황이라 평균보다 한 방이 더 필요해요."
-            !sdA.isNaN() && sdA < sdB - 0.7 && win > 0.5 -> "$lead, 지금은 유리한 상황이라 크게 무너지지 않는 쪽이 이길 확률이 더 높아요."
-            win < 0.45 -> "$lead, 지금은 불리한 상황이라 평균 점수보다 이길 수 있는 점수를 노리는 게 중요해요."
-            win > 0.55 -> "$lead, 지금은 앞서 있어서 평균 점수보다 지지 않는 게 중요해요."
-            else -> "$lead, 이기고 지는 것만 따지면 이쪽이 더 나아요."
+            opp.isComplete -> "$lead 상대가 ${opp.total}점으로 끝났으니, 그 점수를 넘을 확률이 더 중요해요."
+            !sdA.isNaN() && sdA > sdB + 0.7 && win < 0.5 -> "$lead 지금은 뒤지고 있어서, 평균보다 한 방이 필요해요."
+            !sdA.isNaN() && sdA < sdB - 0.7 && win > 0.5 -> "$lead 지금은 앞서 있어서, 크게 무너지지 않는 쪽이 더 잘 이겨요."
+            win < 0.45 -> "$lead 지금은 불리해서, 평균 점수보다 역전할 수 있는 점수를 노려야 해요."
+            win > 0.55 -> "$lead 지금은 유리해서, 평균 점수보다 지지 않는 게 중요해요."
+            else -> "$lead 이기고 지는 것만 따지면 이쪽이 더 나아요."
         }
     }
 
@@ -619,22 +623,36 @@ class Explainer(private val tables: Tables) {
 
     private fun dice(held: List<Int>) = held.joinToString(" ")
 
+    /** A keep as a name: "추천은 ‘4 4 4 남기기’였어요", "추천(‘모두 다시 굴리기’)보다". */
     private fun keepNoun(k: KeepOption) = when {
-        k.held.isEmpty() -> "전부 다시 굴리기"
-        k.held.size == 5 -> "여기서 멈추기"
-        else -> "${dice(k.held)} 남기기"
+        k.held.isEmpty() -> "‘모두 다시 굴리기’"
+        k.held.size == 5 -> "‘여기서 멈추기’"
+        else -> "‘${dice(k.held)} 남기기’"
     }
 
-    private fun rerollNoun(k: KeepOption) =
-        if (k.held.isEmpty()) "전부 다시 굴리기" else "${dice(k.held)}만 남기고 다시 굴리기"
+    /** A keep to compare with: "4 4 4를 남기는 것보다". */
+    private fun keepThan(k: KeepOption) = when {
+        k.held.isEmpty() -> "모두 다시 굴리는 것"
+        k.held.size == 5 -> "여기서 멈추는 것"
+        else -> "${Ko.eul(dice(k.held))} 남기는 것"
+    }
+
+    private fun rerollThan(k: KeepOption) =
+        if (k.held.isEmpty()) "모두 다시 굴리는 것" else "${dice(k.held)}만 남기고 다시 굴리는 것"
 
     private fun keepIf(k: KeepOption) = when {
-        k.held.isEmpty() -> "전부 다시 굴리면"
+        k.held.isEmpty() -> "모두 다시 굴리면"
         k.held.size == 5 -> "여기서 멈추면"
         else -> "${Ko.eul(dice(k.held))} 남기면"
     }
 
-    private fun catNoun(o: CategoryOption) = "${box(o.category)}에 ${o.points}점 넣기"
+    /** A box choice as a name: "추천은 초이스에 25점이었어요". */
+    private fun catNoun(o: CategoryOption) =
+        if (o.points == 0) "${Ko.eul(box(o.category))} 0점으로 지우기" else "${box(o.category)}에 ${o.points}점"
+
+    /** A box choice to compare with: "초이스에 25점을 넣는 것보다". */
+    private fun catThan(o: CategoryOption) =
+        if (o.points == 0) "${Ko.eul(box(o.category))} 0점으로 지우는 것" else "${box(o.category)}에 ${o.points}점을 넣는 것"
 
     // ---- situation --------------------------------------------------------------------------------
 
@@ -655,9 +673,9 @@ class Explainer(private val tables: Tables) {
         val outlook = if (!opp.isComplete && !me.isComplete) {
             val e = eMe - eOpp
             when {
-                abs(e) < 1.5 -> "점수판만 보면 예상 최종 점수는 거의 같아요."
-                e > 0 -> "점수판만 보면 예상 최종 점수가 ${Ko.int(e)}점쯤 앞서요."
-                else -> "점수판만 보면 예상 최종 점수가 ${Ko.int(-e)}점쯤 밀려요."
+                abs(e) < 1.5 -> "예상 최종 점수는 거의 같아요."
+                e > 0 -> "예상 최종 점수로는 ${Ko.int(e)}점쯤 앞서요."
+                else -> "예상 최종 점수로는 ${Ko.int(-e)}점쯤 뒤져요."
             }
         } else null
         var summary = when {
@@ -672,32 +690,32 @@ class Explainer(private val tables: Tables) {
         if (left == 1 && !me.isComplete) details += "이번이 마지막 턴이에요."
         if (me.filledCount > 0 || opp.filledCount > 0) {
             val now = when {
-                d > 0 -> "지금 점수는 ${d}점 앞서 있어요"
-                d < 0 -> "지금 점수는 ${-d}점 뒤져 있어요"
-                else -> "지금 점수는 같아요"
+                d > 0 -> "지금은 ${d}점 앞서 있어요"
+                d < 0 -> "지금은 ${-d}점 뒤져 있어요"
+                else -> "지금은 동점이에요"
             }
             val nowAnd = when {
-                d > 0 -> "지금 점수는 ${d}점 앞서 있고"
-                d < 0 -> "지금 점수는 ${-d}점 뒤져 있고"
-                else -> "지금 점수는 같고"
+                d > 0 -> "지금은 ${d}점 앞서 있고"
+                d < 0 -> "지금은 ${-d}점 뒤져 있고"
+                else -> "지금은 동점이고"
             }
             if (opp.isComplete) {
                 details += "$now. 상대는 ${opp.total}점으로 끝났어요."
             } else if (!me.isComplete) {
                 val e = eMe - eOpp
                 val flips = (d > 0 && e < -1.5) || (d < 0 && e > 1.5)
-                val finals = "예상 최종 점수는 나 ${Ko.int(eMe)}점, 상대 ${Ko.int(eOpp)}점"
+                val finals = "끝까지 가면 나 ${Ko.int(eMe)}점, 상대 ${Ko.int(eOpp)}점쯤으로 예상돼요"
                 details += when {
                     flips -> {
-                        val nowBut = if (d > 0) "지금 점수는 ${d}점 앞서 있지만" else "지금 점수는 ${-d}점 뒤져 있지만"
-                        "$nowBut, ${Ko.ieyo(finals)}."
+                        val nowBut = if (d > 0) "지금은 ${d}점 앞서 있지만" else "지금은 ${-d}점 뒤져 있지만"
+                        "$nowBut, $finals."
                     }
-                    else -> "$nowAnd, ${Ko.ieyo(finals)}."
+                    else -> "$nowAnd, $finals."
                 }
                 val gap = evMe - evOpp
                 if (abs(gap) >= 8) {
                     val who = if (gap > 0) "내가" else "상대가"
-                    var s = "남은 칸의 기대 점수는 $who ${Ko.int(abs(gap))}점쯤 더 높아요."
+                    var s = "남은 칸으로 보면 앞으로 $who ${Ko.int(abs(gap))}점쯤 더 얻을 것 같아요."
                     val yMe = !me.isFilled(Category.YACHT)
                     val yOpp = !opp.isFilled(Category.YACHT)
                     if (yMe != yOpp && (gap > 0) == yMe) s += " ${if (yMe) "나는" else "상대는"} 아직 요트 칸이 남아 있거든요."
@@ -711,7 +729,7 @@ class Explainer(private val tables: Tables) {
         }
         bonusLine(me)?.let { details += it }
         if (!opp.isComplete && Category.COUNT - opp.filledCount <= 6) {
-            oppRange(opp)?.let { (lo, hi) -> details += "상대 최종 점수는 대략 ${lo}~${hi}점 사이로 예상돼요." }
+            oppRange(opp)?.let { (lo, hi) -> details += "상대는 대략 ${lo}~${hi}점 사이로 끝날 것 같아요." }
         }
         return Explanation(summary, details.take(3))
     }
@@ -740,12 +758,12 @@ class Explainer(private val tables: Tables) {
         val par = 3 * filled.sumOf { it.face }
         val vsPar = me.upperSum - par
         val pace = when {
-            vsPar > 0 -> "기준(눈마다 세 개)보다 ${vsPar}점 앞서 있어서"
-            vsPar < 0 -> "기준(눈마다 세 개)보다 ${-vsPar}점 모자라서"
-            else -> "딱 기준(눈마다 세 개)대로라서"
+            vsPar > 0 -> "눈마다 세 개씩 모으는 기준보다 ${vsPar}점 앞서서"
+            vsPar < 0 -> "눈마다 세 개씩 모으는 기준보다 ${-vsPar}점 모자라서"
+            else -> "눈마다 세 개씩 모으는 기준에 딱 맞아서"
         }
-        val chance = if (pb >= 0.995) "거의 확실해요" else "받을 확률은 ${Ko.ieyo(Ko.pct(pb))}"
-        return "보너스까지 ${need}점 남았어요. $pace $chance."
+        val chance = if (pb >= 0.995) "거의 확실히 받아요" else "받을 확률은 ${Ko.ieyo(Ko.pct(pb))}"
+        return "보너스까지 ${need}점 남았어요. $pace, $chance."
     }
 
     /** 10th and 90th percentile of the opponent's final score. */
@@ -787,20 +805,22 @@ class Explainer(private val tables: Tables) {
         val evBefore = tables.ev[before.mask, before.u]
         val evAfter = if (oppAfter.isComplete) 0.0 else tables.ev[oppAfter.mask, oppAfter.u]
         val luck = pts + bonusGain + evAfter - evBefore
-        if (luck >= 4) parts += "$who 입장에선 평소보다 ${Ko.int(luck)}점쯤 잘 풀린 턴이에요."
-        else if (luck <= -4) parts += "$who 입장에선 평소보다 ${Ko.int(-luck)}점쯤 아쉬운 턴이에요."
+        val luckText = when {
+            luck >= 4 -> "평소보다 ${Ko.int(luck)}점쯤 잘 풀린 턴"
+            luck <= -4 -> "평소보다 ${Ko.int(-luck)}점쯤 안 풀린 턴"
+            else -> null
+        }
         val after = move.winAfter
-        if (after != null && winBefore != null) {
+        if (after != null && winBefore != null && abs(after - winBefore) >= 0.005) {
             val dw = after - winBefore
-            if (abs(dw) >= 0.005) {
-                val (b, a) = Ko.pctPair(winBefore, after)
-                val so = if ((luck >= 4 && dw < 0) || (luck <= -4 && dw > 0)) "그래서 " else ""
-                parts += "${so}내 승률은 ${b}에서 ${Ko.ro(a)} ${if (dw > 0) "올랐어요" else "내려갔어요"}."
-            } else {
-                parts += "내 승률은 ${Ko.ro(Ko.pct(after))} 거의 그대로예요."
-            }
-        } else if (after != null) {
-            parts += "지금 내 승률은 ${Ko.ieyo(Ko.pct(after))}."
+            val (b, a) = Ko.pctPair(winBefore, after)
+            val moved = "내 승률이 ${b}에서 ${Ko.ro(a)} ${if (dw > 0) "올랐어요" else "떨어졌어요"}."
+            parts += if (luckText != null && (luck >= 4) == (dw < 0)) "${luckText}이라, $moved"
+            else listOfNotNull(luckText?.let { "${who}에게는 ${it}이었어요." }, moved).joinToString(" ")
+        } else {
+            luckText?.let { parts += "${who}에게는 ${it}이었어요." }
+            if (after != null && winBefore != null) parts += "내 승률은 ${Ko.ro(Ko.pct(after))} 거의 그대로예요."
+            else if (after != null) parts += "지금 내 승률은 ${Ko.ieyo(Ko.pct(after))}."
         }
         return parts.joinToString(" ")
     }
@@ -815,7 +835,7 @@ class Explainer(private val tables: Tables) {
             val action = if (k < held.size) yacht.engine.game.Game.keepText(held[k])
             else yacht.engine.game.Game.scoreText(category, rules.score(dice, category))
             val why = runCatching { advice(turn, opp, turn.advise(k + 1, dice)).summary }.getOrNull()
-            out += "${k + 1}번째 ${dice.sorted().joinToString(" ")} → $action" + (why?.let { ": $it" } ?: "")
+            out += "${Ko.nth(k + 1)} 굴림 ${dice.sorted().joinToString(" ")} → $action" + (why?.let { ". $it" } ?: ".")
         }
         return out
     }
@@ -839,12 +859,12 @@ class Explainer(private val tables: Tables) {
             } else {
                 val mode = mistakes.first().mode
                 val sum = mistakes.filter { it.mode == mode }.sumOf { it.loss }
-                val total = if (mode == Mode.WIN) "승률 ${Ko.eul(Ko.pp(sum))}" else "기대 점수 ${Ko.num(sum)}점을"
-                val all = if (mistakes.size > 1) "모두 합쳐 " else ""
-                var line = "추천과 다르게 둔 수가 ${mistakes.size}번 있었고, $all$total 손해 봤어요."
+                val total = if (mode == Mode.WIN) "승률 ${Ko.eul(Ko.pp(sum))}" else "평균 점수 ${Ko.num(sum)}점을"
+                val all = if (mistakes.size > 1) "합쳐서 " else ""
+                var line = "추천과 다르게 둔 수가 ${mistakes.size}번이고, $all$total 잃었어요."
                 val worst = mistakes.maxBy { it.loss }
                 if (mistakes.size > 1 && (mode != Mode.WIN || worst.loss >= 0.005)) {
-                    line += " 가장 아까운 수는 ${worst.turn}턴의 ${Ko.ieosseoyo(Ko.quote(worst.chosen))}(추천: ${worst.best})."
+                    line += " 가장 아까운 수는 ${worst.turn}턴의 ${Ko.ieyo(Ko.quote(worst.chosen))}(추천: ${worst.best})."
                 }
                 details += line
             }
@@ -881,6 +901,6 @@ class Explainer(private val tables: Tables) {
         }
         val who = if (m.side == Side.ME) "${turn}턴에 내가" else "${turn}턴에 상대가"
         val (a, b) = Ko.pctPair(from, to)
-        return "가장 큰 전환점은 $who $what${if (what.endsWith("때")) "예요" else ""}(내 승률 $a → $b)."
+        return "가장 큰 전환점은 $who ${what}예요(내 승률 $a → $b)."
     }
 }
