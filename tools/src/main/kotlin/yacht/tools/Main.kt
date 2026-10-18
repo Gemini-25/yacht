@@ -42,6 +42,7 @@ fun main(args: Array<String>) {
         "calib" -> calib(opts)
         "versus" -> versus(opts)
         "quiz" -> quizSamples(opts)
+        "review" -> reviewSamples(opts)
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"], opts["ties"] != null)
         else -> println(
             """
@@ -764,4 +765,105 @@ private fun versus(opts: Map<String, String>) {
     println("versus: $games deals x 2 games in %.0fs".format((System.nanoTime() - t0) / 1e9))
     println("  $specA wins %.2f%%, $specB wins %.2f%%, ties %.2f%%; difference %+.2f%%p ±%.2f".format(
         100 * aWins.sum() / n, 100 * bWins.sum() / n, 100 * ties.sum() / n, 100 * m, 100 * ci))
+}
+
+/**
+ * Plays games the way the app does against its AI (outlook before each AI turn, the AI's reasons,
+ * my P(win) before every throw) and prints the opponent-turn texts, the luck analysis and the
+ * "추천대로 뒀다면?" comparisons, for reading. I deviate from the advice with probability --stray.
+ */
+private fun reviewSamples(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+    val games = opts["games"]?.toInt() ?: 2
+    val stray = opts["stray"]?.toDouble() ?: 0.1
+    val rng = Random(opts["seed"]?.toLong() ?: 11L)
+    val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+    val advisor = Advisor(tables, pool)
+    val ex = yacht.engine.explain.Explainer(tables)
+    val outlook = yacht.engine.explain.OutlookAnalysis(tables)
+    val luck = yacht.engine.explain.LuckAnalysis(tables)
+    val whatIf = yacht.engine.explain.WhatIfAnalysis(tables)
+    try {
+        repeat(games) { g ->
+            println("==================== game ${g + 1} ====================")
+            var s = yacht.engine.game.GameState.new(
+                yacht.engine.game.DiceSource.RANDOM,
+                if (g % 2 == 0) yacht.engine.game.Side.ME else yacht.engine.game.Side.OPP,
+                rules,
+            )
+            var lastWin: Double? = null
+            while (!s.isOver) {
+                if (s.toMove == yacht.engine.game.Side.OPP) {
+                    val now = lastWin ?: if (s.me.isComplete) outlook.quick(s.me, s.opp) else advisor.planTurn(s.me, s.opp, Mode.WIN, depth = 1).startValue
+                    outlook.opponentTurn(s.me, s.opp, now)?.let { o ->
+                        println("  [상대 턴 전망] ${o.summary}")
+                        o.details.forEach { println("        - $it") }
+                    }
+                    val turn = advisor.planTurn(s.opp, s.me, Mode.WIN)
+                    val throws = ArrayList<List<Int>>()
+                    val held = ArrayList<List<Int>>()
+                    var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+                    throws += Dice.rollFaces(r)
+                    for (rollsDone in 1..2) {
+                        val k = turn.bestKeep(rollsDone, r)
+                        if (k == Dice.rollAsKeep[r]) break
+                        held += Dice.keepFaces(k)
+                        r = Match.throwDice(rng, k)
+                        throws += Dice.rollFaces(r)
+                    }
+                    val c = turn.bestCategory(r)
+                    val why = ex.aiTurn(turn, s.me, throws, held, c)
+                    why.forEach { println("  [AI] $it") }
+                    s = yacht.engine.game.Game.opponentScore(
+                        s, c, tables.scores[r, c.ordinal], winBefore = now,
+                        turn = yacht.engine.game.MoveRecord(yacht.engine.game.Side.OPP, c, 0, throws = throws, held = held, why = why),
+                    )
+                    continue
+                }
+                val turn = advisor.planTurn(s.me, s.opp, Mode.WIN, ties = true)
+                s = yacht.engine.game.Game.noteWinAfterOpponent(s, turn.startValue)
+                val last = s.moves.lastOrNull()
+                if (last != null && last.side == yacht.engine.game.Side.OPP) {
+                    println("  [직전 상대] " + ex.opponentMove(s.opp, last, last.winBefore, "AI"))
+                }
+                turn.startOutlook?.let { println("--- my turn ${s.myTurnNumber}: ${s.me.total}:${s.opp.total} 승 ${"%.1f".format(100 * it.win)} 무 ${"%.2f".format(100 * it.tie)} 패 ${"%.1f".format(100 * it.loss)}") }
+                s = yacht.engine.game.Game.firstThrow(s, rng)
+                var before = turn.startValue
+                while (true) {
+                    val a = turn.advise(s.draft.rollsDone, s.draft.faces)
+                    val strayNow = rng.nextDouble() < stray
+                    if (a.shouldStop) {
+                        val pick = if (strayNow && a.categories.size > 1) a.categories[1] else a.bestCategory
+                        lastWin = pick.value
+                        s = yacht.engine.game.Game.score(s, pick.category, a, before = before)
+                        break
+                    }
+                    val pick = if (strayNow) a.keeps[1 + rng.nextInt(minOf(3, a.keeps.size - 1))] else a.bestKeep!!
+                    if (pick.held.size == 5) {
+                        lastWin = a.bestCategory.value
+                        s = yacht.engine.game.Game.score(s, a.bestCategory.category, a, before = before)
+                        break
+                    }
+                    s = yacht.engine.game.Game.holdFaces(s, pick.held)
+                    s = yacht.engine.game.Game.reroll(s, a, rng, before = before)
+                    before = pick.value
+                }
+            }
+            println("=== result ${s.me.total}:${s.opp.total}")
+            val r = luck.of(s)
+            println("  [운] ${r.summary}")
+            r.details.forEach { println("        - $it") }
+            r.moments.forEach { println("        * ${it.text} ${"%+.1f".format(100 * it.delta)}%p") }
+            for (d in s.decisions.filter { it.isMistake }.sortedByDescending { it.loss }.take(3)) {
+                val w = whatIf.of(advisor.planTurn(d.me!!, d.opp!!, d.mode, budgetOps = 100_000_000L), d) ?: continue
+                println("  [추천대로?] ${w.summary}")
+                for ((t, side) in listOf("추천" to w.best, "내 선택" to w.chosen)) {
+                    println("        $t ${side.move}: " + side.outcomes.joinToString(" · ") { "${it.label} ${"%.0f".format(100 * it.prob)}%" })
+                }
+                w.details.forEach { println("        - $it") }
+            }
+        }
+    } finally {
+        pool.shutdown()
+    }
 }

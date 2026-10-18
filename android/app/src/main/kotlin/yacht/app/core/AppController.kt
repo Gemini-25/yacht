@@ -406,7 +406,8 @@ class AppController(
             val last = s.moves.lastOrNull() ?: return null
             if (last.side != Side.OPP) return null
             val before = last.winBefore ?: s.moves.dropLast(1).lastOrNull { it.side == Side.ME }?.winAfter
-            return cached(listOf("opponent", s.moves.size, last, before)) { e.opponentMove(s.opp, last, before) }
+            val who = if (s.source == DiceSource.RANDOM) "AI" else "상대"
+            return cached(listOf("opponent", s.moves.size, last, before)) { e.opponentMove(s.opp, last, before, who) }
         }
 
     fun gameSummary(g: GameState): Explanation? {

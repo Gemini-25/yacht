@@ -219,7 +219,7 @@ class LuckAnalysis(private val tables: Tables) {
         return if (n > 0) "+${n}점" else if (n < 0) "−${-n}점" else "±0점"
     }
 
-    private fun signedPp(d: Double): String = (if (d >= 0) "+" else "−") + Ko.pp(d)
+    private fun signedPp(d: Double): String = if (abs(d) < 0.0005) "±0%p" else (if (d > 0) "+" else "−") + Ko.pp(d)
 
     /** "100판으로 치면 운 나쁜 쪽에서 20번째쯤이에요." */
     private fun rank(p: Double, good: String, bad: String): String {

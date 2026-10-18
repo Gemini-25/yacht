@@ -138,6 +138,7 @@ private fun run(args: Array<String>) {
 
     // Playing alone: no advice during the game.
     c.changeStyle(PlayStyle.SOLO)
+    c.screen = Screen.HOME
     shot(c, out, "14_home_solo")
     c.newGame(DiceSource.RANDOM, Side.ME)
     c.firstThrow()

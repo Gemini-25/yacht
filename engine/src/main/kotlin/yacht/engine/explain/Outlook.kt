@@ -66,7 +66,9 @@ class OutlookAnalysis(private val tables: Tables) {
             val pts = if (c < 6 && opp.u < cap && gain >= rules.bonusPoints) gain - rules.bonusPoints else gain
             cards += opp.with(Category.of(c), pts)
         }
-        val exact = exactAt?.let { f -> cards.map { f(it) } }?.takeIf { v -> v.all { it != null } }?.map { it!! }
+        // With my card full the quick value is exact: P(the opponent ends below my total).
+        val exact = if (me.isComplete) cards.map { quick(me, it) }
+        else exactAt?.let { f -> cards.map { f(it) } }?.takeIf { v -> v.all { it != null } }?.map { it!! }
         var wins = exact ?: cards.map { quick(me, it) }
         if (exact == null && now != null) {
             val mean = (0 until oc.size).sumOf { oc.prob[it] * wins[it] }
@@ -107,17 +109,25 @@ class OutlookAnalysis(private val tables: Tables) {
     ): Pair<String, List<String>> {
         val (a, b) = Ko.pctPair(low, high)
         val about = if (exact) "" else "대략 "
-        val summary = if (high - low < 0.01) "상대 턴 결과와 상관없이 내 승률은 ${about}${Ko.pct(typical)} 그대로예요."
-        else "상대 턴 결과에 따라 내 승률이 ${about}$a~$b 사이로 움직여요."
+        val yachtMatters = yacht != null && yacht.second < low - 0.005
+        val flat = high - low < 0.005 && !yachtMatters
+        val summary = when {
+            flat && high < 0.0005 -> "상대 턴 결과와 상관없이 역전은 어려워요."
+            flat && low > 0.9995 -> "상대 턴 결과와 상관없이 이긴 판이에요."
+            flat -> "상대 턴 결과와 상관없이 내 승률은 ${about}${Ko.pct(typical)} 그대로예요."
+            high - low < 0.005 -> "상대가 요트를 만들지 않으면 내 승률은 ${about}${Ko.pct(typical)} 그대로예요."
+            else -> "상대 턴 결과에 따라 내 승률이 ${about}$a~$b 사이로 움직여요."
+        }
         val details = ArrayList<String>()
-        if (Category.COUNT - opp.filledCount == 1) details += "상대의 마지막 턴이에요."
-        if (high - low >= 0.01) {
+        val last = Category.COUNT - opp.filledCount == 1
+        if (last) details += "상대의 마지막 턴이에요."
+        if (high - low >= 0.005) {
             details += "상대가 무난하게 두면 내 승률은 ${Ko.pct(typical)}쯤이에요. 상대가 잘 풀리면 ${a}, 꼬이면 ${b}가 돼요."
         }
-        if (yacht != null && yacht.second < low - 0.005) {
+        if (yacht != null && yachtMatters) {
             details += "상대가 요트를 만들면(확률 ${Ko.pct(yacht.first)}) ${Ko.ro(Ko.pct(yacht.second))} 떨어져요."
         }
-        if (targets.isNotEmpty()) {
+        if (targets.isNotEmpty() && !last) {
             details += "상대는 주로 " + targets.joinToString(", ") { "${box(it.first)}(${Ko.pct(it.second)})" } + " 쪽에 넣게 될 거예요."
         }
         return summary to details

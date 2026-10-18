@@ -105,20 +105,30 @@ class ExplainTest {
             var lastWin: Double? = null
             while (!s.isOver) {
                 if (s.toMove == Side.OPP) {
-                    val turn = advisor.planTurn(s.opp, s.me, Mode.EXPECTED_SCORE)
+                    yacht.engine.explain.OutlookAnalysis(tables).opponentTurn(s.me, s.opp, lastWin ?: 0.5)?.let { add(Explanation(it.summary, it.details)) }
+                    val turn = advisor.planTurn(s.opp, s.me, Mode.WIN, depth = 1)
+                    val throws = ArrayList<List<Int>>()
+                    val held = ArrayList<List<Int>>()
                     var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+                    throws += Dice.rollFaces(r)
                     for (rolls in 1..2) {
                         val k = turn.bestKeep(rolls, r)
                         if (k == Dice.rollAsKeep[r]) break
+                        held += Dice.keepFaces(k)
                         r = Match.throwDice(rng, k)
+                        throws += Dice.rollFaces(r)
                     }
                     val c = turn.bestCategory(r)
-                    s = Game.opponentScore(s, c, tables.scores[r, c.ordinal])
+                    texts += ex.aiTurn(turn, s.me, throws, held, c)
+                    s = Game.opponentScore(s, c, tables.scores[r, c.ordinal], winBefore = lastWin)
                     continue
                 }
                 val turn = advisor.planTurn(s.me, s.opp, Mode.WIN, depth = 1)
                 s = Game.noteWinAfterOpponent(s, turn.startValue)
-                s.moves.lastOrNull()?.takeIf { it.side == Side.OPP }?.let { texts += ex.opponentMove(s.opp, it, lastWin) }
+                s.moves.lastOrNull()?.takeIf { it.side == Side.OPP }?.let {
+                    texts += ex.opponentMove(s.opp, it, lastWin)
+                    texts += ex.opponentMove(s.opp, it, lastWin, "AI")
+                }
                 add(ex.situation(s.me, s.opp, turn.startValue))
                 add(ex.situation(s.me, s.opp, null))
                 s = Game.firstThrow(s, rng)
@@ -150,6 +160,12 @@ class ExplainTest {
                 }
             }
             add(ex.gameSummary(s))
+            val luck = yacht.engine.explain.LuckAnalysis(tables).of(s)
+            add(Explanation(luck.summary, luck.details))
+            for (d in s.decisions.filter { it.isMistake }) {
+                val w = yacht.engine.explain.WhatIfAnalysis(tables).of(advisor.planTurn(d.me!!, d.opp!!, d.mode, depth = 1), d) ?: continue
+                add(Explanation(w.summary, w.details))
+            }
             assertEquals(s, GameCodec.decode(GameCodec.encode(s)))
             assertEquals(24, s.moves.size)
             finished += s

@@ -769,26 +769,26 @@ class Explainer(private val tables: Tables) {
 
     /**
      * Comment on the opponent's last box. [winBefore] is my P(win) after my previous move and
-     * [move].winAfter my P(win) now, when known.
+     * [move].winAfter my P(win) now, when known. [who] names the opponent ("상대", "AI").
      */
-    fun opponentMove(oppAfter: Board, move: MoveRecord, winBefore: Double?): String {
+    fun opponentMove(oppAfter: Board, move: MoveRecord, winBefore: Double?, who: String = "상대"): String {
         val c = move.category
         val pts = move.points
         val before = oppAfter.without(c)
         val bonusGain = if (before.bonus == 0 && oppAfter.bonus > 0) rules.bonusPoints else 0
         val parts = ArrayList<String>()
         parts += when {
-            c == Category.YACHT && pts > 0 -> "상대가 요트에 성공했어요(${pts}점)!"
-            pts == 0 -> "상대가 ${Ko.eul(box(c))} 0점으로 지웠어요."
-            c.isUpper -> "상대가 ${box(c)}에 ${pts}점(${Ko.count(pts / c.face)} 개)을 넣었어요."
-            else -> "상대가 ${box(c)}에 ${pts}점을 넣었어요."
+            c == Category.YACHT && pts > 0 -> "${Ko.i(who)} 요트에 성공했어요(${pts}점)!"
+            pts == 0 -> "${Ko.i(who)} ${Ko.eul(box(c))} 0점으로 지웠어요."
+            c.isUpper -> "${Ko.i(who)} ${box(c)}에 ${pts}점(${Ko.count(pts / c.face)} 개)을 넣었어요."
+            else -> "${Ko.i(who)} ${box(c)}에 ${pts}점을 넣었어요."
         }
         if (bonusGain > 0) parts += "보너스 ${bonusGain}점도 확정됐어요."
         val evBefore = tables.ev[before.mask, before.u]
         val evAfter = if (oppAfter.isComplete) 0.0 else tables.ev[oppAfter.mask, oppAfter.u]
         val luck = pts + bonusGain + evAfter - evBefore
-        if (luck >= 4) parts += "상대 입장에선 평소보다 ${Ko.int(luck)}점쯤 잘 풀린 턴이에요."
-        else if (luck <= -4) parts += "상대 입장에선 평소보다 ${Ko.int(-luck)}점쯤 아쉬운 턴이에요."
+        if (luck >= 4) parts += "$who 입장에선 평소보다 ${Ko.int(luck)}점쯤 잘 풀린 턴이에요."
+        else if (luck <= -4) parts += "$who 입장에선 평소보다 ${Ko.int(-luck)}점쯤 아쉬운 턴이에요."
         val after = move.winAfter
         if (after != null && winBefore != null) {
             val dw = after - winBefore

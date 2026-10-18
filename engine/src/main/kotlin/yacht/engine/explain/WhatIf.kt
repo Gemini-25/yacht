@@ -41,9 +41,19 @@ class WhatIfAnalysis(private val tables: Tables) {
         }
     }
 
+    /** [label] with the points where they help: fixed boxes "S.스트레이트 15점", sums "포카드 약 24점". */
+    private fun labelWithPoints(o: Int, points: Double): String {
+        val c = Outcome.category(o)
+        if (c.isUpper || Outcome.kind(o) == Outcome.ZERO) return label(o)
+        return when (c) {
+            Category.CHOICE, Category.FOUR_OF_A_KIND, Category.FULL_HOUSE -> "${c.label} 약 ${Ko.int(points)}점"
+            else -> "${c.label} ${Ko.int(points)}점"
+        }
+    }
+
     private fun lines(p: Profile): List<OutcomeLine> {
         val all = (0 until Outcome.COUNT).filter { p.p(it) > 0.0 }
-            .map { OutcomeLine(label(it), p.p(it), p.points(it)) }
+            .map { OutcomeLine(labelWithPoints(it, p.points(it)), p.p(it), p.points(it)) }
             .sortedByDescending { it.prob }
         val shown = all.filter { it.prob >= 0.01 }.take(5)
         val rest = 1.0 - shown.sumOf { it.prob }
