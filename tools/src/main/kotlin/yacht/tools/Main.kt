@@ -43,6 +43,7 @@ fun main(args: Array<String>) {
         "versus" -> versus(opts)
         "quiz" -> quizSamples(opts)
         "review" -> reviewSamples(opts)
+        "cost" -> cost(opts)
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"], opts["ties"] != null)
         else -> println(
             """
@@ -866,4 +867,131 @@ private fun reviewSamples(opts: Map<String, String>) {
     } finally {
         pool.shutdown()
     }
+}
+
+/**
+ * How much more exact play would cost: for random positions with N boxes left, the work and
+ * memory of (1) the fixed-opponent search solved to the end, (2) the duel table (the opponent's
+ * results inside the search), and (3) the whole-game duel table from the empty board.
+ * Work is in the searches' operation units; --time also times the feasible searches.
+ */
+private fun cost(opts: Map<String, String>) {
+    val tables = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+    val rng = Random(opts["seed"]?.toLong() ?: 1L)
+    val samples = opts["samples"]?.toInt() ?: 5
+    val timeLimit = opts["time"]?.toDouble() ?: 0.0
+    val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+    val advisor = Advisor(tables, pool)
+    try {
+        println("== fixed-opponent search solved to the end (max over $samples positions)")
+        for (left in 12 downTo 4) {
+            var ops = 0L
+            var bytes = 0L
+            var secs = Double.NaN
+            repeat(samples) {
+                val me = randomBoard(tables, rng, 12 - left)
+                val opp = randomBoard(tables, rng, 12 - left)
+                ops = maxOf(ops, WinSearch.estimateOps(tables, me, left, opp))
+                bytes = maxOf(bytes, winSearchBytes(tables, me, left))
+                if (timeLimit > 0 && WinSearch.estimateOps(tables, me, left, opp) < timeLimit * 1e9) {
+                    val t = System.nanoTime()
+                    advisor.planTurn(me, opp, depth = left)
+                    secs = if (secs.isNaN()) (System.nanoTime() - t) / 1e9 else maxOf(secs, (System.nanoTime() - t) / 1e9)
+                }
+            }
+            println("left=%2d ops %.2e  memory %8.1f MB  measured %s".format(left, ops.toDouble(), bytes / 1e6, if (secs.isNaN()) "-" else "%.2f s".format(secs)))
+        }
+        println("== duel table rooted at my turn (max over $samples positions)")
+        for (left in 12 downTo 5) {
+            var ops = 0.0
+            var cells = 0.0
+            var secs = Double.NaN
+            repeat(samples) {
+                val me = randomBoard(tables, rng, 12 - left)
+                val opp = randomBoard(tables, rng, 12 - left)
+                val (c, o) = duelCost(tables, me, opp, true)
+                ops = maxOf(ops, o)
+                cells = maxOf(cells, c)
+                if (timeLimit > 0 && o < timeLimit * 1e9) {
+                    val t = System.nanoTime()
+                    advisor.buildDuelTable(me, opp, true)
+                    secs = if (secs.isNaN()) (System.nanoTime() - t) / 1e9 else maxOf(secs, (System.nanoTime() - t) / 1e9)
+                }
+            }
+            println("left=%2d ops %.2e  cells %.2e (%.1f MB as floats)  measured %s".format(left, ops, cells, cells * 4 / 1e6, if (secs.isNaN()) "-" else "%.2f s".format(secs)))
+        }
+        val empty = Board(rules)
+        for (meFirst in listOf(true, false)) {
+            val (c, o) = duelCost(tables, empty, empty, meFirst)
+            val (_, oa) = duelCost(tables, empty, empty, meFirst, adversarial = true)
+            println("whole game, ${if (meFirst) "me first" else "opponent first"}: cells %.3e (%.1f GB float, %.1f GB half), ops %.2e (minimax %.2e)".format(c, c * 4 / 1e9, c * 2 / 1e9, o, oa))
+        }
+    } finally {
+        pool.shutdown()
+    }
+}
+
+/** Memory of a fixed-opponent search's grids (doubles) to depth [depth]. */
+private fun winSearchBytes(tables: Tables, me: Board, depth: Int): Long {
+    val decided = WinSearch.bonusDecided(me)
+    val levels = WinSearch.masksByLevel(me.mask)
+    var bytes = 0L
+    for (j in 1..minOf(depth, levels.size - 1)) for (m in levels[j]) {
+        if (m == Category.FULL_MASK) continue
+        bytes += 8L * WinSearch.upperRows(me, decided, m).values.size * (WinSearch.gainMax(tables, me, decided, m) + 1)
+    }
+    return bytes
+}
+
+/**
+ * Stored cells and operations of a duel table from ([me], [opp]) with no size limit: the same
+ * count as DuelSearch.estimateOps, plus every stored score difference.
+ */
+private fun duelCost(tables: Tables, me: Board, opp: Board, meToMove: Boolean, adversarial: Boolean = false): Pair<Double, Double> {
+    val kMe = Category.COUNT - me.filledCount
+    val kOpp = Category.COUNT - opp.filledCount
+    val myDecided = WinSearch.bonusDecided(me)
+    val oppDecided = WinSearch.bonusDecided(opp)
+    val myLevels = WinSearch.masksByLevel(me.mask)
+    val oppLevels = WinSearch.masksByLevel(opp.mask)
+    val d0 = me.total - opp.total
+    class Info(val rows: Int, val gain: Int, val rest: Int)
+    fun rest(m: Int, decided: Boolean): Int {
+        var g = 0
+        for (c in 0 until Category.COUNT) if (m and (1 shl c) == 0) g += tables.scores.maxPoints[c]
+        if (!decided && (m and Category.UPPER_MASK) != Category.UPPER_MASK) g += tables.rules.bonusPoints
+        return g
+    }
+    val myInfo = HashMap<Int, Info>()
+    val oppInfo = HashMap<Int, Info>()
+    fun info(map: HashMap<Int, Info>, b: Board, decided: Boolean, m: Int) = map.getOrPut(m) {
+        Info(WinSearch.upperRows(b, decided, m).values.size, WinSearch.gainMax(tables, b, decided, m), rest(m, decided))
+    }
+    val kernel = 7_500.0
+    var ops = 0.0
+    var cells = 0.0
+    for (h in kMe + kOpp - 1 downTo 1) {
+        val myTurn = (h % 2 == 0) == meToMove
+        val jm = if (meToMove) (h + 1) / 2 else h / 2
+        val jo = if (meToMove) h / 2 else (h + 1) / 2
+        if (jm >= myLevels.size || jo >= oppLevels.size) continue
+        for (mm in myLevels[jm]) {
+            val mi = info(myInfo, me, myDecided, mm)
+            for (om in oppLevels[jo]) {
+                if (mm == Category.FULL_MASK && om == Category.FULL_MASK) continue
+                val oi = info(oppInfo, opp, oppDecided, om)
+                val lo = d0 - oi.gain
+                val hi = d0 + mi.gain
+                val slices = mi.rows.toDouble() * oi.rows
+                cells += slices * (hi - lo + 1)
+                val w = (minOf(hi, oi.rest) - maxOf(lo, -mi.rest) + 1).coerceAtLeast(0)
+                ops += slices * w * when {
+                    myTurn -> kernel + 252.0 * (Category.COUNT - Integer.bitCount(mm))
+                    adversarial -> kernel + 252.0 * (Category.COUNT - Integer.bitCount(om))
+                    else -> 120.0
+                }
+            }
+        }
+    }
+    return cells to ops
 }

@@ -36,6 +36,7 @@ tools/build/install/tools/bin/tools bench --tables tables [--only search|duel] [
 tools/build/install/tools/bin/tools explain --tables tables --games 2                             # 샘플 게임의 설명 문장 전부 출력
 tools/build/install/tools/bin/tools quiz --tables tables --n 6                                    # 퀴즈 문제 샘플과 통과율
 tools/build/install/tools/bin/tools review --tables tables --games 2                              # 상대 턴 전망·AI 이유·운 분석·추천대로 뒀다면 샘플
+tools/build/install/tools/bin/tools cost --tables tables --time 30                                 # 더 정확한 계산(끝까지·대결 표·전체 표)의 연산량·메모리
 tools/build/install/tools/bin/tools headroom --tables tables --games 100 --strong 3e9,1e10        # 더 깊은 탐색이 더해 줄 승률 추정
 tools/build/install/tools/bin/tools arena --tables tables --games 1000 --opp rule,greedy,slip10,ev,self   # 다른 AI와 맞대결 승률
 ./gradlew -p uicheck compileKotlin                        # 안드로이드 SDK 없이 UI 컴파일 검사
