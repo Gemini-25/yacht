@@ -74,6 +74,9 @@ class GameStorage(private val dir: File) {
 
     fun saveFinished(id: Long, text: String) = File(finished, "$id.txt").writeText(text)
 
+    /** A finished game reopened by undo is not finished any more. */
+    fun deleteFinished(id: Long) = File(finished, "$id.txt").delete()
+
     fun loadSettings(): Map<String, String> = settings.takeIf { it.exists() }?.readLines()
         ?.mapNotNull { l -> l.indexOf('=').takeIf { it > 0 }?.let { l.substring(0, it) to l.substring(it + 1) } }
         ?.toMap() ?: emptyMap()
@@ -599,10 +602,21 @@ class AppController(
         act { Game.opponentScore(it, c, points, winBefore = winBeforeOpponent(it)) }
     }
 
+    /**
+     * Back to the state before my last action. Against the AI only actions that revealed no new
+     * dice can be undone (the history is cleared at every throw and at every AI turn), so undo
+     * fixes a mis-tap but never buys a re-throw. A box written before the AI's turn can be taken
+     * back while the AI is still thinking.
+     */
     fun undo() {
+        val cur = state ?: return
         val prev = undoStack.removeLastOrNull() ?: return
         canUndo = undoStack.isNotEmpty()
-        state = prev
+        aiJob?.cancel()
+        aiThinking = false
+        if (cur.isOver && !prev.isOver) scope.launch(Dispatchers.IO) { storage.deleteFinished(cur.createdAt) }
+        // A hint once seen stays seen: undo never turns a game back into one played alone.
+        state = if (cur.style == PlayStyle.PEEKED) prev.copy(style = PlayStyle.PEEKED) else prev
         autoHeld = false
         lastNote = null
         onStateChanged()
@@ -624,11 +638,15 @@ class AppController(
         val s = state ?: return
         val next = f(s)
         if (next == s) return
-        if (s.source == DiceSource.MANUAL) {
+        // Against the AI a throw shows new dice: nothing before it can be undone any more.
+        val revealed = s.source == DiceSource.RANDOM && next.draft.rollsDone > s.draft.rollsDone
+        if (revealed) {
+            undoStack.clear()
+        } else {
             undoStack.addLast(s)
             if (undoStack.size > 200) undoStack.removeFirst()
-            canUndo = true
         }
+        canUndo = undoStack.isNotEmpty()
         val justThrown = next.draft.deciding && next.draft.rollsDone != s.draft.rollsDone
         state = next
         if (justThrown) autoHold()
@@ -784,11 +802,16 @@ class AppController(
         aiJob?.cancel()
         aiJob = scope.launch {
             aiThinking = true
+            val started = System.currentTimeMillis()
             try {
                 delay(350)
                 val move = withContext(Dispatchers.Default) { aiTurn(adv, s) }
+                // Leave time to take back a mis-tapped box before the AI's dice are shown.
+                if (canUndo) delay(UNDO_GRACE_MS - (System.currentTimeMillis() - started))
                 if (state == s) {
                     lastNote = null
+                    undoStack.clear()
+                    canUndo = false
                     state = Game.opponentScore(s, move.category, move.points, aiLog(s, move), winBeforeOpponent(s), move)
                     onStateChanged()
                 }
@@ -1045,6 +1068,9 @@ class AppController(
     companion object {
         /** Search budget of the win AI in verification games (deterministic, a few hundred ms per turn). */
         const val VERIFY_BUDGET = 100_000_000L
+
+        /** Shortest time between my box and the AI's turn being shown, so a mis-tap can be undone. */
+        const val UNDO_GRACE_MS = 2_000L
 
         /** Search budget for replaying a decision in the review (under a second on a phone). */
         const val REVIEW_BUDGET = 100_000_000L

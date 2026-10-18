@@ -102,9 +102,7 @@ fun GameScreen(c: AppController) {
                 },
                 navigationIcon = { TextButton(onClick = { c.screen = Screen.HOME }) { Text("홈") } },
                 actions = {
-                    if (s.source == DiceSource.MANUAL) {
-                        TextButton(onClick = { c.undo() }, enabled = c.canUndo) { Text("↶ 되돌리기") }
-                    }
+                    TextButton(onClick = { c.undo() }, enabled = c.canUndo) { Text("↶ 되돌리기") }
                     Box {
                         TextButton(onClick = { menu = true }) { Text("⋮", fontSize = 20.sp) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -475,7 +473,10 @@ private fun OpponentTurnCard(c: AppController, s: GameState) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = cs.onTertiaryContainer)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text("AI가 두는 중…", fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)
+                    Text("AI가 두는 중…", fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer, modifier = Modifier.weight(1f))
+                    if (c.canUndo) {
+                        TextButton(onClick = { c.undo() }) { Text("↶ 방금 기록 되돌리기", color = cs.onTertiaryContainer, fontWeight = FontWeight.Bold) }
+                    }
                 }
             } else {
                 Text("상대 차례", fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)

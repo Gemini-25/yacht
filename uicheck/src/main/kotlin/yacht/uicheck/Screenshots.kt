@@ -136,6 +136,16 @@ private fun run(args: Array<String>) {
     waitPlan(c)
     shot(c, out, "10b_vs_ai_roll")
 
+    // Undo against the AI: a written box can be taken back before the AI's turn shows, a throw cannot.
+    val beforeScore = c.state!!
+    check(!c.canUndo) { "a throw must not be undoable" }
+    c.score(c.advice!!.categories.last().category)
+    check(c.canUndo && c.state!!.toMove == Side.OPP) { "box not undoable" }
+    shot(c, out, "10c_vs_ai_undo")
+    c.undo()
+    check(c.state == beforeScore) { "undo did not restore the dice" }
+    check(!c.aiThinking) { "AI still thinking after undo" }
+
     // Playing alone: no advice during the game.
     c.changeStyle(PlayStyle.SOLO)
     c.screen = Screen.HOME
