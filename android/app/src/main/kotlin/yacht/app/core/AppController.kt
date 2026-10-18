@@ -680,7 +680,8 @@ class AppController(
             s.opp.mask and root.second.mask == root.second.mask
         ) return
         val meToMove = s.toMove == Side.ME
-        val budget = (opsPerSecond * DUEL_SECONDS).toLong()
+        // The table also tracks P(tie), which about doubles its work.
+        val budget = (opsPerSecond * DUEL_SECONDS / 2).toLong()
         if (DuelSearch.estimateOps(t, s.me, s.opp, meToMove, limit = budget) == Long.MAX_VALUE) return
         stopDuel()
         val stop = AtomicBoolean(false)
@@ -736,11 +737,14 @@ class AppController(
                 withContext(Dispatchers.Default) {
                     if (objective == Mode.WIN) {
                         val t0 = System.nanoTime()
+                        var decided = t0
                         val table = duelTable
                         val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table, allowDuel = !duelBuilding, ties = true) { p ->
+                            // The draw-chance pass at the end repeats the last search: not part of the speed sample.
+                            if (!p.hasTies) decided = System.nanoTime()
                             scope.launch { publish(key, p) }
                         }
-                        if (!p.duel || table == null) calibrate(s.me, s.opp, p.depth, System.nanoTime() - t0)
+                        if (!p.duel || table == null) calibrate(s.me, s.opp, p.depth, decided - t0)
                     } else {
                         val p = adv.planTurn(s.me, s.opp, Mode.EXPECTED_SCORE)
                         scope.launch { publish(key, p) }

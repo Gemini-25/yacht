@@ -207,6 +207,15 @@ private fun MatchHeader(c: AppController, s: GameState) {
                 )
             } else if (value != null && mode == Mode.WIN) {
                 WinBar(value)
+                if (c.refining) {
+                    Text(
+                        "무승부 확률 계산 중…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
             val situation = if (!hidden && s.toMove == Side.ME) c.situation else null
             if (situation != null) SituationLine(situation)

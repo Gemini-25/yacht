@@ -191,6 +191,11 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         table: DuelSearch? = null,
         /** False when a duel table is already being built elsewhere (avoid doing it twice). */
         allowDuel: Boolean = true,
+        /**
+         * Also give P(tie): after the decisions are settled, the deepest search is repeated with
+         * ties tracked (same values, same decisions) and handed over as a last improvement. The
+         * time budget is spent on the decisions first, so tracking ties never makes them shallower.
+         */
         ties: Boolean = false,
         onImproved: (PlannedTurn) -> Unit = {},
     ): PlannedTurn {
@@ -199,21 +204,21 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
             onImproved(p)
             return p
         }
-        var t0 = System.nanoTime()
-        var best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = 1, ties = ties)
+        val begin = System.nanoTime()
+        var t0 = begin
+        var best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = 1)
         onImproved(best)
         if (best.mode != Mode.WIN) return best
         var lastNanos = System.nanoTime() - t0
-        val tieFactor = if (ties) 2 else 1
-        var lastOps = tieFactor * WinSearch.estimateOps(tables, me, 1, opp).coerceAtLeast(1)
+        var lastOps = WinSearch.estimateOps(tables, me, 1, opp).coerceAtLeast(1)
         val remaining = Category.COUNT - me.filledCount
         for (d in 2..remaining) {
-            val ops = tieFactor * WinSearch.estimateOps(tables, me, d, opp)
+            val ops = WinSearch.estimateOps(tables, me, d, opp)
             t0 = System.nanoTime()
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (t0 + predicted > deadlineNanos) break
             try {
-                best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = d, deadlineNanos = deadlineNanos, ties = ties)
+                best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = d, deadlineNanos = deadlineNanos)
             } catch (e: SearchTimeout) {
                 break
             }
@@ -223,15 +228,33 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         }
         // Exact to the end already: if time allows, also let later turns react to the opponent.
         if (allowDuel && best.depth >= remaining && canDuel(me, opp)) {
-            val raw = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS / tieFactor, adversarial = adversarial)
-            val ops = if (raw == Long.MAX_VALUE) raw else tieFactor * raw
+            val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS, adversarial = adversarial)
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
                 try {
-                    best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = deadlineNanos, duel = true, ties = ties)
+                    t0 = System.nanoTime()
+                    best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = deadlineNanos, duel = true)
+                    lastNanos = (System.nanoTime() - t0).coerceAtLeast(1)
                     onImproved(best)
                 } catch (e: SearchTimeout) {
                     // keep the exact fixed-opponent plan
+                }
+            }
+        }
+        if (ties) {
+            // P(tie) for display: the same search once more with ties (about twice its time),
+            // allowed to run past the deadline by at most the thinking time again.
+            val tieDeadline = deadlineNanos + (deadlineNanos - begin)
+            if (System.nanoTime() + 2 * lastNanos <= tieDeadline) {
+                try {
+                    best = if (best.duel) {
+                        planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = tieDeadline, duel = true, ties = true)
+                    } else {
+                        planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = best.depth, deadlineNanos = tieDeadline, ties = true)
+                    }
+                    onImproved(best)
+                } catch (e: SearchTimeout) {
+                    // decisions stand; only the draw chance is missing
                 }
             }
         }

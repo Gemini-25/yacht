@@ -361,6 +361,23 @@ class TieTest {
     }
 
     @Test
+    fun anytimePlanDecidesWithoutTiesThenAddsThem() {
+        val me = card(setOf(Category.ACES, Category.CHOICE, Category.YACHT, Category.FULL_HOUSE)) { if (it.isUpper) 3 * it.face else 10 }
+        val opp = card(setOf(Category.SIXES, Category.YACHT, Category.SMALL_STRAIGHT)) { if (it.isUpper) 3 * it.face else 12 }
+        val advisor = Advisor(tables)
+        val far = System.nanoTime() + 60_000_000_000L
+        val seen = ArrayList<PlannedTurn>()
+        val traced = advisor.planTurnAnytime(me, opp, far, allowDuel = false, ties = true) { seen += it }
+        val plain = advisor.planTurnAnytime(me, opp, far, allowDuel = false)
+        // Every plan before the last is searched without ties; the last adds them at the same depth.
+        assertTrue(seen.dropLast(1).none { it.hasTies })
+        assertTrue(traced.hasTies && !plain.hasTies)
+        assertEquals(plain.depth, traced.depth)
+        assertEquals(plain.startValue, traced.startValue, 0.0)
+        for (r in 0 until Dice.ROLLS step 7) assertEquals(plain.bestCategory(r), traced.bestCategory(r))
+    }
+
+    @Test
     fun exactSearchTieMatchesPlay() {
         // The opponent is done at 212; I need about a Choice's worth with Choice and Yacht left.
         val me = card(setOf(Category.CHOICE, Category.YACHT)) { if (it.isUpper) 3 * it.face else 23 }
