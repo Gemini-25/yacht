@@ -175,7 +175,7 @@ private fun MatchHeader(c: AppController, s: GameState) {
                         s.isOver -> Text("최종", style = MaterialTheme.typography.labelLarge)
                         value != null -> {
                             Text(
-                                (if (mode == Mode.WIN) "승률 " else "기대 최종 ") + fmtValue(mode, value),
+                                (if (mode == Mode.WIN) "승률 " else "예상 최종 ") + fmtValue(mode, value),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                             )
@@ -711,8 +711,8 @@ private fun NoteLine(note: String, onDismiss: () -> Unit) {
 
 @Composable
 private fun ValueLine(mode: Mode, value: Double, expectedFinal: Double) {
-    val text = if (mode == Mode.WIN) "승률 ${pct(value)} · 기대 최종 ${"%.1f".format(expectedFinal)}점"
-    else "기대 최종 %.1f점".format(value)
+    val text = if (mode == Mode.WIN) "승률 ${pct(value)} · 예상 최종 ${"%.1f".format(expectedFinal)}점"
+    else "예상 최종 %.1f점".format(value)
     Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
 }
 
