@@ -12,6 +12,22 @@ enum class Side { ME, OPP }
 /** MANUAL: the player types in dice thrown elsewhere (advisor). RANDOM: the app throws (vs AI). */
 enum class DiceSource { MANUAL, RANDOM }
 
+/**
+ * How I play a game: with the AI's recommendations, or alone with only a review at the end. The
+ * plans are computed either way (silently when alone), so the review is ready when the game ends.
+ */
+enum class PlayStyle {
+    ASSISTED,
+
+    /** Alone: nothing from the AI is shown until the game is over. */
+    SOLO,
+
+    /** Started alone, but a hint was looked at: counted with the assisted games. */
+    PEEKED;
+
+    val assisted: Boolean get() = this != SOLO
+}
+
 val Category.label: String
     get() = when (this) {
         Category.ACES -> "1"
@@ -80,18 +96,33 @@ data class DecisionRecord(
     /** Spread (standard deviation) of my final score after each, when the choice differed. */
     val chosenSd: Double? = null,
     val bestSd: Double? = null,
+    /**
+     * Value of the position just before the throw that produced [dice], from the same plan:
+     * [bestValue] - [before] is how much that throw helped (dice luck).
+     */
+    val before: Double? = null,
 ) {
     val loss: Double get() = (bestValue - chosenValue).coerceAtLeast(0.0)
     val expectedLoss: Double get() = (bestExpected - chosenExpected).coerceAtLeast(0.0)
     val isMistake: Boolean get() = if (mode == Mode.WIN) loss > 0.0005 else loss > 0.05
 }
 
-/** One box written by either side, with my P(win) right after it when known (WIN mode). */
+/**
+ * One box written by either side, with my P(win) right after it when known (WIN mode). For the
+ * opponent also my P(win) before its turn, and in games against the AI its throws and reasons.
+ */
 data class MoveRecord(
     val side: Side,
     val category: Category,
     val points: Int,
     val winAfter: Double? = null,
+    val winBefore: Double? = null,
+    /** The AI's dice after each throw of the turn. */
+    val throws: List<List<Int>>? = null,
+    /** Dice the AI held before each rethrow (one fewer than [throws]). */
+    val held: List<List<Int>>? = null,
+    /** Why the AI played so, one line per decision. */
+    val why: List<String>? = null,
 )
 
 data class GameState(
@@ -107,6 +138,9 @@ data class GameState(
     /** Every box written, in order. */
     val moves: List<MoveRecord> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
+    val style: PlayStyle = PlayStyle.ASSISTED,
+    /** Who I played (optional tag for real games: "친구 A", "스위치 CPU", ...). */
+    val opponent: String? = null,
 ) {
     val rules: RuleSet get() = me.rules
     val isOver: Boolean get() = me.isComplete && opp.isComplete
@@ -114,9 +148,17 @@ data class GameState(
 
     fun boardOf(side: Side) = if (side == Side.ME) me else opp
 
+    /** AI information may be shown (assisted play, or after the game). */
+    val hintsShown: Boolean get() = style.assisted || isOver
+
     companion object {
-        fun new(source: DiceSource, first: Side, rules: RuleSet = RuleSet.NINTENDO) =
-            GameState(source, first, Board(rules), Board(rules), toMove = first)
+        fun new(
+            source: DiceSource,
+            first: Side,
+            rules: RuleSet = RuleSet.NINTENDO,
+            style: PlayStyle = PlayStyle.ASSISTED,
+            opponent: String? = null,
+        ) = GameState(source, first, Board(rules), Board(rules), toMove = first, style = style, opponent = opponent?.trim()?.ifEmpty { null })
     }
 }
 
@@ -175,10 +217,10 @@ object Game {
      * Throw the non-held dice again. MANUAL clears them for typing; RANDOM throws with [rng].
      * [advice] (for the current dice) is used to record the decision.
      */
-    fun reroll(s: GameState, advice: Advice?, rng: Random? = null, note: DecisionNote? = null): GameState {
+    fun reroll(s: GameState, advice: Advice?, rng: Random? = null, note: DecisionNote? = null, before: Double? = null): GameState {
         val d = s.draft
         if (s.toMove != Side.ME || !d.deciding || d.rollsDone >= 3 || d.held.all { it }) return s
-        val decisions = if (advice != null) s.decisions + keepRecord(s, advice, note) else s.decisions
+        val decisions = if (advice != null) s.decisions + keepRecord(s, advice, note, before) else s.decisions
         val next = when (s.source) {
             DiceSource.MANUAL -> d.copy(
                 dice = d.dice.mapIndexed { i, f -> if (d.held[i]) f else null },
@@ -203,26 +245,41 @@ object Game {
         return s.copy(draft = TurnDraft(rollsDone = 1, dice = List(5) { rng.nextInt(6) + 1 }))
     }
 
-    fun score(s: GameState, c: Category, advice: Advice?, note: DecisionNote? = null): GameState {
+    fun score(s: GameState, c: Category, advice: Advice?, note: DecisionNote? = null, before: Double? = null): GameState {
         val d = s.draft
         if (s.toMove != Side.ME || !d.deciding || s.me.isFilled(c)) return s
         val points = s.rules.score(d.faces, c)
-        val decisions = if (advice != null) s.decisions + scoreRecord(s, c, advice, note) else s.decisions
+        val decisions = if (advice != null) s.decisions + scoreRecord(s, c, advice, note, before) else s.decisions
         val win = advice?.takeIf { it.mode == Mode.WIN }?.categories?.firstOrNull { it.category == c }?.value
         val me = s.me.with(c, points)
         val moved = s.copy(me = me, draft = TurnDraft(), decisions = decisions, moves = s.moves + MoveRecord(Side.ME, c, points, win))
         return moved.copy(toMove = nextToMove(moved, Side.ME))
     }
 
-    fun opponentScore(s: GameState, c: Category, points: Int, log: String? = null): GameState {
+    /**
+     * The opponent writes [points] into [c]. [winBefore] is my P(win) before its turn when known;
+     * [turn] carries the AI's throws and reasons (vs AI).
+     */
+    fun opponentScore(
+        s: GameState,
+        c: Category,
+        points: Int,
+        log: String? = null,
+        winBefore: Double? = null,
+        turn: MoveRecord? = null,
+    ): GameState {
         if (s.toMove != Side.OPP || s.opp.isFilled(c)) return s
+        val move = (turn ?: MoveRecord(Side.OPP, c, points)).copy(side = Side.OPP, category = c, points = points, winBefore = winBefore)
         val moved = s.copy(
             opp = s.opp.with(c, points),
             oppLog = if (log != null) s.oppLog + log else s.oppLog,
-            moves = s.moves + MoveRecord(Side.OPP, c, points),
+            moves = s.moves + move,
         )
         return moved.copy(toMove = nextToMove(moved, Side.OPP))
     }
+
+    /** A hint was looked at in a game played alone: it counts as assisted from now on. */
+    fun peek(s: GameState): GameState = if (s.style == PlayStyle.SOLO) s.copy(style = PlayStyle.PEEKED) else s
 
     /** Records my P(win) after the opponent's last move, once my next turn has been planned. */
     fun noteWinAfterOpponent(s: GameState, win: Double): GameState {
@@ -242,7 +299,7 @@ object Game {
     private fun bestExpected(a: Advice): Double =
         if (a.shouldStop) a.bestCategory.expectedFinal else a.bestKeep!!.expectedFinal
 
-    private fun keepRecord(s: GameState, a: Advice, note: DecisionNote?): DecisionRecord {
+    private fun keepRecord(s: GameState, a: Advice, note: DecisionNote?, before: Double?): DecisionRecord {
         val held = s.draft.heldFaces
         val opt = a.keeps.first { it.held == held }
         return DecisionRecord(
@@ -251,11 +308,11 @@ object Game {
             note?.reason, s.me, s.opp, chosenHeld = held, chosenCategory = null,
             bestHeld = if (a.shouldStop) null else a.bestKeep?.held,
             bestCategory = if (a.shouldStop) a.bestCategory.category else null,
-            chosenSd = note?.chosenSd, bestSd = note?.bestSd,
+            chosenSd = note?.chosenSd, bestSd = note?.bestSd, before = before,
         )
     }
 
-    private fun scoreRecord(s: GameState, c: Category, a: Advice, note: DecisionNote?): DecisionRecord {
+    private fun scoreRecord(s: GameState, c: Category, a: Advice, note: DecisionNote?, before: Double?): DecisionRecord {
         val opt = a.categories.first { it.category == c }
         return DecisionRecord(
             s.myTurnNumber, s.draft.rollsDone, s.draft.faces.sorted(), DecisionKind.SCORE,
@@ -263,7 +320,7 @@ object Game {
             note?.reason, s.me, s.opp, chosenHeld = null, chosenCategory = c,
             bestHeld = if (a.shouldStop) null else a.bestKeep?.held,
             bestCategory = if (a.shouldStop) a.bestCategory.category else null,
-            chosenSd = note?.chosenSd, bestSd = note?.bestSd,
+            chosenSd = note?.chosenSd, bestSd = note?.bestSd, before = before,
         )
     }
 }

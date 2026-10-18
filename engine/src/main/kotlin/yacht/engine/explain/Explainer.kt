@@ -805,6 +805,21 @@ class Explainer(private val tables: Tables) {
         return parts.joinToString(" ")
     }
 
+    /**
+     * The AI's reasons for its turn (vs AI), one line per decision: the dice it saw, what it did,
+     * and why, as a recommendation would put it. [opp] is the AI's opponent (me).
+     */
+    fun aiTurn(turn: PlannedTurn, opp: Board, throws: List<List<Int>>, held: List<List<Int>>, category: Category): List<String> {
+        val out = ArrayList<String>()
+        for ((k, dice) in throws.withIndex()) {
+            val action = if (k < held.size) yacht.engine.game.Game.keepText(held[k])
+            else yacht.engine.game.Game.scoreText(category, rules.score(dice, category))
+            val why = runCatching { advice(turn, opp, turn.advise(k + 1, dice)).summary }.getOrNull()
+            out += "${k + 1}번째 ${dice.sorted().joinToString(" ")} → $action" + (why?.let { ": $it" } ?: "")
+        }
+        return out
+    }
+
     // ---- whole game -------------------------------------------------------------------------------
 
     fun gameSummary(s: GameState): Explanation {
@@ -829,7 +844,7 @@ class Explainer(private val tables: Tables) {
                 var line = "추천과 다르게 둔 수가 ${mistakes.size}번 있었고, $all$total 손해 봤어요."
                 val worst = mistakes.maxBy { it.loss }
                 if (mistakes.size > 1 && (mode != Mode.WIN || worst.loss >= 0.005)) {
-                    line += " 가장 아까운 수는 ${worst.turn}턴의 ${Ko.ieosseoyo("‘${worst.chosen}’")}(추천: ${worst.best})."
+                    line += " 가장 아까운 수는 ${worst.turn}턴의 ${Ko.ieosseoyo(Ko.quote(worst.chosen))}(추천: ${worst.best})."
                 }
                 details += line
             }

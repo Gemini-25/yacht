@@ -127,6 +127,22 @@ class TurnKernel(capacity: Int = 1) {
     }
 
     companion object {
+        /**
+         * Expected value of each keep for one context: [e] per roll after the next throw, the
+         * result per keep (holding all five = that roll itself). Linear; no decisions.
+         */
+        fun expectOne(e: DoubleArray): DoubleArray {
+            val k = DoubleArray(Dice.KEEPS)
+            for (r in 0 until Dice.ROLLS) k[Dice.rollAsKeep[r]] = e[r]
+            for (keep in Dice.PARTIAL_KEEPS - 1 downTo 0) {
+                val a = keep * 6
+                var sum = 0.0
+                for (f in 0 until 6) sum += k[Dice.addFace[a + f]]
+                k[keep] = sum * SIXTH
+            }
+            return k
+        }
+
         /** Relative difference below which values are treated as ties (floating-point noise). */
         const val EPS = 1e-12
         private const val SIXTH = 1.0 / 6.0

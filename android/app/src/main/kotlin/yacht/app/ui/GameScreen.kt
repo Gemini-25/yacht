@@ -31,6 +31,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -59,6 +60,7 @@ import yacht.engine.Mode
 import yacht.engine.explain.Explanation
 import yacht.engine.game.DiceSource
 import yacht.engine.game.GameState
+import yacht.engine.game.PlayStyle
 import yacht.engine.game.Side
 import yacht.engine.game.label
 import yacht.engine.game.possibleScores
@@ -72,15 +74,12 @@ private val Category.short: String
         else -> label
     }
 
-/** Advice shown to the player (hidden when hints are off in vs-AI games). */
-private fun shownAdvice(c: AppController, s: GameState): Advice? =
-    if (s.source == DiceSource.RANDOM && !c.showHints) null else c.advice
-
 @Composable
 fun GameScreen(c: AppController) {
     val s = c.state ?: return
     var oppPick by remember { mutableStateOf<Category?>(null) }
     var menu by remember { mutableStateOf(false) }
+    var peekAsk by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Scaffold(
         containerColor = cs.background,
@@ -89,9 +88,13 @@ fun GameScreen(c: AppController) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
                 title = {
                     Column {
-                        Text(if (s.source == DiceSource.MANUAL) "실전 도우미" else "AI와 대전", fontWeight = FontWeight.Bold)
                         Text(
-                            if (s.isOver) "게임 종료" else "내 턴 ${minOf(s.myTurnNumber, 12)}/12 · ${if (s.first == Side.ME) "선공" else "후공"}",
+                            (if (s.source == DiceSource.MANUAL) "실전 도우미" else "AI와 대전") + if (s.style == PlayStyle.SOLO) " · 혼자 두기" else "",
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            (if (s.isOver) "게임 종료" else "내 턴 ${minOf(s.myTurnNumber, 12)}/12 · ${if (s.first == Side.ME) "선공" else "후공"}") +
+                                (s.opponent?.let { " · vs $it" } ?: ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onSurfaceVariant,
                         )
@@ -113,11 +116,8 @@ fun GameScreen(c: AppController) {
                                 text = { Text((if (c.objective == Mode.EXPECTED_SCORE) "✓ " else "   ") + "목표: 기대점수 최대") },
                                 onClick = { c.changeObjective(Mode.EXPECTED_SCORE); menu = false },
                             )
-                            if (s.source == DiceSource.RANDOM) {
-                                DropdownMenuItem(
-                                    text = { Text(if (c.showHints) "힌트 숨기기" else "힌트 보기") },
-                                    onClick = { c.toggleHints(); menu = false },
-                                )
+                            if (s.style == PlayStyle.SOLO && !s.isOver) {
+                                DropdownMenuItem(text = { Text("힌트 보기") }, onClick = { menu = false; peekAsk = true })
                             }
                             DropdownMenuItem(text = { Text("기록 · 복기") }, onClick = { menu = false; c.openHistory() })
                         }
@@ -131,8 +131,22 @@ fun GameScreen(c: AppController) {
             Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
                 GameScoreSheet(c, s, onOppCell = { oppPick = it })
             }
-            if (s.isOver) GameOverPanel(c, s) else ActionArea(c, s)
+            if (s.isOver) GameOverPanel(c, s) else ActionArea(c, s) { peekAsk = true }
         }
+    }
+    if (peekAsk) {
+        AlertDialog(
+            onDismissRequest = { peekAsk = false },
+            confirmButton = { TextButton(onClick = { peekAsk = false; c.peek() }) { Text("힌트 보기") } },
+            dismissButton = { TextButton(onClick = { peekAsk = false }) { Text("계속 혼자 두기") } },
+            title = { Text("힌트를 볼까요?") },
+            text = {
+                Text(
+                    "힌트를 보면 이 판은 ‘AI 추천 받기’ 기록으로 바뀌어요. 혼자 둔 판의 통계에는 들어가지 않아요.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+        )
     }
     val pick = oppPick
     if (pick != null) {
@@ -145,9 +159,10 @@ fun GameScreen(c: AppController) {
 @Composable
 private fun MatchHeader(c: AppController, s: GameState) {
     val cs = MaterialTheme.colorScheme
-    val advice = shownAdvice(c, s)
-    val hidden = s.source == DiceSource.RANDOM && !c.showHints
-    val value = if (s.toMove == Side.ME && !hidden) advice?.value ?: c.turnValue else null
+    val advice = c.shownAdvice
+    val hidden = c.hintsHidden
+    val outlook = if (s.toMove == Side.ME && !hidden) c.outlook else null
+    val value = if (s.toMove == Side.ME && !hidden) outlook?.win ?: advice?.value ?: c.turnValue else null
     val mode = c.plan?.mode ?: c.objective
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -175,13 +190,24 @@ private fun MatchHeader(c: AppController, s: GameState) {
                             }
                         }
                         s.toMove == Side.OPP -> Text("${oppName(s)} 차례", style = MaterialTheme.typography.labelLarge)
-                        hidden -> Text("힌트 꺼짐", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                        hidden -> Text("혼자 두는 중", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
                         else -> Text("계산 중…", style = MaterialTheme.typography.labelLarge)
                     }
                 }
                 ScoreBadge(oppName(s), s.opp.total, gameColors.opp, active = s.toMove == Side.OPP && !s.isOver)
             }
-            if (value != null && mode == Mode.WIN) WinBar(value)
+            if (outlook != null && mode == Mode.WIN) {
+                WdlBar(outlook)
+                Text(
+                    wdlText(outlook),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+            } else if (value != null && mode == Mode.WIN) {
+                WinBar(value)
+            }
             val situation = if (!hidden && s.toMove == Side.ME) c.situation else null
             if (situation != null) SituationLine(situation)
         }
@@ -256,7 +282,7 @@ private fun ScoreBadge(name: String, total: Int, color: Color, active: Boolean) 
 
 @Composable
 private fun GameScoreSheet(c: AppController, s: GameState, onOppCell: (Category) -> Unit) {
-    val advice = shownAdvice(c, s)
+    val advice = c.shownAdvice
     ScoreSheet(
         s,
         oppLabel = oppName(s),
@@ -406,7 +432,7 @@ private fun TotalRow(s: GameState) {
 // ---- action area -----------------------------------------------------------------------------
 
 @Composable
-private fun ActionArea(c: AppController, s: GameState) {
+private fun ActionArea(c: AppController, s: GameState, onPeek: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxWidth().background(cs.surfaceVariant.copy(alpha = 0.5f)).padding(horizontal = 12.dp, vertical = 8.dp),
@@ -416,8 +442,9 @@ private fun ActionArea(c: AppController, s: GameState) {
             OpponentTurnCard(c, s)
             return@Column
         }
-        val advice = shownAdvice(c, s)
-        if (!(s.source == DiceSource.RANDOM && !c.showHints)) RecommendationCard(c, s, advice)
+        c.lastOpponentMove?.let { LastOpponentTurnCard(c, s, it) }
+        val advice = c.shownAdvice
+        if (c.hintsHidden) SoloCard(s, onPeek) else RecommendationCard(c, s, advice)
         val d = s.draft
         val suggested = advice?.bestKeep?.takeIf { !advice.shouldStop && it.held != d.heldFaces }?.let { keep ->
             val left = keep.held.toMutableList()
@@ -449,11 +476,114 @@ private fun OpponentTurnCard(c: AppController, s: GameState) {
                     color = cs.onTertiaryContainer,
                 )
             }
-            s.oppLog.lastOrNull()?.let {
-                Text("최근 AI: $it", style = MaterialTheme.typography.bodySmall, color = cs.onTertiaryContainer)
-            }
             val note = c.lastNote
             if (note != null && !c.hintsHidden) NoteLine(note) { c.dismissNote() }
+            val o = c.oppOutlook
+            if (o != null && !c.hintsHidden) {
+                HorizontalDivider(color = cs.onTertiaryContainer.copy(alpha = 0.2f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("상대 턴 전망", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer, modifier = Modifier.weight(1f))
+                    o.now?.let { Text("지금 내 승률 ${pct(it)}", style = MaterialTheme.typography.labelMedium, color = cs.onTertiaryContainer) }
+                }
+                OutlookRange(o)
+                Text(o.summary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = cs.onTertiaryContainer)
+                if (o.details.isNotEmpty()) {
+                    TertiaryToggle(if (c.whyOpen) "▴ 자세히 접기" else "▾ 자세히") { c.toggleWhy() }
+                    if (c.whyOpen) Bullets(o.details, cs.onTertiaryContainer)
+                }
+            }
+        }
+    }
+}
+
+/** My P(win) after the opponent's turn: the 10%-90% range of its results, with the typical one marked. */
+@Composable
+private fun OutlookRange(o: yacht.engine.explain.OpponentOutlook) {
+    val cs = MaterialTheme.colorScheme
+    val me = gameColors.me
+    val track = cs.onTertiaryContainer.copy(alpha = 0.15f)
+    val mark = cs.onTertiaryContainer
+    androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(14.dp)) {
+        val y = size.height / 2
+        drawLine(track, androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Offset(size.width, y), strokeWidth = 8f)
+        val a = size.width * o.low.toFloat()
+        val b = size.width * o.high.toFloat()
+        drawLine(me.copy(alpha = 0.6f), androidx.compose.ui.geometry.Offset(a, y), androidx.compose.ui.geometry.Offset(maxOf(b, a + 3f), y), strokeWidth = 8f)
+        drawCircle(me, 8f, androidx.compose.ui.geometry.Offset(size.width * o.typical.toFloat(), y))
+        o.now?.let { drawLine(mark, androidx.compose.ui.geometry.Offset(size.width * it.toFloat(), 0f), androidx.compose.ui.geometry.Offset(size.width * it.toFloat(), size.height), strokeWidth = 3f) }
+        drawLine(Color.White.copy(alpha = 0.7f), androidx.compose.ui.geometry.Offset(size.width / 2, 0f), androidx.compose.ui.geometry.Offset(size.width / 2, size.height), strokeWidth = 1.5f)
+    }
+}
+
+@Composable
+private fun TertiaryToggle(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(vertical = 3.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onTertiaryContainer,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
+/**
+ * The opponent's last turn, shown at the start of mine: its result, how lucky it was and how it
+ * moved my P(win), and in games against the AI its throws and reasons. Playing alone only the
+ * throws are shown.
+ */
+@Composable
+private fun LastOpponentTurnCard(c: AppController, s: GameState, m: yacht.engine.game.MoveRecord) {
+    val cs = MaterialTheme.colorScheme
+    val open = c.whyOpen
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("직전 ${oppName(s)} 턴", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)
+            m.throws?.let { t ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    for ((i, d) in t.withIndex()) {
+                        if (i > 0) Text(" → ", style = MaterialTheme.typography.labelSmall, color = cs.onTertiaryContainer)
+                        MiniDice(d.sorted(), 14.dp)
+                    }
+                    Text("  ${yacht.engine.game.Game.scoreText(m.category, m.points)}", style = MaterialTheme.typography.labelMedium, color = cs.onTertiaryContainer)
+                }
+            }
+            if (!c.hintsHidden) {
+                c.opponentComment?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onTertiaryContainer) }
+                val why = m.why
+                if (!why.isNullOrEmpty()) {
+                    TertiaryToggle(if (open) "▴ AI의 생각 접기" else "▾ AI는 왜 이렇게 뒀을까?") { c.toggleWhy() }
+                    if (open) Bullets(why, cs.onTertiaryContainer)
+                }
+            } else if (m.throws == null) {
+                Text("${oppName(s)}: ${yacht.engine.game.Game.scoreText(m.category, m.points)}", style = MaterialTheme.typography.bodySmall, color = cs.onTertiaryContainer)
+            }
+        }
+    }
+}
+
+/** Playing alone: no advice, only a way to look anyway. */
+@Composable
+private fun SoloCard(s: GameState, onPeek: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val d = s.draft
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("혼자 두기", style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer)
+                Text(
+                    when {
+                        !d.deciding && s.source == DiceSource.MANUAL -> "${d.rollsDone + 1}번째 굴림 결과를 입력하세요"
+                        !d.deciding -> "주사위를 굴리세요"
+                        d.rollsDone >= 3 -> "기록할 칸을 고르세요"
+                        else -> "고정할 주사위를 고르거나 칸에 기록하세요"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSecondaryContainer,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text("AI 분석은 끝난 뒤 복기에서 보여 드려요.", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
+            }
+            TextButton(onClick = onPeek) { Text("힌트 보기") }
         }
     }
 }
@@ -475,11 +605,6 @@ private fun RecommendationCard(c: AppController, s: GameState, a: Advice?) {
                         color = cs.onSecondaryContainer,
                     )
                     if (c.plan == null) Text("AI가 이번 턴을 계산하는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
-                    if (d.rollsDone == 0) {
-                        c.opponentComment?.let {
-                            Text("직전 상대 턴 · $it", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
-                        }
-                    }
                 }
                 a == null -> Text("AI 계산 중…", color = cs.onSecondaryContainer)
                 a.shouldStop -> {
@@ -698,7 +823,7 @@ private fun ManualPad(c: AppController, s: GameState) {
     } else {
         Text(
             when {
-                d.deciding -> "3번 다 굴렸습니다. 점수표에서 기록할 칸을 누르세요 (노란 칸 = 추천)"
+                d.deciding -> "3번 다 굴렸습니다. 점수표에서 기록할 칸을 누르세요" + if (c.hintsHidden) "" else " (노란 칸 = 추천)"
                 d.dice.any { it != null } -> "주사위를 잘못 넣었으면 그 주사위를 눌러 지우세요"
                 else -> "주사위 눈 버튼을 왼쪽 주사위부터 차례로 누르세요"
             },

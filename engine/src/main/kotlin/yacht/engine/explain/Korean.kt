@@ -104,6 +104,9 @@ object Ko {
 
     private fun trimZero(s: String) = if (s.endsWith(".0")) s.dropLast(2) else s
 
+    /** A move or box name in quotes, once: "‘1 2 고정’", while "‘6’ 18점" keeps its own quotes. */
+    fun quote(s: String): String = if (s.contains('‘')) s else "‘$s’"
+
     /** 한, 두, 세 ... for counting dice. */
     fun count(n: Int): String = when (n) {
         1 -> "한"

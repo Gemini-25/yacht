@@ -9,6 +9,8 @@ data class KeepOption(
     /** P(win) in WIN mode, expected final score in EXPECTED_SCORE mode. */
     val value: Double,
     val expectedFinal: Double,
+    /** P(tie) along the plan when the search tracks ties, else NaN. */
+    val tie: Double = Double.NaN,
 )
 
 data class CategoryOption(
@@ -16,7 +18,13 @@ data class CategoryOption(
     val points: Int,
     val value: Double,
     val expectedFinal: Double,
+    val tie: Double = Double.NaN,
 )
+
+/** Win, draw and loss probabilities of a position (they sum to 1). */
+data class Outlook(val win: Double, val tie: Double) {
+    val loss: Double get() = (1.0 - win - tie).coerceAtLeast(0.0)
+}
 
 class Advice(
     val mode: Mode,
@@ -28,6 +36,8 @@ class Advice(
     val categories: List<CategoryOption>,
     /** Value of the position right now with optimal play from here. */
     val value: Double,
+    /** Win/draw/loss right now (P(win) without the points tie-break); null unless ties are tracked. */
+    val outlook: Outlook? = null,
 ) {
     val bestKeep: KeepOption? get() = keeps.firstOrNull()
     val bestCategory: CategoryOption get() = categories.first()
@@ -45,9 +55,37 @@ class PlannedTurn internal constructor(
     private val winPlan: TurnPlan?,
     /** Exact to the end with the opponent's turns inside the search (DuelSearch). */
     val duel: Boolean = false,
+    /**
+     * What the points tie-break in plan values is measured against: 0 for a fixed-opponent
+     * search (my final score), the opponent's expected final for a duel (score difference).
+     */
+    private val weightBase: Double = 0.0,
 ) {
     private val plan get() = winPlan ?: evPlan
     private val total = me.total
+
+    /** True when P(tie) is tracked, so [startOutlook] and the advice's outlooks are known. */
+    val hasTies: Boolean get() = winPlan != null && !winPlan.startTie.isNaN()
+
+    /**
+     * P(win) and P(tie) from plan [value] and [tie], removing the points tie-break (estimated
+     * from the max-expectation final [expectedFinal]; off by well under 0.001%p).
+     */
+    private fun outlook(value: Double, tie: Double, expectedFinal: Double): Outlook? {
+        if (winPlan == null || tie.isNaN()) return null
+        val w = (value - WinCurve.SCORE_WEIGHT * (expectedFinal - weightBase)).coerceIn(0.0, 1.0)
+        return Outlook(w, tie.coerceIn(0.0, 1.0 - w))
+    }
+
+    /** Win/draw/loss before the first throw of the turn; null unless ties are tracked. */
+    val startOutlook: Outlook?
+        get() = winPlan?.let { outlook(it.startValue, it.startTie, total + evPlan.startValue) }
+
+    /** Win/draw/loss after holding [keep] (index) following [rollsDone] throws. */
+    fun keepOutlook(rollsDone: Int, keep: Int): Outlook? {
+        val w = winPlan ?: return null
+        return outlook(w.keepValue(rollsDone, keep), w.keepTie(rollsDone, keep), total + evPlan.keepValue(rollsDone, keep))
+    }
 
     /** The plan whose decisions are followed (win plan in WIN mode). */
     internal val active: TurnPlan get() = plan
@@ -67,17 +105,30 @@ class PlannedTurn internal constructor(
                 val k = Dice.subKeep[j]
                 if (Dice.keepSize[k] == 5) {
                     // Holding everything ends the turn now (the kernel's value would allow a later reroll).
-                    KeepOption(Dice.keepFaces(k), shown(plan.rollValue(3, r)), total + evPlan.rollValue(3, r))
+                    KeepOption(Dice.keepFaces(k), shown(plan.rollValue(3, r)), total + evPlan.rollValue(3, r), tieOf { it.rollTie(3, r) })
                 } else {
-                    KeepOption(Dice.keepFaces(k), shown(plan.keepValue(rollsDone, k)), total + evPlan.keepValue(rollsDone, k))
+                    KeepOption(
+                        Dice.keepFaces(k), shown(plan.keepValue(rollsDone, k)), total + evPlan.keepValue(rollsDone, k),
+                        tieOf { it.keepTie(rollsDone, k) },
+                    )
                 }
             }.sortedWith(compareByDescending<KeepOption> { it.value }.thenByDescending { it.held.size })
         }
         val categories = me.openCategories.map { c ->
-            CategoryOption(c, plan.points(r, c.ordinal), shown(plan.categoryValue(r, c.ordinal)), total + evPlan.categoryValue(r, c.ordinal))
+            CategoryOption(
+                c, plan.points(r, c.ordinal), shown(plan.categoryValue(r, c.ordinal)), total + evPlan.categoryValue(r, c.ordinal),
+                tieOf { it.categoryTie(r, c.ordinal) },
+            )
         }.sortedWith(compareByDescending<CategoryOption> { it.value }.thenByDescending { it.expectedFinal })
-        return Advice(mode, rollsDone, dice.sorted(), keeps, categories, shown(plan.rollValue(rollsDone, r)))
+        val now = winPlan?.let { outlook(it.rollValue(rollsDone, r), it.rollTie(rollsDone, r), total + evPlan.rollValue(rollsDone, r)) }
+        return Advice(mode, rollsDone, dice.sorted(), keeps, categories, shown(plan.rollValue(rollsDone, r)), now)
     }
+
+    private inline fun tieOf(f: (TurnPlan) -> Double): Double = winPlan?.let(f) ?: Double.NaN
+
+    /** Value of holding [held] (fewer than five dice) after [rollsDone] throws, in shown units. */
+    fun keepValue(rollsDone: Int, held: List<Int>): Double =
+        shown(plan.keepValue(rollsDone, Dice.keepIndex(Dice.countsOf(held))))
 
     /** Index-level decisions for simulations. */
     fun bestKeep(rollsDone: Int, r: Int): Int = plan.bestKeep(rollsDone, r)
@@ -104,6 +155,8 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         duel: Boolean = false,
         /** A duel table built earlier in this game; used as is when it covers this position. */
         table: DuelSearch? = null,
+        /** Also compute P(tie) along the plan (about twice the search cost). */
+        ties: Boolean = false,
     ): PlannedTurn {
         require(me.rules == tables.rules)
         val evPlan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
@@ -111,16 +164,17 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
             return PlannedTurn(me, Mode.EXPECTED_SCORE, 0, evPlan, null)
         }
         val remaining = Category.COUNT - me.filledCount
+        val oppExpected = opp.total + if (opp.isComplete) 0.0 else tables.ev[opp.mask, opp.u]
         table?.after(me, opp)?.let { after ->
-            return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, after), duel = true)
+            return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, after), duel = true, weightBase = oppExpected)
         }
         if (duel && canDuel(me, opp)) {
-            val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos, adversarial = adversarial)
-            return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true)
+            val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos, adversarial = adversarial, ties = ties)
+            return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true, weightBase = oppExpected)
         }
         val curve = WinCurve.against(tables, opp, tieValue)
         val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps, opp)
-        val search = WinSearch(tables, me, curve, d, pool, deadlineNanos)
+        val search = WinSearch(tables, me, curve, d, pool, deadlineNanos, ties = ties)
         return PlannedTurn(me, Mode.WIN, d, evPlan, TurnPlan(me, search))
     }
 
@@ -137,6 +191,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         table: DuelSearch? = null,
         /** False when a duel table is already being built elsewhere (avoid doing it twice). */
         allowDuel: Boolean = true,
+        ties: Boolean = false,
         onImproved: (PlannedTurn) -> Unit = {},
     ): PlannedTurn {
         table?.after(me, opp)?.let {
@@ -145,19 +200,20 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
             return p
         }
         var t0 = System.nanoTime()
-        var best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = 1)
+        var best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = 1, ties = ties)
         onImproved(best)
         if (best.mode != Mode.WIN) return best
         var lastNanos = System.nanoTime() - t0
-        var lastOps = WinSearch.estimateOps(tables, me, 1, opp).coerceAtLeast(1)
+        val tieFactor = if (ties) 2 else 1
+        var lastOps = tieFactor * WinSearch.estimateOps(tables, me, 1, opp).coerceAtLeast(1)
         val remaining = Category.COUNT - me.filledCount
         for (d in 2..remaining) {
-            val ops = WinSearch.estimateOps(tables, me, d, opp)
+            val ops = tieFactor * WinSearch.estimateOps(tables, me, d, opp)
             t0 = System.nanoTime()
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (t0 + predicted > deadlineNanos) break
             try {
-                best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = d, deadlineNanos = deadlineNanos)
+                best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, depth = d, deadlineNanos = deadlineNanos, ties = ties)
             } catch (e: SearchTimeout) {
                 break
             }
@@ -167,11 +223,12 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         }
         // Exact to the end already: if time allows, also let later turns react to the opponent.
         if (allowDuel && best.depth >= remaining && canDuel(me, opp)) {
-            val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS, adversarial = adversarial)
+            val raw = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS / tieFactor, adversarial = adversarial)
+            val ops = if (raw == Long.MAX_VALUE) raw else tieFactor * raw
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
             if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
                 try {
-                    best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = deadlineNanos, duel = true)
+                    best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = deadlineNanos, duel = true, ties = ties)
                     onImproved(best)
                 } catch (e: SearchTimeout) {
                     // keep the exact fixed-opponent plan
@@ -191,7 +248,8 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         meToMove: Boolean,
         executor: ExecutorService? = pool,
         stop: java.util.concurrent.atomic.AtomicBoolean? = null,
-    ): DuelSearch = DuelSearch(tables, me, opp, meToMove, executor, stop = stop, adversarial = adversarial)
+        ties: Boolean = false,
+    ): DuelSearch = DuelSearch(tables, me, opp, meToMove, executor, stop = stop, adversarial = adversarial, ties = ties)
 
     /** The duel search needs it to be my turn: the opponent has as many boxes left as me, or one fewer. */
     fun canDuel(me: Board, opp: Board): Boolean {

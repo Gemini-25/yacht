@@ -312,3 +312,121 @@ class AdversarialDuelTest {
         assertTrue(a <= e + 1e-6 && a > 0.0, "adversarial $a vs max-expectation opponent $e")
     }
 }
+
+/** P(tie) carried along the searches' own decisions, checked against playing those decisions. */
+class TieTest {
+    private val tables get() = SolverTest.tables
+
+    private fun play(turn: PlannedTurn, b: Board, rng: java.util.Random): Board {
+        var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+        for (rolls in 1..2) {
+            val k = turn.bestKeep(rolls, r)
+            if (k == Dice.rollAsKeep[r]) break
+            r = Match.throwDice(rng, k)
+        }
+        val c = turn.bestCategory(r)
+        return b.with(c, tables.scores[r, c.ordinal])
+    }
+
+    private fun card(open: Set<Category>, points: (Category) -> Int): Board =
+        Category.ALL.filter { it !in open }.fold(Board()) { b, c -> b.with(c, points(c)) }
+
+    private fun assertClose(exact: Double, sim: Double, n: Int, slack: Double, what: String) {
+        val sd = sqrt(sim * (1 - sim) / n)
+        println("$what exact $exact vs simulated $sim (sd $sd)")
+        assertTrue(kotlin.math.abs(exact - sim) < 4 * sd + slack, "$what exact $exact vs simulated $sim (sd $sd)")
+    }
+
+    @Test
+    fun tracingTiesDoesNotChangeTheSearch() {
+        val me = card(setOf(Category.ACES, Category.CHOICE, Category.YACHT, Category.FULL_HOUSE)) { if (it.isUpper) 3 * it.face else 10 }
+        val opp = card(setOf(Category.SIXES, Category.YACHT, Category.SMALL_STRAIGHT)) { if (it.isUpper) 3 * it.face else 12 }
+        val advisor = Advisor(tables)
+        for (depth in listOf(1, 2, 4)) {
+            val plain = advisor.planTurn(me, opp, depth = depth)
+            val traced = advisor.planTurn(me, opp, depth = depth, ties = true)
+            assertEquals(plain.startValue, traced.startValue, 0.0, "depth $depth")
+            val o = traced.startOutlook!!
+            assertTrue(o.tie in 0.0..0.2 && o.win in 0.0..1.0, "depth $depth: $o")
+            assertEquals(1.0, o.win + o.tie + o.loss, 1e-12)
+            assertEquals(plain.startValue, o.win, 4e-4)
+            val a = traced.advise(1, listOf(1, 1, 3, 5, 6))
+            for (k in a.keeps) assertTrue(k.tie in 0.0..1.0, "keep tie ${k.tie}")
+            for (c in a.categories) assertTrue(c.tie in 0.0..1.0, "category tie ${c.tie}")
+        }
+        val duel = advisor.planTurn(me, opp, duel = true)
+        val duelTies = advisor.planTurn(me, opp, duel = true, ties = true)
+        assertTrue(duelTies.duel)
+        assertEquals(duel.startValue, duelTies.startValue, 0.0)
+    }
+
+    @Test
+    fun exactSearchTieMatchesPlay() {
+        // The opponent is done at 212; I need about a Choice's worth with Choice and Yacht left.
+        val me = card(setOf(Category.CHOICE, Category.YACHT)) { if (it.isUpper) 3 * it.face else 23 }
+        val opp = Category.ALL.fold(Board()) { b, c -> b.with(c, if (c == Category.CHOICE) 212 else 0) }
+        check(me.total + 22 == opp.total) { "me ${me.total}" }
+        val advisor = Advisor(tables)
+        val turn = advisor.planTurn(me, opp, depth = Category.COUNT, ties = true)
+        val o = turn.startOutlook!!
+        val rng = java.util.Random(5)
+        val plans = HashMap<Board, PlannedTurn>()
+        val n = 200_000
+        var ties = 0
+        var wins = 0
+        repeat(n) {
+            var b = me
+            while (!b.isComplete) b = play(plans.getOrPut(b) { advisor.planTurn(b, opp, depth = Category.COUNT) }, b, rng)
+            if (b.total == opp.total) ties++
+            if (b.total > opp.total) wins++
+        }
+        assertTrue(o.tie > 0.02, "tie ${o.tie}")
+        assertClose(o.tie, ties.toDouble() / n, n, 1e-3, "tie")
+        assertClose(o.win, wins.toDouble() / n, n, 1e-3, "win")
+    }
+
+    @Test
+    fun duelTieMatchesPlay() {
+        // Two boxes left each, two points apart.
+        val me = card(setOf(Category.YACHT, Category.CHOICE)) { if (it.isUpper) 3 * it.face else 0 }
+        val opp = card(setOf(Category.LARGE_STRAIGHT, Category.SIXES)) { if (it == Category.CHOICE) 100 else 0 }
+        val advisor = Advisor(tables)
+        val turn = advisor.planTurn(me, opp, duel = true, ties = true)
+        assertTrue(turn.duel)
+        val o = turn.startOutlook!!
+        val rng = java.util.Random(11)
+        val plans = HashMap<Pair<Board, Board>, PlannedTurn>()
+        val oppPlans = HashMap<Board, PlannedTurn>()
+        val n = 100_000
+        var ties = 0
+        var wins = 0
+        repeat(n) {
+            var a = me
+            var b = opp
+            var myMove = true
+            while (!a.isComplete || !b.isComplete) {
+                if (myMove && !a.isComplete) a = play(plans.getOrPut(a to b) { advisor.planTurn(a, b, duel = true) }, a, rng)
+                else if (!myMove && !b.isComplete) b = play(oppPlans.getOrPut(b) { advisor.planTurn(b, null, Mode.EXPECTED_SCORE) }, b, rng)
+                myMove = !myMove
+            }
+            if (a.total == b.total) ties++
+            if (a.total > b.total) wins++
+        }
+        assertTrue(o.tie > 0.003, "tie ${o.tie}")
+        assertClose(o.tie, ties.toDouble() / n, n, 1e-3, "duel tie")
+        assertClose(o.win, wins.toDouble() / n, n, 1e-3, "duel win")
+    }
+
+    @Test
+    fun opponentRootedTableGivesOutlookBeforeEachOfMyTurns() {
+        val me = card(setOf(Category.YACHT, Category.CHOICE)) { if (it.isUpper) 3 * it.face else 0 }
+        val opp = card(setOf(Category.LARGE_STRAIGHT, Category.SIXES, Category.ACES)) { if (it == Category.CHOICE) 100 else 0 }
+        val advisor = Advisor(tables)
+        val table = advisor.buildDuelTable(me, opp, meToMove = false, ties = true)
+        val after = opp.with(Category.ACES, 2)
+        val (w, t) = table.valueAt(me, after)!!
+        val direct = advisor.planTurn(me, after, duel = true, ties = true).startOutlook!!
+        assertEquals(direct.win, w, 1e-4)
+        assertEquals(direct.tie, t, 1e-5)
+    }
+}

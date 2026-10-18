@@ -15,6 +15,8 @@ object GameCodec {
         appendLine("first=${s.first}")
         appendLine("toMove=${s.toMove}")
         appendLine("created=${s.createdAt}")
+        appendLine("style=${s.style}")
+        s.opponent?.let { appendLine("opponent=${clean(it)}") }
         appendLine("me=${board(s.me)}")
         appendLine("opp=${board(s.opp)}")
         appendLine("rolls=${s.draft.rollsDone}")
@@ -29,12 +31,21 @@ object GameCodec {
                     d.me?.let { board(it) }.orEmpty(), d.opp?.let { board(it) }.orEmpty(),
                     d.chosenHeld?.joinToString(",") ?: "-", d.chosenCategory?.name.orEmpty(),
                     d.bestHeld?.joinToString(",") ?: "-", d.bestCategory?.name.orEmpty(),
-                    d.chosenSd ?: "", d.bestSd ?: "",
+                    d.chosenSd ?: "", d.bestSd ?: "", d.before ?: "",
                 ).joinToString("|"),
             )
         }
         for (l in s.oppLog) appendLine("opplog=${clean(l)}")
-        for (m in s.moves) appendLine("move=${m.side}|${m.category}|${m.points}|${m.winAfter ?: "-"}")
+        for (m in s.moves) {
+            appendLine(
+                "move=" + listOf(
+                    m.side, m.category, m.points, m.winAfter ?: "-", m.winBefore ?: "-",
+                    m.throws?.joinToString(";") { it.joinToString("") } ?: "-",
+                    m.held?.joinToString(";") { it.joinToString("") } ?: "-",
+                    m.why?.joinToString("\u001f") { clean(it) } ?: "-",
+                ).joinToString("|"),
+            )
+        }
     }
 
     fun decode(text: String, rules: RuleSet = RuleSet.NINTENDO): GameState {
@@ -53,7 +64,12 @@ object GameCodec {
                 "decision" -> decisions += decision(v, rules)
                 "opplog" -> oppLog += v
                 "move" -> v.split('|').let { f ->
-                    moves += MoveRecord(Side.valueOf(f[0]), Category.valueOf(f[1]), f[2].toInt(), f[3].toDoubleOrNull())
+                    fun dice(i: Int) = f.getOrNull(i)?.takeIf { it != "-" }?.split(';')?.map { t -> t.map { it - '0' } }
+                    moves += MoveRecord(
+                        Side.valueOf(f[0]), Category.valueOf(f[1]), f[2].toInt(), f[3].toDoubleOrNull(), f.getOrNull(4)?.toDoubleOrNull(),
+                        throws = dice(5), held = dice(6),
+                        why = f.getOrNull(7)?.takeIf { it != "-" }?.split('\u001f'),
+                    )
                 }
                 else -> kv[k] = v
             }
@@ -76,6 +92,8 @@ object GameCodec {
             oppLog = oppLog,
             moves = moves,
             createdAt = kv["created"]?.toLong() ?: 0L,
+            style = kv["style"]?.let { v -> PlayStyle.entries.firstOrNull { it.name == v } } ?: PlayStyle.ASSISTED,
+            opponent = kv["opponent"]?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -119,6 +137,7 @@ object GameCodec {
             bestCategory = opt(17)?.let { Category.valueOf(it) },
             chosenSd = opt(18)?.toDouble(),
             bestSd = opt(19)?.toDouble(),
+            before = opt(20)?.toDouble(),
         )
     }
 }

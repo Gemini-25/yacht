@@ -14,10 +14,10 @@ object WinCurve {
     const val SCORE_WEIGHT = 1e-6
 
     /**
-     * values[f] = P(opp final < f) + tieValue * P(opp final == f) + SCORE_WEIGHT * f.
-     * The win part is 0 for f < oppMin and 1 for f > oppMax.
+     * values[f] = P(opp final < f) + tieValue * P(opp final == f) + SCORE_WEIGHT * f, and
+     * ties[f] = P(opp final == f). The win part is 0 for f < oppMin and 1 for f > oppMax.
      */
-    class Curve(val values: DoubleArray, val oppMin: Int, val oppMax: Int)
+    class Curve(val values: DoubleArray, val oppMin: Int, val oppMax: Int, val ties: DoubleArray = DoubleArray(values.size))
 
     fun against(tables: Tables, opp: Board, tieValue: Double = 0.0): Curve {
         val base = opp.total
@@ -33,14 +33,16 @@ object WinCurve {
         }
         val mass = pmf.sum()
         val curve = DoubleArray(SIZE)
+        val ties = DoubleArray(SIZE)
         var below = 0.0
         for (f in 0 until SIZE) {
             val x = f - base - lo
             val p = if (x in pmf.indices) pmf[x] / mass else 0.0
             curve[f] = below + tieValue * p + SCORE_WEIGHT * f
+            ties[f] = p
             below += p
         }
-        return Curve(curve, base + lo, base + lo + pmf.size - 1)
+        return Curve(curve, base + lo, base + lo + pmf.size - 1, ties)
     }
 }
 
@@ -55,6 +57,9 @@ class SearchTimeout : RuntimeException("search stopped", null, false, false)
  *
  * Scores whose outcome is already certain (ahead of the opponent's best final, or unable to
  * reach its worst) are filled in closed form instead of searched.
+ *
+ * With [ties] the search also carries P(tie) along its own decisions (see [BlockKernel]): the
+ * exact probability of a draw when this plan is followed, at about twice the cost.
  */
 class WinSearch(
     private val tables: Tables,
@@ -65,8 +70,10 @@ class WinSearch(
     /** System.nanoTime() after which the search gives up with [SearchTimeout]. */
     private val deadline: Long = Long.MAX_VALUE,
     private val stop: java.util.concurrent.atomic.AtomicBoolean? = null,
+    val ties: Boolean = false,
 ) : AfterTurn {
     private val curve = win.values
+    private val tieCurve = win.ties
     private val rules = me.rules
     private val cap = rules.bonusThreshold
     private val scores = tables.scores
@@ -80,7 +87,7 @@ class WinSearch(
      * Values over (reachable capped upper sum, score since the root). [uIndex] maps a capped
      * upper sum to its row, or is null when the upper sum no longer matters (one row).
      */
-    private class Grid(val uList: IntArray, val uIndex: IntArray?, val nS: Int, val values: DoubleArray) {
+    private class Grid(val uList: IntArray, val uIndex: IntArray?, val nS: Int, val values: DoubleArray, val ties: DoubleArray?) {
         fun row(u: Int): Int = if (uIndex == null) 0 else uIndex[u].also { check(it >= 0) { "unreachable u=$u" } }
     }
 
@@ -124,13 +131,18 @@ class WinSearch(
         if (stop?.get() == true || (deadline != Long.MAX_VALUE && System.nanoTime() > deadline)) throw SearchTimeout()
     }
 
-    private fun newGrid(m: Int, values: (IntArray, Int) -> DoubleArray): Grid {
+    /** [fill] gets (upper rows, score columns, values, ties or null) and fills the grid. */
+    private fun newGrid(m: Int, fill: (IntArray, Int, DoubleArray, DoubleArray?) -> Unit): Grid {
         val rows = upperRows(me, bonusDecided, m)
         val nS = gainMax(tables, me, bonusDecided, m) + 1
-        return Grid(rows.values, rows.index, nS, values(rows.values, nS))
+        val values = DoubleArray(rows.values.size * nS)
+        val tieValues = if (ties) DoubleArray(values.size) else null
+        fill(rows.values, nS, values, tieValues)
+        return Grid(rows.values, rows.index, nS, values, tieValues)
     }
 
     private fun curveAt(s: Int) = if (s < curve.size) curve[s] else curve[curve.size - 1]
+    private fun tieAt(s: Int) = if (s < tieCurve.size) tieCurve[s] else 0.0
 
     /** Win probability once mask [m] is filled with capped upper sum [u] and score [s]. */
     fun valueOf(m: Int, u: Int, s: Int): Double {
@@ -139,8 +151,19 @@ class WinSearch(
         return g.values[g.row(u) * g.nS + minOf(s - s0, g.nS - 1)]
     }
 
+    /** P(tie) once mask [m] is filled with capped upper sum [u] and score [s] (needs [ties]). */
+    fun tieOf(m: Int, u: Int, s: Int): Double {
+        if (m == Category.FULL_MASK) return tieAt(s)
+        val g = grids[m] ?: error("mask $m outside search")
+        val t = checkNotNull(g.ties) { "search without ties" }
+        return t[g.row(u) * g.nS + minOf(s - s0, g.nS - 1)]
+    }
+
     override fun value(c: Int, points: Int, bonus: Int, u2: Int): Double =
         valueOf(mask0 or (1 shl c), u2, s0 + points + bonus)
+
+    override fun tie(c: Int, points: Int, bonus: Int, u2: Int): Double =
+        if (ties) tieOf(mask0 or (1 shl c), u2, s0 + points + bonus) else Double.NaN
 
     /** Most points still to come once [m] is filled (bonus included while still possible). */
     private fun remainingMax(m: Int): Int {
@@ -173,10 +196,9 @@ class WinSearch(
     }
 
     /** Leaves continue with whichever stored policy (max expectation or a risk attitude) wins most. */
-    private fun leafGrid(m: Int): Grid = newGrid(m) { uList, nS ->
+    private fun leafGrid(m: Int): Grid = newGrid(m) { uList, nS, values, tieValues ->
         val dists = tables.leafDists
         require(dists.isNotEmpty()) { "depth-limited search needs the distribution table" }
-        val values = DoubleArray(uList.size * nS)
         val w = window(m, nS)
         fillDecided(m, uList, nS, w, values)
         for (ui in uList.indices) {
@@ -189,20 +211,27 @@ class WinSearch(
                     val base = s0 + si + lo
                     var v = 0.0
                     for (x in pmf.indices) v += pmf[x] * curveAt(base + x)
-                    if (v > values[ui * nS + si]) values[ui * nS + si] = v
+                    if (v > values[ui * nS + si]) {
+                        values[ui * nS + si] = v
+                        if (tieValues != null) {
+                            var t = 0.0
+                            for (x in pmf.indices) t += pmf[x] * tieAt(base + x)
+                            tieValues[ui * nS + si] = t
+                        }
+                    }
                 }
             }
         }
-        values
     }
 
-    private fun interiorGrid(m: Int, kernel: BlockKernel): Grid = newGrid(m) { uList, nS ->
+    private fun interiorGrid(m: Int, kernel: BlockKernel): Grid = newGrid(m) { uList, nS, values, tieValues ->
         val nU = uList.size
-        val values = DoubleArray(nU * nS)
         val w = window(m, nS)
         fillDecided(m, uList, nS, w, values)
         val wLen = w.last - w.first + 1
-        if (wLen > 0) {
+        if (wLen > 0 && tieValues != null) {
+            interiorWithTies(m, uList, nS, w, values, tieValues, kernel)
+        } else if (wLen > 0) {
             val open = (0 until Category.COUNT).filter { m and (1 shl it) == 0 }
             val children = open.map { c -> grids[m or (1 shl c)] }
             val solved = DoubleArray(nU * wLen)
@@ -246,7 +275,69 @@ class WinSearch(
             }
             for (ui in 0 until nU) System.arraycopy(solved, ui * wLen, values, ui * nS + w.first, wLen)
         }
-        values
+    }
+
+    /** [interiorGrid]'s search with the tie channel (kept apart so the plain loop stays lean). */
+    private fun interiorWithTies(
+        m: Int, uList: IntArray, nS: Int, w: IntRange, values: DoubleArray, tieValues: DoubleArray, kernel: BlockKernel,
+    ) {
+        val nU = uList.size
+        val wLen = w.last - w.first + 1
+        val open = (0 until Category.COUNT).filter { m and (1 shl it) == 0 }
+        val children = open.map { c -> grids[m or (1 shl c)] }
+        val solved = DoubleArray(nU * wLen)
+        val solvedTies = DoubleArray(nU * wLen)
+        kernel.runBlocksWithTies(nU * wLen, solved, solvedTies) { start, len, e3, t3 ->
+            for ((ci, c) in open.withIndex()) {
+                val g = children[ci]
+                for (r in 0 until Dice.ROLLS) {
+                    val pts = scores[r, c]
+                    val rb = r * len - start
+                    var k = start
+                    while (k < start + len) {
+                        val ui = k / wLen
+                        val rowEnd = minOf(start + len, (ui + 1) * wLen)
+                        val u = uList[ui]
+                        var gain = pts
+                        var u2 = u
+                        if (c < 6 && !bonusDecided) {
+                            u2 = minOf(cap, u + pts)
+                            if (u < cap && u + pts >= cap) gain += rules.bonusPoints
+                        }
+                        val siStart = w.first + (k - ui * wLen)
+                        if (g == null) {
+                            for (kk in k until rowEnd) {
+                                val s = s0 + siStart + (kk - k) + gain
+                                val v = curveAt(s).toFloat()
+                                if (v > e3[rb + kk]) {
+                                    e3[rb + kk] = v
+                                    t3[rb + kk] = tieAt(s).toFloat()
+                                }
+                            }
+                        } else {
+                            val cb = g.row(u2) * g.nS
+                            val last = g.nS - 1
+                            val vals = g.values
+                            val tv = g.ties!!
+                            val off = siStart + gain - k
+                            for (kk in k until rowEnd) {
+                                val at = cb + minOf(kk + off, last)
+                                val v = vals[at].toFloat()
+                                if (v > e3[rb + kk]) {
+                                    e3[rb + kk] = v
+                                    t3[rb + kk] = tv[at].toFloat()
+                                }
+                            }
+                        }
+                        k = rowEnd
+                    }
+                }
+            }
+        }
+        for (ui in 0 until nU) {
+            System.arraycopy(solved, ui * wLen, values, ui * nS + w.first, wLen)
+            System.arraycopy(solvedTies, ui * wLen, tieValues, ui * nS + w.first, wLen)
+        }
     }
 
     companion object {

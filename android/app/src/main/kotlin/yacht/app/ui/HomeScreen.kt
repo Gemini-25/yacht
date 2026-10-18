@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -24,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -44,6 +46,7 @@ import yacht.app.core.Screen
 import yacht.app.core.ThinkTime
 import yacht.engine.Mode
 import yacht.engine.game.DiceSource
+import yacht.engine.game.PlayStyle
 import yacht.engine.game.Side
 
 @Composable
@@ -82,6 +85,7 @@ fun CenterText(text: String, modifier: Modifier = Modifier) {
 fun HomeScreen(c: AppController) {
     var source by remember { mutableStateOf(DiceSource.MANUAL) }
     var seat by remember { mutableStateOf(Side.OPP) }
+    var opponent by remember { mutableStateOf("") }
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 16.dp),
@@ -107,8 +111,8 @@ fun HomeScreen(c: AppController) {
                     Column(Modifier.weight(1f)) {
                         Text("이어하기", fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
                         Text(
-                            "${if (current.source == DiceSource.MANUAL) "실전" else "AI 대전"} · 내 턴 ${current.myTurnNumber}/12 · " +
-                                "${current.me.total} : ${current.opp.total}",
+                            "${if (current.source == DiceSource.MANUAL) "실전" else "AI 대전"} · ${if (current.style.assisted) "AI 추천" else "혼자"} · " +
+                                "내 턴 ${current.myTurnNumber}/12 · ${current.me.total} : ${current.opp.total}",
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onPrimaryContainer,
                         )
@@ -128,7 +132,7 @@ fun HomeScreen(c: AppController) {
         ModeCard(
             selected = source == DiceSource.RANDOM,
             title = "AI와 대전",
-            desc = "앱이 주사위를 굴립니다. 승률 최대화 AI와 1:1 연습, 힌트 켜고 끄기 가능.",
+            desc = "앱이 주사위를 굴립니다. 승률 최대화 AI와 1:1 연습.",
             onClick = { source = DiceSource.RANDOM },
         )
         Text("순서", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
@@ -149,7 +153,43 @@ fun HomeScreen(c: AppController) {
             style = MaterialTheme.typography.bodySmall,
             color = cs.onSurfaceVariant,
         )
-        Button(onClick = { c.newGame(source, seat) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Text("진행 방식", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = c.nextStyle == PlayStyle.ASSISTED,
+                onClick = { c.changeStyle(PlayStyle.ASSISTED) },
+                shape = SegmentedButtonDefaults.itemShape(0, 2),
+            ) { Text("AI 추천 받기") }
+            SegmentedButton(
+                selected = c.nextStyle == PlayStyle.SOLO,
+                onClick = { c.changeStyle(PlayStyle.SOLO) },
+                shape = SegmentedButtonDefaults.itemShape(1, 2),
+            ) { Text("혼자 두고 복기") }
+        }
+        Text(
+            if (c.nextStyle == PlayStyle.SOLO) "게임 중에는 AI가 아무것도 알려 주지 않고, 끝나면 바로 복기할 수 있어요. 통계도 따로 모아요."
+            else "매 판단마다 승률이 가장 높은 수와 이유를 알려 줘요.",
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+        )
+        if (source == DiceSource.MANUAL) {
+            Text("상대 (선택)", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+            OutlinedTextField(
+                value = opponent,
+                onValueChange = { opponent = it.take(20) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("예: 친구 A, 스위치 CPU, 온라인") },
+            )
+            if (c.tags.isNotEmpty()) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (t in c.tags) {
+                        FilterChip(selected = opponent.trim() == t, onClick = { opponent = if (opponent.trim() == t) "" else t }, label = { Text(t) })
+                    }
+                }
+            }
+        }
+        Button(onClick = { c.newGame(source, seat, opponent) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
             Text("게임 시작", style = MaterialTheme.typography.titleMedium)
         }
 
@@ -171,7 +211,7 @@ fun HomeScreen(c: AppController) {
         }
 
         SectionTitle("기록과 검증")
-        MenuCard("기록 · 통계 · 복기", "실전 승률(신뢰구간), 내 습관 분석, 판별 실수와 승률 그래프") { c.openHistory() }
+        MenuCard("기록 · 통계 · 복기", "추천/혼자·상대별 승률, 운 분석, 내 습관, 판별 실수와 승률 그래프") { c.openHistory() }
         val qs = c.quizStats
         MenuCard(
             "연습 퀴즈",

@@ -18,6 +18,7 @@ import yacht.engine.RuleSet
 import yacht.engine.TableIO
 import yacht.engine.Tables
 import yacht.engine.game.DiceSource
+import yacht.engine.game.PlayStyle
 import yacht.engine.game.Side
 import java.io.File
 import java.io.RandomAccessFile
@@ -56,7 +57,8 @@ private fun run(args: Array<String>) {
     if (!c.whyOpen) c.toggleWhy()
     shot(c, out, "01_home")
 
-    c.newGame(DiceSource.MANUAL, Side.OPP)
+    c.newGame(DiceSource.MANUAL, Side.OPP, "친구 A")
+    waitFor("outlook") { c.oppOutlook != null }
     shot(c, out, "02_opponent_turn")
     c.opponentScore(Category.FULL_HOUSE, 23)
     waitPlan(c)
@@ -106,10 +108,14 @@ private fun run(args: Array<String>) {
     }
     shot(c, out, "07_game_over")
     c.openReview(c.state!!)
-    shot(c, out, "08_review")
+    c.state!!.decisions.filter { it.isMistake }.maxByOrNull { it.loss }?.let { d ->
+        c.loadWhatIf(d)
+        waitFor("what-if", 120_000) { d in c.whatIfs || d !in c.whatIfBusy }
+    }
+    shot(c, out, "08_review", heightDp = 2600)
     c.openHistory()
     waitFor("history") { c.screen == Screen.HISTORY }
-    shot(c, out, "09_history")
+    shot(c, out, "09_history", heightDp = 1400)
 
     c.openQuiz()
     waitFor("quiz", 120_000) { c.quiz != null }
@@ -121,10 +127,23 @@ private fun run(args: Array<String>) {
     shot(c, out, "13_quiz_result")
     c.closeQuiz()
 
+    // Against the AI, moving second: my turn starts with the AI's turn and its reasons.
+    c.newGame(DiceSource.RANDOM, Side.OPP)
+    waitFor("ai turn", 120_000) { c.state!!.toMove == Side.ME }
+    waitPlan(c)
+    shot(c, out, "10_vs_ai", heightDp = 1100)
+    c.firstThrow()
+    waitPlan(c)
+    shot(c, out, "10b_vs_ai_roll")
+
+    // Playing alone: no advice during the game.
+    c.changeStyle(PlayStyle.SOLO)
+    shot(c, out, "14_home_solo")
     c.newGame(DiceSource.RANDOM, Side.ME)
     c.firstThrow()
     waitPlan(c)
-    shot(c, out, "10_vs_ai")
+    shot(c, out, "15_solo")
+    c.changeStyle(PlayStyle.ASSISTED)
 
     c.screen = Screen.VERIFY
     c.startVerify(4)
@@ -158,10 +177,10 @@ private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean)
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
-private fun shot(c: AppController, out: File, name: String, dark: Boolean = false) {
+private fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850) {
     Thread.sleep(200)
     val density = 2f
-    val scene = ImageComposeScene(width = (392 * density).toInt(), height = (850 * density).toInt(), density = Density(density)) {
+    val scene = ImageComposeScene(width = (392 * density).toInt(), height = (heightDp * density).toInt(), density = Density(density)) {
         YachtTheme(dark = dark) { AppRoot(c) }
     }
     scene.render(0)

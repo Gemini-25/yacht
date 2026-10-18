@@ -28,19 +28,28 @@ import yacht.engine.Match
 import yacht.engine.Mode
 import yacht.engine.PlannedTurn
 import yacht.engine.Tables
+import yacht.engine.Outlook
 import yacht.engine.explain.Explainer
 import yacht.engine.explain.Explanation
 import yacht.engine.explain.HabitReport
 import yacht.engine.explain.Habits
+import yacht.engine.explain.LuckAnalysis
+import yacht.engine.explain.LuckReport
+import yacht.engine.explain.OpponentOutlook
+import yacht.engine.explain.OutlookAnalysis
 import yacht.engine.explain.Quiz
 import yacht.engine.explain.QuizQuestion
 import yacht.engine.explain.QuizResult
+import yacht.engine.explain.WhatIf
+import yacht.engine.explain.WhatIfAnalysis
 import yacht.engine.game.DecisionRecord
 import yacht.engine.game.DecisionNote
 import yacht.engine.game.DiceSource
 import yacht.engine.game.Game
 import yacht.engine.game.GameCodec
 import yacht.engine.game.GameState
+import yacht.engine.game.MoveRecord
+import yacht.engine.game.PlayStyle
 import yacht.engine.game.Side
 import yacht.engine.game.label
 import java.io.File
@@ -138,7 +147,14 @@ class AppController(
         private set
     var thinkTime by mutableStateOf(ThinkTime.NORMAL)
         private set
-    var showHints by mutableStateOf(true)
+
+    /** How the next game is played: with recommendations or alone (saved, last choice). */
+    var nextStyle by mutableStateOf(PlayStyle.ASSISTED)
+        private set
+
+    /** Opponent tags used before, most recent first (saved). */
+    var tags by mutableStateOf<List<String>>(emptyList())
+        private set
     var aiThinking by mutableStateOf(false)
         private set
     var history by mutableStateOf<List<GameState>>(emptyList())
@@ -158,6 +174,18 @@ class AppController(
 
     /** Why the recommendation was better, for my last move when it differed; cleared by the next move. */
     var lastNote by mutableStateOf<String?>(null)
+        private set
+
+    /** Before the opponent's turn: how its result would move my P(win) (WIN mode). */
+    var oppOutlook by mutableStateOf<OpponentOutlook?>(null)
+        private set
+    private var outlookKey: Pair<Board, Board>? = null
+    private var outlookJob: Job? = null
+
+    /** Review: "추천대로 뒀다면?" for decisions opened so far, and those still computing. */
+    var whatIfs by mutableStateOf<Map<DecisionRecord, WhatIf>>(emptyMap())
+        private set
+    var whatIfBusy by mutableStateOf<Set<DecisionRecord>>(emptySet())
         private set
 
     private var advisor: Advisor? = null
@@ -209,7 +237,8 @@ class AppController(
                 val settings = withContext(Dispatchers.IO) { storage.loadSettings() }
                 settings["objective"]?.let { v -> Mode.entries.firstOrNull { it.name == v }?.let { objective = it } }
                 settings["think"]?.let { v -> ThinkTime.entries.firstOrNull { it.name == v }?.let { thinkTime = it } }
-                settings["hints"]?.let { showHints = it == "1" }
+                settings["style"]?.let { v -> PlayStyle.entries.firstOrNull { it.name == v && it != PlayStyle.PEEKED }?.let { nextStyle = it } }
+                settings["tags"]?.let { v -> tags = v.split(TAG_SEP).filter { it.isNotBlank() } }
                 settings["why"]?.let { whyOpen = it == "1" }
                 quizStats = QuizStats(
                     settings["quizAnswered"]?.toIntOrNull() ?: 0,
@@ -263,7 +292,8 @@ class AppController(
         val values = mapOf(
             "objective" to objective.name,
             "think" to thinkTime.name,
-            "hints" to if (showHints) "1" else "0",
+            "style" to nextStyle.name,
+            "tags" to tags.joinToString(TAG_SEP),
             "why" to if (whyOpen) "1" else "0",
             "quizAnswered" to quizStats.answered.toString(),
             "quizCorrect" to quizStats.correct.toString(),
@@ -274,7 +304,10 @@ class AppController(
 
     // ---- derived -----------------------------------------------------------------------------
 
-    /** Advice for the dice on the table, if it is my decision and the plan is ready. */
+    /**
+     * Advice for the dice on the table, if it is my decision and the plan is ready. Computed in
+     * every game (for the record and the review); [shownAdvice] is what the player may see.
+     */
     val advice: Advice?
         get() {
             val s = state ?: return null
@@ -285,8 +318,17 @@ class AppController(
 
     private val currentPlan: PlannedTurn? get() = plan?.takeIf { it.me == state?.me }
 
+    /** AI information is hidden while playing alone, until the game is over. */
+    val hintsHidden: Boolean get() = state?.hintsShown == false
+
+    /** The advice when it may be shown. */
+    val shownAdvice: Advice? get() = if (hintsHidden) null else advice
+
     /** P(win) or expected final score before my next throw. */
     val turnValue: Double? get() = currentPlan?.startValue
+
+    /** Win/draw/loss right now in my turn (WIN mode), from the dice on the table when thrown. */
+    val outlook: Outlook? get() = advice?.outlook ?: currentPlan?.startOutlook
 
     /** Turns searched exactly by the current plan, and whether that reaches the end of the game. */
     val searchDepth: Int get() = currentPlan?.depth ?: 0
@@ -298,9 +340,6 @@ class AppController(
         }
 
     // ---- explanations ------------------------------------------------------------------------
-
-    /** AI information is hidden while playing against the AI with hints off. */
-    val hintsHidden: Boolean get() = state?.source == DiceSource.RANDOM && !showHints
 
     private val explainCache = object : LinkedHashMap<Any, Any>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, Any>?) = size > 64
@@ -366,7 +405,7 @@ class AppController(
             val s = state ?: return null
             val last = s.moves.lastOrNull() ?: return null
             if (last.side != Side.OPP) return null
-            val before = s.moves.dropLast(1).lastOrNull { it.side == Side.ME }?.winAfter
+            val before = last.winBefore ?: s.moves.dropLast(1).lastOrNull { it.side == Side.ME }?.winAfter
             return cached(listOf("opponent", s.moves.size, last, before)) { e.opponentMove(s.opp, last, before) }
         }
 
@@ -374,6 +413,47 @@ class AppController(
         val e = explainer ?: return null
         return cached(listOf("summary", g.createdAt, g.moves.size, g.decisions.size)) { e.gameSummary(g) }
     }
+
+    /** How lucky the game was for both sides (review). */
+    fun luck(g: GameState): LuckReport? {
+        val t = tables ?: return null
+        if (!g.isOver) return null
+        return cached(listOf("luck", g.createdAt, g.moves.size, g.decisions.size)) { LuckAnalysis(t).of(g) }
+    }
+
+    /** Starts computing "추천대로 뒀다면?" for [d] (review); the result lands in [whatIfs]. */
+    fun loadWhatIf(d: DecisionRecord) {
+        val adv = advisor ?: return
+        val t = tables ?: return
+        val me = d.me ?: return
+        val opp = d.opp ?: return
+        if (d in whatIfs || d in whatIfBusy) return
+        whatIfBusy = whatIfBusy + d
+        scope.launch {
+            try {
+                val w = withContext(Dispatchers.Default) {
+                    runCatching {
+                        val turn = adv.planTurn(me, opp, d.mode, budgetOps = REVIEW_BUDGET)
+                        WhatIfAnalysis(t).of(turn, d)
+                    }.getOrNull()
+                }
+                if (w != null) whatIfs = whatIfs + (d to w)
+            } finally {
+                whatIfBusy = whatIfBusy - d
+            }
+        }
+    }
+
+    /**
+     * The opponent's last turn, at the start of mine: what it scored, how that moved my P(win),
+     * and (vs AI) why the AI played so.
+     */
+    val lastOpponentMove: MoveRecord?
+        get() {
+            val s = state ?: return null
+            if (s.toMove != Side.ME || s.draft.rollsDone != 0) return null
+            return s.moves.lastOrNull()?.takeIf { it.side == Side.OPP }
+        }
 
     /** Patterns in my recent mistakes (finished games). */
     val habits: HabitReport?
@@ -423,15 +503,30 @@ class AppController(
         saveSettings()
     }
 
-    fun toggleHints() {
-        showHints = !showHints
+    fun changeStyle(style: PlayStyle) {
+        nextStyle = style
         saveSettings()
+    }
+
+    /** Playing alone: look at the AI's advice anyway; the game then counts as assisted. */
+    fun peek() {
+        val s = state ?: return
+        if (s.style != PlayStyle.SOLO) return
+        state = Game.peek(s)
+        onStateChanged()
+        if (state?.draft?.deciding == true && state?.draft?.held?.none { it } == true) autoHold()
     }
 
     // ---- game actions ------------------------------------------------------------------------
 
-    fun newGame(source: DiceSource, first: Side) {
+    /** [opponent]: optional tag for real games ("친구 A"); the style is [nextStyle]. */
+    fun newGame(source: DiceSource, first: Side, opponent: String? = null) {
         val t = tables ?: return
+        val tag = opponent?.trim()?.ifEmpty { null }
+        if (tag != null) {
+            tags = (listOf(tag) + tags.filter { it != tag }).take(MAX_TAGS)
+            saveSettings()
+        }
         undoStack.clear()
         canUndo = false
         aiJob?.cancel()
@@ -439,7 +534,9 @@ class AppController(
         lastNote = null
         stopDuel()
         duelTable = null
-        state = GameState.new(source, first, t.rules)
+        oppOutlook = null
+        outlookKey = null
+        state = GameState.new(source, first, t.rules, nextStyle, if (source == DiceSource.MANUAL) tag else null)
         screen = Screen.GAME
         onStateChanged()
     }
@@ -462,8 +559,9 @@ class AppController(
     fun reroll() {
         val note = keepNote()
         val before = state
-        act { Game.reroll(it, advice, rng, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }) }
-        if (state !== before) lastNote = note?.full
+        val v = state?.let { valueBeforeThrow(it) }
+        act { Game.reroll(it, advice, rng, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }, v) }
+        if (state !== before) lastNote = note?.full?.takeIf { !hintsHidden }
     }
 
     fun firstThrow() = act { Game.firstThrow(it, rng) }
@@ -471,13 +569,33 @@ class AppController(
     fun score(c: Category) {
         val note = scoreNote(c)
         val before = state
-        act { Game.score(it, c, advice, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }) }
-        if (state !== before) lastNote = note?.full
+        val v = state?.let { valueBeforeThrow(it) }
+        act { Game.score(it, c, advice, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }, v) }
+        if (state !== before) lastNote = note?.full?.takeIf { !hintsHidden }
     }
+
+    /**
+     * Value of my position just before the throw now on the table, from the current plan: the
+     * turn's start, or the dice held at my previous decision of this turn.
+     */
+    private fun valueBeforeThrow(s: GameState): Double? {
+        val p = currentPlan ?: return null
+        val d = s.draft
+        if (!d.deciding) return null
+        if (d.rollsDone == 1) return p.startValue
+        val prev = s.decisions.lastOrNull()?.takeIf { it.turn == s.myTurnNumber && it.rollsDone == d.rollsDone - 1 } ?: return null
+        val held = prev.chosenHeld ?: return null
+        return runCatching { p.keepValue(d.rollsDone - 1, held) }.getOrNull()
+    }
+
+    /** My P(win) before the opponent's turn now on the table, when known. */
+    private fun winBeforeOpponent(s: GameState): Double? =
+        oppOutlook?.takeIf { outlookKey == (s.me to s.opp) }?.now
+            ?: s.moves.lastOrNull()?.takeIf { it.side == Side.ME }?.winAfter
 
     fun opponentScore(c: Category, points: Int) {
         lastNote = null
-        act { Game.opponentScore(it, c, points) }
+        act { Game.opponentScore(it, c, points, winBefore = winBeforeOpponent(it)) }
     }
 
     fun undo() {
@@ -530,7 +648,10 @@ class AppController(
         if (table != null && !table.contains(s.me, s.opp)) duelTable = null
         when (s.toMove) {
             Side.ME -> ensurePlan(s)
-            Side.OPP -> if (s.source == DiceSource.RANDOM) runAi(s)
+            Side.OPP -> {
+                ensureOutlook(s)
+                if (s.source == DiceSource.RANDOM) runAi(s)
+            }
         }
         maybeStartDuel(s)
     }
@@ -568,7 +689,7 @@ class AppController(
         duelJob = scope.launch {
             try {
                 val table = withContext(Dispatchers.Default) {
-                    adv.buildDuelTable(s.me, s.opp, meToMove, background, stop)
+                    adv.buildDuelTable(s.me, s.opp, meToMove, background, stop, ties = true)
                 }
                 if (stop.get()) return@launch
                 duelTable = table
@@ -592,7 +713,7 @@ class AppController(
     /** After a throw, pre-select the recommended dice so "throw again" follows the advice. */
     private fun autoHold() {
         val s = state ?: return
-        if (s.source == DiceSource.RANDOM && !showHints) return
+        if (!s.hintsShown) return
         val a = advice ?: return
         val keep = a.bestKeep ?: return
         if (a.shouldStop) return
@@ -615,7 +736,7 @@ class AppController(
                     if (objective == Mode.WIN) {
                         val t0 = System.nanoTime()
                         val table = duelTable
-                        val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table, allowDuel = !duelBuilding) { p ->
+                        val p = adv.planTurnAnytime(s.me, s.opp, deadline, table = table, allowDuel = !duelBuilding, ties = true) { p ->
                             scope.launch { publish(key, p) }
                         }
                         if (!p.duel || table == null) calibrate(s.me, s.opp, p.depth, System.nanoTime() - t0)
@@ -660,10 +781,10 @@ class AppController(
             aiThinking = true
             try {
                 delay(350)
-                val (c, points, log) = withContext(Dispatchers.Default) { aiTurn(adv, s) }
+                val move = withContext(Dispatchers.Default) { aiTurn(adv, s) }
                 if (state == s) {
                     lastNote = null
-                    state = Game.opponentScore(s, c, points, log)
+                    state = Game.opponentScore(s, move.category, move.points, aiLog(s, move), winBeforeOpponent(s), move)
                     onStateChanged()
                 }
             } finally {
@@ -672,23 +793,59 @@ class AppController(
         }
     }
 
-    private fun aiTurn(adv: Advisor, s: GameState): Triple<Category, Int, String> {
+    /** The AI plays its turn: every throw, the dice it held, its box, and why (from its own plan). */
+    private fun aiTurn(adv: Advisor, s: GameState): MoveRecord {
         val deadline = System.nanoTime() + (thinkTime.seconds * 1e9).toLong()
         val turn = adv.planTurnAnytime(s.opp, s.me, deadline)
         val throws = ArrayList<List<Int>>()
+        val held = ArrayList<List<Int>>()
         var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
         throws += Dice.rollFaces(r)
         for (rollsDone in 1..2) {
             val k = turn.bestKeep(rollsDone, r)
             if (k == Dice.rollAsKeep[r]) break
+            held += Dice.keepFaces(k)
             r = Match.throwDice(rng, k)
             throws += Dice.rollFaces(r)
         }
         val c = turn.bestCategory(r)
         val points = adv.tables.scores[r, c.ordinal]
-        val text = "턴 ${s.opp.filledCount + 1}: " + throws.joinToString(" → ") { it.joinToString("") } +
-            " ⇒ ${Game.scoreText(c, points)}"
-        return Triple(c, points, text)
+        val why = explainer?.let { e -> runCatching { e.aiTurn(turn, s.me, throws, held, c) }.getOrNull() }
+        return MoveRecord(Side.OPP, c, points, throws = throws, held = held, why = why)
+    }
+
+    private fun aiLog(s: GameState, m: MoveRecord): String =
+        "턴 ${s.opp.filledCount + 1}: " + m.throws.orEmpty().joinToString(" → ") { it.joinToString("") } +
+            " ⇒ ${Game.scoreText(m.category, m.points)}"
+
+    /**
+     * Before the opponent's turn (WIN mode): my P(win) now and after each result it may get.
+     * Computed even when playing alone, for the review.
+     */
+    private fun ensureOutlook(s: GameState) {
+        val key = s.me to s.opp
+        if (outlookKey == key) return
+        outlookKey = key
+        oppOutlook = null
+        outlookJob?.cancel()
+        val adv = advisor ?: return
+        val t = tables ?: return
+        if (objective != Mode.WIN || s.opp.isComplete || t.dist == null) return
+        val lastMine = s.moves.lastOrNull()?.takeIf { it.side == Side.ME }?.winAfter
+        val table = duelTable
+        outlookJob = scope.launch {
+            val o = withContext(Dispatchers.Default) {
+                runCatching {
+                    val analysis = OutlookAnalysis(t)
+                    val now = table?.valueAt(s.me, s.opp)?.first ?: lastMine ?: when {
+                        s.me.isComplete -> analysis.quick(s.me, s.opp)
+                        else -> adv.planTurn(s.me, s.opp, Mode.WIN, depth = 1).startValue
+                    }
+                    analysis.opponentTurn(s.me, s.opp, now, table?.let { tb -> { o: Board -> tb.valueAt(s.me, o)?.first } })
+                }.getOrNull()
+            }
+            if (outlookKey == key) oppOutlook = o
+        }
     }
 
     // ---- practice quiz -------------------------------------------------------------------------
@@ -883,6 +1040,12 @@ class AppController(
     companion object {
         /** Search budget of the win AI in verification games (deterministic, a few hundred ms per turn). */
         const val VERIFY_BUDGET = 100_000_000L
+
+        /** Search budget for replaying a decision in the review (under a second on a phone). */
+        const val REVIEW_BUDGET = 100_000_000L
+
+        private const val TAG_SEP = "\u001f"
+        private const val MAX_TAGS = 8
 
         /**
          * Longest background computation allowed for the exact duel table (once per game). Kept

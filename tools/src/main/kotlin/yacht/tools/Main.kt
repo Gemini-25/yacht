@@ -42,7 +42,7 @@ fun main(args: Array<String>) {
         "calib" -> calib(opts)
         "versus" -> versus(opts)
         "quiz" -> quizSamples(opts)
-        "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"])
+        "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"], opts["ties"] != null)
         else -> println(
             """
             usage:
@@ -160,7 +160,8 @@ private fun sim(opts: Map<String, String>) {
     println("  mean score $a %.2f, $b %.2f".format(scoreSum[0].toDouble() / games, scoreSum[1].toDouble() / games))
 }
 
-private fun bench(dir: File, budget: Long, only: String?) {
+/** --ties: time the searches with P(tie) tracking as well (and their table sizes). */
+private fun bench(dir: File, budget: Long, only: String?, ties: Boolean) {
     val tables = loadTables(dir)
     val rng = Random(3)
     val advisor = Advisor(tables)
@@ -170,6 +171,7 @@ private fun bench(dir: File, budget: Long, only: String?) {
         var worst = 0.0
         var sum = 0.0
         var worstPar = 0.0
+        var worstTies = 0.0
         val depths = HashMap<Int, Int>()
         val samples = 6
         repeat(samples) {
@@ -183,17 +185,25 @@ private fun bench(dir: File, budget: Long, only: String?) {
             t = System.nanoTime()
             parallel.planTurn(me, opp, depth = d)
             val msPar = (System.nanoTime() - t) / 1e6
+            if (ties) {
+                t = System.nanoTime()
+                parallel.planTurn(me, opp, depth = d, ties = true)
+                worstTies = maxOf(worstTies, (System.nanoTime() - t) / 1e6)
+            }
             worst = maxOf(worst, ms)
             worstPar = maxOf(worstPar, msPar)
             sum += ms
         }
-        println("filled=%2d depth=%s  avg %.0f ms, worst %.0f ms (1 thread), worst %.0f ms (pool)".format(filled, depths, sum / samples, worst, worstPar))
+        println("filled=%2d depth=%s  avg %.0f ms, worst %.0f ms (1 thread), worst %.0f ms (pool)".format(filled, depths, sum / samples, worst, worstPar) +
+            if (ties) ", worst %.0f ms (pool, ties)".format(worstTies) else "")
     }
     for (filled in if (only == "search") emptyList() else (11 downTo 6).toList()) {
         var worst = 0.0
         var sum = 0.0
         var est = 0L
         var mem = 0L
+        var worstTies = 0.0
+        var memTies = 0L
         val samples = 4
         repeat(samples) {
             val me = randomBoard(tables, rng, filled)
@@ -203,10 +213,17 @@ private fun bench(dir: File, budget: Long, only: String?) {
             val table = parallel.buildDuelTable(me, opp, meToMove = true)
             val ms = (System.nanoTime() - t) / 1e6
             mem = maxOf(mem, table.bytes)
+            if (ties) {
+                val t2 = System.nanoTime()
+                val traced = parallel.buildDuelTable(me, opp, meToMove = true, ties = true)
+                worstTies = maxOf(worstTies, (System.nanoTime() - t2) / 1e6)
+                memTies = maxOf(memTies, traced.bytes)
+            }
             worst = maxOf(worst, ms)
             sum += ms
         }
-        println("duel filled=%2d avg %.0f ms, worst %.0f ms (pool), max estimate %.2e ops, max table %.1f MB".format(filled, sum / samples, worst, est.toDouble(), mem / 1e6))
+        println("duel filled=%2d avg %.0f ms, worst %.0f ms (pool), max estimate %.2e ops, max table %.1f MB".format(filled, sum / samples, worst, est.toDouble(), mem / 1e6) +
+            if (ties) ", ties: worst %.0f ms, %.1f MB".format(worstTies, memTies / 1e6) else "")
     }
     pool.shutdown()
 }

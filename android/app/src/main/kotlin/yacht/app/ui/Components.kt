@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.engine.Mode
+import yacht.engine.Outlook
 
 // ---- formatting ------------------------------------------------------------------------------
 
@@ -143,6 +144,40 @@ fun WinBar(p: Double, modifier: Modifier = Modifier, height: Dp = 10.dp) {
     Canvas(modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(50))) {
         drawRect(opp.copy(alpha = 0.55f))
         drawRect(me, size = size.copy(width = size.width * frac))
+        drawLine(Color.White, Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), strokeWidth = 2f)
+    }
+}
+
+/** Win, draw and loss in tenths of a percent that add up to 100.0% after rounding. */
+fun wdlParts(o: Outlook): Triple<String, String, String> {
+    val w = Math.round(o.win * 1000).toInt().coerceIn(0, 1000)
+    val t = Math.round(o.tie * 1000).toInt().coerceIn(0, 1000 - w)
+    val l = 1000 - w - t
+    fun f(x: Int, exact: Double) = if (x == 0 && exact > 0.0) "<0.1%" else "${x / 10}.${x % 10}%"
+    return Triple(f(w, o.win), f(t, o.tie), f(l, o.loss))
+}
+
+fun wdlText(o: Outlook): String {
+    val (w, t, l) = wdlParts(o)
+    return "승 $w · 무 $t · 패 $l"
+}
+
+/** Win / draw / loss as one bar: mine from the left, the draw in grey, the opponent's to the right. */
+@Composable
+fun WdlBar(o: Outlook, modifier: Modifier = Modifier, height: Dp = 10.dp) {
+    val win by animateFloatAsState(o.win.coerceIn(0.0, 1.0).toFloat(), label = "win")
+    val tie by animateFloatAsState(o.tie.coerceIn(0.0, 1.0).toFloat(), label = "tie")
+    val me = gameColors.me
+    val opp = gameColors.opp
+    val draw = MaterialTheme.colorScheme.outline
+    Canvas(modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(50))) {
+        drawRect(opp.copy(alpha = 0.55f))
+        drawRect(me, size = size.copy(width = size.width * win))
+        if (tie > 0f) {
+            // At least a hairline, so a small chance of a draw stays visible.
+            val w = maxOf(size.width * tie, 2f)
+            drawRect(draw, topLeft = Offset(size.width * win, 0f), size = size.copy(width = w))
+        }
         drawLine(Color.White, Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), strokeWidth = 2f)
     }
 }

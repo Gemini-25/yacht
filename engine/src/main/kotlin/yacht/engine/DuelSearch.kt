@@ -88,6 +88,8 @@ class TurnOutcomes(val category: IntArray, val gain: IntArray, val u2: IntArray,
  * The root may be my turn or the opponent's ([meToMove]). The table covers every position
  * reachable from the root, so once built it answers all my remaining turns ([after]) without
  * searching again. Scores whose outcome is already certain are filled in closed form.
+ *
+ * With [ties] every position also stores P(tie) along the same decisions (exact, for display).
  */
 class DuelSearch(
     private val tables: Tables,
@@ -98,6 +100,7 @@ class DuelSearch(
     private val deadline: Long = Long.MAX_VALUE,
     private val stop: java.util.concurrent.atomic.AtomicBoolean? = null,
     val adversarial: Boolean = false,
+    val ties: Boolean = false,
 ) : AfterTurn {
     private val rules = me.rules
     private val cap = rules.bonusThreshold
@@ -122,6 +125,8 @@ class DuelSearch(
         val lo: Int, val width: Int,
         /** Win values stored in single precision: tables for 6 boxes stay in the tens of MB. */
         val values: FloatArray,
+        /** P(tie) in the same layout, when tracked. */
+        val tieValues: FloatArray?,
     ) {
         /** Offset of the diff row for these upper sums, or -1 if unreachable. */
         fun rowOrNull(mu: Int, ou: Int): Int {
@@ -183,6 +188,7 @@ class DuelSearch(
         synchronized(outcomes) { outcomes.getOrPut(om * 64 + u) { TurnOutcomes.of(tables, om, u) } }
 
     private fun terminal(diff: Int): Double = (if (diff > 0) 1.0 else 0.0) + WinCurve.SCORE_WEIGHT * diff
+    private fun terminalTie(diff: Int): Float = if (diff == 0) 1f else 0f
 
     /** Value with both cards and the score difference (both full = game over). */
     private fun valueOf(mm: Int, om: Int, mu: Int, ou: Int, diff: Int): Double {
@@ -191,10 +197,33 @@ class DuelSearch(
         return g.values[g.row(mu, ou) + (diff - g.lo).coerceIn(0, g.width - 1)].toDouble()
     }
 
+    private fun tieOf(mm: Int, om: Int, mu: Int, ou: Int, diff: Int): Double {
+        if (!ties) return Double.NaN
+        if (mm == Category.FULL_MASK && om == Category.FULL_MASK) return terminalTie(diff).toDouble()
+        val g = grids.getValue(key(mm, om))
+        return g.tieValues!![g.row(mu, ou) + (diff - g.lo).coerceIn(0, g.width - 1)].toDouble()
+    }
+
     /** Root plan (only when it is my turn at the root). */
     override fun value(c: Int, points: Int, bonus: Int, u2: Int): Double {
         check(meToMove)
         return valueOf(me.mask or (1 shl c), opp.mask, u2, opp.u, d0 + points + bonus)
+    }
+
+    override fun tie(c: Int, points: Int, bonus: Int, u2: Int): Double {
+        check(meToMove)
+        return tieOf(me.mask or (1 shl c), opp.mask, u2, opp.u, d0 + points + bonus)
+    }
+
+    /**
+     * (P(win), P(tie)) at a position of the table before its mover's turn: my value at ([myCard],
+     * [oppCard]) with [myCard] or [oppCard] about to move as in the table. Null when not covered;
+     * the tie is NaN without [ties]. P(win) includes the tiny points tie-break.
+     */
+    fun valueAt(myCard: Board, oppCard: Board): Pair<Double, Double>? {
+        if (!contains(myCard, oppCard) || (myCard == me && oppCard == opp)) return null
+        val diff = myCard.total - oppCard.total
+        return valueOf(myCard.mask, oppCard.mask, myCard.u, oppCard.u, diff) to tieOf(myCard.mask, oppCard.mask, myCard.u, oppCard.u, diff)
     }
 
     /**
@@ -221,8 +250,12 @@ class DuelSearch(
             val g = grids[key(mm, oppCard.mask)] ?: return null
             if (g.oppIdx != null && g.oppIdx.getOrElse(oppCard.u) { -1 } < 0) return null
         }
-        return AfterTurn { c, points, bonus, u2 ->
-            valueOf(myCard.mask or (1 shl c), oppCard.mask, u2, oppCard.u, diff + points + bonus)
+        return object : AfterTurn {
+            override fun value(c: Int, points: Int, bonus: Int, u2: Int) =
+                valueOf(myCard.mask or (1 shl c), oppCard.mask, u2, oppCard.u, diff + points + bonus)
+
+            override fun tie(c: Int, points: Int, bonus: Int, u2: Int) =
+                tieOf(myCard.mask or (1 shl c), oppCard.mask, u2, oppCard.u, diff + points + bonus)
         }
     }
 
@@ -237,7 +270,7 @@ class DuelSearch(
     }
 
     /** Approximate memory held by the table, in bytes. */
-    val bytes: Long get() = grids.values.sumOf { it.values.size.toLong() * 4 }
+    val bytes: Long get() = grids.values.sumOf { it.values.size.toLong() * if (it.tieValues != null) 8 else 4 }
 
     /** Most points still to come for a card once [m] is filled. */
     private fun remainingMax(m: Int, decided: Boolean): Int {
@@ -258,11 +291,12 @@ class DuelSearch(
         val width = WinSearch.gainMax(tables, me, myDecided, mm) + (d0 - lo) + 1
         val slices = myU.size * oppU.size
         val values = FloatArray(slices * width)
+        val tieValues = if (ties) FloatArray(slices * width) else null
         // Undecided differences: I can still be caught (diff <= opponent's best) and can still
-        // get ahead (diff + my best > 0). Everything else is closed form.
+        // draw level (diff + my best >= 0). Everything else is closed form, with P(tie) 0.
         val meBest = remainingMax(mm, myDecided)
         val oppBest = remainingMax(om, oppDecided)
-        val wLo = maxOf(0, -meBest + 1 - lo)
+        val wLo = maxOf(0, -meBest - lo)
         val wHi = minOf(width - 1, oppBest - lo)
         for (a in myU.indices) for (b in oppU.indices) {
             val future = ev[mm, myU[a]] - ev[om, oppU[b]]
@@ -275,83 +309,34 @@ class DuelSearch(
         }
         val wLen = wHi - wLo + 1
         if (wLen > 0) {
-            if (myTurn) myNode(mm, om, myU, oppU, lo, width, wLo, wLen, values, kernel)
-            else if (adversarial) oppMinNode(mm, om, myU, oppU, lo, width, wLo, wLen, values, kernel)
-            else oppNode(mm, om, myU, oppU, lo, width, wLo, wLen, values)
+            if (myTurn || adversarial) turnNode(mm, om, myTurn, myU, oppU, lo, width, wLo, wLen, values, tieValues, kernel)
+            else oppNode(mm, om, myU, oppU, lo, width, wLo, wLen, values, tieValues)
         }
-        return Grid(myU, myIdx, oppU, oppIdx, lo, width, values)
-    }
-
-    private fun myNode(
-        mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
-        wLo: Int, wLen: Int, values: FloatArray, kernel: BlockKernel,
-    ) {
-        val slices = myU.size * oppU.size
-        val open = (0 until Category.COUNT).filter { mm and (1 shl it) == 0 }
-        val children = open.map { c ->
-            val child = mm or (1 shl c)
-            if (child == Category.FULL_MASK && om == Category.FULL_MASK) null else grids.getValue(key(child, om))
-        }
-        val solved = DoubleArray(slices * wLen)
-        kernel.runBlocks(slices * wLen, solved) { start, len, e3 ->
-            for ((ci, c) in open.withIndex()) {
-                val g = children[ci]
-                for (r in 0 until Dice.ROLLS) {
-                    val pts = scores[r, c]
-                    val rb = r * len - start
-                    var k = start
-                    while (k < start + len) {
-                        val slice = k / wLen
-                        val rowEnd = minOf(start + len, (slice + 1) * wLen)
-                        val u = myU[slice / oppU.size]
-                        val ou = oppU[slice % oppU.size]
-                        var gain = pts
-                        var u2 = u
-                        if (c < 6 && !myDecided) {
-                            u2 = minOf(cap, u + pts)
-                            if (u < cap && u + pts >= cap) gain += rules.bonusPoints
-                        }
-                        // diff at context kk = lo + wLo + (kk - slice * wLen)
-                        val diffAtK = lo + wLo + (k - slice * wLen)
-                        if (g == null) {
-                            for (kk in k until rowEnd) {
-                                val v = terminal(diffAtK + (kk - k) + gain).toFloat()
-                                if (v > e3[rb + kk]) e3[rb + kk] = v
-                            }
-                        } else {
-                            val row = g.row(u2, ou)
-                            val top = g.width - 1
-                            val vals = g.values
-                            val off = diffAtK + gain - g.lo - k
-                            for (kk in k until rowEnd) {
-                                val v = vals[row + (kk + off).coerceIn(0, top)]
-                                if (v > e3[rb + kk]) e3[rb + kk] = v
-                            }
-                        }
-                        k = rowEnd
-                    }
-                }
-            }
-        }
-        for (slice in 0 until slices) for (i in 0 until wLen) values[slice * width + wLo + i] = solved[slice * wLen + i].toFloat()
+        return Grid(myU, myIdx, oppU, oppIdx, lo, width, values, tieValues)
     }
 
     /**
-     * The opponent's turn played to minimise my value: the same turn search as mine on negated
-     * values (keeps and box chosen against me, with its own upper bonus).
+     * A searched turn: mine, or the opponent's when it plays to minimise my value ([adversarial]),
+     * which is the same turn search on negated values (keeps and box chosen against me, with its
+     * own upper bonus). P(tie) follows the chosen moves.
      */
-    private fun oppMinNode(
-        mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
-        wLo: Int, wLen: Int, values: FloatArray, kernel: BlockKernel,
+    private fun turnNode(
+        mm: Int, om: Int, myTurn: Boolean, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
+        wLo: Int, wLen: Int, values: FloatArray, tieValues: FloatArray?, kernel: BlockKernel,
     ) {
         val slices = myU.size * oppU.size
-        val open = (0 until Category.COUNT).filter { om and (1 shl it) == 0 }
+        val mover = if (myTurn) mm else om
+        val decided = if (myTurn) myDecided else oppDecided
+        val sign = if (myTurn) 1 else -1
+        val open = (0 until Category.COUNT).filter { mover and (1 shl it) == 0 }
         val children = open.map { c ->
-            val child = om or (1 shl c)
-            if (child == Category.FULL_MASK && mm == Category.FULL_MASK) null else grids.getValue(key(mm, child))
+            val child = mover or (1 shl c)
+            val (cm, co) = if (myTurn) child to om else mm to child
+            if (cm == Category.FULL_MASK && co == Category.FULL_MASK) null else grids.getValue(key(cm, co))
         }
         val solved = DoubleArray(slices * wLen)
-        kernel.runBlocks(slices * wLen, solved) { start, len, e3 ->
+        val solvedTies = if (tieValues != null) DoubleArray(slices * wLen) else null
+        val fill = { start: Int, len: Int, e3: FloatArray, t3: FloatArray? ->
             for ((ci, c) in open.withIndex()) {
                 val g = children[ci]
                 for (r in 0 until Dice.ROLLS) {
@@ -361,28 +346,53 @@ class DuelSearch(
                     while (k < start + len) {
                         val slice = k / wLen
                         val rowEnd = minOf(start + len, (slice + 1) * wLen)
-                        val u = myU[slice / oppU.size]
-                        val ou = oppU[slice % oppU.size]
+                        var u = myU[slice / oppU.size]
+                        var ou = oppU[slice % oppU.size]
+                        val mu0 = if (myTurn) u else ou
                         var gain = pts
-                        var ou2 = ou
-                        if (c < 6 && !oppDecided) {
-                            ou2 = minOf(cap, ou + pts)
-                            if (ou < cap && ou + pts >= cap) gain += rules.bonusPoints
+                        if (c < 6 && !decided) {
+                            val mu2 = minOf(cap, mu0 + pts)
+                            if (mu0 < cap && mu0 + pts >= cap) gain += rules.bonusPoints
+                            if (myTurn) u = mu2 else ou = mu2
                         }
-                        val diffAtK = lo + wLo + (k - slice * wLen)
+                        // diff at context kk = lo + wLo + (kk - slice * wLen)
+                        val diffAtK = lo + wLo + (k - slice * wLen) + sign * gain
                         if (g == null) {
                             for (kk in k until rowEnd) {
-                                val v = (-terminal(diffAtK + (kk - k) - gain)).toFloat()
-                                if (v > e3[rb + kk]) e3[rb + kk] = v
+                                val d = diffAtK + (kk - k)
+                                val v = (sign * terminal(d)).toFloat()
+                                if (v > e3[rb + kk]) {
+                                    e3[rb + kk] = v
+                                    if (t3 != null) t3[rb + kk] = terminalTie(d)
+                                }
                             }
                         } else {
-                            val row = g.row(u, ou2)
+                            val row = g.row(u, ou)
                             val top = g.width - 1
                             val vals = g.values
-                            val off = diffAtK - gain - g.lo - k
-                            for (kk in k until rowEnd) {
-                                val v = -vals[row + (kk + off).coerceIn(0, top)]
-                                if (v > e3[rb + kk]) e3[rb + kk] = v
+                            val off = diffAtK - g.lo - k
+                            if (t3 == null) {
+                                if (myTurn) {
+                                    for (kk in k until rowEnd) {
+                                        val v = vals[row + (kk + off).coerceIn(0, top)]
+                                        if (v > e3[rb + kk]) e3[rb + kk] = v
+                                    }
+                                } else {
+                                    for (kk in k until rowEnd) {
+                                        val v = -vals[row + (kk + off).coerceIn(0, top)]
+                                        if (v > e3[rb + kk]) e3[rb + kk] = v
+                                    }
+                                }
+                            } else {
+                                val tv = g.tieValues!!
+                                for (kk in k until rowEnd) {
+                                    val at = row + (kk + off).coerceIn(0, top)
+                                    val v = sign * vals[at]
+                                    if (v > e3[rb + kk]) {
+                                        e3[rb + kk] = v
+                                        t3[rb + kk] = tv[at]
+                                    }
+                                }
                             }
                         }
                         k = rowEnd
@@ -390,17 +400,24 @@ class DuelSearch(
                 }
             }
         }
-        for (slice in 0 until slices) for (i in 0 until wLen) values[slice * width + wLo + i] = (-solved[slice * wLen + i]).toFloat()
+        if (solvedTies == null) kernel.runBlocks(slices * wLen, solved) { start, len, e3 -> fill(start, len, e3, null) }
+        else kernel.runBlocksWithTies(slices * wLen, solved, solvedTies) { start, len, e3, t3 -> fill(start, len, e3, t3) }
+        for (slice in 0 until slices) for (i in 0 until wLen) {
+            values[slice * width + wLo + i] = (sign * solved[slice * wLen + i]).toFloat()
+            if (tieValues != null) tieValues[slice * width + wLo + i] = solvedTies!![slice * wLen + i].toFloat()
+        }
     }
 
     private fun oppNode(
         mm: Int, om: Int, myU: IntArray, oppU: IntArray, lo: Int, width: Int,
-        wLo: Int, wLen: Int, values: FloatArray,
+        wLo: Int, wLen: Int, values: FloatArray, tieValues: FloatArray?,
     ) {
         val acc = DoubleArray(myU.size * wLen)
+        val tieAcc = if (tieValues != null) DoubleArray(myU.size * wLen) else null
         for (b in oppU.indices) {
             val oc = outcomeOf(om, oppU[b])
             java.util.Arrays.fill(acc, 0.0)
+            if (tieAcc != null) java.util.Arrays.fill(tieAcc, 0.0)
             for (k in 0 until oc.size) {
                 val p = oc.prob[k]
                 val gain = oc.gain[k]
@@ -411,18 +428,24 @@ class DuelSearch(
                     val diff0 = lo + wLo - gain
                     if (g == null) {
                         for (i in 0 until wLen) acc[base + i] += p * terminal(diff0 + i)
+                        if (tieAcc != null) for (i in 0 until wLen) tieAcc[base + i] += p * terminalTie(diff0 + i)
                     } else {
                         val row = g.row(myU[a], oc.u2[k])
                         val off = diff0 - g.lo
                         val top = g.width - 1
                         val vals = g.values
                         for (i in 0 until wLen) acc[base + i] += p * vals[row + (i + off).coerceIn(0, top)]
+                        if (tieAcc != null) {
+                            val tv = g.tieValues!!
+                            for (i in 0 until wLen) tieAcc[base + i] += p * tv[row + (i + off).coerceIn(0, top)]
+                        }
                     }
                 }
             }
             for (a in myU.indices) {
                 val base = (a * oppU.size + b) * width + wLo
                 for (i in 0 until wLen) values[base + i] = acc[a * wLen + i].toFloat()
+                if (tieAcc != null) for (i in 0 until wLen) tieValues!![base + i] = tieAcc[a * wLen + i].toFloat()
             }
         }
     }
@@ -474,7 +497,7 @@ class DuelSearch(
                         val oi = info(oppInfo, opp, oppDecided, om)
                         val lo = d0 - oi.gain
                         val hi = d0 + mi.gain
-                        val w = (minOf(hi, oi.rest) - maxOf(lo, -mi.rest + 1) + 1).coerceAtLeast(0)
+                        val w = (minOf(hi, oi.rest) - maxOf(lo, -mi.rest) + 1).coerceAtLeast(0)
                         ops += mi.rows.toLong() * oi.rows * w * when {
                             myTurn -> KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(mm))
                             adversarial -> KERNEL_OPS + 252L * (Category.COUNT - Integer.bitCount(om))

@@ -7,9 +7,13 @@
 
 ## 앱이 하는 일
 - **실전 도우미**: 스위치에서 나온 주사위와 상대 점수를 입력하면, 고정할 주사위와 기록할 칸을 승률 기준으로 추천한다.
+- **진행 방식**: "AI 추천 받기" 또는 "혼자 두고 복기"(게임 중에는 아무것도 안 보여 주고 끝나면 바로 복기). 통계도 따로 모은다.
+- **승·무·패 확률**: 승률과 같은 정책으로 무승부 확률까지 정확히 계산해 막대로 보여 준다.
+- **상대 턴 설명**: 상대 결과에 따라 내 승률이 어떻게 움직일지(요트가 나오면 등), AI 대전에서는 AI가 왜 그렇게 뒀는지.
 - **AI와 대전**: 앱이 주사위를 굴리고 승률 최대화 AI와 겨룬다.
 - **설명**: 왜 그 수가 좋은지, 다른 선택지는 왜 못한지, 지금 상황이 어떤지, 상대 턴이 내 승률에 어떤 영향을 줬는지를 자연스러운 한국어로 알려 준다. 문장 속 숫자는 모두 엔진이 계산한 값이다.
-- **기록·복기**: 실전 승률과 95% 신뢰구간, AI 예측 승률이 실제와 맞는지(보정), 판마다 추천과 다르게 둔 수와 그 이유, 게임 총평을 보여 준다.
+- **기록·복기**: 실전/AI 대전 × 추천/혼자, 상대별 승률과 95% 신뢰구간, AI 예측 승률이 실제와 맞는지(보정), 판마다 추천과 다르게 둔 수와 그 이유, 게임 총평을 보여 준다.
+- **운 분석**: 나와 상대의 주사위 운(점수, 100판 중 몇 번째 수준), 승률 변화를 내 운·내 선택·상대 결과로 나눈 값, 턴별 그래프, 결정적인 순간 3개. 실수를 누르면 "추천대로 뒀다면?" 결과 분포를 보여 준다.
 - **습관 분석**: 최근 30판의 실수를 유형별(너무 일찍 멈춤, 초이스를 일찍 씀, 불리할 때 너무 안전하게 둠 등)로 묶어 잃은 승률 순으로 보여 주고, 그 국면을 다시 풀게 한다.
 - **연습 퀴즈**: 직관과 정답이 다른 국면만 골라 출제하고, 답하면 승률 손해와 해설을 보여 준다.
 - **승률 검증**: 같은 주사위로 승률 AI와 기대점수 AI를 휴대폰에서 직접 겨뤄 차이를 측정한다.
@@ -28,7 +32,7 @@
 ./gradlew :tools:installDist
 tools/build/install/tools/bin/tools gen --out tables     # 계산 표 생성 (약 5초)
 tools/build/install/tools/bin/tools duel --tables tables --games 2000 --players ev,win,duel-4e9   # 같은 주사위 비교
-tools/build/install/tools/bin/tools bench --tables tables [--only search|duel]                    # 계산 시간
+tools/build/install/tools/bin/tools bench --tables tables [--only search|duel] [--ties 1]         # 계산 시간 (무승부 추적 포함 비교)
 tools/build/install/tools/bin/tools explain --tables tables --games 2                             # 샘플 게임의 설명 문장 전부 출력
 tools/build/install/tools/bin/tools quiz --tables tables --n 6                                    # 퀴즈 문제 샘플과 통과율
 tools/build/install/tools/bin/tools headroom --tables tables --games 100 --strong 3e9,1e10        # 더 깊은 탐색이 더해 줄 승률 추정

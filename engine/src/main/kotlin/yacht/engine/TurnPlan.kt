@@ -3,6 +3,9 @@ package yacht.engine
 /** Value of ending the turn by writing [points] (plus [bonus]) into category [c], reaching capped upper sum [u2]. */
 fun interface AfterTurn {
     fun value(c: Int, points: Int, bonus: Int, u2: Int): Double
+
+    /** P(tie) from there with the plan behind [value], or NaN when not tracked. */
+    fun tie(c: Int, points: Int, bonus: Int, u2: Int): Double = Double.NaN
 }
 
 /** Max-expectation continuation: points now plus expected remaining points. */
@@ -46,15 +49,62 @@ class TurnPlan(val board: Board, private val after: AfterTurn) {
 
     fun points(r: Int, c: Int): Int = scores[r, c]
 
-    fun categoryValue(r: Int, c: Int): Double {
+    fun categoryValue(r: Int, c: Int): Double = afterCategory(r, c, after::value)
+
+    /** P(tie) after writing roll [r] into [c] and following the plan; NaN when not tracked. */
+    fun categoryTie(r: Int, c: Int): Double = afterCategory(r, c, after::tie)
+
+    private inline fun afterCategory(r: Int, c: Int, f: (Int, Int, Int, Int) -> Double): Double {
         val s = scores[r, c]
         val u = board.u
         if (c < 6) {
             val cap = rules.bonusThreshold
             val bonus = if (u < cap && u + s >= cap) rules.bonusPoints else 0
-            return after.value(c, s, bonus, minOf(cap, u + s))
+            return f(c, s, bonus, minOf(cap, u + s))
         }
-        return after.value(c, s, 0, u)
+        return f(c, s, 0, u)
+    }
+
+    /**
+     * P(tie) along this plan's own decisions (policy evaluation, no maximising): per final roll
+     * after the 3rd/2nd/1st throw, and per keep before the 3rd/2nd. Null when not tracked.
+     */
+    private class Ties(val t3: DoubleArray, val k2: DoubleArray, val t2: DoubleArray, val k1: DoubleArray, val t1: DoubleArray, val start: Double)
+
+    private val ties: Ties? by lazy {
+        val t3 = DoubleArray(Dice.ROLLS) { categoryTie(it, bestCat[it]) }
+        if (t3.any { it.isNaN() }) return@lazy null
+        val k2 = TurnKernel.expectOne(t3)
+        val t2 = DoubleArray(Dice.ROLLS) { k2[bestKeep(2, it)] }
+        val k1 = TurnKernel.expectOne(t2)
+        val t1 = DoubleArray(Dice.ROLLS) { k1[bestKeep(1, it)] }
+        var start = 0.0
+        for (r in 0 until Dice.ROLLS) start += Dice.firstRoll[r] * t1[r]
+        Ties(t3, k2, t2, k1, t1, start)
+    }
+
+    /** P(tie) before the first throw; NaN when the valuation does not track ties. */
+    val startTie: Double get() = ties?.start ?: Double.NaN
+
+    /** P(tie) of holding [keep] after [rollsDone] throws and following the plan. */
+    fun keepTie(rollsDone: Int, keep: Int): Double {
+        val t = ties ?: return Double.NaN
+        return when (rollsDone) {
+            1 -> t.k1[keep]
+            2 -> t.k2[keep]
+            else -> error("no keep decision after roll $rollsDone")
+        }
+    }
+
+    /** P(tie) of having roll [r] after [rollsDone] throws and following the plan. */
+    fun rollTie(rollsDone: Int, r: Int): Double {
+        val t = ties ?: return Double.NaN
+        return when (rollsDone) {
+            1 -> t.t1[r]
+            2 -> t.t2[r]
+            3 -> t.t3[r]
+            else -> error("bad roll number $rollsDone")
+        }
     }
 
     fun bestCategory(r: Int): Category = Category.of(bestCat[r])
