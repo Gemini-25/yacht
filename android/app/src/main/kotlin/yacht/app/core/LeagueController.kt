@@ -437,8 +437,8 @@ class LeagueController(
         val l = ladder ?: return null
         val s = season
         if (s != null && s.finished) {
-            val summary = s.finish()
-            seasonNews = historyItem(summary)
+            val news = historyItem(s.finish())
+            scope.launch { seasonNews = news }
             saveSeasonAsync()
         }
         val newcomers = s?.newcomers?.filter { it !in busy && it in byKey }.orEmpty()
