@@ -18,6 +18,19 @@ import kotlin.test.assertTrue
 
 class LadderTest {
     @Test
+    fun aCutFileLosesOnlyItsLastLine() {
+        val text = java.io.File("../android/app/src/main/assets/league_seed.txt").readText()
+        val keys = text.lines().filter { it.startsWith("p ") }.map { it.split(' ')[1] }
+        val full = Ladder.decode(keys, text)
+        // Older versions saved in place: a kill left the file cut at a page boundary.
+        for (cut in listOf(4096, 65536, 100_000, text.length - 7)) {
+            val l = Ladder.decode(keys, text.substring(0, cut))
+            assertTrue(l.keys.count { (l.entry(it)?.games ?: 0) > 0 } > 0, "cut at $cut kept nothing")
+            if (cut > 100_000) assertEquals(full.rating("win"), l.rating("win"), 1.0)
+        }
+    }
+
+    @Test
     fun tiersFollowRatingAndRank() {
         assertEquals(TierName.CHALLENGER, Tier.of(1515.0, 1).name)
         assertEquals(TierName.GRANDMASTER, Tier.of(1515.0, 5).name)

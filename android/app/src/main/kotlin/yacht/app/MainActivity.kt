@@ -93,12 +93,6 @@ private fun loadTables(context: Context): Tables {
     return Tables(rules, TableIO.readEv(ev, rules), TableIO.readDist(dist, rules), bonus = bonus)
 }
 
-/** A file request waiting for the system picker. */
-private class PendingFiles {
-    var save: Pair<ByteArray, (Boolean) -> Unit>? = null
-    var open: ((ByteArray?, String?) -> Unit)? = null
-}
-
 /** A backup is a few MB at most: anything far bigger is the wrong file (and would not fit in memory). */
 private const val MAX_BACKUP_BYTES = 64L shl 20
 
@@ -121,28 +115,28 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            // Backups go through the system file picker; the request waits here for its answer.
-            val pending = remember { PendingFiles() }
+            // Backups go through the system file picker. Nothing waits in the composition for
+            // the answer (the activity can be recreated meanwhile): the backup is built when the
+            // place to save it arrives, and the result goes to the controller.
+            val c0 = vm.controller
             val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-                val p = pending.save
-                pending.save = null
-                // Cancelled: nothing to report.
-                if (p != null && uri != null) {
-                    // Off the main thread: the target can be a cloud folder.
-                    vm.viewModelScope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            runCatching { contentResolver.openOutputStream(uri)!!.use { it.write(p.first) } }.isSuccess
-                        }
-                        p.second(ok)
+                if (uri == null) return@rememberLauncherForActivityResult
+                vm.viewModelScope.launch {
+                    c0.backupNote = "백업 파일을 저장하는 중…"
+                    val ok = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val bytes = c0.backupBytes()
+                            contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }
+                        }.isSuccess
                     }
+                    c0.backupNote = if (ok) "백업 파일을 저장했어요." else "저장하지 못했어요."
                 }
             }
             val opener = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                val cb = pending.open
-                pending.open = null
-                if (cb == null || uri == null) return@rememberLauncherForActivityResult
+                if (uri == null) return@rememberLauncherForActivityResult
                 // Off the main thread: a file in Drive downloads while it is read.
                 vm.viewModelScope.launch {
+                    c0.backupNote = "불러오는 중…"
                     val read = withContext(Dispatchers.IO) {
                         runCatching {
                             contentResolver.openInputStream(uri)!!.use { input ->
@@ -160,24 +154,18 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    val bytes = read.getOrNull()
                     when {
-                        read.isFailure -> cb(null, "파일을 읽지 못했어요.")
-                        read.getOrNull() == null -> cb(null, "백업 파일이 아니에요(너무 커요).")
-                        else -> cb(read.getOrNull(), null)
+                        read.isFailure -> c0.backupNote = "파일을 읽지 못했어요."
+                        bytes == null -> c0.backupNote = "백업 파일이 아니에요(너무 커요)."
+                        else -> c0.restore(bytes) { c0.backupNote = it }
                     }
                 }
             }
             val port = remember(saver, opener) {
                 object : FilePort {
-                    override fun save(name: String, bytes: ByteArray, done: (Boolean) -> Unit) {
-                        pending.save = bytes to done
-                        saver.launch(name)
-                    }
-
-                    override fun open(got: (ByteArray?, String?) -> Unit) {
-                        pending.open = got
-                        opener.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
-                    }
+                    override fun save(name: String) = saver.launch(name)
+                    override fun open() = opener.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
                 }
             }
             YachtTheme(dark = isSystemInDarkTheme()) {

@@ -91,7 +91,6 @@ fun HomeScreen(c: AppController) {
     var seat by remember { mutableStateOf(Side.OPP) }
     var opponent by remember { mutableStateOf("") }
     var rankedAsk by remember { mutableStateOf(false) }
-    var backupNote by remember { mutableStateOf<String?>(null) }
     val files = LocalFilePort.current
     val cs = MaterialTheme.colorScheme
     Column(
@@ -246,28 +245,10 @@ fun HomeScreen(c: AppController) {
             color = cs.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                val f = files ?: return@OutlinedButton
-                backupNote = "백업 파일을 만드는 중…"
-                c.backup { name, bytes ->
-                    backupNote = null
-                    f.save(name, bytes) { ok -> backupNote = if (ok) "백업 파일을 저장했어요." else "저장하지 못했어요." }
-                }
-            }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("💾 백업 저장") }
-            OutlinedButton(onClick = {
-                val f = files ?: return@OutlinedButton
-                f.open { bytes, problem ->
-                    when {
-                        problem != null -> backupNote = problem
-                        bytes != null -> {
-                            backupNote = "불러오는 중…"
-                            c.restore(bytes) { backupNote = it }
-                        }
-                    }
-                }
-            }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("📂 불러오기") }
+            OutlinedButton(onClick = { files?.save(c.backupName()) }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("💾 백업 저장") }
+            OutlinedButton(onClick = { files?.open() }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("📂 불러오기") }
         }
-        backupNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.secondary) }
+        c.backupNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.secondary) }
 
         Text(
             "규칙: 상단 63점 이상 보너스 35 · 초이스/포카드/풀하우스 = 주사위 5개 합 (요트도 풀하우스 인정) · " +

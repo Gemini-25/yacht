@@ -299,6 +299,9 @@ class AppController(
         scope.launch(Dispatchers.IO) { storage.clearCrash() }
     }
 
+    /** Progress or result of the last backup or restore, for the home screen. */
+    var backupNote by mutableStateOf<String?>(null)
+
     /** My AI open in the builder; null builds a new one. */
     var editingAi by mutableStateOf<yacht.engine.league.CustomAiSpec?>(null)
 
@@ -358,6 +361,10 @@ class AppController(
                 advisor = Advisor(t, pool)
                 explainer = Explainer(t).also { quizEngine = Quiz(Advisor(t, pool), it) }
                 commentary = Commentary(t)
+                // The clone must be in the roster before the league is read, or its saved
+                // record is dropped as an unknown AI.
+                history = withContext(Dispatchers.IO) { readHistory() }
+                league.updateClone(CloneProfile.of(history))
                 league.attach(t)
                 tables = t
                 val settings = withContext(Dispatchers.IO) { storage.loadSettings() }
@@ -375,9 +382,7 @@ class AppController(
                 val saved = withContext(Dispatchers.IO) {
                     storage.loadCurrent()?.let { runCatching { GameCodec.decode(it, t.rules) }.getOrNull() }
                 }
-                history = withContext(Dispatchers.IO) { readHistory() }
                 lastCrash = withContext(Dispatchers.IO) { storage.loadCrash() }
-                league.updateClone(CloneProfile.of(history))
                 if (saved != null) {
                     state = saved
                     if (!saved.isOver) {
@@ -1272,17 +1277,17 @@ class AppController(
                 }
             }
         }
+        // The restored games may make (or change) the clone: it joins the roster before the
+        // restored league is read, so its record there is kept.
+        history = withContext(Dispatchers.IO) { readHistory() }
+        league.updateClone(CloneProfile.of(history))
         if ((league.view?.matches ?: 0L) == 0L && leagueFiles["ladder.txt"] != null) {
             withContext(Dispatchers.IO) {
                 val dir = File(storage.dir, "league").apply { mkdirs() }
-                for (name in listOf("ladder.txt", "season.txt")) leagueFiles[name]?.let { File(dir, name).writeAtomically(it) }
+                for (name in listOf("ladder.txt", "season.txt", "honours.txt")) leagueFiles[name]?.let { File(dir, name).writeAtomically(it) }
             }
             league.reload()
             leagueTaken = true
-        }
-        scope.launch {
-            history = withContext(Dispatchers.IO) { readHistory() }
-            league.updateClone(CloneProfile.of(history))
         }
         val parts = ArrayList<String>()
         parts += "게임 기록 ${added}판을 가져왔어요" + if (skipped > 0) "(이미 있던 ${skipped}판은 건너뜀)" else ""

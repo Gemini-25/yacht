@@ -380,50 +380,66 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         private const val RECORD_SWEEPS = 20
 
         /** Restores [text] onto a ladder for [keys]; unknown AIs (an older roster) are skipped. */
+        /** One saved line into [l]; every field is read before anything is set (a cut line changes nothing). */
+        private fun decodeLine(l: Ladder, f: List<String>) {
+            when (f.firstOrNull()) {
+                "totals" -> {
+                    val m = f[1].toLong()
+                    val g = f[2].toLong()
+                    l.matches = m
+                    l.games = g
+                }
+                "p" -> {
+                    val e = l.entry(f[1]) ?: return
+                    val nums = (2..11).map { if (it == 6) 0 else f[it].toInt() }
+                    val scoreSum = f[6].toLong()
+                    val recent = if (f[12] != "-") f[12].toList() else emptyList()
+                    val peak = if (f[13] == "-") Double.NaN else f[13].toDouble()
+                    val history = if (f[14] != "-") f[14].split(',').map { it.toInt() } else emptyList()
+                    e.games = nums[0]
+                    e.wins = nums[1]
+                    e.ties = nums[2]
+                    e.losses = nums[3]
+                    e.scoreSum = scoreSum
+                    e.best = nums[5]
+                    e.yachts = nums[6]
+                    e.bonuses = nums[7]
+                    e.streak = nums[8]
+                    e.bestStreak = nums[9]
+                    recent.forEach { e.recent.addLast(it) }
+                    e.peak = peak
+                    history.forEach { e.history.addLast(it) }
+                }
+                "h" -> {
+                    val i = l.index[f[1]] ?: return
+                    val j = l.index[f[2]] ?: return
+                    val pts = f[3].toDouble()
+                    val n = f[4].toInt()
+                    l.points[i][j] = pts
+                    l.points[j][i] = n - pts
+                    l.played[i][j] = n
+                    l.played[j][i] = n
+                }
+                "m" -> {
+                    if (l.index[f[1]] == null || l.index[f[2]] == null) return
+                    val games = f[3].split(';').map { g ->
+                        val p = g.split(',')
+                        val fl = p[2]
+                        GameScore(p[0].toInt(), p[1].toInt(), fl[0] == '1', fl[1] == '1', fl[2] == '1', fl[3] == '1')
+                    }
+                    val notes = f[7].replace('\u00a0', ' ').takeIf { it != "-" }?.split('\u001f') ?: emptyList()
+                    l.feed.addFirst(MatchRecord(f[1], f[2], games, f[4].toInt(), f[5].toInt(), f[6].toLong(), notes))
+                }
+            }
+        }
+
         fun decode(keys: List<String>, text: String, anchor: String = "ev"): Ladder {
             val l = Ladder(keys, anchor)
+            // Line by line: a line cut off by a kill mid-save (older versions saved in place)
+            // loses only itself, not the whole league.
             for (line in text.lines()) {
                 val f = line.split(' ')
-                when (f.firstOrNull()) {
-                    "totals" -> {
-                        l.matches = f[1].toLong()
-                        l.games = f[2].toLong()
-                    }
-                    "p" -> {
-                        val e = l.entry(f[1]) ?: continue
-                        e.games = f[2].toInt()
-                        e.wins = f[3].toInt()
-                        e.ties = f[4].toInt()
-                        e.losses = f[5].toInt()
-                        e.scoreSum = f[6].toLong()
-                        e.best = f[7].toInt()
-                        e.yachts = f[8].toInt()
-                        e.bonuses = f[9].toInt()
-                        e.streak = f[10].toInt()
-                        e.bestStreak = f[11].toInt()
-                        if (f[12] != "-") f[12].forEach { e.recent.addLast(it) }
-                        e.peak = if (f[13] == "-") Double.NaN else f[13].toDouble()
-                        if (f[14] != "-") f[14].split(',').forEach { e.history.addLast(it.toInt()) }
-                    }
-                    "h" -> {
-                        val i = l.index[f[1]] ?: continue
-                        val j = l.index[f[2]] ?: continue
-                        l.points[i][j] = f[3].toDouble()
-                        l.points[j][i] = f[4].toInt() - f[3].toDouble()
-                        l.played[i][j] = f[4].toInt()
-                        l.played[j][i] = f[4].toInt()
-                    }
-                    "m" -> {
-                        if (l.index[f[1]] == null || l.index[f[2]] == null) continue
-                        val games = f[3].split(';').map { g ->
-                            val p = g.split(',')
-                            val fl = p[2]
-                            GameScore(p[0].toInt(), p[1].toInt(), fl[0] == '1', fl[1] == '1', fl[2] == '1', fl[3] == '1')
-                        }
-                        val notes = f[7].replace(' ', ' ').takeIf { it != "-" }?.split('\u001f') ?: emptyList()
-                        l.feed.addFirst(MatchRecord(f[1], f[2], games, f[4].toInt(), f[5].toInt(), f[6].toLong(), notes))
-                    }
-                }
+                runCatching { decodeLine(l, f) }
             }
             // Entries of AIs no longer in the roster are gone: their games stay out of the fit.
             l.fit()

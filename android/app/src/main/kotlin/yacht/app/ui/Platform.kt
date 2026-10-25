@@ -4,14 +4,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 /** Saving and opening files through the system's file picker (Android); absent on the desktop UI check. */
 interface FilePort {
-    /** Asks where to save [bytes] as [name]; [done] gets whether it was written. */
-    fun save(name: String, bytes: ByteArray, done: (Boolean) -> Unit)
+    /** Asks where to save a backup named [name]; the backup is built then (see AppController.backupNote). */
+    fun save(name: String)
 
-    /**
-     * Asks for a file to open; [got] gets its bytes (read off the main thread), or null when
-     * cancelled, or a problem to show (too big, unreadable).
-     */
-    fun open(got: (bytes: ByteArray?, problem: String?) -> Unit)
+    /** Asks for a backup to open and restores it (see AppController.backupNote). */
+    fun open()
 }
 
 val LocalFilePort = staticCompositionLocalOf<FilePort?> { null }
