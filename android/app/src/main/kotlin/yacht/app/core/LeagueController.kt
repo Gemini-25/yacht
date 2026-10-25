@@ -409,16 +409,22 @@ class LeagueController(
         running = true
         val flag = AtomicBoolean(false)
         stop = flag
-        synchronized(lock) {
-            val l = ladder!!
-            startRanks = l.keys.mapNotNull { k -> l.rankOf(k)?.let { k to it } }.toMap()
-            if (season == null) season = Season.start(l.ranking())
-        }
+        val previous = runJob
         runStart = System.currentTimeMillis()
         runMatches = 0
         pace = 0.0
         val threads = speed.threads(cores)
         runJob = scope.launch {
+            // A restart (speed change) waits for the old workers; ranks and the first season
+            // need the lock the workers hold: both off the main thread.
+            previous?.join()
+            withContext(Dispatchers.Default) {
+                synchronized(lock) {
+                    val l = ladder ?: return@synchronized
+                    startRanks = l.keys.mapNotNull { k -> l.rankOf(k)?.let { k to it } }.toMap()
+                    if (season == null) season = Season.start(l.ranking())
+                }
+            }
             val r = extra!!
             // Risk-attitude and rule-belief AIs need their tables: built once, then loaded from disk.
             val missing = LeagueRoster.tableSpecs(t.rules).filter { !r.has(it.key) }
