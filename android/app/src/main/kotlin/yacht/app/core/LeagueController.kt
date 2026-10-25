@@ -37,6 +37,9 @@ import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.CompetitionView
+import yacht.engine.league.Competitions
+import yacht.engine.league.Origin
 import yacht.engine.league.PlayerBook
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
@@ -95,6 +98,9 @@ data class LadderRow(
     val isMe: Boolean = false,
     /** Season division (0 = top), null when not in this season. */
     val division: Int? = null,
+    /** 기본 (hand-made), 생성, 진화 or 내 AI. */
+    val origin: Origin = Origin.BASE,
+    val hometown: String = "",
 )
 
 data class FeedItem(
@@ -118,6 +124,8 @@ data class LeagueView(
     /** Matches being played right now. */
     val live: List<Pair<String, String>>,
     val season: SeasonView? = null,
+    /** This season's competitions as the 대회 tab draws them (post-season last). */
+    val comps: List<Pair<Comp, CompetitionView>> = emptyList(),
 )
 
 /** One team in a season table. */
@@ -442,6 +450,7 @@ class LeagueController(
             val all = mine + baseRoster + generated
             roster = all
             byKey = all.associateBy { it.key }
+            players?.let { b -> pastNames = (b.retired.map { it.key to it.name } + b.legends.map { it.key to it.name }).toMap() }
             heavyKeys = all.filter { it.heavy }.map { it.key }.toSet()
             val keys = ladderKeys()
             world?.let { w ->
@@ -1088,7 +1097,14 @@ class LeagueController(
         }
     }
 
-    fun name(key: String): String = if (key == Ladder.ME) "나" else byKey[key]?.name ?: key
+    fun name(key: String): String = when {
+        key == Ladder.ME -> "나"
+        else -> byKey[key]?.name ?: pastNames[key] ?: key
+    }
+
+    /** Names of retired players and legends (news and records still mention them). */
+    @Volatile
+    private var pastNames: Map<String, String> = emptyMap()
 
     private fun snapshot(): LeagueView? {
         val l = ladder ?: return null
@@ -1108,10 +1124,12 @@ class LeagueController(
                 l.tier(k), e.games, e.wins, e.ties, e.losses, e.winRate, e.avgScore, e.best, e.yachts, e.bonuses,
                 e.streak, e.bestStreak, e.recent.joinToString(""), e.history.toList(), e.peak.takeIf { !it.isNaN() }?.roundToInt(),
                 lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.league?.divisionOf(k),
+                Origin.of(k), world?.hometown(k) ?: "",
             )
         }
         val feed = l.feed.take(FEED).map { m -> FeedItem(m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes) }
-        return LeagueView(rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) })
+        val comps = s?.let { runCatching { Competitions.views(it) }.getOrNull() }.orEmpty()
+        return LeagueView(rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps)
     }
 
     private fun seasonView(p: SeasonPlan): SeasonView {

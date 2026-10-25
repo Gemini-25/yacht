@@ -76,6 +76,14 @@ import yacht.engine.league.Ladder
 import yacht.engine.league.Tier
 import yacht.engine.league.TierName
 
+private enum class LeagueTab(val label: String) {
+    LADDER("순위표"),
+    SEASON("리그"),
+    COMPS("대회"),
+    NEWS("소식"),
+    RECORDS("기록"),
+}
+
 private enum class LadderSort(val label: String) {
     RATING("레이팅"),
     WIN_RATE("승률"),
@@ -131,19 +139,22 @@ fun LeagueScreen(c: AppController) {
                 AssistChip(onClick = { c.editingAi = null; c.screen = Screen.BUILDER }, label = { Text("🛠 AI 만들기") })
             }
             lg.seasonNews?.let { SeasonNews(it) { lg.seasonNews = null } }
-            TabRow(selectedTabIndex = tab, containerColor = cs.background) {
-                for ((i, t) in listOf("순위표", "시즌", "경기 소식", "계열별").withIndex()) {
-                    Tab(selected = tab == i, onClick = { lg.tab = i }, text = { Text(t, maxLines = 1) })
+            val tabs = LeagueTab.entries
+            val current = tabs.getOrElse(tab) { LeagueTab.LADDER }
+            androidx.compose.material3.ScrollableTabRow(selectedTabIndex = current.ordinal, containerColor = cs.background, edgePadding = 4.dp) {
+                for (t in tabs) {
+                    Tab(selected = current == t, onClick = { lg.tab = t.ordinal }, text = { Text(t.label, maxLines = 1) })
                 }
             }
             if (v == null) {
                 CenterText("리그 기록을 불러오는 중…")
             } else {
-                when (tab) {
-                    0 -> LadderList(lg, v) { lg.detail = it }
-                    1 -> SeasonList(lg, v.season) { lg.detail = it }
-                    2 -> FeedList(lg, v)
-                    else -> FamilyList(lg, v) { lg.detail = it }
+                when (current) {
+                    LeagueTab.LADDER -> LadderList(lg, v) { lg.detail = it }
+                    LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
+                    LeagueTab.COMPS -> CompsTab(lg, v.comps) { lg.detail = it }
+                    LeagueTab.NEWS -> FeedList(lg, v)
+                    LeagueTab.RECORDS -> FamilyList(lg, v) { lg.detail = it }
                 }
             }
         }
@@ -255,10 +266,11 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
     var family by remember { mutableStateOf<Family?>(null) }
     var sort by remember { mutableStateOf(LadderSort.RATING) }
     var onlyFavourites by remember { mutableStateOf(false) }
+    var origin by remember { mutableStateOf<yacht.engine.league.Origin?>(null) }
     var query by remember { mutableStateOf("") }
     val favs = lg.favourites
     val rows = v.rows.filter {
-        (family == null || it.family == family) && (!onlyFavourites || it.key in favs) &&
+        (family == null || it.family == family) && (!onlyFavourites || it.key in favs) && (origin == null || it.origin == origin) &&
             (query.isBlank() || it.name.contains(query.trim(), ignoreCase = true))
     }.let { r ->
         when (sort) {
@@ -283,6 +295,14 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원 ${favs.size}", fontSize = 12.sp) })
+                for (o in yacht.engine.league.Origin.entries) {
+                    val n = v.rows.count { it.origin == o }
+                    if (n > 0) FilterChip(selected = origin == o, onClick = { origin = if (origin == o) null else o }, label = { Text("${o.label} $n", fontSize = 12.sp) })
+                }
+            }
+        }
+        item {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FilterChip(selected = family == null, onClick = { family = null }, label = { Text("전체", fontSize = 12.sp) })
                 for (f in Family.entries) {
                     FilterChip(selected = family == f, onClick = { family = if (family == f) null else f }, label = { Text(f.label, fontSize = 12.sp) })
