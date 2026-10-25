@@ -155,6 +155,8 @@ data class SeasonHistoryItem(
     val yachts: Int,
     val promoted: List<String>,
     val relegated: List<String>,
+    /** The season's titles and awards besides the division champions: (kind, winner's name). */
+    val titles: List<Pair<String, String>> = emptyList(),
 )
 
 data class SeasonView(
@@ -190,6 +192,41 @@ data class CalendarItem(
  * NaN with fewer than 2 games; [games][i][j] the games between them.
  */
 class H2hMatrix(val title: String, val labels: List<String>, val score: Array<DoubleArray>, val games: Array<IntArray>)
+
+/** An AI's profile (프로필): where it comes from, its family tree and its honours. */
+data class ProfileView(
+    val key: String,
+    val name: String,
+    val origin: Origin,
+    val hometown: String,
+    /** Debut season of a generated or evolved player (null for the others). */
+    val born: Int?,
+    /** Season it retired, for a retired player or a legend. */
+    val retired: Int?,
+    val legend: Boolean,
+    /** 계보도: names per generation upwards (parents, grandparents, ...), null where unknown. */
+    val ancestors: List<List<String?>>,
+    /** Names per generation downwards (children, grandchildren, ...). */
+    val descendants: List<List<String>>,
+    /** Its honours, newest season first. */
+    val honours: List<Honour>,
+    val titles: Int,
+    /** Genes in words, for generated and evolved players. */
+    val genes: String?,
+)
+
+/** A retired player or legend for the 레전드 보관소. */
+data class PastPlayer(
+    val key: String,
+    val name: String,
+    val born: Int,
+    val retired: Int,
+    val bestRating: Int?,
+    val titles: Int,
+    val legend: Boolean,
+    val honours: String,
+    val hometown: String,
+)
 
 /** A matchday of a division in the calendar. */
 data class CalendarView(val division: Int, val matchday: Int, val matchdays: Int, val current: Int, val items: List<CalendarItem>)
@@ -1162,6 +1199,53 @@ class LeagueController(
         )
     }
 
+    /** The profile asked for last (read off the main thread). */
+    var profile by mutableStateOf<ProfileView?>(null)
+        private set
+
+    /** Loads [key]'s profile into [profile]. */
+    fun loadProfile(key: String) {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                val b = w.players
+                val alive = b[key]
+                val past = if (alive == null) b.retiredRecord(key) else null
+                fun nm(k: String?) = k?.let { name(it) }
+                ProfileView(
+                    key, name(key), Origin.of(key).let { if (past != null) past.origin else it }, alive?.hometown ?: past?.hometown ?: w.hometown(key),
+                    alive?.born ?: past?.born, past?.retired, b.legend(key) != null,
+                    b.ancestors(key).map { gen -> gen.map { nm(it) } }, b.descendants(key).map { gen -> gen.map { name(it) } },
+                    w.honours.of(key).sortedByDescending { it.season }, w.honours.titles(key),
+                    (alive?.spec ?: b.legend(key)?.spec)?.describe(),
+                )
+            }
+            scope.launch { profile = v }
+        }
+    }
+
+    /** Retired players and legends, newest first (레전드 보관소). */
+    var pastPlayers by mutableStateOf<List<PastPlayer>>(emptyList())
+        private set
+
+    fun loadPastPlayers() {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val b = world?.players ?: return@synchronized emptyList()
+                val legends = b.legends.map { l ->
+                    val r = l.record
+                    PastPlayer(r.key, r.name, r.born, r.retired, r.bestRating.takeIf { !it.isNaN() }?.roundToInt(), r.titles, true, l.honours, r.hometown)
+                }
+                val legendKeys = legends.map { it.key }.toSet()
+                val retired = b.retired.filter { it.key !in legendKeys }.map { r ->
+                    PastPlayer(r.key, r.name, r.born, r.retired, r.bestRating.takeIf { !it.isNaN() }?.roundToInt(), r.titles, false, "-", r.hometown)
+                }
+                (legends + retired).sortedByDescending { it.retired }
+            }
+            scope.launch { pastPlayers = v }
+        }
+    }
+
     /** The head-to-head matrix asked for last (read off the main thread). */
     var h2h by mutableStateOf<H2hMatrix?>(null)
         private set
@@ -1224,7 +1308,14 @@ class LeagueController(
             season, champions, h.firstOrNull { it.kind == "SCORER" }?.let { name(it.key) }, 0.0,
             h.firstOrNull { it.kind == "YACHT" }?.let { name(it.key) }, 0,
             h.filter { it.kind.startsWith("UP") }.map { name(it.key) }, h.filter { it.kind.startsWith("DOWN") }.map { name(it.key) },
+            h.filter { it.kind in SHOWN_TITLES }.sortedBy { SHOWN_TITLES.indexOf(it.kind) }.map { it.kind to teamOrName(it.kind, it.key) },
         )
+    }
+
+    /** An honour's winner: a club, a family or an all-star side by its label, else the AI's name. */
+    private fun teamOrName(kind: String, key: String): String = when (kind) {
+        "FAMILY", "ALLSTAR" -> Competitions.teamLabel(key)
+        else -> name(key)
     }
 
     /** Best and worst opponents of [key] with at least [min] games against them. */
@@ -1242,6 +1333,9 @@ class LeagueController(
 
     companion object {
         private val DIVISION = Regex("L\\d")
+
+        /** Honours the season history lists after the division champions, in this order. */
+        val SHOWN_TITLES = listOf("REG", "L0R", "CL", "CL2", "CUP", "CUP2", "SUPER", "CLUB", "FAMILY", "ALLSTAR", "MVP", "ROOKIE", "MIP")
 
         /** League files a backup restores (when this phone's league has no games yet). */
         val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")

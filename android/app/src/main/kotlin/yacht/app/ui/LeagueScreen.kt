@@ -154,7 +154,7 @@ fun LeagueScreen(c: AppController) {
                     LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
                     LeagueTab.COMPS -> CompsTab(lg, v.comps) { lg.detail = it }
                     LeagueTab.NEWS -> FeedList(lg, v)
-                    LeagueTab.RECORDS -> FamilyList(lg, v) { lg.detail = it }
+                    LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
                 }
             }
         }
@@ -162,6 +162,7 @@ fun LeagueScreen(c: AppController) {
     val key = lg.detail
     val row = v?.rows?.firstOrNull { it.key == key }
     if (row != null) AiDetail(c, row) { lg.detail = null }
+    else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
     if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }
     if (resetAsk) {
@@ -943,6 +944,7 @@ private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("${r.family.label} · ${r.desc}" + if (r.heavy) " (승률 탐색을 써서 계산이 무거워요)" else "", style = MaterialTheme.typography.bodySmall)
+                if (!r.isMe) ProfileSection(lg, r.key)
                 if (r.key == yacht.engine.league.CustomAis.CLONE) {
                     lg.clone?.let { p ->
                         Text(

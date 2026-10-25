@@ -57,6 +57,8 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onO
     var picked by remember { mutableStateOf<Comp?>(null) }
     val shown = comps.firstOrNull { it.first == picked } ?: comps.first()
     val label: (String) -> String = { k -> if (shown.second.squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) }
+    // A team (all-star side, family) has no page of its own: its squad is listed below.
+    val open: (String) -> Unit = { k -> if (!shown.second.squads.containsKey(k)) onOpen(k) }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -66,10 +68,10 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onO
             }
         }
         when (val v = shown.second) {
-            is CompetitionView.Bracket -> item { BracketCard(v, label, onOpen) }
+            is CompetitionView.Bracket -> item { BracketCard(v, label, open) }
             is CompetitionView.Groups -> {
-                items(v.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, onOpen) }
-                v.knockout?.let { k -> item { BracketCard(k, label, onOpen) } }
+                items(v.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, open) }
+                v.knockout?.let { k -> item { BracketCard(k, label, open) } }
             }
         }
         val squads = shown.second.squads
