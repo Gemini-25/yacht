@@ -196,7 +196,17 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         return points[i][j] to played[i][j]
     }
 
-    /** Placed AIs by rating, best first, then the ones still in placement (most games first). */
+    /**
+     * What ranks are by: the rating less one standard error, so an AI fresh out of placement
+     * (a range of a hundred points) does not jump over the established ones on a lucky start;
+     * with thousands of games the error is a few points.
+     */
+    private fun rankScore(i: Int): Double = ratings[i] - errors[i].let { if (it.isNaN()) 0.0 else it }
+
+    /** The rank score of [key] (see [rankScore]); NaN before its first game. */
+    fun rankScore(key: String): Double = index[key]?.let { rankScore(it) } ?: Double.NaN
+
+    /** Placed AIs by rank score, best first, then the ones still in placement (most games first). */
     fun ranking(): List<String> {
         val out = ArrayList<String>(n)
         for (r in 0 until orderSize) out += keys[order[r]]
@@ -220,14 +230,14 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             pos[i] = orderSize++
         }
         var at = pos[i]
-        val r = ratings[i]
-        while (at > 0 && ratings[order[at - 1]] < r) {
+        val r = rankScore(i)
+        while (at > 0 && rankScore(order[at - 1]) < r) {
             val k = order[at - 1]
             order[at] = k
             pos[k] = at
             at--
         }
-        while (at < orderSize - 1 && ratings[order[at + 1]] > r) {
+        while (at < orderSize - 1 && rankScore(order[at + 1]) > r) {
             val k = order[at + 1]
             order[at] = k
             pos[k] = at
@@ -238,7 +248,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     }
 
     private fun rebuildOrder() {
-        val placed = (0 until n).filter { isPlaced(it) }.sortedByDescending { ratings[it] }
+        val placed = (0 until n).filter { isPlaced(it) }.sortedByDescending { rankScore(it) }
         pos.fill(-1)
         orderSize = 0
         for (i in placed) {

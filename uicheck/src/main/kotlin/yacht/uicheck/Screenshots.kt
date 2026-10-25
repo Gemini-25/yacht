@@ -207,7 +207,13 @@ private fun run(args: Array<String>) {
     while (true) {
         waitFor("my ranked turn", 120_000) { c.state!!.isOver || (c.state!!.toMove == Side.ME && !c.aiThinking) }
         if (c.state!!.isOver) break
-        c.firstThrow()
+        // The AI's last step may still be landing on the main thread: throw until it takes.
+        waitFor("my ranked throw", 30_000) {
+            c.state!!.draft.dice.all { it != null } || run {
+                c.firstThrow()
+                false
+            }
+        }
         val d = c.state!!
         val dice = d.draft.dice.map { it!! }
         if (!shotRanked) {

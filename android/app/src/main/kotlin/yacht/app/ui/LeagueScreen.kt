@@ -347,6 +347,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         item {
             Text(
                 "레이팅: 모든 판을 브래들리-테리 모형(엘로와 같은 눈금)으로 맞춘 값, 기대점수 AI = 1500. ±는 95% 범위, 7점 ≈ 승률 1%p. " +
+                    "순위는 레이팅에서 오차(± 범위의 절반)를 뺀 값 순서라, 배치를 막 끝낸 AI는 판이 쌓일 때까지 조금 아래에 놓여요. " +
                     "티어: 마스터 1490↑, 그랜드마스터 1500↑ 상위 10, 챌린저 1505↑ 상위 3.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

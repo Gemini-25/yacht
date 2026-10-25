@@ -135,7 +135,7 @@ class LadderTest {
         assertTrue(worst < 15.0, "quick ratings drift $worst from the full fit")
         // Ranks follow the ratings.
         val ranked = ladder.ranking().filter { ladder.rankOf(it) != null }
-        assertTrue(ranked.zipWithNext().all { (a, b) -> ladder.rating(a) >= ladder.rating(b) })
+        assertTrue(ranked.zipWithNext().all { (a, b) -> ladder.rankScore(a) >= ladder.rankScore(b) })
         assertEquals((1..ranked.size).toList(), ranked.map { ladder.rankOf(it) })
         // Matches recorded while the fit is solved elsewhere are not lost.
         val before = ladder.entry("ev")!!.games
