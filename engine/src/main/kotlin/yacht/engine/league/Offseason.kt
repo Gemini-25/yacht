@@ -60,8 +60,15 @@ object Offseason {
         val minPlayed = (all.maxOfOrNull { it.played } ?: 0) / 2
         all.filter { it.played >= minPlayed }.maxByOrNull { it.avgScore }?.let { out += Honour(n, "SCORER", it.key) }
         all.maxByOrNull { it.yachts }?.takeIf { it.yachts > 0 }?.let { out += Honour(n, "YACHT", it.key) }
-        // The title playoff's L0 is above; the promotion playoff's winners are in the moves.
-        for (c in plan.comps + plan.post) if (c.comp != Comp.TITLE_PLAYOFF && c.comp != Comp.PROMOTION_PLAYOFF) out += c.honours()
+        // The title playoff's L0 is above (its runner-up L0R joins here); the promotion
+        // playoff's winners are in the moves.
+        for (c in plan.comps + plan.post) {
+            when (c.comp) {
+                Comp.TITLE_PLAYOFF -> out += c.honours().filter { it.kind != "L0" }
+                Comp.PROMOTION_PLAYOFF -> {}
+                else -> out += c.honours()
+            }
+        }
         return out
     }
 

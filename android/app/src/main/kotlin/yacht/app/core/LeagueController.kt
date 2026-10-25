@@ -28,8 +28,6 @@ import yacht.engine.league.CustomAis
 import yacht.engine.league.Family
 import yacht.engine.league.BoardResult
 import yacht.engine.league.Comp
-import yacht.engine.league.CompetitionCodec
-import yacht.engine.league.Competition
 import yacht.engine.league.Fixture
 import yacht.engine.league.Honour
 import yacht.engine.league.HonourBook
@@ -37,9 +35,10 @@ import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
-import yacht.engine.league.Offseason
 import yacht.engine.league.SeasonPlan
-import yacht.engine.league.SeasonStart
+import yacht.engine.league.LeagueWorld
+import yacht.engine.league.PlayerBook
+import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
 import yacht.engine.league.TierName
 import yacht.engine.league.WatchMatch
@@ -259,9 +258,6 @@ class LeagueController(
     private val seed: () -> String? = { null },
 ) {
     private val folder = File(dir, "league").apply { mkdirs() }
-    private val file = File(folder, "ladder.txt")
-    private val seasonFile = File(folder, "season.txt")
-    private val honourFile = File(folder, "honours.txt")
     private val configFile = File(folder, "config.txt")
     private val customFile = File(folder, "custom.txt")
     private val prefs = File(folder, "prefs.txt")
@@ -314,9 +310,11 @@ class LeagueController(
     private var byKey: Map<String, LeagueAi> = emptyMap()
     private var heavyKeys: Set<String> = emptySet()
     private var extra: LeagueTables? = null
-    private var ladder: Ladder? = null
-    private var plan: SeasonPlan? = null
-    private var honours = HonourBook()
+    /** The league's state (ladder, season, honours, players); null until the saved league is read. */
+    private var world: LeagueWorld? = null
+    private val ladder: Ladder? get() = world?.ladder
+    private val plan: SeasonPlan? get() = world?.plan
+    private val honours: HonourBook get() = world?.honours ?: HonourBook()
     private var estimate: WinEstimate? = null
 
     /** Average ms per game of each AI (cost meter: heavy fixtures first late in a season). */
@@ -329,10 +327,6 @@ class LeagueController(
     var config by mutableStateOf(LeagueConfig())
         private set
 
-    /** Readers of saved competitions and builders of each season's ones (filled in by the modules). */
-    private val codecs: Map<Comp, CompetitionCodec> = emptyMap()
-    private val factories: List<(SeasonStart) -> Competition?> = emptyList()
-    private val postFactories: List<(SeasonPlan) -> Competition?> = emptyList()
     private val lock = Any()
     private val throttle = Any()
     private val busy = HashSet<String>()
@@ -399,25 +393,28 @@ class LeagueController(
     /** Reads the saved ladder and season again (after a restore). */
     fun reload() {
         scope.launch(rosterWork) {
-            val keys = synchronized(lock) { ladderKeys() }
-            val l = runCatching { file.takeIf { it.exists() }?.readText()?.let { Ladder.decode(keys, it) } }.getOrNull() ?: Ladder(keys)
-            val seasonText = runCatching { seasonFile.takeIf { it.exists() }?.readText() }.getOrNull()
-            val s = seasonText?.let { text -> runCatching { SeasonPlan.decode(text, keys, codecs) }.getOrNull() }
-            val h = runCatching { honourFile.takeIf { it.exists() }?.readText()?.let { HonourBook.decode(it) } }.getOrNull() ?: HonourBook()
-            // A season file of the first version: its history moves into the honours, and the
-            // next start begins a season of the new kind.
-            if (s == null && seasonText != null) h.add(HonourBook.legacy(seasonText))
+            val texts = LeagueWorld.FILES.associateWith { name -> runCatching { File(folder, name).takeIf { it.exists() }?.readText() }.getOrNull() }
+            val cfg = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: config
+            val reserved = baseRoster.map { it.name }
+            // The generated and evolved players first: they are AIs of the roster, so the
+            // ladder and the season read with them.
+            val players = texts[LeagueWorld.ROSTER]?.let { runCatching { PlayerBook.decode(it, reserved) }.getOrNull() } ?: PlayerBook(reserved)
+            players.ensureGenerated(cfg.generated)
+            synchronized(lock) { pendingPlayers = players }
+            rebuildRoster()
+            val w = synchronized(lock) { LeagueWorld.decode(texts, ladderKeys(), reserved) }
+            w.players = players
+            w.config = cfg
             synchronized(lock) {
-                ladder = l
-                plan = s
-                honours = h
+                world = w
+                pendingPlayers = null
+                configureWorld(w)
             }
             loaded.complete(Unit)
             // A restore may have brought the rules and the favourites too.
-            val cfg = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull()
             val favs = readFavourites()
             scope.launch {
-                cfg?.let { config = it }
+                config = cfg
                 favourites = favs
             }
             publish(force = true)
@@ -426,21 +423,56 @@ class LeagueController(
 
     private fun ladderKeys() = roster.map { it.key } + Ladder.ME
 
-    /** Base roster plus the clone and the player's AIs; the ladder and season follow. */
+    /** The players book while the league is being read (before [world] exists). */
+    private var pendingPlayers: PlayerBook? = null
+
+    /**
+     * The clone and the player's AIs, the hand-made AIs, then the generated and evolved players;
+     * the ladder follows (and the league's members, see [members]). Safe under the lock.
+     */
     private fun rebuildRoster() {
         val t = tables ?: return
         val x = extra ?: return
-        val mine = ArrayList<LeagueAi>()
-        clone?.let { mine += CustomAis.clone(it, t) }
-        for (c in customs) mine += CustomAis.build(c, t, x)
-        val all = mine + baseRoster
         synchronized(lock) {
+            val mine = ArrayList<LeagueAi>()
+            clone?.let { mine += CustomAis.clone(it, t) }
+            for (c in customs) mine += CustomAis.build(c, t, x)
+            val players = world?.players ?: pendingPlayers
+            val generated = players?.alive.orEmpty().map { leagueAi(it, t, x) }
+            val all = mine + baseRoster + generated
             roster = all
             byKey = all.associateBy { it.key }
             heavyKeys = all.filter { it.heavy }.map { it.key }.toSet()
             val keys = ladderKeys()
-            ladder?.let { l -> if (l.keys != keys) ladder = Ladder.decode(keys, l.encode()) }
+            world?.let { w ->
+                if (w.ladder.keys != keys) w.ladder = Ladder.decode(keys, w.ladder.encode())
+                configureWorld(w)
+            }
         }
+    }
+
+    /** What the world takes from the roster and the rules: the members, families and config. */
+    private fun configureWorld(w: LeagueWorld) {
+        w.config = config
+        w.family = { k -> byKey[k]?.family }
+        w.members = members(w)
+    }
+
+    /**
+     * Next season's AIs: everyone but me, or only the AIs with mistakes (대혼돈), or the best
+     * rated (강자만); my own AIs always play.
+     */
+    private fun members(w: LeagueWorld): List<String> {
+        val c = config
+        var keys = roster.filter { ai ->
+            !c.onlyFlawed || ai.family == Family.MINE || ai.family in LeagueWorld.FLAWED ||
+                w.players[ai.key]?.spec?.flawed == true
+        }.map { it.key }
+        if (c.onlyTop > 0) {
+            val mine = keys.filter { byKey[it]?.family == Family.MINE }
+            keys = (keys.filter { it !in mine }.sortedByDescending { w.rating(it) }.take(c.onlyTop) + mine)
+        }
+        return keys
     }
 
     private fun tableFile(key: String) = File(folder, "$key.bin")
@@ -492,9 +524,9 @@ class LeagueController(
     /** Drops [key]'s ladder results so it is placed again. */
     private fun forget(key: String) {
         synchronized(lock) {
-            val l = ladder ?: return
+            val w = world ?: return
             val keys = ladderKeys()
-            ladder = Ladder.decode(keys, Ladder.decode(keys - key, l.encode()).encode())
+            w.ladder = Ladder.decode(keys, Ladder.decode(keys - key, w.ladder.encode()).encode())
         }
         scope.launch { save() }
     }
@@ -530,9 +562,13 @@ class LeagueController(
             previous?.join()
             withContext(Dispatchers.Default) {
                 synchronized(lock) {
-                    val l = ladder ?: return@synchronized
+                    val w = world ?: return@synchronized
+                    val l = w.ladder
                     startRanks = l.keys.mapNotNull { k -> l.rankOf(k)?.let { k to it } }.toMap()
-                    if (plan == null) plan = Offseason.first(System.nanoTime(), offseasonContext(l))
+                    if (w.plan == null) {
+                        configureWorld(w)
+                        w.openFirstSeason(System.nanoTime())
+                    }
                 }
             }
             val r = extra!!
@@ -559,47 +595,49 @@ class LeagueController(
         }
     }
 
-    /** What the off-season needs: the AIs in the league next season (me excluded) and their ratings. */
-    private fun offseasonContext(l: Ladder): Offseason.Context {
-        val keys = roster.map { it.key }
-        return Offseason.Context(
-            keys, { k -> l.rating(k).takeIf { !it.isNaN() } ?: START_RATING }, { k -> byKey[k]?.family }, { k -> hometown(k) },
-            config, factories, honours.all.toList(),
-        )
-    }
-
-    /** One of 16 cities for an AI (from its key). */
-    private fun hometown(key: String): String = HOMETOWNS[Math.floorMod(key.hashCode(), HOMETOWNS.size)]
-
     /**
      * What a worker plays next: the season's next fixture (ending the season and starting the
      * next when it is over), or a friendly (newcomers waiting for a season, or nothing free).
      */
     private fun nextJob(rng: Random): Fixture? {
-        val l = ladder ?: return null
-        var p = plan ?: return null
-        if (p.league.finished && !p.postStarted) p.startPost(postFactories)
-        if (p.finished) {
-            // Next season's divisions and seeds from the converged ratings.
-            l.fit()
-            val (next, h) = Offseason.next(p, offseasonContext(l))
-            honours.add(h)
-            plan = next
-            p = next
-            val news = historyItem(p.number - 1, h)
-            scope.launch { seasonNews = news }
-            saveSeasonAsync()
-        }
+        val w = world ?: return null
+        val l = w.ladder
+        val p = w.plan ?: return null
         val inLeague = p.league.standings.keys
-        val newcomers = roster.map { it.key }.filter { it !in inLeague && it !in busy }
-        if (newcomers.isNotEmpty() && rng.nextDouble() < FRIENDLY_SHARE) {
+        val members = w.members
+        val newcomers = members.filter { it !in inLeague && it !in busy }
+        // Many newcomers (a new roster, a lot of generated players): place them quickly.
+        val share = if (newcomers.size * 10 > members.size) FRIENDLY_RUSH else FRIENDLY_SHARE
+        if (newcomers.isNotEmpty() && rng.nextDouble() < share) {
             Matchmaker.pick(l, rng, busy, among = newcomers)?.let { return friendly(it, rng) }
         }
         val cost = { f: yacht.engine.league.LeagueFixture -> (costMs[f.a] ?: 5.0) + (costMs[f.b] ?: 5.0) }
-        p.next(busy, cupsInFlight, maxOf(1, speed.threads(cores) - 1), cost)?.let { return it }
-        // Fillers only between light AIs: a heavy one would burn a worker on a game that does
-        // not move the season, and hold up its own fixtures.
-        return Matchmaker.pick(l, rng, busy + heavyKeys)?.let { friendly(it, rng) }
+        val cap = maxOf(1, speed.threads(cores) - 1)
+        w.next(busy, cupsInFlight, cap, cost)?.let { return it }
+        if (w.seasonOver) {
+            rollover(w)
+            w.next(busy, cupsInFlight, cap, cost)?.let { return it }
+        }
+        // Fillers only between light members: a heavy one would burn a worker on a game that
+        // does not move the season, and hold up its own fixtures.
+        val idle = members.filter { it !in busy && it !in heavyKeys }
+        return Matchmaker.pick(l, rng, busy + heavyKeys, among = idle)?.let { friendly(it, rng) }
+    }
+
+    /**
+     * The season is over (under the lock): honours, evolution and new players, the AIs rebuilt,
+     * then the next season. Saved at once.
+     */
+    private fun rollover(w: LeagueWorld) {
+        // Next season's divisions and seeds from the converged ratings.
+        w.ladder.fit()
+        val closing = w.closeSeason()
+        if (closing.rosterChanged) rebuildRoster()
+        configureWorld(w)
+        w.openSeason()
+        val news = historyItem(closing.season, closing.honours)
+        scope.launch { seasonNews = news }
+        saveAsync()
     }
 
     private fun friendly(pair: Pair<String, String>, rng: Random) = Fixture(Comp.FRIENDLY, -1, pair.first, pair.second, rng.nextLong())
@@ -641,7 +679,7 @@ class LeagueController(
                             lastDelta[rec.b] = rec.deltaB
                         }
                     }
-                    if (job.comp != Comp.FRIENDLY) plan?.record(result)
+                    if (job.comp != Comp.FRIENDLY) world?.record(result)
                     recorded = true
                     meter(result)
                     runMatches += result.boards.size
@@ -650,7 +688,7 @@ class LeagueController(
                 // stopped mid-match: the match is dropped
             } finally {
                 synchronized(lock) {
-                    if (!recorded && job.comp != Comp.FRIENDLY) plan?.release(job)
+                    if (!recorded && job.comp != Comp.FRIENDLY) world?.release(job)
                     busy -= job.players.toSet()
                     live -= job.a to job.b
                     if (isCup(job.comp)) cupsInFlight--
@@ -756,8 +794,10 @@ class LeagueController(
             withContext(rosterWork) {
                 val l = Ladder.decode(synchronized(lock) { ladderKeys() }, text)
                 synchronized(lock) {
-                    ladder = l
-                    plan = null
+                    world?.let { w ->
+                        w.ladder = l
+                        w.plan = null
+                    }
                 }
             }
             save()
@@ -770,39 +810,43 @@ class LeagueController(
         stop()
         scope.launch {
             runJob?.join()
-            synchronized(lock) {
-                ladder = Ladder(ladderKeys())
-                plan = null
-                honours = HonourBook()
-                lastDelta.clear()
-                startRanks = emptyMap()
+            withContext(rosterWork) {
+                // Fresh generated players too (the evolved ones go).
+                val players = PlayerBook(baseRoster.map { it.name }).apply { ensureGenerated(config.generated) }
+                synchronized(lock) {
+                    world?.let { w ->
+                        w.players = players
+                        w.plan = null
+                        w.honours = HonourBook()
+                        w.events.clear()
+                    }
+                    rebuildRoster()
+                    world?.let { w -> w.ladder = Ladder(ladderKeys()) }
+                    lastDelta.clear()
+                    startRanks = emptyMap()
+                }
             }
             withContext(fileWrites) {
-                runCatching { file.delete() }
-                runCatching { seasonFile.delete() }
-                runCatching { honourFile.delete() }
+                for (name in LeagueWorld.FILES) runCatching { File(folder, name).delete() }
             }
+            save()
             publish(force = true)
         }
     }
 
     private suspend fun save() = withContext(Dispatchers.Default) {
-        val (text, s) = synchronized(lock) { ladder?.encode() to plan?.encode() }
-        val h = synchronized(lock) { honours.encode() }
-        withContext(fileWrites) {
-            text?.let { runCatching { file.writeTextAtomically(it) } }
-            s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
-            runCatching { honourFile.writeTextAtomically(h) }
-        }
+        val texts = synchronized(lock) { world?.encodeFiles() } ?: return@withContext
+        withContext(fileWrites) { write(texts) }
     }
 
-    private fun saveSeasonAsync() {
-        val s = plan?.encode() ?: return
-        val h = honours.encode()
-        scope.launch(fileWrites) {
-            runCatching { seasonFile.writeTextAtomically(s) }
-            runCatching { honourFile.writeTextAtomically(h) }
-        }
+    /** Saves every league file (under the lock: the encoding needs it). */
+    private fun saveAsync() {
+        val texts = world?.encodeFiles() ?: return
+        scope.launch(fileWrites) { write(texts) }
+    }
+
+    private fun write(texts: Map<String, String>) {
+        for ((name, text) in texts) runCatching { File(folder, name).writeTextAtomically(text) }
     }
 
     // ---- ranked games ----------------------------------------------------------------------------
@@ -1164,14 +1208,13 @@ class LeagueController(
     }
 
     /** The saved league files, for a backup. */
-    fun files(): List<File> = listOf(file, seasonFile, honourFile, configFile, customFile, prefs, favouriteFile).filter { it.exists() }
+    fun files(): List<File> = (LeagueWorld.FILES.map { File(folder, it) } + listOf(configFile, customFile, prefs, favouriteFile)).filter { it.exists() }
 
     companion object {
         private val DIVISION = Regex("L\\d")
 
         /** League files a backup restores (when this phone's league has no games yet). */
-        val SAVED = listOf("ladder.txt", "season.txt", "honours.txt", "config.txt", "favourites.txt")
-        val HOMETOWNS = listOf("서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "수원", "춘천", "청주", "전주", "포항", "창원", "제주", "강릉")
+        val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")
         private const val FIT_MS = 2_000L
         private const val CHECKPOINT_MS = 30_000L
         private const val PUBLISH_MS = 300L
@@ -1179,6 +1222,7 @@ class LeagueController(
 
         /** Share of matches given to AIs waiting for the next season, so they get a rating. */
         private const val FRIENDLY_SHARE = 0.2
+        private const val FRIENDLY_RUSH = 0.6
 
         /** My assumed rating before my first ranked game (a solid amateur). */
         const val START_RATING = 1400.0
