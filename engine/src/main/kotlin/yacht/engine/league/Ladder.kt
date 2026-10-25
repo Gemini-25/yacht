@@ -170,7 +170,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     fun entry(key: String): LadderEntry? = index[key]?.let { entries[it] }
     fun rating(key: String): Double = index[key]?.let { ratings[it] } ?: Double.NaN
     fun error(key: String): Double = index[key]?.let { errors[it] } ?: Double.NaN
-    fun placed(key: String): Boolean = (entry(key)?.games ?: 0) >= PLACEMENT
+    fun placed(key: String): Boolean = (entry(key)?.games ?: 0) >= placementOf(key)
 
     /** Results between [a] and [b]: (a's points, games), ties counting half. */
     fun headToHead(a: String, b: String): Pair<Double, Int> {
@@ -222,7 +222,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         // Every refit moves everyone a little: peaks follow all placed AIs.
         for ((k, e) in entries.withIndex()) {
             val r = ratings[k]
-            if (!r.isNaN() && e.games >= PLACEMENT && (e.peak.isNaN() || r > e.peak)) e.peak = r
+            if (!r.isNaN() && e.games >= placementOf(e.key) && (e.peak.isNaN() || r > e.peak)) e.peak = r
         }
         fun delta(k: String) = (rating(k) - before.getValue(k)).takeIf { !it.isNaN() }?.roundToInt() ?: 0
         val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore))
@@ -324,6 +324,14 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     companion object {
         /** Games before an AI gets a rank and a tier (ten matches: ratings swing a lot before that). */
         const val PLACEMENT = 20
+
+        /** The player's own key: rated from ranked games against the AIs, never scheduled by the league. */
+        const val ME = "me"
+
+        /** A person plays one game at a time: placement after five. */
+        const val ME_PLACEMENT = 5
+
+        fun placementOf(key: String) = if (key == ME) ME_PLACEMENT else PLACEMENT
         const val FEED = 80
         const val STREAK_NEWS = 5
         const val UPSET = 150.0
@@ -391,14 +399,15 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
  * quickly) against someone of similar rating, with a little chance of anyone at all.
  */
 object Matchmaker {
-    fun pick(ladder: Ladder, rng: Random, busy: Set<String>): Pair<String, String>? {
-        val free = ladder.keys.filter { it !in busy }
-        if (free.size < 2) return null
+    fun pick(ladder: Ladder, rng: Random, busy: Set<String>, among: Collection<String>? = null): Pair<String, String>? {
+        val free = (among ?: ladder.keys).filter { it !in busy && it != Ladder.ME }
+        if (free.isEmpty()) return null
         val a = if (rng.nextDouble() < 0.3) {
             val least = free.minOf { ladder.entry(it)!!.games }
             free.filter { ladder.entry(it)!!.games == least }.let { it[rng.nextInt(it.size)] }
         } else free[rng.nextInt(free.size)]
-        val others = free.filter { it != a }
+        val others = ladder.keys.filter { it != a && it !in busy && it != Ladder.ME }
+        if (others.isEmpty()) return null
         val ra = ladder.rating(a)
         val weights = others.map { b ->
             val rb = ladder.rating(b)
@@ -414,6 +423,22 @@ object Matchmaker {
             if (x <= 0) return a to others[k]
         }
         return a to others.last()
+    }
+
+    /**
+     * An opponent for the player's ranked game: a placed AI near [rating] (my rating, or a
+     * starting guess while I am in placement), rarely someone further away.
+     */
+    fun opponentFor(ladder: Ladder, rating: Double, rng: Random, among: Collection<String>? = null): String? {
+        val pool = (among ?: ladder.keys).filter { it != Ladder.ME && ladder.placed(it) && !ladder.rating(it).isNaN() }
+        if (pool.isEmpty()) return null
+        val weights = pool.map { exp(-((ladder.rating(it) - rating) / (SPREAD / 2)).pow(2)) + EXPLORE / 10 }
+        var x = rng.nextDouble() * weights.sum()
+        for ((k, w) in weights.withIndex()) {
+            x -= w
+            if (x <= 0) return pool[k]
+        }
+        return pool.last()
     }
 
     /** Opponents are usually within about this many rating points. */

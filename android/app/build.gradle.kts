@@ -9,12 +9,29 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // A new id: installs as its own app next to the earlier "요트 AI" (yacht.dice.ai), which keeps its records.
-        applicationId = "yacht.dice.ai2"
         minSdk = 26
         targetSdk = 35
         versionCode = 2
         versionName = "0.2.0"
+    }
+
+    flavorDimensions += "app"
+    productFlavors {
+        // A new id: installs as its own app next to the earlier "요트 AI", which keeps its records.
+        create("next") {
+            dimension = "app"
+            applicationId = "yacht.dice.ai2"
+            resValue("string", "app_name", "요트 AI 2")
+            resValue("color", "ic_launcher_background", "#1A3A6B")
+        }
+        // The earlier app's id: installs over "요트 AI" (same key) and keeps its records, so they
+        // can be backed up there and opened in "요트 AI 2".
+        create("classic") {
+            dimension = "app"
+            applicationId = "yacht.dice.ai"
+            resValue("string", "app_name", "요트 AI")
+            resValue("color", "ic_launcher_background", "#1B5E20")
+        }
     }
 
     signingConfigs {
@@ -48,6 +65,7 @@ android {
 
     buildFeatures {
         compose = true
+        resValues = true
     }
 
     // dist.bin is memory-mapped straight from the APK, so it must stay uncompressed.

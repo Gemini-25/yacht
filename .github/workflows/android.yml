@@ -34,15 +34,24 @@ jobs:
       - name: Build APK
         run: ./gradlew -p android :app:assembleRelease --console=plain
 
-      - name: Rename APK
+      - name: Rename APKs
         run: |
-          mkdir -p out
-          cp android/app/build/outputs/apk/release/app-release.apk out/yacht-ai2-${GITHUB_SHA::7}.apk
+          mkdir -p out/next out/classic
+          cp android/app/build/outputs/apk/next/release/app-next-release.apk out/next/yacht-ai2-${GITHUB_SHA::7}.apk
+          cp android/app/build/outputs/apk/classic/release/app-classic-release.apk out/classic/yacht-ai-classic-${GITHUB_SHA::7}.apk
 
+      # "요트 AI 2": its own app next to the earlier one.
       - uses: actions/upload-artifact@v4
         with:
           name: yacht-ai2-apk
-          path: out/*.apk
+          path: out/next/*.apk
+          compression-level: 0
+
+      # The earlier "요트 AI" updated in place (keeps its records; can back them up for 요트 AI 2).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yacht-ai-classic-apk
+          path: out/classic/*.apk
           compression-level: 0
 
   screenshots:

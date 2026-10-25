@@ -141,7 +141,14 @@ data class GameState(
     val style: PlayStyle = PlayStyle.ASSISTED,
     /** Who I played (optional tag for real games: "친구 A", "스위치 CPU", ...). */
     val opponent: String? = null,
+    /** A ranked game against this league AI (its key): played alone, the result rates me. */
+    val rankedAi: String? = null,
+    /** The ranked result has been counted in my rating. */
+    val rated: Boolean = false,
 ) {
+    /** Still counts for my rating: ranked and played without hints. */
+    val ranked: Boolean get() = rankedAi != null && style == PlayStyle.SOLO
+
     val rules: RuleSet get() = me.rules
     val isOver: Boolean get() = me.isComplete && opp.isComplete
     val myTurnNumber: Int get() = me.filledCount + 1
@@ -158,7 +165,11 @@ data class GameState(
             rules: RuleSet = RuleSet.NINTENDO,
             style: PlayStyle = PlayStyle.ASSISTED,
             opponent: String? = null,
-        ) = GameState(source, first, Board(rules), Board(rules), toMove = first, style = style, opponent = opponent?.trim()?.ifEmpty { null })
+            rankedAi: String? = null,
+        ) = GameState(
+            source, first, Board(rules), Board(rules), toMove = first, style = style, opponent = opponent?.trim()?.ifEmpty { null },
+            rankedAi = rankedAi,
+        )
     }
 }
 

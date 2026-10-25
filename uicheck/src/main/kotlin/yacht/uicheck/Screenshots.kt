@@ -51,7 +51,10 @@ private fun run(args: Array<String>) {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
     val out = File(args.getOrElse(1) { "build/shots" }).apply { mkdirs() }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val c = AppController(scope, GameStorage(Files.createTempDirectory("yacht").toFile())) { load(tablesDir) }
+    val c = AppController(
+        scope, GameStorage(Files.createTempDirectory("yacht").toFile()), loadTables = { load(tablesDir) },
+        loadAsset = { name -> File("android/app/src/main/assets", name).takeIf { it.exists() }?.readText() },
+    )
     c.start()
     waitFor("tables") { c.tables != null }
     c.changeThinkTime(ThinkTime.FAST)
@@ -162,25 +165,81 @@ private fun run(args: Array<String>) {
     shot(c, out, "15_solo")
     c.changeStyle(PlayStyle.ASSISTED)
 
-    // The AI league: start it, let a few hundred matches finish, then look at every tab.
+    // The AI league: from the shipped seed when there is one (else played from zero until
+    // everyone is placed), then a short run so the season starts; then every tab.
     c.screen = Screen.LEAGUE
     waitFor("league view") { c.league.view != null }
     shot(c, out, "16a_league_empty")
     c.league.changeSpeed(yacht.app.core.LeagueSpeed.FULL)
+    if (c.league.hasSeed) {
+        c.league.loadSeed()
+        waitFor("league seed") { (c.league.view?.matches ?: 0L) > 0L }
+    }
     c.league.start()
-    waitFor("league matches", 300_000) { (c.league.view?.rows?.count { it.rank != null } ?: 0) >= c.league.size - 2 }
+    waitFor("league matches", 300_000) {
+        (c.league.view?.rows?.count { it.rank != null } ?: 0) >= c.league.size - 2 && (c.league.view?.season?.played ?: 0) >= 40
+    }
     shot(c, out, "16_league_ladder", heightDp = 1500)
     c.league.tab = 1
-    shot(c, out, "17_league_feed", heightDp = 1100)
+    shot(c, out, "16b_league_season", heightDp = 1500)
     c.league.tab = 2
+    shot(c, out, "17_league_feed", heightDp = 1100)
+    c.league.tab = 3
     shot(c, out, "18_league_families", heightDp = 1500)
     c.league.tab = 0
     c.league.detail = "win"
-    shot(c, out, "19_league_detail", heightDp = 1000)
+    shot(c, out, "19_league_detail", heightDp = 1100)
     c.league.detail = null
     c.league.stop()
     waitFor("league stopped", 60_000) { !c.league.running }
     println("league: ${c.league.view?.matches} matches; top: " + c.league.view?.rows?.take(5)?.joinToString { "${it.name} ${it.rating}" })
+
+    // A ranked game against a league AI near 1400, played greedily to the end.
+    c.changeAiPace(AiPace.INSTANT)
+    check(c.newRankedGame()) { "no ranked opponent" }
+    var shotRanked = false
+    while (true) {
+        waitFor("my ranked turn", 120_000) { c.state!!.isOver || (c.state!!.toMove == Side.ME && !c.aiThinking) }
+        if (c.state!!.isOver) break
+        c.firstThrow()
+        val d = c.state!!
+        val dice = d.draft.dice.map { it!! }
+        if (!shotRanked) {
+            shotRanked = true
+            shot(c, out, "20_ranked_game", heightDp = 1000)
+        }
+        c.score(Category.ALL.filter { !d.me.isFilled(it) }.maxBy { d.rules.score(dice, it) })
+    }
+    waitFor("rank result") { c.rankResult != null }
+    shot(c, out, "21_ranked_result", heightDp = 1200)
+    println("ranked: ${c.state!!.me.total}:${c.state!!.opp.total} vs ${c.state!!.opponent} -> ${c.rankResult}")
+    c.screen = Screen.HOME
+    shot(c, out, "22_home_ranked_backup", heightDp = 2400)
+
+    // Watching a league game throw by throw.
+    c.changeAiPace(AiPace.NORMAL)
+    c.screen = Screen.LEAGUE
+    val rival = c.league.rivalOf("win", Random(3)) ?: "ev"
+    c.league.startWatch("win", rival) { 300L }
+    c.screen = Screen.WATCH
+    waitFor("watch", 180_000) { (c.league.watch?.shown ?: 0) >= 8 }
+    c.league.pauseWatch()
+    shot(c, out, "23_watch", heightDp = 1300)
+    waitFor("watch complete", 180_000) { c.league.watch?.complete == true }
+    repeat(30) { c.league.skipWatchTurn() }
+    shot(c, out, "24_watch_end", heightDp = 1300)
+    c.league.stopWatch()
+
+    // Building my own AI.
+    c.editingAi = null
+    c.screen = Screen.BUILDER
+    shot(c, out, "25_builder", heightDp = 1700)
+    c.league.saveCustom(yacht.engine.league.CustomAiSpec("shot", "요트 사랑", yacht.engine.league.CustomBase.EV, yacht = 25.0, mistake = yacht.engine.league.CustomMistake.FEEL, amount = 0.6))
+    c.editingAi = c.league.customs.first()
+    c.screen = Screen.LEAGUE
+    c.screen = Screen.BUILDER
+    shot(c, out, "26_builder_edit", heightDp = 1700)
+    c.editingAi = null
 
     c.screen = Screen.VERIFY
     c.startVerify(4)

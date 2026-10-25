@@ -36,6 +36,8 @@ import yacht.engine.winPlanner
 import java.util.Random
 
 enum class Family(val label: String) {
+    /** The player's clone and the AIs the player built. */
+    MINE("나와 내 AI"),
     WIN("승률형"),
     TARGET("목표 점수형"),
     EV("기대점수형"),

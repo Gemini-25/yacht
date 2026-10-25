@@ -54,3 +54,48 @@ object LeagueMatch {
         return me.with(c, rules.score(Dice.rollCounts[r], c))
     }
 }
+
+/** One turn of a watched game: who moved (0 = first player), its throws, held dice and box. */
+data class WatchTurn(
+    val side: Int,
+    val throws: List<List<Int>>,
+    val held: List<List<Int>>,
+    val category: yacht.engine.Category,
+    val points: Int,
+    /** Both cards after this turn (first player, second player). */
+    val first: Board,
+    val second: Board,
+)
+
+/** A single game kept turn by turn, for watching it back. */
+object WatchMatch {
+    fun play(rules: RuleSet, first: Player, second: Player, rng: Random): List<WatchTurn> {
+        var a = Board(rules)
+        var b = Board(rules)
+        val out = ArrayList<WatchTurn>()
+        for (turn in 0 until Category.COUNT) {
+            for (side in 0..1) {
+                val p = if (side == 0) first else second
+                val me = if (side == 0) a else b
+                val opp = if (side == 0) b else a
+                p.startTurn(me, opp)
+                val throws = ArrayList<List<Int>>()
+                val held = ArrayList<List<Int>>()
+                var r = yacht.engine.Match.throwDice(rng, Dice.EMPTY_KEEP)
+                throws += Dice.rollFaces(r)
+                for (rollsDone in 1..2) {
+                    val keep = p.chooseKeep(rollsDone, r)
+                    if (keep == Dice.rollAsKeep[r]) break
+                    held += Dice.keepFaces(keep)
+                    r = yacht.engine.Match.throwDice(rng, keep)
+                    throws += Dice.rollFaces(r)
+                }
+                val c = p.chooseCategory(r)
+                val pts = rules.score(Dice.rollCounts[r], c)
+                if (side == 0) a = a.with(c, pts) else b = b.with(c, pts)
+                out += WatchTurn(side, throws, held, c, pts, a, b)
+            }
+        }
+        return out
+    }
+}

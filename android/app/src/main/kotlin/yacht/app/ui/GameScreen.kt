@@ -92,7 +92,11 @@ fun GameScreen(c: AppController) {
                 title = {
                     Column {
                         Text(
-                            (if (s.source == DiceSource.MANUAL) "실전 도우미" else "AI와 대전") + if (s.style == PlayStyle.SOLO) " · 혼자 두기" else "",
+                            when {
+                                s.ranked -> "🎮 랭크전"
+                                s.rankedAi != null -> "랭크전 (연습 경기)"
+                                else -> (if (s.source == DiceSource.MANUAL) "실전 도우미" else "AI와 대전") + if (s.style == PlayStyle.SOLO) " · 혼자 두기" else ""
+                            },
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
@@ -153,7 +157,8 @@ fun GameScreen(c: AppController) {
             title = { Text("힌트를 볼까요?") },
             text = {
                 Text(
-                    "힌트를 보면 이 판은 ‘AI 추천 받기’ 기록으로 바뀌어요. 혼자 둔 판의 통계에는 들어가지 않아요.",
+                    (if (s.ranked) "힌트를 보면 이 랭크전은 연습 경기가 되어 레이팅에 반영되지 않아요. " else "") +
+                        "힌트를 보면 이 판은 ‘AI 추천 받기’ 기록으로 바뀌어요. 혼자 둔 판의 통계에는 들어가지 않아요.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
@@ -990,6 +995,10 @@ private fun GameOverPanel(c: AppController, s: GameState) {
                 fontWeight = FontWeight.ExtraBold,
             )
             Text("나 $me : $opp ${oppName(s)}", style = MaterialTheme.typography.titleMedium)
+            c.rankResult?.let { RankResultCard(it) }
+            if (s.rankedAi != null && !s.ranked) {
+                Text("힌트를 봐서 연습 경기로 끝났어요. 레이팅은 그대로예요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            }
             val summary = c.gameSummary(s)
             if (summary != null && summary.details.isNotEmpty()) {
                 Bullets(summary.details, cs.onSurface)
@@ -998,7 +1007,11 @@ private fun GameOverPanel(c: AppController, s: GameState) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { c.openReview(s) }, modifier = Modifier.weight(1f)) { Text("복기 보기") }
-                OutlinedButton(onClick = { c.screen = Screen.HOME }, modifier = Modifier.weight(1f)) { Text("새 게임") }
+                if (s.rankedAi != null) {
+                    OutlinedButton(onClick = { c.newRankedGame() }, modifier = Modifier.weight(1f)) { Text("랭크전 한 판 더") }
+                } else {
+                    OutlinedButton(onClick = { c.screen = Screen.HOME }, modifier = Modifier.weight(1f)) { Text("새 게임") }
+                }
             }
         }
     }

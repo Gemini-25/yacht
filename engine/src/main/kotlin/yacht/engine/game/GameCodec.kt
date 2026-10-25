@@ -17,6 +17,8 @@ object GameCodec {
         appendLine("created=${s.createdAt}")
         appendLine("style=${s.style}")
         s.opponent?.let { appendLine("opponent=${clean(it)}") }
+        s.rankedAi?.let { appendLine("ranked=${clean(it)}") }
+        if (s.rated) appendLine("rated=1")
         appendLine("me=${board(s.me)}")
         appendLine("opp=${board(s.opp)}")
         appendLine("rolls=${s.draft.rollsDone}")
@@ -94,6 +96,8 @@ object GameCodec {
             createdAt = kv["created"]?.toLong() ?: 0L,
             style = kv["style"]?.let { v -> PlayStyle.entries.firstOrNull { it.name == v } } ?: PlayStyle.ASSISTED,
             opponent = kv["opponent"]?.takeIf { it.isNotBlank() },
+            rankedAi = kv["ranked"]?.takeIf { it.isNotBlank() },
+            rated = kv["rated"] == "1",
         )
     }
 

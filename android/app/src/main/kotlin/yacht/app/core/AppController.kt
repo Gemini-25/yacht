@@ -47,6 +47,9 @@ import yacht.engine.explain.QuizQuestion
 import yacht.engine.explain.QuizResult
 import yacht.engine.explain.WhatIf
 import yacht.engine.explain.WhatIfAnalysis
+import yacht.engine.Player
+import yacht.engine.league.CloneProfile
+import yacht.engine.league.TierName
 import yacht.engine.game.DecisionRecord
 import yacht.engine.game.DecisionNote
 import yacht.engine.game.DiceSource
@@ -79,6 +82,17 @@ class GameStorage(val dir: File) {
 
     fun saveFinished(id: Long, text: String) = File(finished, "$id.txt").writeText(text)
 
+    /** Finished games on disk (for a backup). */
+    fun gameFiles(): List<File> = finished.listFiles()?.filter { it.name.endsWith(".txt") }.orEmpty()
+
+    /** Adds a finished game from a backup; false when it is already there. */
+    fun importGame(name: String, text: String): Boolean {
+        val f = File(finished, File(name).name)
+        if (!f.name.endsWith(".txt") || f.exists()) return false
+        f.writeText(text)
+        return true
+    }
+
     /** A finished game reopened by undo is not finished any more. */
     fun deleteFinished(id: Long) = File(finished, "$id.txt").delete()
 
@@ -90,7 +104,7 @@ class GameStorage(val dir: File) {
         settings.writeText(values.entries.joinToString("\n") { "${it.key}=${it.value}" })
 }
 
-enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ, LEAGUE }
+enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ, LEAGUE, WATCH, BUILDER }
 
 /** Practice record (saved). */
 data class QuizStats(val answered: Int = 0, val correct: Int = 0, val lossSum: Double = 0.0)
@@ -144,6 +158,8 @@ class AppController(
     private val scope: CoroutineScope,
     private val storage: GameStorage,
     private val loadTables: () -> Tables,
+    /** A text file shipped with the app (the league seed), or null. */
+    private val loadAsset: (String) -> String? = { null },
 ) {
     var screen by mutableStateOf(Screen.HOME)
     var tables by mutableStateOf<Tables?>(null)
@@ -215,7 +231,18 @@ class AppController(
         private set
 
     /** The AI league (its own background runner, started and stopped from its screen). */
-    val league = LeagueController(scope, storage.dir)
+    val league = LeagueController(scope, storage.dir) { loadAsset(LEAGUE_SEED) }
+
+    /** My ranked result of the game just finished (rating and tier before and after). */
+    var rankResult by mutableStateOf<RankResult?>(null)
+        private set
+
+    /** My AI open in the builder; null builds a new one. */
+    var editingAi by mutableStateOf<yacht.engine.league.CustomAiSpec?>(null)
+
+    /** The league AI of the ranked game in progress (made again after a restart). */
+    private var rankedPlayer: Player? = null
+    private var rankedKey: String? = null
 
     private var advisor: Advisor? = null
     private var explainer: Explainer? = null
@@ -285,6 +312,7 @@ class AppController(
                     storage.loadCurrent()?.let { runCatching { GameCodec.decode(it, t.rules) }.getOrNull() }
                 }
                 history = withContext(Dispatchers.IO) { readHistory() }
+                league.updateClone(CloneProfile.of(history))
                 if (saved != null) {
                     state = saved
                     if (!saved.isOver) {
@@ -614,6 +642,13 @@ class AppController(
             tags = (listOf(tag) + tags.filter { it != tag }).take(MAX_TAGS)
             saveSettings()
         }
+        resetForNewGame()
+        state = GameState.new(source, first, t.rules, nextStyle, if (source == DiceSource.MANUAL) tag else null)
+        screen = Screen.GAME
+        onStateChanged()
+    }
+
+    private fun resetForNewGame() {
         undoStack.clear()
         canUndo = false
         aiJob?.cancel()
@@ -624,9 +659,26 @@ class AppController(
         duelTable = null
         oppOutlook = null
         outlookKey = null
-        state = GameState.new(source, first, t.rules, nextStyle, if (source == DiceSource.MANUAL) tag else null)
+        rankResult = null
+        rankedPlayer = null
+        rankedKey = null
+    }
+
+    /**
+     * A ranked game against a league AI: [aiKey], or one near my rating (within [tier] when
+     * given). Played alone; the result moves my league rating. False when no AI is rated yet.
+     */
+    fun newRankedGame(aiKey: String? = null, tier: TierName? = null): Boolean {
+        val t = tables ?: return false
+        val key = aiKey ?: league.pickOpponent(rng, tier) ?: return false
+        resetForNewGame()
+        state = GameState.new(
+            DiceSource.RANDOM, if (rng.nextBoolean()) Side.ME else Side.OPP, t.rules, PlayStyle.SOLO,
+            opponent = league.name(key), rankedAi = key,
+        )
         screen = Screen.GAME
         onStateChanged()
+        return true
     }
 
     fun enterFace(face: Int) = act { Game.enterFace(it, face) }
@@ -715,6 +767,7 @@ class AppController(
     fun openHistory() {
         scope.launch {
             history = withContext(Dispatchers.IO) { readHistory() }
+            league.updateClone(CloneProfile.of(history))
             screen = Screen.HISTORY
         }
     }
@@ -747,7 +800,10 @@ class AppController(
                 if (s.isOver) storage.saveFinished(s.createdAt, text)
             }
         }
-        if (s.isOver) return
+        if (s.isOver) {
+            finished(s)
+            return
+        }
         val table = duelTable
         if (table != null && !table.contains(s.me, s.opp)) duelTable = null
         when (s.toMove) {
@@ -758,6 +814,27 @@ class AppController(
             }
         }
         maybeStartDuel(s)
+    }
+
+    /** A game just ended: into the history (the clone follows), and a ranked one into my rating. */
+    private fun finished(s: GameState) {
+        if (history.none { it.createdAt == s.createdAt && it.moves.size == s.moves.size }) {
+            history = listOf(s) + history.filter { it.createdAt != s.createdAt }
+            league.updateClone(CloneProfile.of(history))
+        }
+        val key = s.rankedAi ?: return
+        if (!s.ranked || s.rated) return
+        rankResult = league.recordMyGame(key, s.me, s.opp)
+        val rated = s.copy(rated = true)
+        state = rated
+        // A counted game cannot be taken back.
+        undoStack.clear()
+        canUndo = false
+        val text = GameCodec.encode(rated)
+        scope.launch(Dispatchers.IO) {
+            storage.saveCurrent(text)
+            storage.saveFinished(rated.createdAt, text)
+        }
     }
 
     private fun stopDuel() {
@@ -893,7 +970,10 @@ class AppController(
             val started = System.currentTimeMillis()
             try {
                 delay(350)
-                val (move, steps) = withContext(Dispatchers.Default) { aiTurn(adv, s, winBefore, table, forWin) }
+                val (move, steps) = withContext(Dispatchers.Default) {
+                    val ranked = s.rankedAi
+                    if (ranked != null) rankedTurn(adv, s, ranked, winBefore, table, forWin) else aiTurn(adv, s, winBefore, table, forWin)
+                }
                 // Leave time to take back a mis-tapped box before the AI's dice are shown.
                 if (canUndo) delay(UNDO_GRACE_MS - (System.currentTimeMillis() - started))
                 if (state != s) return@launch
@@ -970,6 +1050,51 @@ class AppController(
         return MoveRecord(Side.OPP, c, points, throws = throws, held = held, why = why) to steps
     }
 
+    /**
+     * A league AI's turn in a ranked game: its own decisions. When hints may be shown the
+     * playback compares them with the app's AI and says when it slips.
+     */
+    private fun rankedTurn(adv: Advisor, s: GameState, key: String, winBefore: Double?, table: DuelSearch?, forWin: Boolean): Pair<MoveRecord, List<AiStep>> {
+        val player = rankedPlayer?.takeIf { rankedKey == key }
+            ?: league.player(key, Random(rng.nextLong()))?.also {
+                rankedPlayer = it
+                rankedKey = key
+            }
+            ?: return aiTurn(adv, s, winBefore, table, forWin)
+        player.startTurn(s.opp, s.me)
+        val throws = ArrayList<List<Int>>()
+        val held = ArrayList<List<Int>>()
+        var r = Match.throwDice(rng, Dice.EMPTY_KEEP)
+        throws += Dice.rollFaces(r)
+        for (rollsDone in 1..2) {
+            val k = player.chooseKeep(rollsDone, r)
+            if (k == Dice.rollAsKeep[r]) break
+            held += Dice.keepFaces(k)
+            r = Match.throwDice(rng, k)
+            throws += Dice.rollFaces(r)
+        }
+        val c = player.chooseCategory(r)
+        val points = adv.tables.scores[r, c.ordinal]
+        val name = s.opponent ?: "AI"
+        val steps = if (!s.hintsShown) {
+            throws.mapIndexed { k, d ->
+                val end = k == throws.size - 1
+                AiStep(k + 1, d.sorted(), held.getOrNull(k), if (end) c else null, if (end) points else 0, null, emptyList())
+            }
+        } else {
+            commentary?.let { talk ->
+                runCatching {
+                    val t = adv.tables
+                    val reference = adv.planTurn(s.opp, s.me, Mode.WIN, depth = 1)
+                    val now = winBefore ?: if (s.me.isComplete) OutlookAnalysis(t).quick(s.me, s.opp) else adv.planTurn(s.me, s.opp, Mode.WIN, depth = 1).startValue
+                    val winOf = if (forWin) OutlookAnalysis(t).winAfter(s.me, s.opp, now, table?.let { tb -> { o: Board -> tb.valueAt(s.me, o)?.first } }) else null
+                    talk.aiSteps(reference, s.opp, throws, held, c, winOf?.let { w -> { b: Board -> w(b) } }, now.takeIf { forWin }, judge = true, who = name)
+                }.getOrNull()
+            }.orEmpty()
+        }
+        return MoveRecord(Side.OPP, c, points, throws = throws, held = held) to steps
+    }
+
     private fun aiLog(s: GameState, m: MoveRecord): String =
         "턴 ${s.opp.filledCount + 1}: " + m.throws.orEmpty().joinToString(" → ") { it.joinToString("") } +
             " ⇒ ${Game.scoreText(m.category, m.points)}"
@@ -1002,6 +1127,76 @@ class AppController(
             }
             if (outlookKey == key) oppOutlook = o
         }
+    }
+
+    // ---- backup ----------------------------------------------------------------------------------
+
+    /** Everything worth keeping as one zip: finished games, settings and the league (not the tables). */
+    fun backupBytes(): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(out).use { zip ->
+            fun put(name: String, f: File) {
+                zip.putNextEntry(java.util.zip.ZipEntry(name))
+                zip.write(f.readBytes())
+                zip.closeEntry()
+            }
+            for (f in storage.gameFiles()) put("games/${f.name}", f)
+            File(storage.dir, "settings.txt").takeIf { it.exists() }?.let { put("settings.txt", it) }
+            for (f in league.files()) put("league/${f.name}", f)
+        }
+        return out.toByteArray()
+    }
+
+    /** Suggested file name of a backup. */
+    fun backupName(): String = "yacht-backup-" + java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.ROOT).format(java.util.Date()) + ".zip"
+
+    /**
+     * Restores a backup: finished games are added (ones already here are skipped); my AIs are
+     * added; the league record is taken only when this app's league has no games yet.
+     * Returns a sentence for the screen.
+     */
+    fun restore(bytes: ByteArray): String {
+        var added = 0
+        var skipped = 0
+        var leagueTaken = false
+        var customs = 0
+        val leagueFiles = HashMap<String, ByteArray>()
+        runCatching {
+            java.util.zip.ZipInputStream(bytes.inputStream()).use { zip ->
+                while (true) {
+                    val e = zip.nextEntry ?: break
+                    val data = zip.readBytes()
+                    when {
+                        e.name.startsWith("games/") -> if (storage.importGame(e.name.removePrefix("games/"), String(data))) added++ else skipped++
+                        e.name.startsWith("league/") -> leagueFiles[e.name.removePrefix("league/")] = data
+                    }
+                }
+            }
+        }.onFailure { return "백업 파일을 읽지 못했어요." }
+        leagueFiles["custom.txt"]?.let { data ->
+            for (spec in String(data).lines().mapNotNull { yacht.engine.league.CustomAiSpec.decode(it) }) {
+                if (league.customs.none { it.id == spec.id }) {
+                    league.saveCustom(spec)
+                    customs++
+                }
+            }
+        }
+        if ((league.view?.matches ?: 0L) == 0L && leagueFiles["ladder.txt"] != null) {
+            val dir = File(storage.dir, "league").apply { mkdirs() }
+            for (name in listOf("ladder.txt", "season.txt")) leagueFiles[name]?.let { File(dir, name).writeBytes(it) }
+            league.reload()
+            leagueTaken = true
+        }
+        scope.launch {
+            history = withContext(Dispatchers.IO) { readHistory() }
+            league.updateClone(CloneProfile.of(history))
+        }
+        val parts = ArrayList<String>()
+        parts += "게임 기록 ${added}판을 가져왔어요" + if (skipped > 0) "(이미 있던 ${skipped}판은 건너뜀)" else ""
+        if (customs > 0) parts += "내가 만든 AI ${customs}개를 더했어요"
+        if (leagueTaken) parts += "리그 기록도 가져왔어요"
+        else if (leagueFiles.containsKey("ladder.txt")) parts += "이 앱의 리그 기록이 이미 있어서 리그는 그대로 뒀어요"
+        return parts.joinToString(". ") + "."
     }
 
     // ---- practice quiz -------------------------------------------------------------------------
@@ -1204,6 +1399,9 @@ class AppController(
         const val REVIEW_BUDGET = 100_000_000L
 
         private const val TAG_SEP = "\u001f"
+
+        /** A league already played on a server, to start from instead of zero (assets). */
+        const val LEAGUE_SEED = "league_seed.txt"
         private const val MAX_TAGS = 8
 
         /**

@@ -20,11 +20,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -63,9 +67,12 @@ import yacht.app.core.LeagueController
 import yacht.app.core.LeagueSpeed
 import yacht.app.core.LeagueView
 import yacht.app.core.Screen
+import yacht.app.core.SeasonHistoryItem
+import yacht.app.core.SeasonView
 import yacht.engine.explain.Ko
 import yacht.engine.league.Family
 import yacht.engine.league.Ladder
+import yacht.engine.league.Season
 import yacht.engine.league.Tier
 import yacht.engine.league.TierName
 
@@ -84,6 +91,7 @@ fun LeagueScreen(c: AppController) {
     val v = lg.view
     val tab = lg.tab
     var resetAsk by remember { mutableStateOf(false) }
+    var rankedAsk by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Scaffold(
         containerColor = cs.background,
@@ -107,17 +115,30 @@ fun LeagueScreen(c: AppController) {
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             ControlCard(lg, v)
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AssistChip(onClick = { rankedAsk = true }, label = { Text("🎮 랭크전") })
+                AssistChip(
+                    onClick = { watchFeatured(c) },
+                    label = { Text("👀 경기 관전") },
+                )
+                AssistChip(onClick = { c.editingAi = null; c.screen = Screen.BUILDER }, label = { Text("🛠 AI 만들기") })
+            }
+            lg.seasonNews?.let { SeasonNews(it) { lg.seasonNews = null } }
             TabRow(selectedTabIndex = tab, containerColor = cs.background) {
-                for ((i, t) in listOf("순위표", "경기 소식", "계열별").withIndex()) {
-                    Tab(selected = tab == i, onClick = { lg.tab = i }, text = { Text(t) })
+                for ((i, t) in listOf("순위표", "시즌", "경기 소식", "계열별").withIndex()) {
+                    Tab(selected = tab == i, onClick = { lg.tab = i }, text = { Text(t, maxLines = 1) })
                 }
             }
             if (v == null) {
                 CenterText("리그 기록을 불러오는 중…")
             } else {
                 when (tab) {
-                    0 -> LadderList(v) { lg.detail = it }
-                    1 -> FeedList(lg, v)
+                    0 -> LadderList(lg, v) { lg.detail = it }
+                    1 -> SeasonList(v.season) { lg.detail = it }
+                    2 -> FeedList(lg, v)
                     else -> FamilyList(v) { lg.detail = it }
                 }
             }
@@ -125,7 +146,8 @@ fun LeagueScreen(c: AppController) {
     }
     val key = lg.detail
     val row = v?.rows?.firstOrNull { it.key == key }
-    if (row != null) AiDetail(lg, row) { lg.detail = null }
+    if (row != null) AiDetail(c, row) { lg.detail = null }
+    if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
     if (resetAsk) {
         AlertDialog(
             onDismissRequest = { resetAsk = false },
@@ -180,6 +202,43 @@ private fun ControlCard(lg: LeagueController, v: LeagueView?) {
                     FilterChip(selected = lg.speed == s, onClick = { lg.changeSpeed(s) }, label = { Text(s.label, fontSize = 12.sp) })
                 }
             }
+            if (v != null && v.matches == 0L && lg.hasSeed && !lg.running) {
+                OutlinedButton(onClick = { lg.loadSeed() }, modifier = Modifier.fillMaxWidth()) { Text("⚡ 미리 돌린 리그로 시작 (서버에서 수십만 경기)") }
+            }
+        }
+    }
+}
+
+/** Watches a featured game (a top AI against a rival). */
+private fun watchFeatured(c: AppController) {
+    val lg = c.league
+    val (a, b) = lg.featured(java.util.Random()) ?: return
+    lg.startWatch(a, b) { c.aiPace.stepMs.coerceAtLeast(400L) }
+    c.screen = Screen.WATCH
+}
+
+/** Banner of a season that just ended. */
+@Composable
+private fun SeasonNews(h: SeasonHistoryItem, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer),
+    ) {
+        Row(Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("🏆 시즌 ${h.number} 종료! 우승 ${h.champions.firstOrNull() ?: "–"}", fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)
+                Text(
+                    listOfNotNull(
+                        h.topScorer?.let { "득점왕 $it" },
+                        h.yachtKing?.let { "요트왕 $it" },
+                        h.promoted.takeIf { it.isNotEmpty() }?.let { "승격 ${it.size}팀" },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onTertiaryContainer,
+                )
+            }
+            TextButton(onClick = onDismiss) { Text("닫기") }
         }
     }
 }
@@ -187,7 +246,7 @@ private fun ControlCard(lg: LeagueController, v: LeagueView?) {
 // ---- ladder ------------------------------------------------------------------------------------
 
 @Composable
-private fun LadderList(v: LeagueView, onOpen: (String) -> Unit) {
+private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     var family by remember { mutableStateOf<Family?>(null) }
     var sort by remember { mutableStateOf(LadderSort.RATING) }
     val rows = v.rows.filter { family == null || it.family == family }.let { r ->
@@ -214,6 +273,15 @@ private fun LadderList(v: LeagueView, onOpen: (String) -> Unit) {
                 for (s in LadderSort.entries) {
                     FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.label, fontSize = 12.sp) })
                 }
+            }
+        }
+        if (lg.clone == null) {
+            item {
+                Text(
+                    "🧬 ‘혼자 두기’로 ${yacht.engine.league.CloneProfile.MIN_GAMES}판 이상 끝내면 내 실수 습관을 닮은 ‘내 분신’ AI가 리그에 들어와요.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         if (v.matches == 0L) {
@@ -245,18 +313,29 @@ private fun LadderItem(r: LadderRow, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = if (r.playing) cs.secondaryContainer.copy(alpha = 0.45f) else cs.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                r.isMe -> cs.primaryContainer
+                r.playing -> cs.secondaryContainer.copy(alpha = 0.45f)
+                else -> cs.surface
+            },
+        ),
     ) {
         Row(Modifier.padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.width(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(r.rank?.toString() ?: "–", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
                 RankChange(r.rankChange)
             }
-            TierBadge(r.tier, r.games, Modifier.width(78.dp))
+            TierBadge(r.tier, r.games, Modifier.width(78.dp), if (r.isMe) Ladder.ME_PLACEMENT else Ladder.PLACEMENT)
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(r.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false))
+                    Text(
+                        if (r.isMe) "🙋 나 (랭크전)" else r.name,
+                        fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false),
+                    )
                     if (r.playing) Text(" ⚔️", fontSize = 11.sp)
+                    r.division?.let { Text(" ${it + 1}부", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
                 }
                 Text(
                     "${r.wins}승 ${if (r.ties > 0) "${r.ties}무 " else ""}${r.losses}패 · ${"%.1f".format(100 * r.winRate)}% · ${"%.0f".format(r.avgScore)}점",
@@ -319,7 +398,7 @@ private val TierName.badge: String
     }
 
 @Composable
-private fun TierBadge(t: Tier?, games: Int, modifier: Modifier = Modifier) {
+private fun TierBadge(t: Tier?, games: Int, modifier: Modifier = Modifier, placement: Int = Ladder.PLACEMENT) {
     val bg = t?.let { tierColor(it.name) } ?: MaterialTheme.colorScheme.surfaceVariant
     val fg = if (t == null) MaterialTheme.colorScheme.onSurfaceVariant else Color.White
     Column(
@@ -328,7 +407,7 @@ private fun TierBadge(t: Tier?, games: Int, modifier: Modifier = Modifier) {
     ) {
         if (t == null) {
             Text("배치 중", color = fg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            Text("$games/${Ladder.PLACEMENT}판", color = fg, fontSize = 10.sp)
+            Text("$games/${placement}판", color = fg, fontSize = 10.sp)
         } else {
             Text(t.name.badge + (t.division?.let { " ${roman(it)}" } ?: ""), color = fg, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
             Text("${t.lp} LP", color = fg.copy(alpha = 0.9f), fontSize = 10.sp)
@@ -439,6 +518,119 @@ private fun noteText(lg: LeagueController, note: String): String? {
     }
 }
 
+// ---- season ------------------------------------------------------------------------------------
+
+@Composable
+private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    if (season == null) {
+        CenterText("▶ 리그를 시작하면 지금 순위대로 1부·2부·3부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 한 번씩 맞붙어 승점(승 3, 무 1)을 쌓고, 시즌이 끝나면 위아래 ${Season.SWAP}팀씩 승강해요.")
+        return
+    }
+    var division by remember { mutableStateOf(0) }
+    val d = division.coerceIn(0, season.divisions.size - 1)
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("시즌 ${season.number}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("${season.played}/${season.total}경기", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                    }
+                    LinearProgressIndicator(
+                        progress = { if (season.total == 0) 0f else season.played.toFloat() / season.total },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "부마다 모두 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 동점이면 득실. 🟢 승격권 · 🔴 강등권",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                    )
+                    if (season.newcomers.isNotEmpty()) {
+                        Text(
+                            "다음 시즌 ${season.divisions.size}부 합류 대기: ${season.newcomers.joinToString(", ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = cs.secondary,
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (i in season.divisions.indices) {
+                    FilterChip(selected = d == i, onClick = { division = i }, label = { Text("${i + 1}부 (${season.divisions[i].size})", fontSize = 12.sp) })
+                }
+            }
+        }
+        item {
+            Row(Modifier.padding(horizontal = 8.dp)) {
+                Text("#", Modifier.width(24.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text("팀", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text("경기", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                Text("승-무-패", Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+            }
+        }
+        itemsIndexed(season.divisions[d], key = { _, r -> "s-${r.key}" }) { i, r ->
+            val zone = when (r.zone) {
+                1 -> gameColors.good
+                -1 -> cs.error
+                else -> Color.Transparent
+            }
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable { onOpen(r.key) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(4.dp).height(30.dp).background(zone))
+                Text("${i + 1}", Modifier.width(24.dp).padding(start = 4.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
+                Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
+                Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
+            }
+        }
+        if (season.history.isNotEmpty()) {
+            item {
+                Text("🏛 명예의 전당", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+                val titles = season.history.mapNotNull { it.champions.firstOrNull() }.groupingBy { it }.eachCount()
+                    .entries.sortedByDescending { it.value }.take(3)
+                if (titles.isNotEmpty()) {
+                    Text(
+                        "최다 우승: " + titles.joinToString(" · ") { "${it.key} ${it.value}회" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
+            }
+            items(season.history, key = { "h-${it.number}" }) { h -> SeasonHistoryCard(h) }
+        }
+    }
+}
+
+@Composable
+private fun SeasonHistoryCard(h: SeasonHistoryItem) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("시즌 ${h.number}", fontWeight = FontWeight.Bold)
+            Text(
+                h.champions.mapIndexed { i, n -> "${if (i == 0) "👑" else "🥇"} ${i + 1}부 $n" }.joinToString("  "),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            val awards = listOfNotNull(
+                h.topScorer?.let { "⚽ 득점왕 $it (평균 ${"%.1f".format(h.topScore)}점)" },
+                h.yachtKing?.let { "🎲 요트왕 $it (${h.yachts}번)" },
+            )
+            if (awards.isNotEmpty()) Text(awards.joinToString("  "), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            if (h.promoted.isNotEmpty()) Text("⬆ 승격: ${h.promoted.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = gameColors.good)
+            if (h.relegated.isNotEmpty()) Text("⬇ 강등: ${h.relegated.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = cs.error)
+        }
+    }
+}
+
 // ---- families ----------------------------------------------------------------------------------
 
 @Composable
@@ -477,7 +669,8 @@ private fun FamilyList(v: LeagueView, onOpen: (String) -> Unit) {
 // ---- one AI ------------------------------------------------------------------------------------
 
 @Composable
-private fun AiDetail(lg: LeagueController, r: LadderRow, onDismiss: () -> Unit) {
+private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
+    val lg = c.league
     val cs = MaterialTheme.colorScheme
     val (best, worst) = remember(r.key, r.games) { lg.matchups(r.key) }
     AlertDialog(
@@ -500,6 +693,36 @@ private fun AiDetail(lg: LeagueController, r: LadderRow, onDismiss: () -> Unit) 
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("${r.family.label} · ${r.desc}" + if (r.heavy) " (승률 탐색을 써서 계산이 무거워요)" else "", style = MaterialTheme.typography.bodySmall)
+                if (r.key == yacht.engine.league.CustomAis.CLONE) {
+                    lg.clone?.let { p ->
+                        Text(
+                            "혼자 둔 최근 ${p.games}판에서 남기기 ${p.keepDecisions}번 중 ${"%.0f".format(100 * p.keepSlip)}%, " +
+                                "칸 고르기 ${p.boxDecisions}번 중 ${"%.0f".format(100 * p.boxSlip)}%를 추천과 다르게 뒀어요. 분신도 그만큼 차선을 둬요.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cs.secondary,
+                        )
+                    }
+                }
+                if (!r.isMe) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        AssistChip(onClick = { onDismiss(); c.newRankedGame(r.key) }, label = { Text("🎮 이 AI와 랭크전") })
+                        AssistChip(
+                            onClick = {
+                                val rival = lg.rivalOf(r.key, java.util.Random())
+                                if (rival != null) {
+                                    onDismiss()
+                                    lg.startWatch(r.key, rival) { c.aiPace.stepMs.coerceAtLeast(400L) }
+                                    c.screen = Screen.WATCH
+                                }
+                            },
+                            label = { Text("👀 관전") },
+                        )
+                        val mine = lg.customs.firstOrNull { it.key == r.key }
+                        if (mine != null) {
+                            AssistChip(onClick = { onDismiss(); c.editingAi = mine; c.screen = Screen.BUILDER }, label = { Text("🛠 고치기") })
+                        }
+                    }
+                }
                 StatGrid(
                     listOf(
                         "경기" to "${r.games}판",

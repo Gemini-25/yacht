@@ -24,6 +24,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -70,6 +71,8 @@ fun AppRoot(c: AppController) {
                 Screen.VERIFY -> VerifyScreen(c)
                 Screen.QUIZ -> QuizScreen(c)
                 Screen.LEAGUE -> LeagueScreen(c)
+                Screen.WATCH -> WatchScreen(c)
+                Screen.BUILDER -> BuilderScreen(c)
             }
         }
     }
@@ -87,6 +90,9 @@ fun HomeScreen(c: AppController) {
     var source by remember { mutableStateOf(DiceSource.MANUAL) }
     var seat by remember { mutableStateOf(Side.OPP) }
     var opponent by remember { mutableStateOf("") }
+    var rankedAsk by remember { mutableStateOf(false) }
+    var backupNote by remember { mutableStateOf<String?>(null) }
+    val files = LocalFilePort.current
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 16.dp),
@@ -112,7 +118,8 @@ fun HomeScreen(c: AppController) {
                     Column(Modifier.weight(1f)) {
                         Text("이어하기", fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
                         Text(
-                            "${if (current.source == DiceSource.MANUAL) "실전" else "AI 대전"} · ${if (current.style.assisted) "AI 추천" else "혼자"} · " +
+                            (if (current.ranked) "🎮 랭크전 vs ${current.opponent} · " else "") +
+                                "${if (current.source == DiceSource.MANUAL) "실전" else "AI 대전"} · ${if (current.style.assisted) "AI 추천" else "혼자"} · " +
                                 "내 턴 ${current.myTurnNumber}/12 · ${current.me.total} : ${current.opp.total}",
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onPrimaryContainer,
@@ -213,6 +220,10 @@ fun HomeScreen(c: AppController) {
 
         SectionTitle("AI 리그")
         MenuCard(
+            "🎮 랭크전 · ${myStanding(myRow(c))}",
+            "리그 AI와 혼자 두고 내 레이팅과 티어 매기기 · AI들과 같은 눈금이라 몇 위쯤인지 바로 보여요",
+        ) { rankedAsk = true }
+        MenuCard(
             "🏆 AI 리그 · ${c.league.size}개 AI 솔랭",
             "승률 AI부터 실수하는 AI, 단순 규칙까지 계속 붙여서 실시간 순위표로 보기 · 티어, 레이팅, 승률, 연승",
         ) { c.screen = Screen.LEAGUE }
@@ -226,6 +237,24 @@ fun HomeScreen(c: AppController) {
         ) { c.openQuiz() }
         MenuCard("승률 검증", "같은 주사위로 승률 AI와 기대점수 AI를 겨뤄 차이를 직접 측정") { c.screen = Screen.VERIFY }
 
+        SectionTitle("기록 백업")
+        Text(
+            "게임 기록, 설정, 리그(순위·시즌·내가 만든 AI)를 파일 하나로 저장하고, 다른 폰이나 다른 앱(예전 ‘요트 AI’ ↔ ‘요트 AI 2’)에서 불러올 수 있어요.",
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val f = files ?: return@OutlinedButton
+                f.save(c.backupName(), c.backupBytes()) { ok -> backupNote = if (ok) "백업 파일을 저장했어요." else "저장하지 못했어요." }
+            }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("💾 백업 저장") }
+            OutlinedButton(onClick = {
+                val f = files ?: return@OutlinedButton
+                f.open { bytes -> backupNote = bytes?.let { c.restore(it) } }
+            }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("📂 불러오기") }
+        }
+        backupNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.secondary) }
+
         Text(
             "규칙: 상단 63점 이상 보너스 35 · 초이스/포카드/풀하우스 = 주사위 5개 합 (요트도 풀하우스 인정) · " +
                 "S.스트레이트 15 · L.스트레이트 30 · 요트 50",
@@ -233,6 +262,7 @@ fun HomeScreen(c: AppController) {
             color = cs.onSurfaceVariant,
         )
     }
+    if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
 }
 
 @Composable

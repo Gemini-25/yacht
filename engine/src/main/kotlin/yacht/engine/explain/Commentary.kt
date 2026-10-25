@@ -122,6 +122,12 @@ class Commentary(private val tables: Tables) {
         winOf: ((Board) -> Double)?,
         winBefore: Double?,
         reasons: List<String?>? = null,
+        /** The AI may play worse than [aiTurn] (a league AI): say when it departs from it. */
+        judge: Boolean = false,
+        /** How the AI is named in the lines ("AI", or the league AI's name). */
+        who: String = "AI",
+        /** Whose P(win) [winOf] gives: "내" for me, or a name when watching two AIs. */
+        viewer: String = "내",
     ): List<AiStep> {
         val plan = aiTurn.active
         val steps = ArrayList<AiStep>()
@@ -136,21 +142,22 @@ class Commentary(private val tables: Tables) {
             val dist = throwDist(rollsDone, keep)
             val lines = ArrayList<Comment>()
             reasons?.getOrNull(k)?.let { lines += Comment("🤖 AI의 생각", it) }
-            rareHand(ai, dist, r, rollsDone, prevHeld, "AI ")?.let { lines += it }
-            throwLuck(aiTurn, plan, rollsDone, dist, r, "AI")?.let { lines += it }
+            rareHand(ai, dist, r, rollsDone, prevHeld, "$who ")?.let { lines += it }
+            throwLuck(aiTurn, plan, rollsDone, dist, r, who)?.let { lines += it }
             val holds = k < held.size
+            if (judge) judgeLine(aiTurn, plan, rollsDone, r, if (holds) held[k] else null, if (holds) null else category, who)?.let { lines += it }
             val win: Double?
             if (holds) {
                 val nextKeep = Dice.keepIndex(Dice.countsOf(held[k]))
                 val final = plan.finalRolls(rollsDone, nextKeep)
                 win = expectWin(ai, plan, final, ::myWin)
-                aiChase(ai, plan, final, win, ::myWin)?.let { lines += it }
+                aiChase(ai, plan, final, win, ::myWin, who, viewer)?.let { lines += it }
                 keep = nextKeep
                 prevHeld = held[k]
             } else {
                 win = myWin(ai.with(category, scores[r, category.ordinal]))
             }
-            winLine(prevWin, win)?.let { lines += it }
+            winLine(prevWin, win, viewer)?.let { lines += it }
             steps += AiStep(
                 rollsDone, faces.sorted(), if (holds) held[k] else null, if (holds) null else category,
                 if (holds) 0 else scores[r, category.ordinal], win, lines,
@@ -159,6 +166,42 @@ class Commentary(private val tables: Tables) {
         }
         return steps
     }
+
+    /**
+     * "😮 실수! 정석은 ‘6 6 6 남기기’였어요": the AI held [held] (or wrote [category]) after throw
+     * [rollsDone] where the reference plan does clearly better.
+     */
+    private fun judgeLine(turn: PlannedTurn, plan: TurnPlan, rollsDone: Int, r: Int, held: List<Int>?, category: Category?, who: String): Comment? {
+        val win = turn.mode == Mode.WIN
+        val bestValue = turn.shown(plan.rollValue(rollsDone, r))
+        val chosen: Double
+        val text: String
+        if (held != null) {
+            val k = Dice.keepIndex(Dice.countsOf(held))
+            chosen = turn.shown(plan.keepValue(rollsDone, k))
+            val best = plan.bestKeep(rollsDone, r)
+            if (best == k) return null
+            text = if (best == Dice.rollAsKeep[r]) "여기서 멈추고 ${plan.bestCategory(r).label.let { box(it) }}에 넣는 게" else "‘${keepName(Dice.keepFaces(best))}’가"
+        } else {
+            val c = category ?: return null
+            chosen = turn.shown(plan.categoryValue(r, c.ordinal))
+            val keepGoing = rollsDone < 3 && plan.bestKeep(rollsDone, r) != Dice.rollAsKeep[r]
+            val bestCat = plan.bestCategory(r)
+            text = when {
+                keepGoing -> "멈추지 말고 ‘${keepName(Dice.keepFaces(plan.bestKeep(rollsDone, r)))}’로 더 굴리는 게"
+                bestCat != c -> "${box(bestCat.label)}에 ${scores[r, bestCat.ordinal]}점을 넣는 게"
+                else -> return null
+            }
+        }
+        val loss = bestValue - chosen
+        if (loss < (if (win) 0.01 else 1.0)) return null
+        val cost = if (win) "$who 승률 ${Ko.pp(loss)} 손해" else "평균 ${Ko.num(loss)}점 손해"
+        return Comment("😮 $who 실수", "$text 정석이었어요($cost).", Tone.GOOD)
+    }
+
+    private fun keepName(faces: List<Int>) = if (faces.isEmpty()) "모두 다시" else faces.joinToString(" ") + " 남기기"
+
+    private fun box(label: String) = if (label.length == 1) "‘$label’" else label
 
     /** My expected P(win) when the AI's turn ends with a roll from [final] written by its plan. */
     private fun expectWin(ai: Board, plan: TurnPlan, final: DoubleArray, myWin: (Board) -> Double?): Double? {
@@ -173,7 +216,7 @@ class Commentary(private val tables: Tables) {
     }
 
     /** "AI가 요트를 노려요(성공 확률 17%). 성공하면 내 승률 21%." */
-    private fun aiChase(ai: Board, plan: TurnPlan, final: DoubleArray, win: Double?, myWin: (Board) -> Double?): Comment? {
+    private fun aiChase(ai: Board, plan: TurnPlan, final: DoubleArray, win: Double?, myWin: (Board) -> Double?, who: String, viewer: String): Comment? {
         val made = DoubleArray(Category.COUNT)
         val winMass = DoubleArray(Category.COUNT)
         for (rf in 0 until Dice.ROLLS) {
@@ -194,18 +237,18 @@ class Commentary(private val tables: Tables) {
         if (win - ifMade < 0.03) return null
         val goal = goalName(Category.of(c))
         val tone = if (win - ifMade >= 0.1) Tone.HOT else Tone.BAD
-        return Comment("🎯 AI의 노림수", "AI가 ${goal}에 성공하면(확률 ${Ko.pct(p)}) 내 승률은 ${Ko.ro(Ko.pct(ifMade))} 떨어져요.", tone)
+        return Comment("🎯 노림수", "${Ko.i(who)} ${goal}에 성공하면(확률 ${Ko.pct(p)}) $viewer 승률은 ${Ko.ro(Ko.pct(ifMade))} 떨어져요.", tone)
     }
 
-    private fun winLine(before: Double?, after: Double?): Comment? {
+    private fun winLine(before: Double?, after: Double?, viewer: String = "내"): Comment? {
         if (before == null || after == null) return null
         if (decided(before) && decided(after)) return null
         val d = after - before
         val (b, a) = Ko.pctPair(before, after)
         return when {
-            abs(d) < 0.005 -> Comment("📊 내 승률", "내 승률은 ${Ko.ro(a)} 거의 그대로예요.", Tone.CALM)
-            d > 0 -> Comment("📊 내 승률", "내 승률 $b → $a (+${Ko.pp(d)})", Tone.GOOD)
-            else -> Comment("📊 내 승률", "내 승률 $b → $a (−${Ko.pp(d)})", Tone.BAD)
+            abs(d) < 0.005 -> Comment("📊 승률", "$viewer 승률은 ${Ko.ro(a)} 거의 그대로예요.", Tone.CALM)
+            d > 0 -> Comment("📊 승률", "$viewer 승률 $b → $a (+${Ko.pp(d)})", Tone.GOOD)
+            else -> Comment("📊 승률", "$viewer 승률 $b → $a (−${Ko.pp(d)})", Tone.BAD)
         }
     }
 
@@ -409,12 +452,12 @@ class Commentary(private val tables: Tables) {
         return when {
             top <= 0.1 -> Comment(
                 "🎲 굴림 운",
-                if (me) "상위 $topText 굴림이에요! $change." else "AI에게 상위 $topText 굴림이 나왔어요.",
+                if (me) "상위 $topText 굴림이에요! $change." else "${who}에게 상위 $topText 굴림이 나왔어요.",
                 if (me) Tone.GOOD else Tone.BAD,
             )
             top >= 0.9 -> Comment(
                 "🎲 굴림 운",
-                if (me) "하위 $bottomText 굴림이에요… $change." else "AI 굴림이 하위 ${Ko.ieyo(bottomText)}. 기회예요!",
+                if (me) "하위 $bottomText 굴림이에요… $change." else "$who 굴림이 하위 ${Ko.ieyo(bottomText)}. 기회예요!",
                 if (me) Tone.BAD else Tone.GOOD,
             )
             !me -> null

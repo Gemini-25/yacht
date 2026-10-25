@@ -90,6 +90,8 @@ class SlipPlayer(
     private val keeps: Boolean = true,
     private val boxes: Boolean = true,
     private val slipOf: ((me: Board, opp: Board) -> Double)? = null,
+    /** A separate chance for box choices (e.g. a player's own rate); null = the same as for dice. */
+    private val boxSlip: Double? = null,
 ) : Player {
     constructor(ev: EvTable, slip: Double, rng: Random, name: String = "slip") :
         this({ me, _ -> TurnPlan(me, ExpectedAfter(ev, me.mask)) }, slip, rng, name)
@@ -114,7 +116,7 @@ class SlipPlayer(
 
     override fun chooseCategory(r: Int): Category {
         val best = plan.bestCategory(r)
-        if (!boxes || rng.nextDouble() >= now) return best
+        if (!boxes || rng.nextDouble() >= (boxSlip ?: now)) return best
         return me.openCategories.filter { it != best }.maxByOrNull { plan.categoryValue(r, it.ordinal) } ?: best
     }
 }
