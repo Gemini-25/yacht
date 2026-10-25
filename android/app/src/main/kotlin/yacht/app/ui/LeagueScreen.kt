@@ -672,18 +672,8 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
         }
         if (season.history.isNotEmpty()) {
             item {
-                Text("🏛 명예의 전당", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-                val titles = season.history.mapNotNull { it.champions.firstOrNull() }.groupingBy { it }.eachCount()
-                    .entries.sortedByDescending { it.value }.take(3)
-                if (titles.isNotEmpty()) {
-                    Text(
-                        "최다 우승: " + titles.joinToString(" · ") { "${it.key} ${it.value}회" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cs.onSurfaceVariant,
-                    )
-                }
+                Text("🏛 지난 시즌 우승팀과 수상자는 ‘기록’ 탭 명예의 전당에 있어요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
-            items(season.history, key = { "h-${it.number}" }) { h -> SeasonHistoryCard(h) }
         }
     }
 }
@@ -837,27 +827,6 @@ private fun RankChartCard(lg: LeagueController, season: SeasonView, division: In
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun SeasonHistoryCard(h: SeasonHistoryItem) {
-    val cs = MaterialTheme.colorScheme
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("시즌 ${h.number}", fontWeight = FontWeight.Bold)
-            Text(
-                h.champions.mapIndexed { i, n -> "${if (i == 0) "👑" else "🥇"} ${i + 1}부 $n" }.joinToString("  "),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            val awards = listOfNotNull(
-                h.topScorer?.let { "⚽ 득점왕 $it (평균 ${"%.1f".format(h.topScore)}점)" },
-                h.yachtKing?.let { "🎲 요트왕 $it (${h.yachts}번)" },
-            )
-            if (awards.isNotEmpty()) Text(awards.joinToString("  "), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-            if (h.promoted.isNotEmpty()) Text("⬆ 승격: ${h.promoted.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = gameColors.good)
-            if (h.relegated.isNotEmpty()) Text("⬇ 강등: ${h.relegated.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = cs.error)
         }
     }
 }
