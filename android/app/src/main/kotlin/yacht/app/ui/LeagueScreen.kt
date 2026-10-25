@@ -203,7 +203,7 @@ private fun ControlCard(lg: LeagueController, v: LeagueView?) {
                 }
             }
             if (v != null && v.matches == 0L && lg.hasSeed && !lg.running) {
-                OutlinedButton(onClick = { lg.loadSeed() }, modifier = Modifier.fillMaxWidth()) { Text("⚡ 미리 돌린 리그로 시작 (서버에서 수십만 경기)") }
+                OutlinedButton(onClick = { lg.loadSeed() }, modifier = Modifier.fillMaxWidth()) { Text("⚡ 미리 돌린 리그로 시작 (서버에서 둔 12만 경기)") }
             }
         }
     }
