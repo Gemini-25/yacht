@@ -24,8 +24,10 @@ import yacht.engine.league.Offseason
 import yacht.engine.league.RatingMove
 import yacht.engine.league.RecordBreak
 import yacht.engine.league.RecordKind
+import yacht.engine.league.Season
 import yacht.engine.league.SeasonEnd
 import yacht.engine.league.SeasonLine
+import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonReview
 import yacht.engine.league.SeasonSummary
 import yacht.engine.league.SideGame
@@ -236,7 +238,7 @@ class StatsTest {
      * Three seasons of 20 AIs in two divisions where the stronger AI always wins; ai15 gains 40
      * rating points every season and a rookie joins in season 2.
      */
-    private fun threeSeasons(): League {
+    private fun threeSeasons(prepare: (StatsBook, Archive) -> Unit = { _, _ -> }): League {
         val keys = (1..20).map { "ai$it" }
         fun strength(k: String) = if (k == "rookie") 1 else 100 - k.removePrefix("ai").toInt()
         val gains = HashMap<String, Double>()
@@ -245,6 +247,7 @@ class StatsTest {
         val name = { k: String -> "선수" + k.removePrefix("ai") }
         val book = StatsBook()
         val archive = Archive()
+        prepare(book, archive)
         val honours = HonourBook()
         var roster = keys
         fun context() = Offseason.Context(roster, ::rating, { Family.EV }, { "서울" }, LeagueConfig(divisions = 2))
@@ -337,6 +340,10 @@ class StatsTest {
         assertTrue(review.sentences.first().startsWith("3시즌 1부 우승은 선수1이에요."), review.sentences.first())
         assertTrue(review.sentences.any { it.startsWith("MVP는 평균 평점 7.38의 선수1이에요") }, review.sentences.toString())
         assertTrue(review.sentences.any { it == "1부 상위 5위 중 5자리를 기대점수형 계열이 차지했어요." }, review.sentences.toString())
+        // A record broken: its value in brackets after the record's name, not after the verb.
+        val said = s2.review!!.sentences
+        assertTrue("선수9가 한 시즌 최다 승점 기록(승점 30)을 새로 썼어요." in said, said.toString())
+        assertTrue("이번 시즌 깨진 리그 기록은 모두 2개예요." in said, said.toString())
         assertEquals(RatingMove("ai15", 1665.0, 1705.0), review.risers.single())
         assertTrue(review.meta.any { it.label == "리그 평균 점수" && it.delta == 0.0 })
         println(review.sentences.joinToString("\n"))
@@ -510,6 +517,8 @@ class StatsTest {
             repeat(if (i < 103) 100 else 10 + rng.nextInt(91)) { career.add(season) }
             book.putCareer(k, career)
             book.putSeason(k, seasonOf(rng, 240))
+            // Career titles and MVPs on every line, as large as they get.
+            book.putCounts(k, 99, 9)
         }
         for (kind in RecordKind.entries) {
             book.offer(LeagueRecord(kind, key(), 1.0, 90, key(), Comp.LEAGUE), ArrayList(), warm = true)
@@ -554,5 +563,161 @@ class StatsTest {
         // And it all reads back.
         assertEquals(archiveText, Archive.decode(archiveText).encode())
         assertEquals(statsText, StatsBook.decode(statsText).encode())
+    }
+
+    // ---- regressions from the review ------------------------------------------------------------
+
+    @Test
+    fun matchRatingsReadBackExactlySoAwardsDoNotChangeOnARestart() {
+        // 6.885 (a WPA of 0.11) is a half step of 0.01: three of them used to read back as 20.66.
+        val s = AiStats()
+        repeat(3) { s.addGame(SideGame(220, 180, false, false, null, Double.NaN, Double.NaN, 6.885, false)) }
+        val back = AiStats.decode(s.encode().split(' '), 0)
+        assertEquals(20.655, s.ratingSum, 1e-9)
+        assertEquals(s.ratingSum, back.ratingSum)
+        assertEquals(s.avgRating, back.avgRating)
+        assertEquals(s, back)
+    }
+
+    @Test
+    fun anUnknownStartRatingStaysUnknownAfterARestart() {
+        val book = StatsBook()
+        book.startSeason(4, mapOf("old" to 1500.4, "newborn" to Double.NaN))
+        // The app starts again in the middle of the season, when the newborn has a rating.
+        val back = StatsBook.decode(book.encode())
+        back.startSeason(4, mapOf("old" to 1580.0, "newborn" to 1650.0))
+        assertEquals(1500.0, back.startRating("old"))
+        assertTrue(back.startRating("newborn").isNaN())
+        // So 기량발전상 goes where it would have gone without the restart.
+        val keys = listOf("newborn", "old")
+        assertEquals("old", Awards.mip(keys, { back.startRating(it) }, { 1700.0 }))
+        assertEquals(book.encode(), back.encode())
+    }
+
+    @Test
+    fun aTornLastLineIsLeftOutRatherThanReadWrong() {
+        val book = StatsBook()
+        book.milestone("x", "games", 10000, 1, ArrayList())
+        val text = book.encode()
+        assertTrue(text.endsWith("10000\n"))
+        assertEquals(listOf("games", "10000"), StatsBook.decode(text).milestones.single().args)
+        // Cut to "...1000": not a 1000-game milestone.
+        assertTrue(StatsBook.decode(text.dropLast(2)).milestones.isEmpty())
+        val a = Archive()
+        a.putHighlights(3, listOf("E 1 2 287:281 comeback"))
+        val arch = a.encode()
+        assertEquals(listOf("E 1 2 287:281 comeback"), Archive.decode(arch).highlights(3))
+        assertTrue(Archive.decode(arch.dropLast(4)).highlights(3).isEmpty())
+        // The header alone, cut or not, is an empty file of its kind.
+        assertTrue(StatsBook.decode("stats 1").keys.isEmpty())
+    }
+
+    @Test
+    fun aFullHallOfFameNeverDropsAnAiThatIsStillPlaying() {
+        // Every member still plays and still qualifies: none makes room (else it would come back
+        // the next season and push the next one out, every season).
+        val playing = threeSeasons { book, archive ->
+            repeat(Archive.MAX_HALL_OF_FAME) {
+                book.putCareer("vet$it", AiStats().apply { games = 6000; gameWins = 4000 })
+                assertTrue(archive.induct(HallOfFameEntry("vet$it", "베테랑 $it", 0, "GAMES", 0, 6000, 0.67)))
+            }
+        }
+        assertTrue(playing.ends.all { e -> e.inducted.isEmpty() && e.events.none { it.kind == "hall_of_fame" } })
+        assertEquals((0 until Archive.MAX_HALL_OF_FAME).map { "vet$it" }, playing.archive.hallOfFame.map { it.key })
+        // Members gone for good make room, oldest first, and do not come back.
+        val gone = threeSeasons { _, archive ->
+            repeat(Archive.MAX_HALL_OF_FAME) { archive.induct(HallOfFameEntry("gone$it", "은퇴 선수 $it", 0, "TITLES", 3, 900, 0.6)) }
+        }
+        assertEquals(listOf("ai1"), gone.ends[1].inducted.map { it.key })
+        assertTrue(gone.ends[2].inducted.isEmpty())
+        assertEquals(Archive.MAX_HALL_OF_FAME, gone.archive.hallOfFame.size)
+        assertEquals("gone1" to "ai1", gone.archive.hallOfFame.first().key to gone.archive.hallOfFame.last().key)
+    }
+
+    /** Season [number] of [keys] in one division, played to the end (k1 strongest). */
+    private fun playedSeason(number: Int, keys: List<String>): SeasonPlan {
+        val plan = SeasonPlan(Season.start(number, number.toLong(), listOf(keys)), LeagueConfig(divisions = 1))
+        while (true) {
+            val f = plan.next(emptySet(), 0, 1) ?: break
+            plan.record(result(f) { 100 - it.removePrefix("k").toInt() })
+        }
+        plan.startPost(emptyList())
+        assertTrue(plan.finished)
+        return plan
+    }
+
+    @Test
+    fun titleMilestonesCountTheWholeCareer() {
+        val keys = (1..6).map { "k$it" }
+        val book = StatsBook()
+        val archive = Archive()
+        val honours = HonourBook()
+        fun close(plan: SeasonPlan, titles: List<Honour>): List<Pair<String, String>> {
+            val end = book.endSeason(plan, titles, honours, archive, { 1500.0 })
+            honours.add(titles + end.awards)
+            return end.events.filter { it.kind == "milestone" && it.args[0] == "title" }.map { it.keys.single() to it.args[1] }
+        }
+        // The league and the cup in the same season: still its first title.
+        assertEquals(listOf("k1" to "1"), close(playedSeason(1, keys), listOf(Honour(1, "L0", "k1"), Honour(1, "CUP", "k1"))))
+        assertEquals(2, book.titles("k1"))
+        // A hundred seasons on, the honours book no longer has them...
+        honours.add((2..101).map { Honour(it, "L0", "k6") })
+        assertEquals(0, honours.titles("k1"))
+        // ...but the career does: the next is its third title, not a first one again.
+        assertEquals(emptyList(), close(playedSeason(102, keys), listOf(Honour(102, "L0", "k1"))))
+        assertEquals(3, book.titles("k1"))
+        assertEquals(3, StatsBook.decode(book.encode()).titles("k1"))
+        // Three at once from three: the fifth is passed and announced.
+        assertEquals(listOf("k1" to "5"), close(playedSeason(103, keys), listOf(Honour(103, "L0", "k1"), Honour(103, "CUP", "k1"), Honour(103, "CL", "k1"))))
+        assertEquals(6, book.titles("k1"))
+    }
+
+    @Test
+    fun dynastiesFollowEachCompetitionsEditions() {
+        val league = Season.start(8, 1L, listOf(listOf("a", "b", "c")))
+        val history = listOf(Honour(2, "FAMILY", "EV"), Honour(4, "ALLSTAR", "1부 올스타"), Honour(5, "FAMILY", "EV"), Honour(7, "ALLSTAR", "1부 올스타"))
+        // The family cup is held every third season: the 5th season's follows the 2nd's.
+        assertEquals(listOf(Dynasty("EV", Awards.RUN, "FAMILY", 2, 2, 5)), Awards.dynasties(5, listOf(Honour(5, "FAMILY", "EV")), history.filter { it.season < 5 }, league, emptyList()))
+        // And the 8th extends that run; the all-star game (an exhibition) makes none.
+        val run = Dynasty("EV", Awards.RUN, "FAMILY", 2, 2, 5)
+        val now = listOf(Honour(8, "FAMILY", "EV"), Honour(8, "ALLSTAR", "1부 올스타"))
+        assertEquals(listOf(Dynasty("EV", Awards.RUN, "FAMILY", 3, 2, 8)), Awards.dynasties(8, now, history, league, listOf(run)))
+        // A league title is still against the season before.
+        assertTrue(Awards.dynasties(8, listOf(Honour(8, "L0", "a")), listOf(Honour(6, "L0", "a"), Honour(7, "L0", "b")), league, emptyList()).isEmpty())
+    }
+
+    @Test
+    fun theYachtRecordIsPerMatchNotPerTwoLeggedTie() {
+        val book = StatsBook()
+        val ctx = StatsContext(1, { 1500.0 })
+        val y = GameScore(250, 200, aYacht = true)
+        // A two-legged tie with A's Yacht in all four games: two in each match.
+        val tie = Fixture(Comp.CHAMPIONS, 1, "a", "b", 0L, kind = JobKind.TIE, legs = 2)
+        book.record(JobResult(tie, listOf(BoardResult("a", "b", List(4) { y }, emptyList())), 1, 0), ctx)
+        assertEquals(2.0, book.records[RecordKind.YACHTS_MATCH]!!.value)
+        // A best-of-three match is one match, its decider included.
+        val bo3 = listOf(y, GameScore(200, 250, aYacht = true), y)
+        book.record(JobResult(Fixture(Comp.LEAGUE, 2, "c", "d", 0L), listOf(BoardResult("c", "d", bo3, emptyList(), deciders = 1)), 1, 0), ctx)
+        assertEquals("c" to 3.0, book.records[RecordKind.YACHTS_MATCH]!!.let { it.holder to it.value })
+    }
+
+    @Test
+    fun levelRankingsAndViewsDoNotDependOnMapOrder() {
+        val book = StatsBook()
+        // "c" comes before "ba" in a HashMap.
+        for (k in listOf("c", "ba")) book.putCareer(k, AiStats().apply { games = 10 })
+        assertEquals(listOf("ba", "c"), book.top(2) { it.games.toDouble() }.map { it.first })
+        // Views are copies: a snapshot does not change under the next season.
+        val a = Archive()
+        a.putDynasty(Dynasty("x", Awards.RUN, "L0", 2, 1, 2))
+        a.addLine("x", SeasonLine(2, 0, 1, 9, 0, 0, 1600.0, 7.0))
+        val dynasties = a.dynasties
+        val lines = a.lines("x")
+        val keys = book.keys
+        a.putDynasty(Dynasty("y", Awards.UNBEATEN, "L0", 1, 3, 3))
+        a.addLine("x", SeasonLine(3, 0, 1, 9, 0, 0, 1610.0, 7.0))
+        book.putCareer("d", AiStats())
+        assertEquals(1 to 1, dynasties.size to lines.size)
+        assertEquals(setOf("c", "ba"), keys)
     }
 }

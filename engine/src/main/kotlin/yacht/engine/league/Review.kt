@@ -141,13 +141,13 @@ data class SeasonReview(
                 say += "레이팅이 가장 크게 떨어진 AI는 ${Ko.ieyo("${name(f.key)}(${f.delta.roundToInt()})")}."
             }
             broken.firstOrNull()?.let { b ->
-                say += "${Ko.i(name(b.record.holder))} ${b.record.kind.label} 기록을 새로 썼어요(${b.record.kind.text(b.record.value)})."
+                say += "${Ko.i(name(b.record.holder))} ${b.record.kind.label} 기록(${b.record.kind.text(b.record.value)})을 새로 썼어요."
                 if (broken.size > 1) say += "이번 시즌 깨진 리그 기록은 모두 ${broken.size}개예요."
             }
             if (before != null && !meta.avgScore.isNaN() && !before.avgScore.isNaN()) {
                 val d = meta.avgScore - before.avgScore
                 say += if (abs(d) < 0.1) "리그 평균 점수는 ${fmt(meta.avgScore, 1)}점으로 지난 시즌과 거의 같아요."
-                else "리그 평균 점수는 ${fmt(meta.avgScore, 1)}점으로 지난 시즌보다 ${fmt(abs(d), 1)}점 ${if (d > 0) "올랐어요" else "내렸어요"}."
+                else "리그 평균 점수는 ${fmt(meta.avgScore, 1)}점으로 지난 시즌보다 ${fmt(abs(d), 1)}점 ${if (d > 0) "올랐어요" else "떨어졌어요"}."
             }
             meta.traits.filter { !it.change.isNaN() && abs(it.change) >= TRAIT_NEWS }.maxByOrNull { abs(it.change) }?.let { t ->
                 say += "상위권에서 ${t.trait} ‘${t.value}’ 비율이 ${(abs(t.change) * 100).roundToInt()}%p ${if (t.change > 0) "늘었어요" else "줄었어요"}."

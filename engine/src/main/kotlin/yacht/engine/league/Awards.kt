@@ -110,18 +110,22 @@ object Awards {
     }
 
     /**
-     * Dynasties of season [n] from its honours ([now]) and the season before's ([before]):
-     * titles kept (a run starts at two in a row), doubles and trebles of the 1부 champion,
-     * unbeaten league seasons. [existing] are the dynasties so far (runs to extend, counts).
+     * Dynasties of season [n] from its honours ([now]) and the earlier seasons' ([history]):
+     * titles kept from the title's previous edition (a run starts at two in a row; the family
+     * cup is held every third season, a competition may be off for a while), doubles and trebles
+     * of the 1부 champion, unbeaten league seasons. [existing] are the dynasties so far (runs to
+     * extend, counts). The all-star game is an exhibition between two picked teams: no runs.
      */
-    fun dynasties(n: Int, now: List<Honour>, before: List<Honour>, league: Season, existing: List<Dynasty>): List<Dynasty> {
+    fun dynasties(n: Int, now: List<Honour>, history: List<Honour>, league: Season, existing: List<Dynasty>): List<Dynasty> {
         val out = ArrayList<Dynasty>()
         for (h in now.distinctBy { it.kind to it.key }) {
-            if (!isTitle(h.kind) || before.none { it.kind == h.kind && it.key == h.key }) continue
+            if (!isTitle(h.kind) || h.kind == "ALLSTAR") continue
+            val last = history.filter { it.kind == h.kind && it.season < n }.maxOfOrNull { it.season } ?: continue
+            if (history.none { it.season == last && it.kind == h.kind && it.key == h.key }) continue
             // A run already taken to this season (the season closed again) stays as it is.
-            val run = existing.firstOrNull { it.kind == RUN && it.title == h.kind && it.key == h.key && (it.to == n - 1 || it.to == n) }
+            val run = existing.firstOrNull { it.kind == RUN && it.title == h.kind && it.key == h.key && (it.to == last || it.to == n) }
             out += when {
-                run == null -> Dynasty(h.key, RUN, h.kind, 2, n - 1, n)
+                run == null -> Dynasty(h.key, RUN, h.kind, 2, last, n)
                 run.to == n -> run
                 else -> run.copy(count = run.count + 1, to = n)
             }
