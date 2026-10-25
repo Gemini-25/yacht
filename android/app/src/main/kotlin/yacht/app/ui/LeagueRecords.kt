@@ -388,8 +388,11 @@ private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsView?, on
         }
         if (r.mvpRace.isNotEmpty()) {
             item { Text("⭐ 이번 시즌 평점 순위 (MVP 레이스)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+            // Bars from a little under the lowest shown, so small gaps are visible.
+            val lo = r.mvpRace.minOf { it.second.avgRating } - 0.1
+            val hi = r.mvpRace.maxOf { it.second.avgRating }
             items(r.mvpRace, key = { "mvp-${it.first}" }) { (k, st) ->
-                BarRow(lg.name(k), st.avgRating - 3.0, 7.0, "%.2f".format(st.avgRating))
+                BarRow(lg.name(k), st.avgRating - lo, hi - lo, "%.2f".format(st.avgRating))
             }
         }
         if (r.dynasties.isNotEmpty()) {

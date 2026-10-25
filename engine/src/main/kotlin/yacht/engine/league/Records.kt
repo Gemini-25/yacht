@@ -26,7 +26,7 @@ enum class RecordKind(val label: String, val lowerIsBetter: Boolean = false) {
     fun text(v: Double): String = when (this) {
         BEST_GAME -> "${plain(v)}점"
         MARGIN -> "${plain(v)}점 차"
-        COMEBACK -> "승리 확률 ${plain(v)}%에서 역전"
+        COMEBACK -> if (v < 1) "승리 확률 1% 미만에서 역전" else "승리 확률 ${plain(v)}%에서 역전"
         YACHTS_MATCH -> "요트 ${plain(v)}번"
         STREAK -> "${plain(v)}연승"
         SEASON_POINTS -> "승점 ${plain(v)}"

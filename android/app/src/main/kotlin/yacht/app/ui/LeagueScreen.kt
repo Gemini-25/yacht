@@ -142,9 +142,10 @@ fun LeagueScreen(c: AppController) {
             lg.seasonNews?.let { SeasonNews(it) { lg.seasonNews = null } }
             val tabs = LeagueTab.entries
             val current = tabs.getOrElse(tab) { LeagueTab.LADDER }
-            androidx.compose.material3.ScrollableTabRow(selectedTabIndex = current.ordinal, containerColor = cs.background, edgePadding = 4.dp) {
+            // Six short tabs fit a phone's width side by side (a scrolling row hid the last two).
+            TabRow(selectedTabIndex = current.ordinal, containerColor = cs.background) {
                 for (t in tabs) {
-                    Tab(selected = current == t, onClick = { lg.tab = t.ordinal }, text = { Text(t.label, maxLines = 1) })
+                    Tab(selected = current == t, onClick = { lg.tab = t.ordinal }, text = { Text(t.label, maxLines = 1, fontSize = 13.sp, softWrap = false) })
                 }
             }
             if (v == null) {
