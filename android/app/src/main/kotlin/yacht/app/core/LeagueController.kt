@@ -21,7 +21,7 @@ import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueRoster
 import yacht.engine.league.Matchmaker
-import yacht.engine.league.RiskTables
+import yacht.engine.league.LeagueTables
 import yacht.engine.league.Tier
 import java.io.File
 import java.nio.ByteBuffer
@@ -136,7 +136,7 @@ class LeagueController(private val scope: CoroutineScope, dir: File) {
     private var tables: Tables? = null
     private var roster: List<LeagueAi> = emptyList()
     private var byKey: Map<String, LeagueAi> = emptyMap()
-    private var risk: RiskTables? = null
+    private var extra: LeagueTables? = null
     private var ladder: Ladder? = null
     private val lock = Any()
     private val throttle = Any()
@@ -166,12 +166,12 @@ class LeagueController(private val scope: CoroutineScope, dir: File) {
         if (tables != null) return
         tables = t
         val rules = t.rules
-        val r = RiskTables(
+        val r = LeagueTables(
             rules, threads = cores,
-            load = { th -> riskFile(th).takeIf { it.exists() }?.let { TableIO.readEv(ByteBuffer.wrap(it.readBytes()), rules) } },
-            save = { th, table: EvTable -> riskFile(th).outputStream().use { TableIO.writeEv(it, rules, table.values) } },
+            load = { key, believed -> tableFile(key).takeIf { it.exists() }?.let { TableIO.readEv(ByteBuffer.wrap(it.readBytes()), believed) } },
+            save = { key, table: EvTable -> tableFile(key).outputStream().use { TableIO.writeEv(it, table.rules, table.values) } },
         )
-        risk = r
+        extra = r
         roster = LeagueRoster.build(t, r)
         byKey = roster.associateBy { it.key }
         scope.launch {
@@ -183,7 +183,7 @@ class LeagueController(private val scope: CoroutineScope, dir: File) {
         }
     }
 
-    private fun riskFile(theta: Double) = File(folder, "risk_$theta.bin")
+    private fun tableFile(key: String) = File(folder, "$key.bin")
 
     fun changeSpeed(s: LeagueSpeed) {
         speed = s
@@ -210,12 +210,12 @@ class LeagueController(private val scope: CoroutineScope, dir: File) {
         pace = 0.0
         val threads = speed.threads(cores)
         runJob = scope.launch {
-            val r = risk!!
-            // The risk-attitude AIs need their tables: built once, then loaded from disk.
-            val missing = LeagueRoster.THETAS.filter { !r.has(it) }
+            val r = extra!!
+            // Risk-attitude and rule-belief AIs need their tables: built once, then loaded from disk.
+            val missing = LeagueRoster.tableSpecs(t.rules).filter { !r.has(it.key) }
             for ((i, th) in missing.withIndex()) {
                 if (flag.get()) break
-                preparing = "위험 성향 AI 준비 중 ${i + 1}/${missing.size}"
+                preparing = "새 AI용 계산표 준비 중 ${i + 1}/${missing.size}"
                 withContext(Dispatchers.Default) { r[th] }
             }
             preparing = null

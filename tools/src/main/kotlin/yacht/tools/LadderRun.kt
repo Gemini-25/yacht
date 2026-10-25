@@ -6,7 +6,7 @@ import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueRoster
 import yacht.engine.league.Matchmaker
-import yacht.engine.league.RiskTables
+import yacht.engine.league.LeagueTables
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.Random
@@ -26,15 +26,15 @@ fun ladderRun(opts: Map<String, String>) {
     val stateFile = File(opts["state"] ?: "ladder.txt")
     val cache = File(opts["cache"] ?: "risk-cache").apply { mkdirs() }
     val rules = tables.rules
-    val risk = RiskTables(
+    val extra = LeagueTables(
         rules, threads = threads,
-        load = { th -> File(cache, "risk_$th.bin").takeIf { it.exists() }?.let { TableIO.readEv(ByteBuffer.wrap(it.readBytes()), rules) } },
-        save = { th, t: EvTable -> File(cache, "risk_$th.bin").outputStream().use { TableIO.writeEv(it, rules, t.values) } },
+        load = { key, believed -> File(cache, "$key.bin").takeIf { it.exists() }?.let { TableIO.readEv(ByteBuffer.wrap(it.readBytes()), believed) } },
+        save = { key, t: EvTable -> File(cache, "$key.bin").outputStream().use { TableIO.writeEv(it, t.rules, t.values) } },
     )
     val t0 = System.nanoTime()
-    LeagueRoster.THETAS.forEach { risk[it] }
-    println("risk tables ready in %.1fs".format((System.nanoTime() - t0) / 1e9))
-    val roster = LeagueRoster.build(tables, risk)
+    LeagueRoster.tableSpecs(rules).forEach { extra[it] }
+    println("extra tables ready in %.1fs".format((System.nanoTime() - t0) / 1e9))
+    val roster = LeagueRoster.build(tables, extra)
     val byKey = roster.associateBy { it.key }
     val ladder = if (stateFile.exists()) Ladder.decode(roster.map { it.key }, stateFile.readText()) else Ladder(roster.map { it.key })
     println("${roster.size} AIs (${roster.count { it.heavy }} heavy), ${ladder.matches} matches so far")

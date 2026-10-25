@@ -5,7 +5,7 @@ import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueRoster
 import yacht.engine.league.Matchmaker
-import yacht.engine.league.RiskTables
+import yacht.engine.league.LeagueTables
 import yacht.engine.league.Tier
 import yacht.engine.league.TierName
 import java.util.Random
@@ -118,9 +118,9 @@ class LadderTest {
     @Test
     fun everyLeagueAiFinishesAMatch() {
         val tables = SolverTest.tables
-        val roster = LeagueRoster.build(tables, RiskTables(tables.rules, threads = Runtime.getRuntime().availableProcessors()))
+        val roster = LeagueRoster.build(tables, LeagueTables(tables.rules, threads = Runtime.getRuntime().availableProcessors()))
         assertEquals(roster.size, roster.map { it.key }.toSet().size)
-        assertTrue(roster.size >= 70, "${roster.size} AIs")
+        assertTrue(roster.size >= 100, "${roster.size} AIs")
         val ev = roster.first { it.key == "ev" }
         val scores = HashMap<String, Double>()
         for ((i, ai) in roster.withIndex()) {

@@ -9,11 +9,12 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "yacht.dice.ai"
+        // A new id: installs as its own app next to the earlier "요트 AI" (yacht.dice.ai), which keeps its records.
+        applicationId = "yacht.dice.ai2"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     signingConfigs {

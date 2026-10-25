@@ -230,16 +230,24 @@ fun riskPlanner(evTheta: EvTable, theta: Double): (Board, Board) -> TurnPlan = {
 
 /**
  * A player who goes by feel: every option is taken with probability proportional to
- * exp(value / [tau]) under max-expectation values (in points), so close calls are coin flips and
- * clear mistakes are rare. Small [tau] plays almost perfectly.
+ * exp(value / [tau]) under the values of [planner] (max expectation by default, in points), so
+ * close calls are coin flips and clear mistakes are rare. Small [tau] plays almost perfectly.
  */
-class SoftmaxPlayer(private val ev: EvTable, private val tau: Double, private val rng: Random, override val name: String = "soft") : Player {
+class SoftmaxPlayer(
+    private val planner: (Board, Board) -> TurnPlan,
+    private val tau: Double,
+    private val rng: Random,
+    override val name: String = "soft",
+) : Player {
+    constructor(ev: EvTable, tau: Double, rng: Random, name: String = "soft") :
+        this({ me, _ -> TurnPlan(me, ExpectedAfter(ev, me.mask)) }, tau, rng, name)
+
     private lateinit var plan: TurnPlan
     private lateinit var me: Board
 
     override fun startTurn(me: Board, opp: Board) {
         this.me = me
-        plan = TurnPlan(me, ExpectedAfter(ev, me.mask))
+        plan = planner(me, opp)
     }
 
     private fun <T> pick(options: List<T>, value: (T) -> Double): T {
@@ -354,4 +362,100 @@ class RandomPlayer(private val rng: Random, override val name: String = "random"
 /** The win search's plan, for [SlipPlayer] (a win AI that sometimes slips). */
 fun winPlanner(advisor: Advisor, budgetOps: Long): (Board, Board) -> TurnPlan = { me, opp ->
     advisor.planTurn(me, opp, Mode.WIN, budgetOps).active
+}
+
+/**
+ * Fills the boxes in a fixed [order]: each turn aims only at the first open box of the list,
+ * holding dice for the most points there (the classic beginner's top-to-bottom sheet).
+ */
+class OrderPlayer(private val order: List<Category>, override val name: String = "order") : Player {
+    private lateinit var plan: TurnPlan
+
+    override fun startTurn(me: Board, opp: Board) {
+        val target = order.first { !me.isFilled(it) }.ordinal
+        plan = TurnPlan(me) { c, points, bonus, _ -> if (c == target) (points + bonus).toDouble() else -1e9 }
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int) = plan.bestKeep(rollsDone, r)
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
+}
+
+/**
+ * Plays max expectation under rules it believes ([belief], with the same bonus threshold), with
+ * [beliefEv] the expectation table for those rules: a player who misremembers a rule.
+ */
+class BeliefPlayer(private val belief: RuleSet, private val beliefEv: EvTable, override val name: String = "belief") : Player {
+    init {
+        require(belief.upperStates == beliefEv.rules.upperStates)
+    }
+
+    private lateinit var plan: TurnPlan
+
+    override fun startTurn(me: Board, opp: Board) {
+        val seen = Board.of(belief, me.toList())
+        plan = TurnPlan(seen, ExpectedAfter(beliefEv, seen.mask))
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int) = plan.bestKeep(rollsDone, r)
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
+}
+
+/**
+ * Ignores the opponent and maximises P(final score >= [target]) with the win search, as if the
+ * opponent had already finished on [target] - 1.
+ */
+fun targetPlanner(advisor: Advisor, target: Int, budgetOps: Long): (Board, Board) -> TurnPlan = { me, _ ->
+    val goal = Board.of(me.rules, Category.ALL.map { if (it == Category.CHOICE) target - 1 else 0 })
+    advisor.planTurn(me, goal, Mode.WIN, budgetOps).active
+}
+
+/** Always holds its longest run of faces, chasing straights; writes like the max-expectation plan. */
+class StraightChaserPlayer(private val ev: EvTable, override val name: String = "straight-chaser") : Player {
+    private lateinit var plan: TurnPlan
+
+    override fun startTurn(me: Board, opp: Board) {
+        plan = TurnPlan(me, ExpectedAfter(ev, me.mask))
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int): Int {
+        val counts = Dice.rollCounts[r]
+        var bestStart = 0
+        var bestLen = 0
+        var start = 0
+        for (f in 0..6) {
+            if (f < 6 && counts[f] > 0) continue
+            if (f - start > bestLen) {
+                bestLen = f - start
+                bestStart = start
+            }
+            start = f + 1
+        }
+        if (bestLen == 5) return Dice.rollAsKeep[r]
+        val keep = IntArray(6)
+        for (f in bestStart until bestStart + bestLen) keep[f] = 1
+        return Dice.keepIndex(keep)
+    }
+
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
+}
+
+/**
+ * Believes in luck, not in holding dice: keeps the roll when some box scores at least [enough]
+ * now, otherwise throws all five again; writes like the max-expectation plan.
+ */
+class LuckBelieverPlayer(private val ev: EvTable, private val enough: Int = 25, override val name: String = "luck") : Player {
+    private lateinit var plan: TurnPlan
+    private lateinit var me: Board
+
+    override fun startTurn(me: Board, opp: Board) {
+        this.me = me
+        plan = TurnPlan(me, ExpectedAfter(ev, me.mask))
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int): Int {
+        val best = me.openCategories.maxOf { plan.points(r, it.ordinal) }
+        return if (best >= enough) Dice.rollAsKeep[r] else Dice.EMPTY_KEEP
+    }
+
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
 }
