@@ -446,6 +446,9 @@ class LeagueController(
     /** Knockout and group jobs in flight (they may take at most all but one worker). */
     private var cupsInFlight = 0
 
+    /** Time spent holding the lock, by what held it (for the stress harness and tuning). */
+    val timings = LockTimings()
+
     /** Lab jobs in flight (up to half the workers). */
     private var labInFlight = 0
 
@@ -786,11 +789,13 @@ class LeagueController(
      */
     private fun rollover(w: LeagueWorld) {
         // Next season's divisions and seeds from the converged ratings.
+        val t0 = System.nanoTime()
         w.ladder.fit()
         val closing = w.closeSeason()
         if (closing.rosterChanged) rebuildRoster()
         configureWorld(w)
         w.openSeason()
+        timings.note("rollover", System.nanoTime() - t0)
         val news = historyItem(closing.season, closing.honours)
         val rv = w.archive.pendingReview
         scope.launch {
@@ -838,7 +843,9 @@ class LeagueController(
                     val w = world ?: return@synchronized
                     if (flag.get()) return@synchronized
                     // Statistics, the ladder and the season, in that order (see LeagueWorld.recordJob).
+                    val t0 = System.nanoTime()
                     val rec = w.recordJob(result, System.currentTimeMillis())
+                    timings.note("record", System.nanoTime() - t0)
                     for (m in rec.matches) {
                         lastDelta[m.a] = m.deltaA
                         lastDelta[m.b] = m.deltaB
@@ -1023,7 +1030,10 @@ class LeagueController(
     }
 
     private suspend fun save() = withContext(Dispatchers.Default) {
-        val texts = synchronized(lock) { world?.encodeFiles() } ?: return@withContext
+        val texts = synchronized(lock) {
+            val t0 = System.nanoTime()
+            world?.encodeFiles().also { timings.note("save", System.nanoTime() - t0) }
+        } ?: return@withContext
         withContext(fileWrites) { write(texts) }
     }
 
@@ -1270,7 +1280,10 @@ class LeagueController(
         }
         scope.launch(Dispatchers.Default) {
             val (v, seq) = try {
-                synchronized(lock) { snapshot() to ++snapshots }
+                synchronized(lock) {
+                    val t0 = System.nanoTime()
+                    (snapshot() to ++snapshots).also { timings.note("snapshot", System.nanoTime() - t0) }
+                }
             } finally {
                 snapshotRunning.set(false)
                 if (snapshotAgain.getAndSet(false)) publish(force = true)
@@ -1653,5 +1666,24 @@ class LeagueController(
 
         /** My assumed rating before my first ranked game (a solid amateur). */
         const val START_RATING = 1400.0
+    }
+}
+
+/** Count, mean and worst of a few timed sections (ms), thread-safe. */
+class LockTimings {
+    private val sums = HashMap<String, DoubleArray>()
+
+    @Synchronized
+    fun note(what: String, nanos: Long) {
+        val a = sums.getOrPut(what) { DoubleArray(3) }
+        val ms = nanos / 1e6
+        a[0] += 1.0
+        a[1] += ms
+        a[2] = maxOf(a[2], ms)
+    }
+
+    @Synchronized
+    override fun toString(): String = sums.entries.sortedBy { it.key }.joinToString(" · ") { (k, a) ->
+        "$k ${a[0].toInt()}× avg ${"%.2f".format(a[1] / a[0])} max ${"%.1f".format(a[2])} ms"
     }
 }

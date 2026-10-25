@@ -193,6 +193,7 @@ private fun run(args: Array<String>): Int {
     waitFor("league stop", 120_000) { !c.league.running }
     onMain { c.shutdown() }
     println("done: $actions actions, $games games, league ${c.league.view?.matches} matches, peak heap ${peakHeap shr 20} MB of ${Runtime.getRuntime().maxMemory() shr 20} MB")
+    println("lock held: ${c.league.timings}")
     if (offMain.isNotEmpty()) {
         println("state written off the main thread:")
         for ((k, n) in offMain.entries.sortedByDescending { it.value }) println("  $n× $k")
