@@ -104,9 +104,10 @@ internal object KoreanNames {
             }
             x -= w
         }
-        val a = FIRST[rng.nextInt(FIRST.length)]
+        var a = FIRST[rng.nextInt(FIRST.length)]
         var b = SECOND[rng.nextInt(SECOND.length)]
-        // No doubled syllable ("민민").
+        // No doubled syllable ("정정우", "민민").
+        if (a.toString() == surname) a = FIRST[(FIRST.indexOf(a) + 1) % FIRST.length]
         if (b == a) b = SECOND[(SECOND.indexOf(b) + 1) % SECOND.length]
         return "$surname$a$b"
     }
@@ -249,7 +250,11 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
     /** Generated indices that have left: never generated again, even after their retired record is dropped. */
     private val gone = TreeSet<Int>()
 
-    /** The last season whose evolution ran (the rollover is idempotent by season). */
+    /**
+     * The last season whose evolution ran (the rollover is idempotent by season): [Evolution.run]
+     * replays any season up to it, so a league reset that starts again from season 1 must start
+     * a new book too (delete roster.txt with the ladder and seasons).
+     */
     var evolvedSeason = 0
         internal set
 
@@ -275,7 +280,10 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
     /** The name of any AI this book knows (alive, retired or legend). */
     fun name(key: String): String? = byKey[key]?.name ?: retiredRecord(key)?.name
 
-    /** Rebuildable genes of every legend (id = its key), for the legend match. */
+    /**
+     * Archived genes of every legend (id = its key). To play one, use [leagueAi] with the
+     * [Legend]: [CustomAis.build]'s defaults would make it one of mine ("custom-" key, MINE).
+     */
     fun legendSpecs(): List<CustomAiSpec> = legendList.map { it.spec }
 
     /** Every name in use: alive, retired, legends and [reserved]. */
@@ -289,8 +297,9 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
     /**
      * Adds the generated players g001..g<[n]> that are missing, debuting in [season]; a key that
      * ever retired is never added again. Returns the new ones. Lowering [n] removes nobody: the
-     * extra players stay until evolution retires them, and the population only shrinks when the
-     * caller asks [Evolution.run] for fewer children than it retires.
+     * extra players stay until evolution retires them, and the population only shrinks (or,
+     * once [n] is raised again, grows back past the g-keys already used) through
+     * [Evolution.run]'s `population` (pass the same [n]).
      */
     fun ensureGenerated(n: Int, season: Int = 1): List<PlayerRecord> {
         val added = ArrayList<PlayerRecord>()
@@ -404,7 +413,8 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             a?.let { index.getOrPut(it) { ArrayList() } += born to k }
             if (b != null && b != a) index.getOrPut(b) { ArrayList() } += born to k
         }
-        return index.mapValues { (_, xs) -> xs.sortedWith(compareBy({ it.first }, { it.second })).map { it.second } }
+        // By debut, then by key as a number would sort ("e3_2" before "e3_10").
+        return index.mapValues { (_, xs) -> xs.sortedWith(compareBy({ it.first }, { it.second.length }, { it.second })).map { it.second } }
     }
 
     // ---- saving --------------------------------------------------------------------------------
@@ -437,13 +447,16 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
 
         /**
          * Reads roster.txt. Each line on its own: a line cut off or from a newer version is
-         * skipped. Throws only when the file is not a roster at all (the caller starts afresh).
+         * skipped. [encode] ends every line with a newline, so a last line without one was cut
+         * off mid-write and is dropped (its last number could otherwise read as a shorter one).
+         * Throws only when the file is not a roster at all (the caller starts afresh).
          */
         fun decode(text: String, reserved: Collection<String> = emptyList()): PlayerBook {
             val lines = text.lines()
             require(lines.firstOrNull()?.trim() == HEADER) { "not a roster file" }
             val b = PlayerBook(reserved)
-            for (line in lines.drop(1)) {
+            val body = lines.drop(1).let { if (text.endsWith("\n")) it else it.dropLast(1) }
+            for (line in body) {
                 runCatching { b.decodeLine(line.trim().split(' ')) }
             }
             return b
