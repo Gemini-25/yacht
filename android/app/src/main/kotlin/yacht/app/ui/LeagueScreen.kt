@@ -72,7 +72,6 @@ import yacht.app.core.SeasonView
 import yacht.engine.explain.Ko
 import yacht.engine.league.Family
 import yacht.engine.league.Ladder
-import yacht.engine.league.Season
 import yacht.engine.league.Tier
 import yacht.engine.league.TierName
 
@@ -524,7 +523,7 @@ private fun noteText(lg: LeagueController, note: String): String? {
 private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (season == null || season.divisions.isEmpty()) {
-        CenterText("▶ 리그를 시작하면 지금 순위대로 1부·2부·3부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 한 번씩 맞붙어 승점(승 3, 무 1, 한 판씩이면 합계 점수로 승부)을 쌓고, 시즌이 끝나면 위아래 ${Season.SWAP}팀씩 승강해요.")
+        CenterText("▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점(승 3, 무 1, 한 판씩이면 합계 점수로 승부)을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.")
         return
     }
     var division by remember { mutableStateOf(0) }
@@ -542,7 +541,7 @@ private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "부마다 모두 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 한 판씩 나눠 가지면 두 판 합계 점수로 승부. 🟢 승격권 · 🔴 강등권",
+                        "부마다 라운드마다 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 한 판씩 나눠 가지면 두 판 합계 점수로 승부. 🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프",
                         style = MaterialTheme.typography.labelSmall,
                         color = cs.onSurfaceVariant,
                     )
@@ -577,6 +576,8 @@ private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
             val zone = when (r.zone) {
                 1 -> gameColors.good
                 -1 -> cs.error
+                2 -> gameColors.good.copy(alpha = 0.4f)
+                -2 -> cs.error.copy(alpha = 0.4f)
                 else -> Color.Transparent
             }
             Row(

@@ -26,8 +26,21 @@ import yacht.engine.league.CloneProfile
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.CustomAis
 import yacht.engine.league.Family
-import yacht.engine.league.Season
-import yacht.engine.league.SeasonSummary
+import yacht.engine.league.BoardResult
+import yacht.engine.league.Comp
+import yacht.engine.league.CompetitionCodec
+import yacht.engine.league.Competition
+import yacht.engine.league.Fixture
+import yacht.engine.league.Honour
+import yacht.engine.league.HonourBook
+import yacht.engine.league.JobKind
+import yacht.engine.league.JobResult
+import yacht.engine.league.LeagueConfig
+import yacht.engine.league.LeagueEvent
+import yacht.engine.league.Offseason
+import yacht.engine.league.SeasonPlan
+import yacht.engine.league.SeasonStart
+import yacht.engine.league.WinEstimate
 import yacht.engine.league.TierName
 import yacht.engine.league.WatchMatch
 import yacht.engine.league.GameScore
@@ -220,6 +233,8 @@ class LeagueController(
     private val folder = File(dir, "league").apply { mkdirs() }
     private val file = File(folder, "ladder.txt")
     private val seasonFile = File(folder, "season.txt")
+    private val honourFile = File(folder, "honours.txt")
+    private val configFile = File(folder, "config.txt")
     private val customFile = File(folder, "custom.txt")
     private val prefs = File(folder, "prefs.txt")
     private val cores = Runtime.getRuntime().availableProcessors()
@@ -260,7 +275,24 @@ class LeagueController(
     private var byKey: Map<String, LeagueAi> = emptyMap()
     private var extra: LeagueTables? = null
     private var ladder: Ladder? = null
-    private var season: Season? = null
+    private var plan: SeasonPlan? = null
+    private var honours = HonourBook()
+    private var estimate: WinEstimate? = null
+
+    /** Average ms per game of each AI (cost meter: heavy fixtures first late in a season). */
+    private val costMs = HashMap<String, Double>()
+
+    /** Knockout and group jobs in flight (they may take at most all but one worker). */
+    private var cupsInFlight = 0
+
+    /** The league's rules (saved); structural changes apply from the next season. */
+    var config by mutableStateOf(LeagueConfig())
+        private set
+
+    /** Readers of saved competitions and builders of each season's ones (filled in by the modules). */
+    private val codecs: Map<Comp, CompetitionCodec> = emptyMap()
+    private val factories: List<(SeasonStart) -> Competition?> = emptyList()
+    private val postFactories: List<(SeasonPlan) -> Competition?> = emptyList()
     private val lock = Any()
     private val throttle = Any()
     private val busy = HashSet<String>()
@@ -284,6 +316,7 @@ class LeagueController(
             prefs.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueSpeed.entries.firstOrNull { it.name == v }?.let { speed = it } }
         }
         customs = runCatching { customFile.takeIf { it.exists() }?.readLines()?.mapNotNull { CustomAiSpec.decode(it) } }.getOrNull().orEmpty()
+        config = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: LeagueConfig()
     }
 
     /** Number of AIs in the league. */
@@ -305,6 +338,7 @@ class LeagueController(
             },
         )
         extra = r
+        estimate = WinEstimate(t)
         baseRoster = LeagueRoster.build(t, r)
         rebuildRoster()
         reload()
@@ -315,10 +349,16 @@ class LeagueController(
         scope.launch(rosterWork) {
             val keys = synchronized(lock) { ladderKeys() }
             val l = runCatching { file.takeIf { it.exists() }?.readText()?.let { Ladder.decode(keys, it) } }.getOrNull() ?: Ladder(keys)
-            val s = runCatching { seasonFile.takeIf { it.exists() }?.readText()?.let { Season.decode(it, keys) } }.getOrNull()
+            val seasonText = runCatching { seasonFile.takeIf { it.exists() }?.readText() }.getOrNull()
+            val s = seasonText?.let { text -> runCatching { SeasonPlan.decode(text, keys, codecs) }.getOrNull() }
+            val h = runCatching { honourFile.takeIf { it.exists() }?.readText()?.let { HonourBook.decode(it) } }.getOrNull() ?: HonourBook()
+            // A season file of the first version: its history moves into the honours, and the
+            // next start begins a season of the new kind.
+            if (s == null && seasonText != null) h.add(HonourBook.legacy(seasonText))
             synchronized(lock) {
                 ladder = l
-                season = s
+                plan = s
+                honours = h
             }
             publish(force = true)
         }
@@ -339,7 +379,6 @@ class LeagueController(
             byKey = all.associateBy { it.key }
             val keys = ladderKeys()
             ladder?.let { l -> if (l.keys != keys) ladder = Ladder.decode(keys, l.encode()) }
-            season?.sync(keys)
         }
     }
 
@@ -432,7 +471,7 @@ class LeagueController(
                 synchronized(lock) {
                     val l = ladder ?: return@synchronized
                     startRanks = l.keys.mapNotNull { k -> l.rankOf(k)?.let { k to it } }.toMap()
-                    if (season == null) season = Season.start(l.ranking())
+                    if (plan == null) plan = Offseason.first(System.nanoTime(), offseasonContext(l))
                 }
             }
             val r = extra!!
@@ -457,32 +496,63 @@ class LeagueController(
         }
     }
 
-    /** What a worker plays next: a season fixture, or a friendly (newcomers, or nothing else free). */
-    private class Job2(val a: String, val b: String, val fixture: Pair<String, String>?)
+    /** What the off-season needs: the AIs in the league next season (me excluded) and their ratings. */
+    private fun offseasonContext(l: Ladder): Offseason.Context {
+        val keys = roster.map { it.key }
+        return Offseason.Context(
+            keys, { k -> l.rating(k).takeIf { !it.isNaN() } ?: START_RATING }, { k -> byKey[k]?.family }, { k -> hometown(k) },
+            config, factories,
+        )
+    }
 
-    private fun nextJob(rng: Random): Job2? {
+    /** One of 16 cities for an AI (from its key). */
+    private fun hometown(key: String): String = HOMETOWNS[Math.floorMod(key.hashCode(), HOMETOWNS.size)]
+
+    /**
+     * What a worker plays next: the season's next fixture (ending the season and starting the
+     * next when it is over), or a friendly (newcomers waiting for a season, or nothing free).
+     */
+    private fun nextJob(rng: Random): Fixture? {
         val l = ladder ?: return null
-        val s = season
-        if (s != null && s.finished) {
-            val news = historyItem(s.finish())
+        var p = plan ?: return null
+        if (p.league.finished && !p.postStarted) p.startPost(postFactories)
+        if (p.finished) {
+            val (next, h) = Offseason.next(p, offseasonContext(l))
+            honours.add(h)
+            plan = next
+            p = next
+            val news = historyItem(p.number - 1, h)
             scope.launch { seasonNews = news }
             saveSeasonAsync()
         }
-        val newcomers = s?.newcomers?.filter { it !in busy && it in byKey }.orEmpty()
+        val inLeague = p.league.standings.keys
+        val newcomers = roster.map { it.key }.filter { it !in inLeague && it !in busy }
         if (newcomers.isNotEmpty() && rng.nextDouble() < FRIENDLY_SHARE) {
-            Matchmaker.pick(l, rng, busy, among = newcomers)?.let { return Job2(it.first, it.second, null) }
+            Matchmaker.pick(l, rng, busy, among = newcomers)?.let { return friendly(it, rng) }
         }
-        s?.next(rng, busy)?.let { return Job2(it.first, it.second, it) }
-        return Matchmaker.pick(l, rng, busy)?.let { Job2(it.first, it.second, null) }
+        val cost = { f: yacht.engine.league.LeagueFixture -> (costMs[f.a] ?: 5.0) + (costMs[f.b] ?: 5.0) }
+        p.next(busy, cupsInFlight, maxOf(1, speed.threads(cores) - 1), cost)?.let { return it }
+        return Matchmaker.pick(l, rng, busy)?.let { friendly(it, rng) }
+    }
+
+    private fun friendly(pair: Pair<String, String>, rng: Random) = Fixture(Comp.FRIENDLY, -1, pair.first, pair.second, rng.nextLong())
+
+    /** A job that cannot be played (an AI was removed): the side still here wins, off the ladder. */
+    private fun forfeit(job: Fixture): JobResult {
+        val aHere = job.players.take(maxOf(1, job.lineupA.size)).all { byKey.containsKey(it) }
+        val games = listOf(if (aHere) GameScore(1, 0) else GameScore(0, 1))
+        val boards = if (job.kind == JobKind.TEAM) job.lineupA.zip(job.lineupB).map { (x, y) -> BoardResult(x, y, games, emptyList()) }
+        else listOf(BoardResult(job.a, job.b, games, emptyList()))
+        return JobResult(job.copy(rated = false), boards, if (aHere) 1 else -1, 0)
     }
 
     private suspend fun work(t: Tables, flag: AtomicBoolean, rng: Random) {
         while (!flag.get()) {
             val job = synchronized(lock) {
                 nextJob(rng)?.also {
-                    busy += it.a
-                    busy += it.b
+                    busy += it.players
                     live += it.a to it.b
+                    if (isCup(it.comp)) cupsInFlight++
                 }
             }
             if (job == null) {
@@ -492,46 +562,66 @@ class LeagueController(
             publish()
             var recorded = false
             try {
-                val a = byKey[job.a]
-                val b = byKey[job.b]
-                if (a != null && b != null) {
-                    val result = LeagueMatch.play(t.rules, a, b, rng.nextLong()) { flag.get() }
-                    val save = synchronized(lock) {
-                        val l = ladder!!
-                        if (flag.get() || l.entry(job.a) == null || l.entry(job.b) == null) return@synchronized null
-                        val rec = l.record(job.a, job.b, result)
-                        job.fixture?.let { season?.record(it, result) }
-                        recorded = true
-                        lastDelta[rec.a] = rec.deltaA
-                        lastDelta[rec.b] = rec.deltaB
-                        runMatches++
-                        sinceSave++
-                        if (sinceSave >= SAVE_EVERY) {
-                            sinceSave = 0
-                            l.encode() to season?.encode()
-                        } else {
-                            null
+                val result = LeagueMatch.playJob(t.rules, job, { byKey[it] }, config.matchFormat, estimate) { flag.get() } ?: forfeit(job)
+                val save = synchronized(lock) {
+                    val l = ladder!!
+                    if (flag.get()) return@synchronized null
+                    if (result.fixture.rated) {
+                        for (b in result.boards) {
+                            if (l.entry(b.a) == null || l.entry(b.b) == null) continue
+                            val rec = l.record(b.a, b.b, b.games)
+                            lastDelta[rec.a] = rec.deltaA
+                            lastDelta[rec.b] = rec.deltaB
                         }
                     }
-                    save?.let { (text, s) ->
-                        scope.launch(fileWrites) {
-                            runCatching { file.writeTextAtomically(text) }
-                            s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
-                        }
+                    if (job.comp != Comp.FRIENDLY) plan?.record(result)
+                    recorded = true
+                    meter(result)
+                    runMatches += result.boards.size
+                    sinceSave++
+                    if (sinceSave >= SAVE_EVERY) {
+                        sinceSave = 0
+                        l.encode() to plan?.encode()
+                    } else {
+                        null
+                    }
+                }
+                save?.let { (text, s) ->
+                    scope.launch(fileWrites) {
+                        runCatching { file.writeTextAtomically(text) }
+                        s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
                     }
                 }
             } catch (e: CancellationException) {
                 // stopped mid-match: the match is dropped
             } finally {
                 synchronized(lock) {
-                    if (!recorded) job.fixture?.let { season?.release(it) }
-                    busy -= job.a
-                    busy -= job.b
+                    if (!recorded && job.comp != Comp.FRIENDLY) plan?.release(job)
+                    busy -= job.players.toSet()
                     live -= job.a to job.b
+                    if (isCup(job.comp)) cupsInFlight--
                 }
             }
             publish()
         }
+    }
+
+    /** Knockout and group competitions (capped so the league always has a worker). */
+    private fun isCup(c: Comp) = c == Comp.CUP || c == Comp.CHAMPIONS || c == Comp.SUPER || c == Comp.TITLE_PLAYOFF || c == Comp.PROMOTION_PLAYOFF
+
+    /** Updates each AI's ms per game from a finished job (half of each game's time per side). */
+    private fun meter(r: JobResult) {
+        val games = r.boards.sumOf { it.games.size }
+        if (games == 0 || r.nanos == 0L) return
+        val perSide = r.nanos / 1e6 / games / 2
+        for (k in r.fixture.players) costMs[k] = (costMs[k] ?: perSide) * 0.8 + perSide * 0.2
+    }
+
+    /** Changes the league's rules: saved now, applied from the next season. */
+    fun changeConfig(c: LeagueConfig) {
+        config = c
+        val text = c.encode()
+        scope.launch(fileWrites) { runCatching { configFile.writeTextAtomically(text) } }
     }
 
     /** Stops after abandoning the matches in progress, and saves. */
@@ -569,7 +659,7 @@ class LeagueController(
                 val l = Ladder.decode(synchronized(lock) { ladderKeys() }, text)
                 synchronized(lock) {
                     ladder = l
-                    season = null
+                    plan = null
                 }
             }
             save()
@@ -584,29 +674,37 @@ class LeagueController(
             runJob?.join()
             synchronized(lock) {
                 ladder = Ladder(ladderKeys())
-                season = null
+                plan = null
+                honours = HonourBook()
                 lastDelta.clear()
                 startRanks = emptyMap()
             }
             withContext(fileWrites) {
                 runCatching { file.delete() }
                 runCatching { seasonFile.delete() }
+                runCatching { honourFile.delete() }
             }
             publish(force = true)
         }
     }
 
     private suspend fun save() = withContext(Dispatchers.Default) {
-        val (text, s) = synchronized(lock) { ladder?.encode() to season?.encode() }
+        val (text, s) = synchronized(lock) { ladder?.encode() to plan?.encode() }
+        val h = synchronized(lock) { honours.encode() }
         withContext(fileWrites) {
             text?.let { runCatching { file.writeTextAtomically(it) } }
             s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
+            runCatching { honourFile.writeTextAtomically(h) }
         }
     }
 
     private fun saveSeasonAsync() {
-        val s = season?.encode() ?: return
-        scope.launch(fileWrites) { runCatching { seasonFile.writeTextAtomically(s) } }
+        val s = plan?.encode() ?: return
+        val h = honours.encode()
+        scope.launch(fileWrites) {
+            runCatching { seasonFile.writeTextAtomically(s) }
+            runCatching { honourFile.writeTextAtomically(h) }
+        }
     }
 
     // ---- ranked games ----------------------------------------------------------------------------
@@ -842,7 +940,7 @@ class LeagueController(
         val l = ladder ?: return null
         // Matches only nudge the fit; the table shows it converged.
         l.fit()
-        val s = season
+        val s = plan
         val ranking = l.ranking().filter { it != Ladder.ME || l.entry(it)!!.games > 0 }
         val rows = ranking.mapNotNull { k ->
             val me = k == Ladder.ME
@@ -857,39 +955,50 @@ class LeagueController(
                 l.error(k).takeIf { !it.isNaN() }?.let { (1.96 * it).roundToInt() },
                 l.tier(k), e.games, e.wins, e.ties, e.losses, e.winRate, e.avgScore, e.best, e.yachts, e.bonuses,
                 e.streak, e.bestStreak, e.recent.joinToString(""), e.history.toList(), e.peak.takeIf { !it.isNaN() }?.roundToInt(),
-                lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.divisionOf(k),
+                lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.league?.divisionOf(k),
             )
         }
         val feed = l.feed.take(FEED).map { m -> FeedItem(m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes) }
         return LeagueView(rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) })
     }
 
-    private fun seasonView(s: Season): SeasonView {
+    private fun seasonView(p: SeasonPlan): SeasonView {
+        val s = p.league
+        val swap = p.config.autoSwap
         val divisions = s.divisions.indices.map { d ->
             val table = s.table(d)
-            val swapUp = if (d > 0) minOf(Season.SWAP, table.size / 3, s.divisions[d - 1].size / 3) else 0
-            val swapDown = if (d < s.divisions.size - 1) minOf(Season.SWAP, table.size / 3, s.divisions[d + 1].size / 3) else 0
+            val up = if (d > 0) minOf(swap, table.size / 3) else 0
+            val down = if (d < s.divisions.size - 1) minOf(swap, table.size / 3) else 0
+            val playoff = p.config.promotionPlayoff
             table.mapIndexed { i, st ->
                 SeasonRow(
                     st.key, name(st.key), st.played, st.wins, st.draws, st.losses, st.points, st.diff, st.avgScore, st.yachts,
                     when {
-                        i < swapUp -> 1
-                        i >= table.size - swapDown -> -1
+                        i < up -> 1
+                        i >= table.size - down -> -1
+                        playoff && d > 0 && i == up -> 2
+                        playoff && d < s.divisions.size - 1 && i == table.size - down - 1 -> -2
                         else -> 0
                     },
                 )
             }
         }
+        val inLeague = s.standings.keys
         return SeasonView(
-            s.number, s.fixturesTotal - s.fixturesLeft, s.fixturesTotal, divisions, s.newcomers.map { name(it) },
-            s.history.reversed().map { historyItem(it) },
+            s.number, s.fixturesPlayed, s.fixturesTotal, divisions, roster.map { it.key }.filter { it !in inLeague }.map { name(it) },
+            honours.seasons.reversed().map { historyItem(it, honours.of(it)) },
         )
     }
 
-    private fun historyItem(h: SeasonSummary) = SeasonHistoryItem(
-        h.number, h.champions.map { name(it) }, h.topScorer?.let { name(it) }, h.topScore, h.yachtKing?.let { name(it) }, h.yachts,
-        h.moves.filter { it.third < it.second }.map { name(it.first) }, h.moves.filter { it.third > it.second }.map { name(it.first) },
-    )
+    /** A past season for the hall of fame, from its honours. */
+    private fun historyItem(season: Int, h: List<Honour>): SeasonHistoryItem {
+        val champions = h.filter { DIVISION.matches(it.kind) }.sortedBy { it.kind }.map { name(it.key) }
+        return SeasonHistoryItem(
+            season, champions, h.firstOrNull { it.kind == "SCORER" }?.let { name(it.key) }, 0.0,
+            h.firstOrNull { it.kind == "YACHT" }?.let { name(it.key) }, 0,
+            h.filter { it.kind.startsWith("UP") }.map { name(it.key) }, h.filter { it.kind.startsWith("DOWN") }.map { name(it.key) },
+        )
+    }
 
     /** Best and worst opponents of [key] with at least [min] games against them. */
     fun matchups(key: String, min: Int = 4): Pair<List<Matchup>, List<Matchup>> = synchronized(lock) {
@@ -902,9 +1011,11 @@ class LeagueController(
     }
 
     /** The saved league files, for a backup. */
-    fun files(): List<File> = listOf(file, seasonFile, customFile, prefs).filter { it.exists() }
+    fun files(): List<File> = listOf(file, seasonFile, honourFile, configFile, customFile, prefs).filter { it.exists() }
 
     companion object {
+        private val DIVISION = Regex("L\\d")
+        val HOMETOWNS = listOf("서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "수원", "춘천", "청주", "전주", "포항", "창원", "제주", "강릉")
         private const val SAVE_EVERY = 10
         private const val PUBLISH_MS = 300L
         private const val FEED = 60

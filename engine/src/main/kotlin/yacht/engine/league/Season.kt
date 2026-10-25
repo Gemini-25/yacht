@@ -1,8 +1,9 @@
 package yacht.engine.league
 
+import yacht.engine.DiceStream
 import java.util.Random
 
-/** One team's line in a division table. */
+/** One AI's line in a division table. */
 class Standing(val key: String) {
     var played = 0
     var wins = 0
@@ -16,60 +17,90 @@ class Standing(val key: String) {
     var scored = 0
     var conceded = 0
     var yachts = 0
+
+    /**
+     * 운 보정 승점: 3 when its two-game total beat the opponent's on the same dice, 1 when
+     * equal, whatever the games won.
+     */
+    var aggPoints = 0
     val diff: Int get() = scored - conceded
     val avgScore: Double get() = if (played == 0) 0.0 else scored / (2.0 * played)
 }
 
-/** How a season ended: champions, awards and who moved between divisions. */
-data class SeasonSummary(
-    val number: Int,
-    /** Champion of each division, top division first. */
-    val champions: List<String>,
-    /** Highest average score per game (at least half the fixtures played). */
-    val topScorer: String?,
-    val topScore: Double,
-    /** Most Yachts in the season. */
-    val yachtKing: String?,
-    val yachts: Int,
-    /** (key, from division, to division), 0 = top division. */
-    val moves: List<Triple<String, Int, Int>>,
-)
+/** A league fixture: division [division], matchday [matchday], [a] first in the first game. */
+data class LeagueFixture(val id: Int, val division: Int, val matchday: Int, val a: String, val b: String)
 
 /**
- * The season structure on top of the rating ladder: divisions that each play a single round
- * robin of matches (two games on the same dice, seats swapped). A match won 2-0 (or 1.5-0.5)
- * gives 3 points; at one game each the higher two-game total wins it (most close matches split
- * the games, since each side gets the same dice once); only equal totals are a draw, 1 each. When every fixture is played the bottom [SWAP] of each
- * division swap places with the top [SWAP] of the one below, and newcomers start at the bottom.
- * Not thread-safe: callers synchronise.
+ * The league stage of a season: divisions that each play a round robin of matches, by matchdays
+ * (every AI plays at most once per matchday; matchday k of every division opens together). See
+ * docs/LEAGUE_SPEC.md section 2.1. Promotion, relegation and playoffs are decided by the
+ * [SeasonPlan]; this class keeps the tables. Not thread-safe: callers synchronise.
  */
 class Season private constructor(
-    var number: Int,
-    val divisions: MutableList<MutableList<String>>,
+    val number: Int,
+    /** Season seed: every fixture's deal comes from it. */
+    val seed: Long,
+    val divisions: List<List<String>>,
+    val double: Boolean,
 ) {
     val standings = HashMap<String, Standing>()
-    private val remaining = ArrayList<Pair<String, String>>()
-    private val inProgress = HashSet<Pair<String, String>>()
-    val history = ArrayList<SeasonSummary>()
+    private val fixtures = ArrayList<LeagueFixture>()
+    private val remaining = java.util.TreeSet<Int>()
+    private val inProgress = HashSet<Int>()
 
-    /** AIs waiting for the next season (they start in the lowest division). */
-    val newcomers = LinkedHashSet<String>()
+    /** Positions after each completed matchday: positions[d][k][i] = place of divisions[d][i]. */
+    val positions: List<MutableList<ByteArray>> = divisions.map { ArrayList() }
+    private val matchdayLeft = HashMap<Pair<Int, Int>, Int>()
 
+    val fixturesTotal: Int get() = fixtures.size
     val fixturesLeft: Int get() = remaining.size + inProgress.size
-    var fixturesTotal = 0
-        private set
+    val fixturesPlayed: Int get() = fixturesTotal - fixturesLeft
+    val finished: Boolean get() = remaining.isEmpty() && inProgress.isEmpty()
+    val progress: Double get() = if (fixturesTotal == 0) 1.0 else fixturesPlayed.toDouble() / fixturesTotal
 
-    fun divisionOf(key: String): Int? = divisions.indexOfFirst { key in it }.takeIf { it >= 0 }
+    /** Matchdays of the longest division. */
+    val matchdays: Int get() = (fixtures.maxOfOrNull { it.matchday } ?: -1) + 1
 
-    private fun startFixtures() {
-        standings.clear()
-        remaining.clear()
-        inProgress.clear()
-        for (d in divisions) {
-            for (k in d) standings[k] = Standing(k)
-            for (i in d.indices) for (j in i + 1 until d.size) remaining += d[i] to d[j]
+    /** The lowest matchday with a fixture still to play. */
+    val currentMatchday: Int get() = (remaining.firstOrNull()?.let { fixtures[it].matchday } ?: matchdays).let { md ->
+        minOf(md, inProgress.minOfOrNull { fixtures[it].matchday } ?: md)
+    }
+
+    private val divisionIndex = HashMap<String, Int>().apply { divisions.forEachIndexed { d, ks -> for (k in ks) put(k, d) } }
+
+    fun divisionOf(key: String): Int? = divisionIndex[key]
+
+    fun fixture(id: Int): LeagueFixture = fixtures[id]
+
+    /** The fixture as a job ([comp] LEAGUE, its own deal). */
+    fun job(f: LeagueFixture): Fixture =
+        Fixture(Comp.LEAGUE, f.id, f.a, f.b, DiceStream.mix(seed, Comp.LEAGUE.code.code.toLong(), f.id.toLong()), label = "${f.matchday + 1}라운드")
+
+    /** Upcoming and played fixtures of a matchday (for the calendar). */
+    fun matchday(k: Int): List<LeagueFixture> = fixtures.filter { it.matchday == k }
+
+    fun isPlayed(id: Int): Boolean = id !in remaining && id !in inProgress
+
+    private fun build(rng: Random) {
+        // Ids in matchday order (then division), so the open matchdays come first in [remaining].
+        val rounds = divisions.map { keys -> if (double) Calendar.doubleRoundRobin(keys, rng) else Calendar.roundRobin(keys, rng) }
+        var id = 0
+        for (md in 0 until (rounds.maxOfOrNull { it.size } ?: 0)) {
+            for ((d, rs) in rounds.withIndex()) {
+                for ((a, b) in rs.getOrNull(md).orEmpty()) {
+                    fixtures += LeagueFixture(id, d, md, a, b)
+                    remaining += id
+                    id++
+                }
+            }
         }
-        fixturesTotal = remaining.size
+        for (d in divisions.indices) for (k in divisions[d]) standings[k] = Standing(k)
+        countMatchdays()
+    }
+
+    private fun countMatchdays() {
+        matchdayLeft.clear()
+        for (f in fixtures) if (!isPlayed(f.id)) matchdayLeft.merge(f.division to f.matchday, 1, Int::plus)
     }
 
     /** Division table, best first: points, then score difference, then score. */
@@ -77,43 +108,53 @@ class Season private constructor(
         divisions[division].map { standings.getValue(it) }
             .sortedWith(compareByDescending<Standing> { it.points }.thenByDescending { it.diff }.thenByDescending { it.scored })
 
+    /** The same division ranked by 운 보정 승점 (two-game totals on the same dice). */
+    fun aggregateTable(division: Int): List<Standing> =
+        divisions[division].map { standings.getValue(it) }
+            .sortedWith(compareByDescending<Standing> { it.aggPoints }.thenByDescending { it.diff })
+
     /**
-     * The next fixture whose teams are both free, preferring teams that have played the least;
-     * null when none is available right now.
+     * The next fixture whose two AIs are free, from the current matchday or the next one,
+     * preferring the earlier matchday and AIs that have played less; [cost] (estimated ms per
+     * game of a fixture) puts the heaviest first once 80% of the league is played, so the season
+     * does not end waiting for one slow match. Null when none is available now.
      */
-    fun next(rng: Random, busy: Set<String>): Pair<String, String>? {
-        var best: Pair<String, String>? = null
-        var bestPlayed = Int.MAX_VALUE
-        val start = if (remaining.isEmpty()) 0 else rng.nextInt(remaining.size)
-        for (k in remaining.indices) {
-            val f = remaining[(start + k) % remaining.size]
-            if (f.first in busy || f.second in busy) continue
-            val p = standings.getValue(f.first).played + standings.getValue(f.second).played
-            if (p < bestPlayed) {
-                bestPlayed = p
+    fun next(busy: Set<String>, cost: ((LeagueFixture) -> Double)? = null): LeagueFixture? {
+        if (remaining.isEmpty()) return null
+        val md = currentMatchday
+        val late = progress >= 0.8 && cost != null
+        var best: LeagueFixture? = null
+        var bestKey = Double.MAX_VALUE
+        for (id in remaining) {
+            val f = fixtures[id]
+            if (f.matchday > md + 1) break
+            if (f.a in busy || f.b in busy) continue
+            val played = standings.getValue(f.a).played + standings.getValue(f.b).played
+            val key = if (late) -cost!!(f) else f.matchday * 10_000.0 + played
+            if (key < bestKey) {
+                bestKey = key
                 best = f
             }
         }
         best?.let {
-            remaining.remove(it)
-            inProgress += it
+            remaining.remove(it.id)
+            inProgress += it.id
         }
         return best
     }
 
-    /** A fixture taken by [next] that could not be played (stopped): back in the list. */
-    fun release(f: Pair<String, String>) {
-        if (inProgress.remove(f)) remaining += f
+    /** A fixture taken by [next] that was not played (stopped): back in the list. */
+    fun release(id: Int) {
+        if (inProgress.remove(id)) remaining += id
     }
 
-    /** Records the fixture [f] (its first team is "a" in [games]). */
-    fun record(f: Pair<String, String>, games: List<GameScore>) {
-        if (!inProgress.remove(f)) return
-        val a = standings[f.first] ?: return
-        val b = standings[f.second] ?: return
-        var aw = 0.0
+    /** Records fixture [id] (its [LeagueFixture.a] is "a" in [games]); false if it was not taken. */
+    fun record(id: Int, games: List<GameScore>): Boolean {
+        if (!inProgress.remove(id)) return false
+        val f = fixtures[id]
+        val a = standings.getValue(f.a)
+        val b = standings.getValue(f.b)
         for (g in games) {
-            aw += if (g.a > g.b) 1.0 else if (g.a == g.b) 0.5 else 0.0
             a.scored += g.a
             a.conceded += g.b
             b.scored += g.b
@@ -121,18 +162,15 @@ class Season private constructor(
             if (g.aYacht) a.yachts++
             if (g.bYacht) b.yachts++
         }
-        val bw = games.size - aw
-        val aTotal = games.sumOf { it.a }
-        val bTotal = games.sumOf { it.b }
         a.played++
         b.played++
-        when {
-            aw > bw || (aw == bw && aTotal > bTotal) -> {
+        when (TieRule.match(games)) {
+            1 -> {
                 a.wins++
                 b.losses++
                 a.points += 3
             }
-            bw > aw || (aw == bw && bTotal > aTotal) -> {
+            -1 -> {
                 b.wins++
                 a.losses++
                 b.points += 3
@@ -144,124 +182,99 @@ class Season private constructor(
                 b.points++
             }
         }
-    }
-
-    val finished: Boolean get() = remaining.isEmpty() && inProgress.isEmpty()
-
-    /**
-     * Ends the season (all fixtures played): awards, promotion and relegation, newcomers into the
-     * lowest division, and the next season's fixtures. Returns the summary.
-     */
-    fun finish(): SeasonSummary {
-        val tables = divisions.indices.map { table(it) }
-        val all = standings.values.filter { it.played > 0 }
-        val minPlayed = (divisions.minOfOrNull { it.size } ?: 2) / 2
-        val scorer = all.filter { it.played >= minPlayed }.maxByOrNull { it.avgScore }
-        val yachtKing = all.maxByOrNull { it.yachts }?.takeIf { it.yachts > 0 }
-        val moves = ArrayList<Triple<String, Int, Int>>()
-        val next = divisions.map { it.toMutableList() }.toMutableList()
-        for (d in 0 until divisions.size - 1) {
-            val swap = minOf(SWAP, tables[d].size / 3, tables[d + 1].size / 3)
-            val down = tables[d].takeLast(swap).map { it.key }
-            val up = tables[d + 1].take(swap).map { it.key }
-            for (k in down) {
-                next[d].remove(k)
-                next[d + 1].add(k)
-                moves += Triple(k, d, d + 1)
-            }
-            for (k in up) {
-                next[d + 1].remove(k)
-                next[d].add(k)
-                moves += Triple(k, d + 1, d)
+        val agg = games.sumOf { it.a - it.b }
+        when {
+            agg > 0 -> a.aggPoints += 3
+            agg < 0 -> b.aggPoints += 3
+            else -> {
+                a.aggPoints++
+                b.aggPoints++
             }
         }
-        for (k in newcomers) if (next.none { k in it }) next.last().add(k)
-        newcomers.clear()
-        val summary = SeasonSummary(
-            number, tables.map { it.first().key }, scorer?.key, scorer?.avgScore ?: 0.0, yachtKing?.key, yachtKing?.yachts ?: 0, moves,
-        )
-        history += summary
-        divisions.clear()
-        divisions.addAll(next)
-        number++
-        startFixtures()
-        return summary
-    }
-
-    /** Keeps the season in step with the roster: removed AIs leave, new ones wait for next season. */
-    fun sync(keys: Collection<String>) {
-        val known = keys.toSet()
-        for (d in divisions) {
-            val gone = d.filter { it !in known }
-            if (gone.isEmpty()) continue
-            d.removeAll(gone.toSet())
-            for (g in gone) standings.remove(g)
-            remaining.removeAll { it.first in gone || it.second in gone }
-            inProgress.removeAll { it.first in gone || it.second in gone }
+        val k = f.division to f.matchday
+        val left = (matchdayLeft[k] ?: 1) - 1
+        matchdayLeft[k] = left
+        if (left == 0) {
+            val order = table(f.division).map { it.key }
+            val place = ByteArray(divisions[f.division].size)
+            for ((i, key) in divisions[f.division].withIndex()) place[i] = (order.indexOf(key) + 1).toByte()
+            positions[f.division] += place
         }
-        newcomers.retainAll(known)
-        for (k in keys) if (k != Ladder.ME && divisionOf(k) == null) newcomers += k
+        return true
     }
 
     // ---- saving --------------------------------------------------------------------------------
 
     fun encode(): String = buildString {
-        append("season 1\n")
-        append("number $number $fixturesTotal\n")
+        append("season 3\n")
+        append("number $number $seed ${if (double) 1 else 0}\n")
         for ((i, d) in divisions.withIndex()) append("division $i ${d.joinToString(",")}\n")
+        for (f in fixtures) append("fx ${f.id} ${f.division} ${f.matchday} ${f.a} ${f.b} ${if (isPlayed(f.id)) 1 else 0}\n")
         for (s in standings.values) {
-            append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts}\n")
+            append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts} ${s.aggPoints}\n")
         }
-        // Fixtures in progress were not played: they are saved as still to play.
-        for (f in remaining + inProgress) append("fixture ${f.first} ${f.second}\n")
-        if (newcomers.isNotEmpty()) append("newcomers ${newcomers.joinToString(",")}\n")
-        for (h in history) {
-            val moves = h.moves.joinToString(";") { "${it.first}:${it.second}:${it.third}" }.ifEmpty { "-" }
-            append(
-                "summary ${h.number} ${h.champions.joinToString(",")} ${h.topScorer ?: "-"} ${h.topScore} " +
-                    "${h.yachtKing ?: "-"} ${h.yachts} $moves\n",
-            )
-        }
+        for ((d, list) in positions.withIndex()) for ((k, p) in list.withIndex()) append("pos $d $k ${p.joinToString(",")}\n")
     }
 
     companion object {
-        /** Teams moving up and down between neighbouring divisions each season. */
-        const val SWAP = 3
-
-        /** Divisions of a league of this many AIs (about 30-35 per division). */
-        fun divisionCount(n: Int) = maxOf(1, minOf(4, (n + 17) / 34))
-
-        /** The first season: divisions by the current ranking (best first). */
-        fun start(ranking: List<String>): Season {
-            val keys = ranking.filter { it != Ladder.ME }
-            val count = divisionCount(keys.size)
-            val size = (keys.size + count - 1) / count
-            val divisions = keys.chunked(maxOf(1, size)).map { it.toMutableList() }.toMutableList()
-            return Season(1, divisions).also { it.startFixtures() }
+        /** A new season of the league stage with these [divisions] (best division first). */
+        fun start(number: Int, seed: Long, divisions: List<List<String>>, double: Boolean = false): Season {
+            val s = Season(number, seed, divisions.filter { it.isNotEmpty() }, double)
+            s.build(Random(DiceStream.mix(seed, 0x5EA5)))
+            return s
         }
 
+        /** Balanced divisions of [ranking] (best first). */
+        fun split(ranking: List<String>, count: Int): List<List<String>> {
+            val n = ranking.size
+            val c = count.coerceIn(1, maxOf(1, n / 2))
+            val out = ArrayList<List<String>>()
+            var start = 0
+            for (d in 0 until c) {
+                val size = n / c + if (d < n % c) 1 else 0
+                out += ranking.subList(start, start + size)
+                start += size
+            }
+            return out
+        }
+
+        /**
+         * Reads a saved season of this version; throws on older versions or unusable files (the
+         * caller starts a new season). AIs no longer in [keys] keep their played results; their
+         * fixtures still to play are dropped.
+         */
         fun decode(text: String, keys: Collection<String>): Season {
             val lines = text.lines()
+            require(lines.firstOrNull()?.trim() == "season 3") { "not a season 3 file" }
             var number = 1
-            var total = 0
+            var seed = 0L
+            var double = false
             val divisions = ArrayList<MutableList<String>>()
             for (l in lines) {
                 val f = l.split(' ')
-                if (f[0] == "number") {
-                    number = f[1].toInt()
-                    total = f.getOrNull(2)?.toInt() ?: 0
+                when (f[0]) {
+                    "number" -> {
+                        number = f[1].toInt()
+                        seed = f[2].toLong()
+                        double = f.getOrNull(3) == "1"
+                    }
+                    "division" -> divisions += f.getOrElse(2) { "" }.split(',').filter { it.isNotEmpty() }.toMutableList()
                 }
-                if (f[0] == "division") divisions += f.getOrElse(2) { "" }.split(',').filter { it.isNotEmpty() }.toMutableList()
             }
-            // A file without divisions (cut off, or not a season) is not a season: start a new one.
             require(divisions.any { it.isNotEmpty() }) { "no divisions in the saved season" }
-            divisions.removeAll { it.isEmpty() }
-            val s = Season(number, divisions)
-            s.fixturesTotal = total
+            val known = keys.toSet()
+            val s = Season(number, seed, divisions, double)
             for (d in divisions) for (k in d) s.standings[k] = Standing(k)
             for (l in lines) {
                 val f = l.split(' ')
                 when (f[0]) {
+                    "fx" -> {
+                        val fx = LeagueFixture(f[1].toInt(), f[2].toInt(), f[3].toInt(), f[4], f[5])
+                        require(fx.id == s.fixtures.size) { "fixtures out of order" }
+                        s.fixtures += fx
+                        val gone = fx.a !in known || fx.b !in known
+                        if (f[6] == "0" && !gone) s.remaining += fx.id
+                    }
                     "standing" -> s.standings[f[1]]?.apply {
                         played = f[2].toInt()
                         wins = f[3].toInt()
@@ -271,22 +284,15 @@ class Season private constructor(
                         scored = f[7].toInt()
                         conceded = f[8].toInt()
                         yachts = f[9].toInt()
+                        aggPoints = f.getOrNull(10)?.toInt() ?: 0
                     }
-                    "fixture" -> if (f[1] in s.standings && f[2] in s.standings) s.remaining += f[1] to f[2]
-                    "newcomers" -> f[1].split(',').filter { it.isNotEmpty() }.forEach { s.newcomers += it }
-                    "summary" -> {
-                        val moves = if (f[7] == "-") emptyList() else f[7].split(';').map { m ->
-                            val p = m.split(':')
-                            Triple(p[0], p[1].toInt(), p[2].toInt())
-                        }
-                        s.history += SeasonSummary(
-                            f[1].toInt(), f[2].split(','), f[3].takeIf { it != "-" }, f[4].toDouble(),
-                            f[5].takeIf { it != "-" }, f[6].toInt(), moves,
-                        )
+                    "pos" -> {
+                        val d = f[1].toInt()
+                        if (d in s.positions.indices) s.positions[d] += f[3].split(',').map { it.toInt().toByte() }.toByteArray()
                     }
                 }
             }
-            s.sync(keys)
+            s.countMatchdays()
             return s
         }
     }

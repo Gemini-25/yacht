@@ -19,7 +19,13 @@ import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.Matchmaker
-import yacht.engine.league.Season
+import yacht.engine.league.BoardResult
+import yacht.engine.league.Comp
+import yacht.engine.league.JobResult
+import yacht.engine.league.LeagueConfig
+import yacht.engine.league.Offseason
+import yacht.engine.league.SeasonPlan
+import yacht.engine.league.TieRule
 import yacht.engine.league.WatchMatch
 import java.util.Random
 import kotlin.test.Test
@@ -32,58 +38,60 @@ class LeagueFeaturesTest {
     private val tables get() = SolverTest.tables
 
     @Test
-    fun aSeasonPlaysOutAndSwapsDivisions() {
-        val keys = (1..70).map { "ai$it" }
-        val season = Season.start(keys)
-        assertEquals(2, season.divisions.size)
-        assertEquals(35, season.divisions[0].size)
-        val total = season.fixturesTotal
-        assertEquals(2 * 35 * 34 / 2, total)
-        val rng = Random(1)
-        // The stronger (lower number) team wins more often.
+    fun aSeasonPlaysOutByMatchdaysAndSwapsDivisions() {
+        val keys = (1..40).map { "ai$it" }
         fun strength(k: String) = 100 - k.removePrefix("ai").toInt()
+        val ctx = Offseason.Context(keys, { 1500.0 + strength(it) }, { null }, { "서울" }, LeagueConfig(divisions = 2))
+        val plan = Offseason.first(77L, ctx)
+        val season = plan.league
+        assertEquals(2, season.divisions.size)
+        assertEquals(20, season.divisions[0].size)
+        assertEquals(2 * 20 * 19 / 2, season.fixturesTotal)
+        assertEquals(19, season.matchdays)
+        // Every AI plays at most once per matchday.
+        for (k in 0 until season.matchdays) {
+            val players = season.matchday(k).flatMap { listOf(it.a, it.b) }
+            assertEquals(players.size, players.toSet().size, "matchday $k")
+        }
+        val rng = Random(1)
         var played = 0
         var saved: String? = null
         while (true) {
-            val f = season.next(rng, emptySet()) ?: break
-            val (a, b) = f
-            val aWins = rng.nextInt(200) < 100 + strength(a) - strength(b)
-            season.record(f, listOf(if (aWins) GameScore(200, 150, aYacht = true) else GameScore(150, 200), GameScore(180, 180)))
+            val f = plan.next(emptySet(), 0, 1) ?: break
+            assertEquals(Comp.LEAGUE, f.comp)
+            val aWins = rng.nextInt(200) < 100 + 2 * (strength(f.a) - strength(f.b))
+            val games = listOf(if (aWins) GameScore(200, 150, aYacht = true) else GameScore(150, 200), GameScore(180, 180))
+            plan.record(JobResult(f, listOf(BoardResult(f.a, f.b, games, emptyList())), TieRule.match(games), 0))
             played++
-            if (played == 300) saved = season.encode()
+            if (played == 150) saved = plan.encode()
         }
         assertTrue(season.finished)
-        assertEquals(total, played)
-        // Everyone played everyone in its division once.
-        assertTrue(season.divisions.flatten().all { season.standings.getValue(it).played == 34 })
-        val top = season.table(0)
-        assertTrue(top.zipWithNext().all { (x, y) -> x.points >= y.points })
-        season.sync(keys + "newbie")
-        val summary = season.finish()
-        assertEquals(1, summary.number)
-        assertEquals(2, summary.champions.size)
-        assertEquals(6, summary.moves.size)
-        assertEquals(2, season.number)
-        assertTrue("newbie" in season.divisions.last())
-        assertTrue(summary.moves.filter { it.second == 0 }.all { it.first in season.divisions[1] })
-        assertNotNull(summary.topScorer)
-        // Saved mid-season: the same table and the fixtures still to play.
-        val back = Season.decode(saved!!, keys)
-        assertEquals(total - 300, back.fixturesLeft)
-        assertEquals(300, back.standings.values.sumOf { it.played } / 2)
-        val round = Season.decode(season.encode(), keys + "newbie")
-        assertEquals(season.history, round.history)
-        assertEquals(season.divisions, round.divisions)
-        // One game each: the higher total takes the match; equal totals draw.
-        val two = Season.start(listOf("a", "b"))
-        val f = two.next(rng, emptySet())!!
-        two.record(f, listOf(GameScore(200, 150), GameScore(170, 190)))
-        assertEquals(3, two.standings.getValue(f.first).points)
-        assertEquals(0, two.standings.getValue(f.second).points)
-        val level = Season.start(listOf("a", "b"))
-        val g = level.next(rng, emptySet())!!
-        level.record(g, listOf(GameScore(200, 150), GameScore(150, 200)))
-        assertEquals(1, level.standings.getValue(g.first).draws)
+        assertEquals(season.fixturesTotal, played)
+        assertTrue(season.divisions.flatten().all { season.standings.getValue(it).played == 19 })
+        assertEquals(19, season.positions[0].size)
+        // Saved mid-season: the same tables and the fixtures still to play.
+        val back = SeasonPlan.decode(saved!!, keys, emptyMap())
+        assertEquals(season.fixturesTotal - 150, back.league.fixturesLeft)
+        assertEquals(150, back.league.standings.values.sumOf { it.played } / 2)
+        // Off-season: two down, two up, the playoff place stays without a playoff.
+        assertTrue(!plan.finished)
+        plan.startPost(emptyList())
+        assertTrue(plan.finished)
+        val (next, honours) = Offseason.next(plan, Offseason.Context(keys + "newbie", { if (it == "newbie") 1400.0 else 1500.0 + strength(it) }, { null }, { "서울" }, LeagueConfig(divisions = 2)))
+        val down = season.table(0).takeLast(2).map { it.key }
+        val up = season.table(1).take(2).map { it.key }
+        assertTrue(down.all { it in next.league.divisions[1] })
+        assertTrue(up.all { it in next.league.divisions[0] })
+        assertTrue("newbie" in next.league.divisions[1])
+        assertEquals(season.table(0).first().key, honours.first { it.kind == "L0" }.key)
+        assertEquals(2, next.number)
+        // A 1-1 match goes to the two-game total; equal totals draw.
+        val one = Offseason.first(5L, Offseason.Context(listOf("a", "b"), { 1500.0 }, { null }, { "서울" }, LeagueConfig(divisions = 1)))
+        val f = one.next(emptySet(), 0, 1)!!
+        val g = listOf(GameScore(200, 150), GameScore(170, 190))
+        one.record(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g), 0))
+        assertEquals(3, one.league.standings.getValue(f.a).points)
+        assertEquals(3, one.league.standings.getValue(f.a).aggPoints)
     }
 
     @Test
