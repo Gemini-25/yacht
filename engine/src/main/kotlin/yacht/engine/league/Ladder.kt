@@ -180,13 +180,19 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     }
 
     /** Placed AIs by rating, best first, then the ones still in placement. */
-    fun ranking(): List<String> {
+    fun ranking(): List<String> = ranked().first
+
+    /** The order and each key's position in it, kept until the next fit (the screen asks for every rank). */
+    private var rankCache: Pair<List<String>, Map<String, Int>>? = null
+
+    private fun ranked(): Pair<List<String>, Map<String, Int>> = rankCache ?: run {
         val (placed, rest) = keys.partition { placed(it) }
-        return placed.sortedByDescending { rating(it) } + rest.sortedByDescending { entry(it)!!.games }
+        val order = placed.sortedByDescending { rating(it) } + rest.sortedByDescending { entry(it)!!.games }
+        (order to order.withIndex().associate { (i, k) -> k to i }).also { rankCache = it }
     }
 
     /** 1-based rank among placed AIs, or null while in placement. */
-    fun rankOf(key: String): Int? = if (!placed(key)) null else ranking().indexOf(key) + 1
+    fun rankOf(key: String): Int? = if (!placed(key)) null else ranked().second[key]?.plus(1)
 
     fun tier(key: String): Tier? {
         val rank = rankOf(key) ?: return null
@@ -210,9 +216,9 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             games++
         }
         matches++
-        // A few sweeps from the last fit: one match moves the ratings only a little, and the
-        // full fit (hundreds of sweeps, the league's bottleneck) runs when the table is shown.
-        fit(RECORD_SWEEPS)
+        // A few sweeps from the last fit: one match moves the ratings only a little. The full
+        // fit (a hundred sweeps, on the league's one lock for every match) runs for the table.
+        fit(RECORD_SWEEPS, intArrayOf(i, j))
         for (k in listOf(i, j)) {
             val e = entries[k]
             val r = ratings[k]
@@ -265,8 +271,9 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
      * Bradley-Terry strengths by minorisation-maximisation. Each AI also gets a tenth of a win and
      * of a loss against a virtual average player, which keeps unbeaten or winless records finite.
      */
-    fun fit(maxSweeps: Int = MAX_ITER) {
-        val active = (0 until n).filter { entries[it].games > 0 }
+    fun fit(maxSweeps: Int = MAX_ITER, touched: IntArray = IntArray(0)) {
+        rankCache = null
+        val active = (0 until n).filter { entries[it].games > 0 }.toIntArray()
         if (active.isEmpty()) return
         val wins = DoubleArray(n)
         for (i in active) {
@@ -275,30 +282,58 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             wins[i] = w
         }
         val pi = strength
+        // Converged when no rating moves relative to the others: all strengths also drift
+        // together under the weak prior, which a plain change test kept chasing for thousands
+        // of sweeps (1e-6 here is 0.0002 rating points).
+        val delta = DoubleArray(n)
         for (iter in 0 until maxSweeps) {
-            var change = 0.0
             for (i in active) {
-                var denom = 2 * PRIOR / (pi[i] + 1.0)
-                for (j in active) if (played[i][j] > 0) denom += played[i][j] / (pi[i] + pi[j])
+                val p = pi[i]
+                val row = played[i]
+                var denom = 2 * PRIOR / (p + 1.0)
+                for (j in active) {
+                    val g = row[j]
+                    if (g > 0) denom += g / (p + pi[j])
+                }
                 val next = wins[i] / denom
-                change = maxOf(change, abs(ln(next / pi[i])))
+                delta[i] = ln(next / p)
                 pi[i] = next
             }
-            if (change < 1e-7) break
+            var mean = 0.0
+            for (i in active) mean += delta[i]
+            mean /= active.size
+            var change = 0.0
+            for (i in active) change = maxOf(change, abs(delta[i] - mean))
+            if (change < 1e-6) break
         }
         val a = index[anchor]?.takeIf { entries[it].games > 0 }
         val base = if (a != null) log10(pi[a]) else active.sumOf { log10(pi[it]) } / active.size
         val r = DoubleArray(n) { Double.NaN }
-        val e = DoubleArray(n) { Double.NaN }
-        for (i in active) {
-            r[i] = 1500 + 400 * (log10(pi[i]) - base)
-            // Standard error from the curvature of the log-likelihood (natural-log strength units).
-            var info = 2 * PRIOR * pi[i] / (pi[i] + 1.0).pow(2)
-            for (j in active) if (played[i][j] > 0) info += played[i][j] * pi[i] * pi[j] / (pi[i] + pi[j]).pow(2)
-            e[i] = 400 / ln(10.0) / sqrt(info)
-        }
+        for (i in active) r[i] = 1500 + 400 * (log10(pi[i]) - base)
         ratings = r
-        errors = e
+        // The ranges only change slowly: a match's quick refit updates its two players (and
+        // anyone without one yet); a full fit all of them.
+        run {
+            val full = maxSweeps == MAX_ITER
+            val e = if (full) DoubleArray(n) { Double.NaN } else errors.copyOf()
+            for (i in active) {
+                if (!full && i !in touched && !e[i].isNaN()) continue
+                // Standard error from the curvature of the log-likelihood (natural-log strength units).
+                val p = pi[i]
+                var info = 2 * PRIOR * p / ((p + 1.0) * (p + 1.0))
+                val row = played[i]
+                for (j in active) {
+                    val g = row[j]
+                    if (g > 0) {
+                        val s = p + pi[j]
+                        info += g * p * pi[j] / (s * s)
+                    }
+                }
+                e[i] = 400 / ln(10.0) / sqrt(info)
+            }
+            errors = e
+        }
+        rankCache = null
     }
 
     // ---- saving --------------------------------------------------------------------------------
@@ -342,7 +377,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         const val RECORD_SCORE = 300
         private const val PRIOR = 0.1
         private const val MAX_ITER = 3000
-        private const val RECORD_SWEEPS = 25
+        private const val RECORD_SWEEPS = 20
 
         /** Restores [text] onto a ladder for [keys]; unknown AIs (an older roster) are skipped. */
         fun decode(keys: List<String>, text: String, anchor: String = "ev"): Ladder {

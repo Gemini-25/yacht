@@ -275,6 +275,8 @@ class LeagueController(
     private var lastPublish = 0L
     private var publishPending = false
     private var snapshots = 0L
+    private val snapshotRunning = AtomicBoolean(false)
+    private val snapshotAgain = AtomicBoolean(false)
     private var shownSnapshot = 0L
 
     init {
@@ -345,7 +347,7 @@ class LeagueController(
 
     fun changeSpeed(s: LeagueSpeed) {
         speed = s
-        scope.launch(Dispatchers.IO) { runCatching { prefs.writeTextAtomically(s.name) } }
+        scope.launch(fileWrites) { runCatching { prefs.writeTextAtomically(s.name) } }
         if (running) {
             stop()
             start()
@@ -359,6 +361,9 @@ class LeagueController(
      * ladder (hundreds of ms on a phone), and they must not overtake each other.
      */
     private val rosterWork = Dispatchers.Default.limitedParallelism(1)
+
+    /** League files are written one at a time, in order: two saves of a file never overtake each other. */
+    private val fileWrites = Dispatchers.IO.limitedParallelism(1)
 
     private fun rosterChanged(after: () -> Unit = {}) {
         scope.launch(rosterWork) {
@@ -402,7 +407,7 @@ class LeagueController(
 
     private fun persistCustoms() {
         val text = customs.joinToString("\n") { it.encode() }
-        scope.launch(Dispatchers.IO) { runCatching { customFile.writeTextAtomically(text) } }
+        scope.launch(fileWrites) { runCatching { customFile.writeTextAtomically(text) } }
     }
 
     // ---- running ---------------------------------------------------------------------------------
@@ -509,7 +514,7 @@ class LeagueController(
                         }
                     }
                     save?.let { (text, s) ->
-                        scope.launch(Dispatchers.IO) {
+                        scope.launch(fileWrites) {
                             runCatching { file.writeTextAtomically(text) }
                             s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
                         }
@@ -583,7 +588,7 @@ class LeagueController(
                 lastDelta.clear()
                 startRanks = emptyMap()
             }
-            withContext(Dispatchers.IO) {
+            withContext(fileWrites) {
                 runCatching { file.delete() }
                 runCatching { seasonFile.delete() }
             }
@@ -593,7 +598,7 @@ class LeagueController(
 
     private suspend fun save() = withContext(Dispatchers.Default) {
         val (text, s) = synchronized(lock) { ladder?.encode() to season?.encode() }
-        withContext(Dispatchers.IO) {
+        withContext(fileWrites) {
             text?.let { runCatching { file.writeTextAtomically(it) } }
             s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
         }
@@ -601,7 +606,7 @@ class LeagueController(
 
     private fun saveSeasonAsync() {
         val s = season?.encode() ?: return
-        scope.launch(Dispatchers.IO) { runCatching { seasonFile.writeTextAtomically(s) } }
+        scope.launch(fileWrites) { runCatching { seasonFile.writeTextAtomically(s) } }
     }
 
     // ---- ranked games ----------------------------------------------------------------------------
@@ -804,9 +809,19 @@ class LeagueController(
             lastPublish = now
         }
         // The snapshot refits and sorts the whole league (and waits for the lock while a match
-        // is recorded): never on the main thread.
+        // is recorded): never on the main thread, and one at a time (a request while one runs
+        // is folded into one more run after it).
+        if (!snapshotRunning.compareAndSet(false, true)) {
+            snapshotAgain.set(true)
+            return
+        }
         scope.launch(Dispatchers.Default) {
-            val (v, seq) = synchronized(lock) { snapshot() to ++snapshots }
+            val (v, seq) = try {
+                synchronized(lock) { snapshot() to ++snapshots }
+            } finally {
+                snapshotRunning.set(false)
+                if (snapshotAgain.getAndSet(false)) publish(force = true)
+            }
             if (v == null) return@launch
             scope.launch {
                 // Two snapshots can finish out of order: keep the newer.
