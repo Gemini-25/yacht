@@ -40,6 +40,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     private val titleRace = TitleRaceWatch()
 
+    /** AI 연구소: the current two-AI experiment and the newest results (league/lab.txt). */
+    var lab = LabBook()
+
     /** News events, oldest first (the newest [EVENTS] are kept). */
     val events = ArrayDeque<LeagueEvent>()
 
@@ -111,6 +114,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * then every rated board on the ladder, then the season (friendlies are only on the ladder).
      */
     fun recordJob(r: JobResult, nowMs: Long = 0L): Recorded {
+        // Lab games count for the experiment only.
+        if (r.fixture.comp == Comp.LAB) {
+            lab.record(r)
+            return Recorded(emptyList(), emptyList())
+        }
         val out = ArrayList<LeagueEvent>()
         val season = plan?.number ?: 0
         val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::hometown)) }.getOrDefault(emptyList())
@@ -147,7 +155,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     }
 
     fun release(f: Fixture) {
-        plan?.release(f)
+        if (f.comp == Comp.LAB) lab.release(f) else plan?.release(f)
     }
 
     /** What [closeSeason] did. */
@@ -245,6 +253,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         put(ARCHIVE, archive.encode())
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
+        put(LAB, lab.encode())
     }
 
     companion object {
@@ -257,9 +266,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val ARCHIVE = "archive.txt"
         const val HIGHLIGHTS = HighlightBook.FILE
         const val NEWS = NewsBook.FILE
+        const val LAB = LabBook.FILE
 
         /** Files [encodeFiles] writes. */
-        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS)
+        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB)
 
         /** Readers of every competition in season.txt. */
         val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec)
@@ -287,6 +297,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             w.archive = files[ARCHIVE]?.let { t -> runCatching { Archive.decode(t) }.getOrNull() } ?: Archive()
             w.highlights = files[HIGHLIGHTS]?.let { t -> runCatching { HighlightBook.decode(t) }.getOrNull() } ?: HighlightBook()
             w.news = files[NEWS]?.let { t -> runCatching { NewsBook.decode(t) }.getOrNull() } ?: NewsBook()
+            w.lab = files[LAB]?.let { t -> runCatching { LabBook.decode(t) }.getOrNull() } ?: LabBook()
             return w
         }
 
@@ -299,3 +310,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val FLAWED = setOf(Family.HUMAN, Family.CHARACTER, Family.RULE, Family.BELIEF, Family.SITUATION)
     }
 }
+
+/** An AI's career statistics as the preview and the scouting report read them (null with none). */
+fun AiStats.boxProfile(): BoxProfile? = BoxProfile.of(
+    carded, LongArray(boxSums.size) { boxSums[it].toLong() }, boxZeros, yachts, bonuses, comebacks, blownLeads,
+)

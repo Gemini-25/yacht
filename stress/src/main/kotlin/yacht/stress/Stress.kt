@@ -164,6 +164,16 @@ private fun run(args: Array<String>): Int {
                 waitFor("restore", 60_000) { note != null }
             }
             10 -> {
+                // The lab now and then: an experiment between two AIs, sometimes stopped early.
+                val keys = c.league.view?.rows?.filter { !it.isMe }?.map { it.key }.orEmpty()
+                if (keys.size >= 2 && rng.nextBoolean()) {
+                    val a = keys[rng.nextInt(keys.size)]
+                    val b = keys.filter { it != a }[rng.nextInt(keys.size - 1)]
+                    onMain { c.league.startLab(a, b, if (rng.nextBoolean()) 200 else 0) }
+                    if (rng.nextInt(3) == 0) onMain { c.league.stopLab() }
+                }
+                // A preview and a scouting report off the main thread.
+                if (keys.size >= 2) onMain { c.league.loadPreview(keys[0], keys[1]) }
                 onMain { c.league.changeSpeed(LeagueSpeed.entries[rng.nextInt(LeagueSpeed.entries.size)]) }
                 if (rng.nextInt(3) == 0) onMain { c.league.stop() }
                 Thread.sleep(300)

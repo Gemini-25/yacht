@@ -144,7 +144,11 @@ fun GameScreen(c: AppController) {
         Column(Modifier.padding(pad).fillMaxSize()) {
             MatchHeader(c, s)
             Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-                GameScoreSheet(c, s, onOppCell = { oppPick = it })
+                Column {
+                    val report = c.scouting
+                    if (s.rankedAi != null && s.moves.isEmpty() && report != null) ScoutingCard(s.opponent ?: "상대", report)
+                    GameScoreSheet(c, s, onOppCell = { oppPick = it })
+                }
             }
             if (s.isOver) GameOverPanel(c, s) else ActionArea(c, s) { peekAsk = true }
         }
@@ -1013,6 +1017,19 @@ private fun GameOverPanel(c: AppController, s: GameState) {
                     OutlinedButton(onClick = { c.screen = Screen.HOME }, modifier = Modifier.weight(1f)) { Text("새 게임") }
                 }
             }
+        }
+    }
+}
+
+/** 스카우팅 리포트: what the ranked opponent is good and bad at, before the first move. */
+@Composable
+private fun ScoutingCard(name: String, r: yacht.engine.league.ScoutingReport) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("🔎 스카우팅 리포트 · $name", fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)
+            for (line in r.lines) Text("· $line", style = MaterialTheme.typography.bodySmall, color = cs.onTertiaryContainer)
+            Text("💡 ${r.advice}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = cs.onTertiaryContainer)
         }
     }
 }

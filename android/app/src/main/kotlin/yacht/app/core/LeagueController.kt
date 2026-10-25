@@ -57,6 +57,17 @@ import yacht.engine.league.Article
 import yacht.engine.league.Highlight
 import yacht.engine.league.LiveFrame
 import yacht.engine.league.WatchTurn
+import yacht.engine.league.AiOdds
+import yacht.engine.league.BoxProfile
+import yacht.engine.league.LabResult
+import yacht.engine.league.MatchFormat
+import yacht.engine.league.MatchPreview
+import yacht.engine.league.Odds
+import yacht.engine.league.OddsTable
+import yacht.engine.league.Preview
+import yacht.engine.league.Scouting
+import yacht.engine.league.ScoutingReport
+import yacht.engine.league.boxProfile
 import yacht.engine.league.PlayerBook
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
@@ -180,6 +191,8 @@ data class SeasonRow(
     val zone: Int,
     /** 운 보정 승점: 3 for the higher two-game total on the same dice, 1 when equal. */
     val aggPoints: Int = 0,
+    /** 우승·승강 확률 (Monte Carlo over the rest of the season), null before the first estimate. */
+    val odds: AiOdds? = null,
 )
 
 data class SeasonHistoryItem(
@@ -432,6 +445,21 @@ class LeagueController(
 
     /** Knockout and group jobs in flight (they may take at most all but one worker). */
     private var cupsInFlight = 0
+
+    /** Lab jobs in flight (up to half the workers). */
+    private var labInFlight = 0
+
+    /** Legends rebuilt for the lab (they are not in the roster). */
+    private val legendAis = HashMap<String, LeagueAi>()
+
+    /** A roster AI, or a legend rebuilt from its genes. */
+    private fun aiOf(key: String): LeagueAi? = byKey[key] ?: synchronized(lock) {
+        legendAis[key] ?: run {
+            val t = tables ?: return@run null
+            val x = extra ?: return@run null
+            world?.players?.legend(key)?.let { leagueAi(it, t, x) }?.also { legendAis[key] = it }
+        }
+    }
 
     /** The league's rules (saved); structural changes apply from the next season. */
     var config by mutableStateOf(LeagueConfig())
@@ -737,6 +765,8 @@ class LeagueController(
         if (newcomers.isNotEmpty() && rng.nextDouble() < share) {
             Matchmaker.pick(l, rng, busy, among = newcomers)?.let { return friendly(it, rng) }
         }
+        // AI 연구소: up to half the workers on the experiment, alongside the league.
+        if (labInFlight < maxOf(1, speed.threads(cores) / 2)) w.lab.next()?.let { return it }
         val cost = { f: yacht.engine.league.LeagueFixture -> (costMs[f.a] ?: 5.0) + (costMs[f.b] ?: 5.0) }
         val cap = maxOf(1, speed.threads(cores) - 1)
         w.next(busy, cupsInFlight, cap, cost)?.let { return it }
@@ -785,8 +815,11 @@ class LeagueController(
         while (!flag.get()) {
             val job = synchronized(lock) {
                 nextJob(rng)?.also {
-                    busy += it.players
-                    live += it.a to it.b
+                    // Lab games may run while their AIs play league games: they take no one's slot.
+                    if (it.comp == Comp.LAB) labInFlight++ else {
+                        busy += it.players
+                        live += it.a to it.b
+                    }
                     if (isCup(it.comp)) cupsInFlight++
                     if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
                 }
@@ -798,7 +831,9 @@ class LeagueController(
             publish()
             var recorded = false
             try {
-                val result = LeagueMatch.playJob(t.rules, job, { byKey[it] }, config.matchFormat, estimate) { flag.get() } ?: forfeit(job)
+                // The lab always plays mirrored matches (its statistics assume them).
+                val format = if (job.comp == Comp.LAB) MatchFormat.MIRRORED else config.matchFormat
+                val result = LeagueMatch.playJob(t.rules, job, { aiOf(it) }, format, estimate) { flag.get() } ?: forfeit(job)
                 synchronized(lock) {
                     val w = world ?: return@synchronized
                     if (flag.get()) return@synchronized
@@ -817,8 +852,10 @@ class LeagueController(
             } finally {
                 synchronized(lock) {
                     if (!recorded && job.comp != Comp.FRIENDLY) world?.release(job)
-                    busy -= job.players.toSet()
-                    live -= job.a to job.b
+                    if (job.comp == Comp.LAB) labInFlight-- else {
+                        busy -= job.players.toSet()
+                        live -= job.a to job.b
+                    }
                     if (isCup(job.comp)) cupsInFlight--
                     if (job.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight = maxOf(0, w.teamsInFlight - 1) }
                 }
@@ -836,12 +873,30 @@ class LeagueController(
         while (!flag.get()) {
             delay(FIT_MS)
             refit()
+            refreshOdds()
             if (System.currentTimeMillis() - lastSave >= CHECKPOINT_MS && !flag.get()) {
                 lastSave = System.currentTimeMillis()
                 save()
             }
             publish()
         }
+    }
+
+    /** The latest 우승·승강 확률, made off the lock at most every 10% of the season. */
+    @Volatile
+    private var oddsNow: OddsTable? = null
+
+    private fun refreshOdds(force: Boolean = false) {
+        val input = synchronized(lock) {
+            val w = world ?: return
+            val p = w.plan ?: return
+            val o = oddsNow
+            if (!force && o != null && !o.stale(p.league)) return
+            Odds.input(p, { k -> w.rating(k) })
+        }
+        val table = runCatching { Odds.run(input, seed = System.nanoTime()) }.getOrNull() ?: return
+        oddsNow = table
+        publish()
     }
 
     /** The full fit of the ladder when it changed since the last one; the lock is held only to copy and to apply. */
@@ -1282,6 +1337,7 @@ class LeagueController(
             ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty())
         }
         val w = world
+        w?.lab?.let { b -> val v = b.current?.results to b.history; scope.launch { lab = v } }
         return LeagueView(
             rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps, clubs,
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
@@ -1307,6 +1363,7 @@ class LeagueController(
                         else -> 0
                     },
                     st.aggPoints,
+                    oddsNow?.takeIf { it.season == s.number }?.get(st.key),
                 )
             }
         }
@@ -1452,6 +1509,76 @@ class LeagueController(
                 delay(250)
             }
         }
+    }
+
+    /** The lab's current experiment and the newest finished ones (newest first). */
+    var lab by mutableStateOf<Pair<LabResult?, List<LabResult>>>(null to emptyList())
+        private set
+
+    /**
+     * Starts an experiment of [a] against [b] (AI 연구소): [target] mirrored matches, or 0 until
+     * the win share is known to ±1%p. The league is started if it was not running.
+     */
+    fun startLab(a: String, b: String, target: Int) {
+        scope.launch(Dispatchers.Default) {
+            synchronized(lock) { world?.lab?.start(a, b, target, System.nanoTime(), name(a), name(b)) }
+            publishLab()
+            save()
+        }
+        if (!running) start()
+    }
+
+    fun stopLab() {
+        scope.launch(Dispatchers.Default) {
+            synchronized(lock) { world?.lab?.stop() }
+            publishLab()
+            save()
+        }
+    }
+
+    private fun publishLab() {
+        val v = synchronized(lock) { world?.lab?.let { b -> b.current?.results to b.history } } ?: return
+        scope.launch { lab = v }
+    }
+
+    /** Legends the lab can field (they no longer play in the league): key and name. */
+    fun legends(): List<Pair<String, String>> = synchronized(lock) { world?.players?.legends?.map { it.key to it.name }.orEmpty() }
+
+    /** The match preview (경기 프리뷰) asked for last. */
+    var preview by mutableStateOf<MatchPreview?>(null)
+        private set
+
+    fun closePreview() {
+        preview = null
+    }
+
+    /** Builds the preview of [a] against [b] (a fixture of this season when [fixtureId] is given). */
+    fun loadPreview(a: String, b: String) {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                val season = w.plan?.league
+                val profiles = profilesOf(w)
+                Preview.of(
+                    a, b, w.ladder, season, oddsNow?.takeIf { it.season == season?.number }, profiles[a], profiles[b],
+                    BoxProfile.league(profiles.values), { k -> name(k) },
+                )
+            }
+            scope.launch { preview = v }
+        }
+    }
+
+    /** Every member's box profile from its career statistics (under the lock). */
+    private fun profilesOf(w: LeagueWorld): Map<String, BoxProfile> =
+        w.members.mapNotNull { k -> w.stats.career(k)?.boxProfile()?.let { k to it } }.toMap()
+
+    /** The scouting report (스카우팅 리포트) of [key] before a ranked game, or null. */
+    fun scouting(key: String): ScoutingReport? = synchronized(lock) {
+        val w = world ?: return null
+        val ai = byKey[key] ?: return null
+        val profiles = profilesOf(w)
+        val spec = customs.firstOrNull { it.key == key } ?: w.players[key]?.spec
+        runCatching { Scouting.report(ai.name, ai.family, spec, w.stats.career(key)?.boxProfile(), BoxProfile.league(profiles.values), ai.desc) }.getOrNull()
     }
 
     /** The matchday shown in the calendar (일정표), read off the main thread on request. */

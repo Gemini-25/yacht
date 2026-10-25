@@ -746,10 +746,16 @@ class AppController(
      * A ranked game against a league AI: [aiKey], or one near my rating (within [tier] when
      * given). Played alone; the result moves my league rating. False when no AI is rated yet.
      */
+    /** The ranked opponent's scouting report (스카우팅 리포트), shown before the first move. */
+    var scouting by mutableStateOf<yacht.engine.league.ScoutingReport?>(null)
+        private set
+
     fun newRankedGame(aiKey: String? = null, tier: TierName? = null): Boolean {
         val t = tables ?: return false
         val key = aiKey ?: league.pickOpponent(rng, tier) ?: return false
         resetForNewGame()
+        scouting = null
+        scope.launch { scouting = withContext(Dispatchers.Default) { league.scouting(key) } }
         state = GameState.new(
             DiceSource.RANDOM, if (rng.nextBoolean()) Side.ME else Side.OPP, t.rules, PlayStyle.SOLO,
             opponent = league.name(key), rankedAi = key,

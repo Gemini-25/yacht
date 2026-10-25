@@ -102,6 +102,7 @@ fun LeagueScreen(c: AppController) {
     var resetAsk by remember { mutableStateOf(false) }
     var rankedAsk by remember { mutableStateOf(false) }
     var rulesAsk by remember { mutableStateOf(false) }
+    var labAsk by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Scaffold(
         containerColor = cs.background,
@@ -120,6 +121,7 @@ fun LeagueScreen(c: AppController) {
                 },
                 navigationIcon = { TextButton(onClick = { c.screen = Screen.HOME }) { Text("홈") } },
                 actions = {
+                    TextButton(onClick = { labAsk = true }) { Text("연구소") }
                     TextButton(onClick = { rulesAsk = true }) { Text("규칙") }
                     TextButton(onClick = { resetAsk = true }) { Text("초기화") }
                 },
@@ -168,6 +170,8 @@ fun LeagueScreen(c: AppController) {
     else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
     if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }
+    if (labAsk) LabDialog(lg) { labAsk = false }
+    lg.preview?.let { PreviewDialog(lg, it) }
     lg.review?.let { if (lg.detail == null) SeasonReviewDialog(lg, it) }
     if (resetAsk) {
         AlertDialog(
@@ -475,7 +479,7 @@ private fun roman(d: Int) = when (d) {
 }
 
 @Composable
-private fun FormDots(recent: String) {
+fun FormDots(recent: String) {
     val cs = MaterialTheme.colorScheme
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
         for (ch in recent.takeLast(10)) {
@@ -632,6 +636,17 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
             }
             SeasonMode.CALENDAR -> item { CalendarCard(lg, d, onOpen) }
             SeasonMode.CHART -> item { RankChartCard(lg, season, d) }
+            SeasonMode.ODDS -> {
+                item {
+                    Text(
+                        "남은 경기를 레이팅으로 2,000번 시뮬레이션한 확률이에요(시즌 10%마다 다시 계산).",
+                        style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                    )
+                }
+                val rows = season.divisions[d]
+                if (rows.none { it.odds != null }) item { Text("확률을 계산하는 중이에요. 리그가 돌아가면 곧 나와요.", style = MaterialTheme.typography.bodySmall) }
+                else items(rows, key = { "o-${it.key}" }) { r -> OddsRow(r, d, season.divisions.size) { onOpen(r.key) } }
+            }
             SeasonMode.H2H -> item {
                 val keys = season.divisions[d].map { it.key }
                 androidx.compose.runtime.LaunchedEffect(d, keys) { lg.loadH2h("${d + 1}부", keys) }
@@ -684,12 +699,54 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
     }
 }
 
+/** One AI's chances: the title (or a playoff place) at the top, promotion and relegation below. */
+@Composable
+private fun OddsRow(r: SeasonRow, division: Int, divisions: Int, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val o = r.odds ?: return
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Text(r.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val cells = buildList {
+            if (division == 0) {
+                add("우승" to o.title)
+                add("4강 PO" to o.playoff)
+                add("챔스" to o.champions)
+            } else {
+                add("${division}부 1위" to o.leader)
+                add("승격" to o.promotion)
+            }
+            if (division < divisions - 1) add("강등" to o.relegation)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            for ((label, p) in cells) {
+                Text(
+                    "$label ${oddsPct(p)}", style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        label == "강등" && p >= 0.5 -> cs.error
+                        label != "강등" && p >= 0.5 -> gameColors.good
+                        else -> cs.onSurfaceVariant
+                    },
+                    fontWeight = if (p >= 0.5) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+}
+
+private fun oddsPct(p: Double): String = when {
+    p >= 0.995 -> "확정"
+    p <= 0.0 -> "–"
+    p < 0.01 -> "<1%"
+    else -> "${"%.0f".format(100 * p)}%"
+}
+
 private enum class SeasonMode(val label: String) {
     TABLE("순위표"),
     LUCK("운 보정 순위"),
     CALENDAR("일정표"),
     CHART("순위 변동"),
     H2H("상대 전적"),
+    ODDS("우승·승강 확률"),
 }
 
 @Composable
@@ -787,12 +844,12 @@ private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: Leag
                 when {
                     g != null -> g.joinToString(" ") { "${it.a}:${it.b}" }
                     f.live -> "⚔️ 경기 중"
-                    else -> "vs"
+                    else -> "🔮 프리뷰"
                 },
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (g != null) FontWeight.Bold else FontWeight.Normal,
-                color = if (g == null) cs.onSurfaceVariant else cs.onSurface,
-                modifier = Modifier.padding(horizontal = 6.dp),
+                color = if (g == null) cs.primary else cs.onSurface,
+                modifier = Modifier.padding(horizontal = 6.dp).clickable { lg.loadPreview(f.a, f.b) },
             )
             Text(
                 f.bName, Modifier.weight(1f).clickable { onOpen(f.b) }, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End,
