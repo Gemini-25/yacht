@@ -390,6 +390,12 @@ class LeagueController(
         reload()
     }
 
+    /** Completed once the saved league has been read for the first time. */
+    val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    /** Matches on the loaded ladder (0 before it is loaded). */
+    fun matchCount(): Long = synchronized(lock) { ladder?.matches ?: 0L }
+
     /** Reads the saved ladder and season again (after a restore). */
     fun reload() {
         scope.launch(rosterWork) {
@@ -405,6 +411,14 @@ class LeagueController(
                 ladder = l
                 plan = s
                 honours = h
+            }
+            loaded.complete(Unit)
+            // A restore may have brought the rules and the favourites too.
+            val cfg = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull()
+            val favs = readFavourites()
+            scope.launch {
+                cfg?.let { config = it }
+                favourites = favs
             }
             publish(force = true)
         }
@@ -1154,6 +1168,9 @@ class LeagueController(
 
     companion object {
         private val DIVISION = Regex("L\\d")
+
+        /** League files a backup restores (when this phone's league has no games yet). */
+        val SAVED = listOf("ladder.txt", "season.txt", "honours.txt", "config.txt", "favourites.txt")
         val HOMETOWNS = listOf("서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "수원", "춘천", "청주", "전주", "포항", "창원", "제주", "강릉")
         private const val FIT_MS = 2_000L
         private const val CHECKPOINT_MS = 30_000L

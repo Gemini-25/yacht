@@ -822,7 +822,10 @@ class AppController(
         canUndo = undoStack.isNotEmpty()
         aiJob?.cancel()
         aiThinking = false
-        if (cur.isOver && !prev.isOver) scope.launch(Dispatchers.IO) { storage.deleteFinished(cur.createdAt) }
+        if (cur.isOver && !prev.isOver) {
+            scope.launch(Dispatchers.IO) { storage.deleteFinished(cur.createdAt) }
+            history = history.filter { it.createdAt != cur.createdAt }
+        }
         // A hint once seen stays seen: undo never turns a game back into one played alone.
         state = if (cur.style == PlayStyle.PEEKED) prev.copy(style = PlayStyle.PEEKED) else prev
         autoHeld = false
@@ -835,12 +838,12 @@ class AppController(
         screen = Screen.REVIEW
     }
 
+    /**
+     * The history is read once at start and kept current by every finished (and undone) game:
+     * opening the list never reads every game file again (thousands of games, tens of MB).
+     */
     fun openHistory() {
-        scope.launch {
-            history = withContext(Dispatchers.IO) { readHistory() }
-            league.updateClone(CloneProfile.of(history))
-            screen = Screen.HISTORY
-        }
+        screen = Screen.HISTORY
     }
 
     private inline fun act(f: (GameState) -> GameState) {
@@ -891,7 +894,9 @@ class AppController(
     private fun finished(s: GameState) {
         if (history.none { it.createdAt == s.createdAt && it.moves.size == s.moves.size }) {
             history = listOf(s) + history.filter { it.createdAt != s.createdAt }
-            league.updateClone(CloneProfile.of(history))
+            // The profile reads every game played alone: off the main thread.
+            val h = history
+            scope.launch { league.updateClone(withContext(Dispatchers.Default) { CloneProfile.of(h) }) }
         }
         val key = s.rankedAi ?: return
         if (!s.ranked || s.rated) return
@@ -1282,10 +1287,14 @@ class AppController(
         // restored league is read, so its record there is kept.
         history = withContext(Dispatchers.IO) { readHistory() }
         league.updateClone(CloneProfile.of(history))
-        if ((league.view?.matches ?: 0L) == 0L && leagueFiles["ladder.txt"] != null) {
+        // Decided on the loaded league, not on the screen: a restore that arrives right after
+        // the app was restarted (killed while the file picker was open) comes before the
+        // league is read, and must not take that for an empty league.
+        val loaded = leagueFiles["ladder.txt"] != null && withTimeoutOrNull(120_000) { league.loaded.await() } != null
+        if (loaded && league.matchCount() == 0L) {
             withContext(Dispatchers.IO) {
                 val dir = File(storage.dir, "league").apply { mkdirs() }
-                for (name in listOf("ladder.txt", "season.txt", "honours.txt")) leagueFiles[name]?.let { File(dir, name).writeAtomically(it) }
+                for (name in LeagueController.SAVED) leagueFiles[name]?.let { File(dir, name).writeAtomically(it) }
             }
             league.reload()
             leagueTaken = true
