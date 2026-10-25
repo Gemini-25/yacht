@@ -7,3 +7,4 @@ local.properties
 /tables/
 android/app/src/main/assets/*.bin
 __pycache__/
+/.claude/worktrees/
