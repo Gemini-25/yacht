@@ -207,6 +207,8 @@ class AppController(
     var errorListener: ((Throwable) -> Unit)? = null
 
     private fun onUncaught(e: Throwable) {
+        // Searches still running when the app closes find their pool shut down: not a crash.
+        if (closed || e is java.util.concurrent.RejectedExecutionException) return
         errorListener?.invoke(e)
         val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
         val text = "$time · 오류 (앱은 계속 실행됨)\n${e.stackTraceToString().take(6000)}"
@@ -396,7 +398,12 @@ class AppController(
         }
     }
 
+    /** Set when the app closes: errors from work still finishing are not crashes. */
+    @Volatile
+    private var closed = false
+
     fun shutdown() {
+        closed = true
         league.stop()
         verifyJob?.cancel()
         stopDuel()

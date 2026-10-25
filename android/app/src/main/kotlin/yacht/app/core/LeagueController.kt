@@ -602,6 +602,12 @@ class LeagueController(
     private fun nextJob(rng: Random): Fixture? {
         val w = world ?: return null
         val l = w.ladder
+        // No season (a restore read an old season file while the league was starting): a
+        // first one, or the workers would wait forever.
+        if (w.plan == null) {
+            configureWorld(w)
+            w.openFirstSeason(System.nanoTime())
+        }
         val p = w.plan ?: return null
         val inLeague = p.league.standings.keys
         val members = w.members
@@ -758,8 +764,12 @@ class LeagueController(
         preparing = null
         val job = runJob
         scope.launch {
-            job?.join()
-            save()
+            // Leaving the app stops the league and then clears the scope: the last save must
+            // not be cancelled with it.
+            withContext(kotlinx.coroutines.NonCancellable) {
+                job?.join()
+                save()
+            }
             publish(force = true)
         }
     }
@@ -950,6 +960,8 @@ class LeagueController(
                 }
             }
             publish(force = true)
+            // The watched game is on the ladder: saved now, the league may not be running.
+            save()
             val advisor = Advisor(t.withoutRisk())
             val outlook = OutlookAnalysis(t)
             val talk = Commentary(t)
