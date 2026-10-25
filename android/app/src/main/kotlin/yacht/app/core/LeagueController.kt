@@ -254,6 +254,7 @@ class LeagueController(
 
     private var tables: Tables? = null
     private var baseRoster: List<LeagueAi> = emptyList()
+    @Volatile
     private var roster: List<LeagueAi> = emptyList()
     @Volatile
     private var byKey: Map<String, LeagueAi> = emptyMap()
@@ -302,13 +303,10 @@ class LeagueController(
 
     /** Reads the saved ladder and season again (after a restore). */
     fun reload() {
-        scope.launch {
+        scope.launch(rosterWork) {
             val keys = synchronized(lock) { ladderKeys() }
-            val (l, s) = withContext(Dispatchers.IO) {
-                val l = runCatching { file.takeIf { it.exists() }?.readText()?.let { Ladder.decode(keys, it) } }.getOrNull() ?: Ladder(keys)
-                val s = runCatching { seasonFile.takeIf { it.exists() }?.readText()?.let { Season.decode(it, keys) } }.getOrNull()
-                l to s
-            }
+            val l = runCatching { file.takeIf { it.exists() }?.readText()?.let { Ladder.decode(keys, it) } }.getOrNull() ?: Ladder(keys)
+            val s = runCatching { seasonFile.takeIf { it.exists() }?.readText()?.let { Season.decode(it, keys) } }.getOrNull()
             synchronized(lock) {
                 ladder = l
                 season = s
@@ -349,22 +347,34 @@ class LeagueController(
 
     // ---- the player's AIs ----------------------------------------------------------------------
 
+    /**
+     * Roster changes and reloads run one at a time off the main thread: each re-reads the
+     * ladder (hundreds of ms on a phone), and they must not overtake each other.
+     */
+    private val rosterWork = Dispatchers.Default.limitedParallelism(1)
+
+    private fun rosterChanged(after: () -> Unit = {}) {
+        scope.launch(rosterWork) {
+            rebuildRoster()
+            after()
+            publish(force = true)
+        }
+    }
+
     /** Updates the clone from my finished games (null: not enough games yet). */
     fun updateClone(profile: CloneProfile?) {
         if (profile == clone) return
         clone = profile
-        rebuildRoster()
-        publish(force = true)
+        rosterChanged()
     }
 
     fun saveCustom(spec: CustomAiSpec) {
         val old = customs.firstOrNull { it.id == spec.id }
         customs = customs.filter { it.id != spec.id } + spec
         persistCustoms()
-        rebuildRoster()
         // Changed play (not just the name): its old results no longer describe it.
-        if (old != null && old.copy(name = spec.name) != spec) forget(spec.key)
-        publish(force = true)
+        val replay = old != null && old.copy(name = spec.name) != spec
+        rosterChanged { if (replay) forget(spec.key) }
     }
 
     /** Drops [key]'s ladder results so it is placed again. */
@@ -380,8 +390,7 @@ class LeagueController(
     fun deleteCustom(id: String) {
         customs = customs.filter { it.id != id }
         persistCustoms()
-        rebuildRoster()
-        publish(force = true)
+        rosterChanged()
     }
 
     private fun persistCustoms() {
@@ -538,9 +547,12 @@ class LeagueController(
         if (running || (view?.matches ?: 0L) > 0L) return
         scope.launch {
             val text = withContext(Dispatchers.IO) { seed() } ?: return@launch
-            synchronized(lock) {
-                ladder = Ladder.decode(ladderKeys(), text)
-                season = null
+            withContext(rosterWork) {
+                val l = Ladder.decode(synchronized(lock) { ladderKeys() }, text)
+                synchronized(lock) {
+                    ladder = l
+                    season = null
+                }
             }
             save()
             publish(force = true)
@@ -566,7 +578,7 @@ class LeagueController(
         }
     }
 
-    private suspend fun save() {
+    private suspend fun save() = withContext(Dispatchers.Default) {
         val (text, s) = synchronized(lock) { ladder?.encode() to season?.encode() }
         withContext(Dispatchers.IO) {
             text?.let { runCatching { file.writeText(it) } }
@@ -666,13 +678,15 @@ class LeagueController(
             val rng = Random()
             val turns = withContext(Dispatchers.Default) { WatchMatch.play(t.rules, a.make(Random(rng.nextLong())), b.make(Random(rng.nextLong())), rng) }
             val last = turns.last()
-            synchronized(lock) {
-                ladder?.let { l ->
-                    if (l.entry(first) != null && l.entry(second) != null) {
-                        l.record(
-                            first, second,
-                            listOf(GameScore(last.first.total, last.second.total, (last.first[Category.YACHT] ?: 0) > 0, (last.second[Category.YACHT] ?: 0) > 0, last.first.bonus > 0, last.second.bonus > 0)),
-                        )
+            withContext(Dispatchers.Default) {
+                synchronized(lock) {
+                    ladder?.let { l ->
+                        if (l.entry(first) != null && l.entry(second) != null) {
+                            l.record(
+                                first, second,
+                                listOf(GameScore(last.first.total, last.second.total, (last.first[Category.YACHT] ?: 0) > 0, (last.second[Category.YACHT] ?: 0) > 0, last.first.bonus > 0, last.second.bonus > 0)),
+                            )
+                        }
                     }
                 }
             }

@@ -115,6 +115,7 @@ private fun run(args: Array<String>): Int {
         scope, GameStorage(Files.createTempDirectory("yacht-stress").toFile()), loadTables = { load(tablesDir) },
         loadAsset = { name -> if (name == "league_seed.txt" && seedFile.exists()) seedFile.readText() else null },
     )
+    c.errorListener = { e -> record("caught by the app's safety net", e) }
     onMain { c.start() }
     waitFor("tables", 120_000) { c.tables != null }
     onMain { c.changeThinkTime(ThinkTime.FAST) }

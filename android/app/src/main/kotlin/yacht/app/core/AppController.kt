@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -164,12 +165,30 @@ data class VerifyStats(
 
 /** All app state and actions; the Android ViewModel only owns its lifetime. */
 class AppController(
-    private val scope: CoroutineScope,
+    parentScope: CoroutineScope,
     private val storage: GameStorage,
     private val loadTables: () -> Tables,
     /** A text file shipped with the app (the league seed), or null. */
     private val loadAsset: (String) -> String? = { null },
 ) {
+    /**
+     * Safety net: an error in background work (a search, the league, a file) is written to the
+     * crash log and the app goes on, instead of closing in the middle of a game.
+     */
+    private val scope = CoroutineScope(parentScope.coroutineContext + CoroutineExceptionHandler { _, e -> onUncaught(e) })
+
+    /** Also told about every such error (the stress test counts them). */
+    @Volatile
+    var errorListener: ((Throwable) -> Unit)? = null
+
+    private fun onUncaught(e: Throwable) {
+        errorListener?.invoke(e)
+        val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
+        val text = "$time · 오류 (앱은 계속 실행됨)\n${e.stackTraceToString().take(6000)}"
+        runCatching { storage.crashFile.writeText(text) }
+        lastCrash = text
+    }
+
     var screen by mutableStateOf(Screen.HOME)
     var tables by mutableStateOf<Tables?>(null)
         private set
@@ -309,6 +328,8 @@ class AppController(
         scope.launch {
             try {
                 val t = withContext(Dispatchers.IO) { loadTables() }
+                // Several tables can be alive at once (my game, the league's duel AIs): each gets a share of the heap.
+                DuelSearch.maxBytes = Runtime.getRuntime().maxMemory() / 8
                 advisor = Advisor(t, pool)
                 explainer = Explainer(t).also { quizEngine = Quiz(Advisor(t, pool), it) }
                 commentary = Commentary(t)
@@ -843,7 +864,8 @@ class AppController(
         }
         val key = s.rankedAi ?: return
         if (!s.ranked || s.rated) return
-        rankResult = league.recordMyGame(key, s.me, s.opp)
+        // The refit takes a moment: off the main thread.
+        scope.launch { rankResult = withContext(Dispatchers.Default) { league.recordMyGame(key, s.me, s.opp) } }
         val rated = s.copy(rated = true)
         state = rated
         // A counted game cannot be taken back.
@@ -882,6 +904,7 @@ class AppController(
         // The table also tracks P(tie), which about doubles its work.
         val budget = (opsPerSecond * DUEL_SECONDS / 2).toLong()
         if (DuelSearch.estimateOps(t, s.me, s.opp, meToMove, limit = budget) == Long.MAX_VALUE) return
+        if (!DuelSearch.fitsMemory(t, s.me, s.opp, meToMove, ties = true)) return
         stopDuel()
         val stop = AtomicBoolean(false)
         duelStop = stop

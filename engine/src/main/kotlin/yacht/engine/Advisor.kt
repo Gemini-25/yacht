@@ -170,7 +170,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         table?.after(me, opp)?.let { after ->
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, after), duel = true, weightBase = oppExpected)
         }
-        if (duel && canDuel(me, opp)) {
+        if (duel && canDuel(me, opp) && DuelSearch.fitsMemory(tables, me, opp, ties = ties)) {
             val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos, adversarial = adversarial, ties = ties)
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true, weightBase = oppExpected)
         }
@@ -232,7 +232,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         if (allowDuel && best.depth >= remaining && canDuel(me, opp)) {
             val ops = DuelSearch.estimateOps(tables, me, opp, limit = DUEL_MAX_OPS, adversarial = adversarial)
             val predicted = (lastNanos.toDouble() * ops / lastOps).toLong()
-            if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos) {
+            if (ops < DUEL_MAX_OPS && System.nanoTime() + predicted <= deadlineNanos && DuelSearch.fitsMemory(tables, me, opp, ties = ties)) {
                 try {
                     t0 = System.nanoTime()
                     best = planTurn(me, opp, Mode.WIN, tieValue = tieValue, deadlineNanos = deadlineNanos, duel = true)

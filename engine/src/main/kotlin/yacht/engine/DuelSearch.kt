@@ -227,6 +227,20 @@ class DuelSearch(
     }
 
     /**
+     * Whether a grid at masks ([mm], [om]) holds upper sums [mu] / [ou]. A grid with one row
+     * takes any value only when the bonus no longer depends on it (decided at the root, or every
+     * upper box filled); otherwise its one value is the root's, and a card with the same boxes
+     * but another upper sum (the box rewritten after an undo) is not in the table.
+     */
+    private fun Grid.holds(mm: Int, om: Int, mu: Int, ou: Int): Boolean {
+        val myOk = if (myIdx != null) myIdx.getOrElse(mu) { -1 } >= 0
+        else myDecided || mm and Category.UPPER_MASK == Category.UPPER_MASK || mu == myU[0]
+        val oppOk = if (oppIdx != null) oppIdx.getOrElse(ou) { -1 } >= 0
+        else oppDecided || om and Category.UPPER_MASK == Category.UPPER_MASK || ou == oppU[0]
+        return myOk && oppOk
+    }
+
+    /**
      * End-of-turn values for my turn at a later position ([myCard], [oppCard]) reached from the
      * root, or null if this table does not cover it (different game, undo past the root, ...).
      */
@@ -238,17 +252,21 @@ class DuelSearch(
         val diff = myCard.total - oppCard.total
         if (h > 0) {
             val g = grids[key(myCard.mask, oppCard.mask)] ?: return null
-            if (g.rowOrNull(myCard.u, oppCard.u) < 0 || diff < g.lo || diff >= g.lo + g.width) return null
+            if (!g.holds(myCard.mask, oppCard.mask, myCard.u, oppCard.u) || diff < g.lo || diff >= g.lo + g.width) return null
         } else if (myCard != me || oppCard != opp) {
             return null
         }
-        // Every child of this position must be in the table with this upper sum and score range.
+        // Every child of this position must be in the table with every upper sum this turn can
+        // give (any count of the face in an upper box) and the opponent's.
         for (c in 0 until Category.COUNT) {
             if (myCard.isFilled(Category.of(c))) continue
             val mm = myCard.mask or (1 shl c)
             if (mm == Category.FULL_MASK && oppCard.isComplete) continue
             val g = grids[key(mm, oppCard.mask)] ?: return null
-            if (g.oppIdx != null && g.oppIdx.getOrElse(oppCard.u) { -1 } < 0) return null
+            val gains = if (c < 6) 5 else 0
+            for (k in 0..gains) {
+                if (!g.holds(mm, oppCard.mask, minOf(cap, myCard.u + k * (c + 1)), oppCard.u)) return null
+            }
         }
         return object : AfterTurn {
             override fun value(c: Int, points: Int, bonus: Int, u2: Int) =
@@ -266,7 +284,7 @@ class DuelSearch(
         if (myCard.isComplete && oppCard.isComplete) return false
         val g = grids[key(myCard.mask, oppCard.mask)] ?: return false
         val diff = myCard.total - oppCard.total
-        return g.rowOrNull(myCard.u, oppCard.u) >= 0 && diff >= g.lo && diff < g.lo + g.width
+        return g.holds(myCard.mask, oppCard.mask, myCard.u, oppCard.u) && diff >= g.lo && diff < g.lo + g.width
     }
 
     /** Approximate memory held by the table, in bytes. */
@@ -456,6 +474,60 @@ class DuelSearch(
 
         /** Duel tables are never considered with more boxes left than this (cost explodes). */
         const val MAX_BOXES = 7
+
+        /**
+         * Most memory one table may take, in bytes. A table holds every score difference that
+         * can still happen, so it grows faster than its work: the work limit alone let tables
+         * reach hundreds of MB. The app lowers this to fit its heap.
+         */
+        @Volatile
+        var maxBytes: Long = 256L shl 20
+
+        /**
+         * Memory the table would take (twice with [ties]), counting the grids the constructor
+         * allocates; [Long.MAX_VALUE] as soon as it passes [limit] or the position is out of reach.
+         */
+        fun estimateBytes(
+            tables: Tables,
+            me: Board,
+            opp: Board,
+            meToMove: Boolean = true,
+            ties: Boolean = false,
+            limit: Long = maxBytes,
+        ): Long {
+            val kMe = Category.COUNT - me.filledCount
+            val kOpp = Category.COUNT - opp.filledCount
+            val ok = if (meToMove) kOpp == kMe || kOpp == kMe - 1 else kMe == kOpp || kMe == kOpp - 1
+            if (!ok || kMe + kOpp == 0 || maxOf(kMe, kOpp) > MAX_BOXES) return Long.MAX_VALUE
+            val myDecided = WinSearch.bonusDecided(me)
+            val oppDecided = WinSearch.bonusDecided(opp)
+            val myLevels = WinSearch.masksByLevel(me.mask)
+            val oppLevels = WinSearch.masksByLevel(opp.mask)
+            val myRows = HashMap<Int, Pair<Int, Int>>()
+            val oppRows = HashMap<Int, Pair<Int, Int>>()
+            fun info(map: HashMap<Int, Pair<Int, Int>>, b: Board, decided: Boolean, m: Int) = map.getOrPut(m) {
+                WinSearch.upperRows(b, decided, m).values.size to WinSearch.gainMax(tables, b, decided, m)
+            }
+            val cell = if (ties) 8L else 4L
+            var bytes = 0L
+            for (h in kMe + kOpp - 1 downTo 1) {
+                val jm = if (meToMove) (h + 1) / 2 else h / 2
+                val jo = if (meToMove) h / 2 else (h + 1) / 2
+                for (mm in myLevels[jm]) {
+                    val (mr, mg) = info(myRows, me, myDecided, mm)
+                    for (om in oppLevels[jo]) {
+                        val (or, og) = info(oppRows, opp, oppDecided, om)
+                        bytes += mr.toLong() * or * (mg + og + 1) * cell
+                        if (bytes > limit) return Long.MAX_VALUE
+                    }
+                }
+            }
+            return bytes
+        }
+
+        /** True when a table at this position fits the memory cap ([ties]: tracked too). */
+        fun fitsMemory(tables: Tables, me: Board, opp: Board, meToMove: Boolean = true, ties: Boolean = false): Boolean =
+            estimateBytes(tables, me, opp, meToMove, ties) <= maxBytes
 
         /**
          * Rough operation count (undecided contexts only), to decide whether the duel table
