@@ -32,6 +32,7 @@ import yacht.app.core.LeagueView
 import yacht.app.core.ProfileView
 import yacht.app.core.SeasonHistoryItem
 import yacht.engine.league.Origin
+import yacht.engine.game.label
 
 /** An honour in Korean ("1부 우승", "요트컵 준우승", "신인왕", ...). */
 fun honourLabel(kind: String): String {
@@ -97,8 +98,113 @@ fun ProfileSection(lg: LeagueController, key: String) {
             Text("유전자: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
         Honours(p)
+        StatsPart(p)
+        Growth(p)
         Genealogy(p)
     }
+}
+
+/** This season's and career numbers beyond the ladder's, and the boxes it is best and worst at. */
+@Composable
+private fun StatsPart(p: ProfileView) {
+    val st = p.career ?: return
+    if (st.games == 0) return
+    val cs = MaterialTheme.colorScheme
+    val season = p.season?.takeIf { it.games > 0 }
+    Text("📈 기록 (통산${if (season != null) " · 이번 시즌" else ""})", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    @Composable
+    fun line(label: String, career: String, now: String?) =
+        Text("$label  $career" + (now?.let { "  ·  $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+    fun rating(a: yacht.engine.league.AiStats) = if (a.avgRating.isNaN()) "–" else "%.2f".format(a.avgRating)
+    line("평균 평점", rating(st), season?.let { rating(it) })
+    line("경기(매치) 승-무-패", "${st.matchWins}-${st.matchDraws}-${st.matchLosses}", season?.let { "${it.matchWins}-${it.matchDraws}-${it.matchLosses}" })
+    line("역전승 / 역전패", "${st.comebacks} / ${st.blownLeads}", season?.let { "${it.comebacks} / ${it.blownLeads}" })
+    line("5점 차 이내 승 / 패", "${st.closeWins} / ${st.closeLosses}", season?.let { "${it.closeWins} / ${it.closeLosses}" })
+    line("대어 사냥 (100점 이상 위)", "${st.giantKills}", season?.let { "${it.giantKills}" })
+    line("300점 이상", "${st.over300}", season?.let { "${it.over300}" })
+    if (st.derbyWins + st.derbyLosses > 0) line("더비 (같은 고향) 승/패", "${st.derbyWins} / ${st.derbyLosses}", null)
+    // 주무기 / 약점: its box averages against the league's.
+    val league = p.league
+    if (league != null && st.carded >= 20) {
+        val diffs = yacht.engine.Category.ALL.mapNotNull { c ->
+            val mine = st.boxAverage(c)
+            val avg = league.boxAverage(c)
+            if (mine.isNaN() || avg.isNaN()) null else c to mine - avg
+        }
+        val strong = diffs.sortedByDescending { it.second }.take(2).filter { it.second > 0.3 }
+        val weak = diffs.sortedBy { it.second }.take(2).filter { it.second < -0.3 }
+        if (strong.isNotEmpty()) Text("💪 주무기: " + strong.joinToString(", ") { (c, d) -> "${c.label} %+.1f".format(d) }, style = MaterialTheme.typography.labelSmall, color = gameColors.good)
+        if (weak.isNotEmpty()) Text("🩹 약점: " + weak.joinToString(", ") { (c, d) -> "${c.label} %+.1f".format(d) }, style = MaterialTheme.typography.labelSmall, color = cs.error)
+    }
+}
+
+/** 성장 곡선: its rating at the end of each season, title seasons ringed, and the season lines. */
+@Composable
+private fun Growth(p: ProfileView) {
+    val lines = p.lines
+    if (lines.isEmpty()) return
+    val cs = MaterialTheme.colorScheme
+    Text("🌱 성장 곡선", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    if (lines.size >= 2) {
+        val titled = p.honours.filter { trophy(it.kind) == "👑" || trophy(it.kind) == "🥇" || trophy(it.kind) == "🏆" }.map { it.season }.toSet()
+        LineChart(
+            lines.map { it.rating }, labels = "시즌 ${lines.first().season}" to "시즌 ${lines.last().season}",
+            mark = lines.withIndex().filter { it.value.season in titled }.map { it.index }.toSet(),
+        )
+    }
+    for (l in lines.takeLast(8).reversed()) {
+        Text(
+            "시즌 ${l.season} · ${l.division + 1}부 ${l.position}위 · ${l.wins}승 ${l.draws}무 ${l.losses}패 · 레이팅 ${"%.0f".format(l.rating)}" +
+                if (l.avgRating.isNaN()) "" else " · 평점 ${"%.2f".format(l.avgRating)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = cs.onSurfaceVariant,
+        )
+    }
+}
+
+/** 시즌 결산: shown once when a season ends. */
+@Composable
+fun SeasonReviewDialog(lg: LeagueController, r: yacht.engine.league.SeasonReview) {
+    val cs = MaterialTheme.colorScheme
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { lg.dismissReview() },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { lg.dismissReview() }) { Text("확인") } },
+        title = { Text("📰 시즌 ${r.season} 결산", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (line in r.sentences) Text(line, style = MaterialTheme.typography.bodyMedium)
+                if (r.champions.isNotEmpty()) {
+                    Text("🏆 우승", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    for (h in r.champions.filter { trophy(it.kind) != null }) Text("${trophy(h.kind)} ${honourLabel(h.kind)} ${honourWinner(lg, h.kind, h.key)}", style = MaterialTheme.typography.bodySmall)
+                }
+                if (r.awards.isNotEmpty()) {
+                    Text("🏅 시상식", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    for (h in r.awards) Text("${honourLabel(h.kind)} ${lg.name(h.key)}", style = MaterialTheme.typography.bodySmall)
+                }
+                if (r.risers.isNotEmpty()) {
+                    Text("📈 가장 많이 오른 AI", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    for (m in r.risers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (%+.0f)".format(m.delta), style = MaterialTheme.typography.bodySmall, color = gameColors.good)
+                }
+                if (r.fallers.isNotEmpty()) {
+                    Text("📉 가장 많이 내린 AI", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    for (m in r.fallers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (%+.0f)".format(m.delta), style = MaterialTheme.typography.bodySmall, color = cs.error)
+                }
+                if (r.records.isNotEmpty()) {
+                    Text("📜 새 기록", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    for (b in r.records) Text("${b.record.kind.label}: ${b.record.kind.text(b.record.value)} ${lg.name(b.record.holder)}", style = MaterialTheme.typography.bodySmall)
+                }
+                if (r.meta.isNotEmpty()) {
+                    Text("📊 메타 변화", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    for (m in r.meta) {
+                        Text(
+                            m.label + ": " + if (m.percent) "%.0f%% → %.0f%%".format(100 * m.before, 100 * m.after) else "%.1f → %.1f".format(m.before, m.after),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -136,7 +242,10 @@ private fun Genealogy(p: ProfileView) {
 }
 
 private enum class RecordsMode(val label: String) {
+    ROOM("기록실"),
     HALL("명예의 전당"),
+    ARCHIVE("시즌 아카이브"),
+    META("메타 리포트"),
     LEGENDS("레전드 보관소"),
     FAMILIES("계열별"),
 }
@@ -144,13 +253,18 @@ private enum class RecordsMode(val label: String) {
 /** 기록: the hall of fame by season, the legends and retired players, and the families. */
 @Composable
 fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, families: @Composable () -> Unit) {
-    var mode by remember { mutableStateOf(RecordsMode.HALL) }
+    var mode by remember { mutableStateOf(RecordsMode.ROOM) }
+    LaunchedEffect(mode) { if (mode != RecordsMode.LEGENDS && mode != RecordsMode.FAMILIES) lg.loadRecords() }
     Column {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
         }
+        val r = lg.records
         when (mode) {
-            RecordsMode.HALL -> HallOfFame(v.season?.history.orEmpty())
+            RecordsMode.ROOM -> RecordsRoom(lg, r, onOpen)
+            RecordsMode.ARCHIVE -> SeasonArchive(lg, r)
+            RecordsMode.META -> MetaReportView(r)
+            RecordsMode.HALL -> HallOfFame(v.season?.history.orEmpty(), r?.hallOfFame.orEmpty(), onOpen)
             RecordsMode.LEGENDS -> Legends(lg, onOpen)
             RecordsMode.FAMILIES -> families()
         }
@@ -158,13 +272,30 @@ fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, fa
 }
 
 @Composable
-private fun HallOfFame(history: List<SeasonHistoryItem>) {
+private fun HallOfFame(history: List<SeasonHistoryItem>, members: List<yacht.engine.league.HallOfFameEntry>, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (history.isEmpty()) {
         CenterText("시즌이 끝나면 우승팀과 수상자가 여기에 쌓여요.")
         return
     }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (members.isNotEmpty()) {
+            item { Text("🏛 헌액 (우승 3회, MVP 2회, 또는 5,000판 승률 55%)", fontWeight = FontWeight.Bold) }
+            items(members.reversed(), key = { "hof-${it.key}" }) { m ->
+                Row(Modifier.fillMaxWidth().clickable { onOpen(m.key) }.padding(vertical = 2.dp)) {
+                    Text("시즌 ${m.season}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
+                    Text(
+                        "${m.name} · " + when (m.reason) {
+                            "TITLES" -> "우승 ${m.titles}회"
+                            "MVP" -> "MVP 2회"
+                            else -> "${"%,d".format(m.games)}판 승률 ${"%.1f".format(100 * m.winRate)}%"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            item { Text("시즌별", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
+        }
         item {
             val titles = history.mapNotNull { it.champions.firstOrNull() }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(5)
             if (titles.isNotEmpty()) {
@@ -231,3 +362,145 @@ fun PastProfileDialog(lg: LeagueController, key: String, onDismiss: () -> Unit) 
     )
 }
 
+
+@Composable
+private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsView?, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    if (r == null) {
+        CenterText("기록을 불러오는 중…")
+        return
+    }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item { Text("📜 리그 기록", fontWeight = FontWeight.Bold) }
+        if (r.records.isEmpty()) item { Text("공식 경기가 쌓이면 기록이 생겨요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+        items(r.records, key = { "rec-${it.kind}" }) { rec ->
+            Card(Modifier.fillMaxWidth().clickable { onOpen(rec.holder) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(rec.kind.label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                    Text("${rec.kind.text(rec.value)} · ${lg.name(rec.holder)}", fontWeight = FontWeight.Bold)
+                    Text(
+                        "시즌 ${rec.season}" + (rec.other?.let { " · 상대 ${lg.name(it)}" } ?: "") + (rec.comp?.let { " · ${it.label}" } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (r.mvpRace.isNotEmpty()) {
+            item { Text("⭐ 이번 시즌 평점 순위 (MVP 레이스)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+            items(r.mvpRace, key = { "mvp-${it.first}" }) { (k, st) ->
+                BarRow(lg.name(k), st.avgRating - 3.0, 7.0, "%.2f".format(st.avgRating))
+            }
+        }
+        if (r.dynasties.isNotEmpty()) {
+            item { Text("👑 왕조·트레블", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+            items(r.dynasties.reversed().take(30), key = { "dy-${it.key}-${it.kind}-${it.title}-${it.from}" }) { d ->
+                Text(
+                    "${lg.name(d.key)} · " + when (d.kind) {
+                        "RUN" -> "${honourLabel(d.title)} ${d.count}연패 (시즌 ${d.from}–${d.to})"
+                        "DOUBLE" -> "더블 (리그·요트컵, 시즌 ${d.to})"
+                        "TREBLE" -> "트레블 (리그·요트컵·챔스, 시즌 ${d.to})"
+                        "UNBEATEN" -> "${honourLabel(d.title).removeSuffix(" 우승")} 무패 시즌 (시즌 ${d.to})"
+                        else -> d.kind
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.clickable { onOpen(d.key) },
+                )
+            }
+        }
+        if (r.milestones.isNotEmpty()) {
+            item { Text("🎯 마일스톤", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+            items(r.milestones.take(30), key = { "ms-${it.season}-${it.keys}-${it.args}" }) { e ->
+                Text("시즌 ${e.season} · ${lg.name(e.keys.firstOrNull() ?: "")} ${milestoneText(e.args)}", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/** A milestone event's args (kind, value) in Korean. */
+fun milestoneText(args: List<String>): String {
+    val v = args.getOrNull(1)?.toIntOrNull()?.let { "%,d".format(it) } ?: args.getOrNull(1).orEmpty()
+    return when (args.firstOrNull()) {
+        "games" -> "통산 ${v}판"
+        "wins" -> "통산 ${v}승"
+        "yachts" -> "통산 요트 ${v}번"
+        "300" -> "첫 300점"
+        "title" -> if (v == "1") "첫 우승" else "통산 ${v}번째 우승"
+        else -> args.joinToString(" ")
+    }
+}
+
+@Composable
+private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsView?) {
+    val cs = MaterialTheme.colorScheme
+    if (r == null || r.summaries.isEmpty()) {
+        CenterText("시즌이 끝나면 시즌마다 우승팀·수상자·깨진 기록이 여기에 남아요.")
+        return
+    }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items(r.summaries, key = { "sum-${it.season}" }) { s ->
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("시즌 ${s.season}", fontWeight = FontWeight.Bold)
+                    Text("${"%,d".format(s.games)}판 · 평균 ${"%.1f".format(s.avgScore)}점", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    for (h in s.honours.filter { trophy(it.kind) != null }) {
+                        Text("${trophy(h.kind)} ${honourLabel(h.kind)} ${honourWinner(lg, h.kind, h.key)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    s.topScorer?.let { Text("⚽ 득점왕 ${lg.name(it)} (평균 ${"%.1f".format(s.topScore)}점)", style = MaterialTheme.typography.bodySmall) }
+                    for (b in s.records) Text("📜 ${b.record.kind.label}: ${b.record.kind.text(b.record.value)} ${lg.name(b.record.holder)}", style = MaterialTheme.typography.labelSmall, color = cs.secondary)
+                }
+            }
+        }
+    }
+}
+
+/** An honour's winner: a family or all-star side by its label, a club or AI by name. */
+fun honourWinner(lg: LeagueController, kind: String, key: String): String = when (kind) {
+    "FAMILY", "ALLSTAR" -> yacht.engine.league.Competitions.teamLabel(key)
+    else -> lg.name(key)
+}
+
+@Composable
+private fun MetaReportView(r: yacht.app.core.RecordsView?) {
+    val cs = MaterialTheme.colorScheme
+    val m = r?.meta
+    if (m == null || m.cards == 0) {
+        CenterText("공식 경기가 쌓이면 칸마다 리그 평균 점수와 0점 비율, 상위권 생성 선수의 성향이 나와요.")
+        return
+    }
+    val before = r.previousMeta?.takeIf { it.season != m.season }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        item {
+            Text("📊 칸별 리그 메타 (시즌 ${m.season}, 점수판 ${"%,d".format(m.cards)}개)", fontWeight = FontWeight.Bold)
+            Text("평균 ${"%.1f".format(m.avgScore)}점" + (before?.let { " · 지난 시즌 ${"%.1f".format(it.avgScore)}점" } ?: ""), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
+        item {
+            Row(Modifier.fillMaxWidth()) {
+                Text("칸", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text("평균", Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text("0점", Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text("변화", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+        }
+        items(yacht.engine.Category.ALL, key = { "meta-${it.name}" }) { c ->
+            Row(Modifier.fillMaxWidth()) {
+                Text(c.label, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                Text("%.1f".format(m.boxAverage(c)), Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text("%.0f%%".format(100 * m.zeroRate(c)), Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.bodySmall)
+                val d = m.boxChange(before, c)
+                Text(if (d.isNaN()) "–" else "%+.1f".format(d), style = MaterialTheme.typography.labelSmall, color = if (d.isNaN() || kotlin.math.abs(d) < 0.05) cs.onSurfaceVariant else if (d > 0) gameColors.good else cs.error)
+            }
+        }
+        val traits = (r.previousMeta ?: m).traits
+        if (traits.isNotEmpty()) {
+            item { Text("🧬 생성·진화 선수의 성향: 상위 20% vs 나머지", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+            items(traits.sortedByDescending { kotlin.math.abs(it.top - it.rest) }.take(16), key = { "tr-${it.trait}-${it.value}" }) { t ->
+                Text(
+                    "${t.trait} · ${t.value}: 상위 ${"%.0f".format(100 * t.top)}% / 나머지 ${"%.0f".format(100 * t.rest)}%" +
+                        if (t.change.isNaN()) "" else " (상위 ${"%+.0f".format(100 * t.change)}%p)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}

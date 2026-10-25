@@ -52,9 +52,7 @@ class LeagueWorldTest {
         var guard = 0
         while (!w.seasonOver) {
             val f = w.next(emptySet(), 0, 2) ?: if (w.seasonOver) break else error("season ${w.plan?.number} stuck at ${w.plan?.fixturesLeft} fixtures left")
-            val r = play(f)
-            if (r.fixture.rated) for (b in r.boards) if (w.ladder.entry(b.a) != null && w.ladder.entry(b.b) != null) w.ladder.record(b.a, b.b, b.games)
-            out += w.record(r)
+            out += w.recordJob(play(f)).events
             check(++guard < 100_000)
         }
         return out
@@ -111,6 +109,10 @@ class LeagueWorldTest {
         assertEquals(w.honours.all, back.honours.all)
         assertEquals(w.players.alive.map { it.key }.sorted(), back.players.alive.map { it.key }.sorted())
         assertEquals(w.clubs!!.clubs, back.clubs!!.clubs)
+        // Stats: season one's summary is archived (made-up results have no match ratings, so no MVP).
+        assertTrue(w.archive.summary(1) != null)
+        assertTrue(w.stats.career("ev") != null)
+        assertEquals(w.stats.career("ev")!!.games, back.stats.career("ev")!!.games)
         // Two more seasons on the read-back world.
         back.config = config
         back.members = w.members

@@ -45,6 +45,14 @@ import yacht.engine.league.ClubLeague
 import yacht.engine.league.ClubMatch
 import yacht.engine.league.ClubMove
 import yacht.engine.league.ClubRow
+import yacht.engine.league.AiStats
+import yacht.engine.league.Dynasty
+import yacht.engine.league.HallOfFameEntry
+import yacht.engine.league.LeagueRecord
+import yacht.engine.league.MetaReport
+import yacht.engine.league.SeasonLine
+import yacht.engine.league.SeasonReview
+import yacht.engine.league.SeasonSummary
 import yacht.engine.league.PlayerBook
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
@@ -233,6 +241,28 @@ data class ProfileView(
     /** Its best and worst opponents (at least 4 games against them). */
     val best: List<Matchup> = emptyList(),
     val worst: List<Matchup> = emptyList(),
+    /** This season's and its career statistics (copies), and the league's box averages to compare. */
+    val season: AiStats? = null,
+    val career: AiStats? = null,
+    val league: MetaReport? = null,
+    /** 성장 곡선: one line per season, oldest first. */
+    val lines: List<SeasonLine> = emptyList(),
+    val hallOfFame: Boolean = false,
+)
+
+/** The 기록 tab's records room, archive and meta (read on request). */
+data class RecordsView(
+    val records: List<LeagueRecord>,
+    val dynasties: List<Dynasty>,
+    val hallOfFame: List<HallOfFameEntry>,
+    /** Newest first. */
+    val summaries: List<SeasonSummary>,
+    val milestones: List<LeagueEvent>,
+    /** This season so far, and the last finished one. */
+    val meta: MetaReport?,
+    val previousMeta: MetaReport?,
+    /** Best average match rating this season (the MVP race), with its matches. */
+    val mvpRace: List<Pair<String, AiStats>>,
 )
 
 /** A retired player or legend for the 레전드 보관소. */
@@ -478,9 +508,11 @@ class LeagueController(
             loaded.complete(Unit)
             // A restore may have brought the rules and the favourites too.
             val favs = readFavourites()
+            val rv = synchronized(lock) { w.archive.pendingReview }
             scope.launch {
                 config = cfg
                 favourites = favs
+                review = rv
             }
             publish(force = true)
         }
@@ -521,6 +553,7 @@ class LeagueController(
     private fun configureWorld(w: LeagueWorld) {
         w.config = config
         w.family = { k -> byKey[k]?.family }
+        w.name = { k -> name(k) }
         w.members = members(w)
     }
 
@@ -708,7 +741,11 @@ class LeagueController(
         configureWorld(w)
         w.openSeason()
         val news = historyItem(closing.season, closing.honours)
-        scope.launch { seasonNews = news }
+        val rv = w.archive.pendingReview
+        scope.launch {
+            seasonNews = news
+            if (rv != null) review = rv
+        }
         saveAsync()
     }
 
@@ -742,17 +779,14 @@ class LeagueController(
             try {
                 val result = LeagueMatch.playJob(t.rules, job, { byKey[it] }, config.matchFormat, estimate) { flag.get() } ?: forfeit(job)
                 synchronized(lock) {
-                    val l = ladder!!
+                    val w = world ?: return@synchronized
                     if (flag.get()) return@synchronized
-                    if (result.fixture.rated) {
-                        for (b in result.boards) {
-                            if (l.entry(b.a) == null || l.entry(b.b) == null) continue
-                            val rec = l.record(b.a, b.b, b.games)
-                            lastDelta[rec.a] = rec.deltaA
-                            lastDelta[rec.b] = rec.deltaB
-                        }
+                    // Statistics, the ladder and the season, in that order (see LeagueWorld.recordJob).
+                    val rec = w.recordJob(result)
+                    for (m in rec.matches) {
+                        lastDelta[m.a] = m.deltaA
+                        lastDelta[m.b] = m.deltaB
                     }
-                    if (job.comp != Comp.FRIENDLY) world?.record(result)
                     recorded = true
                     meter(result)
                     runMatches += result.boards.size
@@ -1249,9 +1283,45 @@ class LeagueController(
                     b.ancestors(key).map { gen -> gen.map { nm(it) } }, b.descendants(key).map { gen -> gen.map { name(it) } },
                     w.honours.of(key).sortedByDescending { it.season }, w.honours.titles(key),
                     (alive?.spec ?: b.legend(key)?.spec)?.describe(),
-                ).let { pv -> matchups(key).let { (best, worst) -> pv.copy(best = best, worst = worst) } }
+                ).let { pv -> matchups(key).let { (best, worst) -> pv.copy(best = best, worst = worst) } }.copy(
+                    season = w.stats.season(key)?.copy(), career = w.stats.career(key)?.copy(),
+                    league = runCatching { w.stats.liveMeta() }.getOrNull() ?: w.stats.meta,
+                    lines = w.archive.lines(key).sortedBy { it.season }, hallOfFame = w.archive.inHallOfFame(key),
+                )
             }
             scope.launch { profile = v }
+        }
+    }
+
+    /** The records room, archive and meta, read on request. */
+    var records by mutableStateOf<RecordsView?>(null)
+        private set
+
+    fun loadRecords() {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                val st = w.stats
+                RecordsView(
+                    st.records.all, w.archive.dynasties.toList(), w.archive.hallOfFame.toList(),
+                    w.archive.summaries.sortedByDescending { it.season }, st.milestones.reversed(),
+                    runCatching { st.liveMeta() }.getOrNull(), st.previousMeta ?: st.meta,
+                    st.top(10, career = false, min = { it.matches >= 10 && !it.avgRating.isNaN() }) { it.avgRating }.map { (k, a) -> k to a.copy() },
+                )
+            }
+            scope.launch { records = v }
+        }
+    }
+
+    /** The season review (시즌 결산) of the season that just ended, until the player closes it. */
+    var review by mutableStateOf<SeasonReview?>(null)
+        private set
+
+    fun dismissReview() {
+        review = null
+        scope.launch(Dispatchers.Default) {
+            synchronized(lock) { world?.archive?.reviewShown() }
+            save()
         }
     }
 

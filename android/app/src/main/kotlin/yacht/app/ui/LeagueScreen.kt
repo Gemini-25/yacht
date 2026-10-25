@@ -167,6 +167,7 @@ fun LeagueScreen(c: AppController) {
     else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
     if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }
+    lg.review?.let { if (lg.detail == null) SeasonReviewDialog(lg, it) }
     if (resetAsk) {
         AlertDialog(
             onDismissRequest = { resetAsk = false },
