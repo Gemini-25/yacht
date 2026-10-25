@@ -274,6 +274,8 @@ class LeagueController(
     private var runMatches = 0
     private var lastPublish = 0L
     private var publishPending = false
+    private var snapshots = 0L
+    private var shownSnapshot = 0L
 
     init {
         runCatching {
@@ -790,12 +792,20 @@ class LeagueController(
             }
             lastPublish = now
         }
-        val v = synchronized(lock) { snapshot() } ?: return
-        scope.launch {
-            view = v
-            if (running) {
-                val minutes = (System.currentTimeMillis() - runStart) / 60_000.0
-                pace = if (minutes > 0.05) runMatches / minutes else 0.0
+        // The snapshot refits and sorts the whole league (and waits for the lock while a match
+        // is recorded): never on the main thread.
+        scope.launch(Dispatchers.Default) {
+            val (v, seq) = synchronized(lock) { snapshot() to ++snapshots }
+            if (v == null) return@launch
+            scope.launch {
+                // Two snapshots can finish out of order: keep the newer.
+                if (seq < shownSnapshot) return@launch
+                shownSnapshot = seq
+                view = v
+                if (running) {
+                    val minutes = (System.currentTimeMillis() - runStart) / 60_000.0
+                    pace = if (minutes > 0.05) runMatches / minutes else 0.0
+                }
             }
         }
     }
