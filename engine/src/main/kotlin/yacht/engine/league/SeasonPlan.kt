@@ -43,11 +43,14 @@ class SeasonPlan(
      * post-season. [cost] estimates a league fixture's ms per game (heaviest first late in the
      * season).
      */
-    fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null): Fixture? {
+    fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null, teamsInFlight: Int = Int.MAX_VALUE): Fixture? {
         val p = progress
         if (cupsInFlight < cupCap) {
             for (c in comps) if (!isTeam(c.comp)) c.next(p, busy)?.let { return it }
         }
+        // One team fixture at a time ahead of the league, so the club league and the family cup
+        // play their rounds as they open instead of all after the league.
+        if (teamsInFlight < 1) for (c in comps) if (isTeam(c.comp)) c.next(p, busy)?.let { return it }
         league.next(busy, cost)?.let { return league.job(it) }
         for (c in comps) if (isTeam(c.comp)) c.next(p, busy)?.let { return it }
         // Cup fixtures are not capped when nothing else is left to do.
@@ -72,8 +75,8 @@ class SeasonPlan(
 
     private fun owner(f: Fixture): Competition? = comps.firstOrNull { it.comp == f.comp } ?: post.firstOrNull { it.comp == f.comp }
 
-    /** Team competitions run with the league; cups and groups take the cup slots. */
-    private fun isTeam(c: Comp) = c == Comp.CLUB || c == Comp.ALL_STAR || c == Comp.FAMILY
+    /** True for team competitions: they run with the league; cups and groups take the cup slots. */
+    fun isTeam(c: Comp) = c == Comp.CLUB || c == Comp.ALL_STAR || c == Comp.FAMILY
 
     // ---- saving --------------------------------------------------------------------------------
 

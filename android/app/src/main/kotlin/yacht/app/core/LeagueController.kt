@@ -40,6 +40,11 @@ import yacht.engine.league.LeagueWorld
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
 import yacht.engine.league.Origin
+import yacht.engine.league.Club
+import yacht.engine.league.ClubLeague
+import yacht.engine.league.ClubMatch
+import yacht.engine.league.ClubMove
+import yacht.engine.league.ClubRow
 import yacht.engine.league.PlayerBook
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
@@ -126,6 +131,18 @@ data class LeagueView(
     val season: SeasonView? = null,
     /** This season's competitions as the 대회 tab draws them (post-season last). */
     val comps: List<Pair<Comp, CompetitionView>> = emptyList(),
+    val clubs: ClubsView? = null,
+)
+
+/** The 클럽 tab: this season's club table, every club and the latest transfers and draft picks. */
+data class ClubsView(
+    /** This season's club league table, best first (empty when there is none this season). */
+    val table: List<ClubRow>,
+    val clubs: List<Club>,
+    /** Newest first. */
+    val moves: List<ClubMove>,
+    /** This season's club fixtures, by round. */
+    val matches: List<ClubMatch>,
 )
 
 /** One team in a season table. */
@@ -710,6 +727,7 @@ class LeagueController(
                     busy += it.players
                     live += it.a to it.b
                     if (isCup(it.comp)) cupsInFlight++
+                    if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
                 }
             }
             if (job == null) {
@@ -744,6 +762,7 @@ class LeagueController(
                     busy -= job.players.toSet()
                     live -= job.a to job.b
                     if (isCup(job.comp)) cupsInFlight--
+                    if (job.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight = maxOf(0, w.teamsInFlight - 1) }
                 }
             }
             publish()
@@ -1136,8 +1155,12 @@ class LeagueController(
 
     fun name(key: String): String = when {
         key == Ladder.ME -> "나"
-        else -> byKey[key]?.name ?: pastNames[key] ?: key
+        else -> byKey[key]?.name ?: pastNames[key] ?: clubNames[key] ?: key
     }
+
+    /** Club names by id (news and honours name clubs by id). */
+    @Volatile
+    private var clubNames: Map<String, String> = emptyMap()
 
     /** Names of retired players and legends (news and records still mention them). */
     @Volatile
@@ -1166,7 +1189,12 @@ class LeagueController(
         }
         val feed = l.feed.take(FEED).map { m -> FeedItem(m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes) }
         val comps = s?.let { runCatching { Competitions.views(it) }.getOrNull() }.orEmpty()
-        return LeagueView(rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps)
+        val clubs = world?.clubs?.let { b ->
+            val cl = s?.competition(Comp.CLUB) as? ClubLeague
+            clubNames = b.clubs.associate { it.id to it.name }
+            ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty())
+        }
+        return LeagueView(rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps, clubs)
     }
 
     private fun seasonView(p: SeasonPlan): SeasonView {
@@ -1345,6 +1373,7 @@ class LeagueController(
         private const val FEED = 60
 
         /** Share of matches given to AIs waiting for the next season, so they get a rating. */
+        private const val CLUB_MOVES = 60
         private const val FRIENDLY_SHARE = 0.2
         private const val FRIENDLY_RUSH = 0.6
 

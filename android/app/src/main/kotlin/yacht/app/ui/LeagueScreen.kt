@@ -80,6 +80,7 @@ private enum class LeagueTab(val label: String) {
     LADDER("순위표"),
     SEASON("리그"),
     COMPS("대회"),
+    CLUBS("클럽"),
     NEWS("소식"),
     RECORDS("기록"),
 }
@@ -153,6 +154,7 @@ fun LeagueScreen(c: AppController) {
                     LeagueTab.LADDER -> LadderList(lg, v) { lg.detail = it }
                     LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
                     LeagueTab.COMPS -> CompsTab(lg, v.comps) { lg.detail = it }
+                    LeagueTab.CLUBS -> ClubsTab(lg, v.clubs) { lg.detail = it }
                     LeagueTab.NEWS -> FeedList(lg, v)
                     LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
                 }

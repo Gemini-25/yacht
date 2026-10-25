@@ -14,6 +14,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     var honours = HonourBook()
     var players = PlayerBook()
 
+    /** The clubs (club league, transfers); null until the first season with clubs makes them. */
+    var clubs: ClubBook? = null
+
     /** News events, oldest first (the newest [EVENTS] are kept). */
     val events = ArrayDeque<LeagueEvent>()
 
@@ -33,8 +36,14 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     val seasonOver: Boolean get() = plan?.finished == true
 
     private fun context(historyBefore: Int): Offseason.Context = Offseason.Context(
-        members, ::rating, family, ::hometown, config, Competitions.factories(),
+        members, ::rating, family, ::hometown, config, factories(),
         honours.all.filter { it.season < historyBefore },
+    )
+
+    /** Every competition of a season: the cups and playoffs, and the club league (making the clubs the first time). */
+    private fun factories(): List<(SeasonStart) -> Competition?> = Competitions.factories() + ClubLeague.factory(
+        { clubs },
+        { s -> ClubBook.create(s.ranking, s.config.clubs, s.config.squad, s.seed, Hometowns.ALL).also { clubs = it } },
     )
 
     /** The first season: divisions by rating; returns the draw news. */
@@ -57,8 +66,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null): Fixture? {
         val p = plan ?: return null
         if (p.league.finished && !p.postStarted) p.startPost(Competitions.postFactories())
-        return p.next(busy, cupsInFlight, cupCap, cost)
+        return p.next(busy, cupsInFlight, cupCap, cost, teamsInFlight)
     }
+
+    /** Team fixtures (club league, family cup) being played; set by the app around [next]. */
+    var teamsInFlight = 0
 
     /** Records a finished season fixture (not friendlies: they are only on the ladder); returns its news. */
     fun record(r: JobResult): List<LeagueEvent> {
@@ -109,12 +121,18 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         return Closing(p.number, h, out, changed)
     }
 
-    /** End of season, second step (after the app set [members] from its rebuilt roster): the next season. */
+    /**
+     * End of season, second step (after the app set [members] from its rebuilt roster): the
+     * clubs' off-season (prize money, retired members out, transfer window, draft), then the
+     * next season. Returns the news of both.
+     */
     fun openSeason(): List<LeagueEvent> {
         val p = plan ?: error("no season")
+        val market = clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty()
+        note(market)
         val (next, _) = Offseason.next(p, context(p.number))
         plan = next
-        return opened(next)
+        return market + opened(next)
     }
 
     private fun note(e: List<LeagueEvent>) {
@@ -130,6 +148,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         plan?.let { put(SEASON, it.encode()) }
         put(HONOURS, honours.encode())
         put(ROSTER, players.encode())
+        clubs?.let { put(CLUBS, it.encode()) }
     }
 
     companion object {
@@ -137,9 +156,13 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val SEASON = "season.txt"
         const val HONOURS = "honours.txt"
         const val ROSTER = "roster.txt"
+        const val CLUBS = "clubs.txt"
 
         /** Files [encodeFiles] writes. */
-        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER)
+        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS)
+
+        /** Readers of every competition in season.txt. */
+        val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec)
 
         const val EVENTS = 300
 
@@ -155,10 +178,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             val ladder = files[LADDER]?.let { t -> runCatching { Ladder.decode(keys, t) }.getOrNull() } ?: Ladder(keys)
             val w = LeagueWorld(ladder)
             val seasonText = files[SEASON]
-            w.plan = seasonText?.let { t -> runCatching { SeasonPlan.decode(t, keys, Competitions.codecs) }.getOrNull() }
+            w.plan = seasonText?.let { t -> runCatching { SeasonPlan.decode(t, keys, CODECS) }.getOrNull() }
             w.honours = files[HONOURS]?.let { t -> runCatching { HonourBook.decode(t) }.getOrNull() } ?: HonourBook()
             if (w.plan == null && seasonText != null) w.honours.add(HonourBook.legacy(seasonText))
             w.players = files[ROSTER]?.let { t -> runCatching { PlayerBook.decode(t, reserved) }.getOrNull() } ?: PlayerBook(reserved)
+            w.clubs = files[CLUBS]?.let { t -> runCatching { ClubBook.decode(t) }.getOrNull() }
             return w
         }
 

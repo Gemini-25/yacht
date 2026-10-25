@@ -74,18 +74,23 @@ class LeagueWorldTest {
 
     @Test
     fun seasonsRollOverWithCompetitionsEvolutionAndSaves() {
-        val config = LeagueConfig(divisions = 3, generated = 20, evolution = 4, clubs = 0)
+        val config = LeagueConfig(divisions = 3, generated = 20, evolution = 4, clubs = 8, squad = 5)
         val w = world(config)
         val opening = w.openFirstSeason(9L)
         assertTrue(opening.any { it.kind == "draw_cup" }, opening.map { it.kind }.toString())
         val comps = w.plan!!.comps.map { it.comp }.toSet()
-        assertTrue(Comp.CUP in comps && Comp.CHAMPIONS in comps && Comp.ALL_STAR in comps, comps.toString())
+        assertTrue(Comp.CUP in comps && Comp.CHAMPIONS in comps && Comp.ALL_STAR in comps && Comp.CLUB in comps, comps.toString())
+        assertEquals(8, w.clubs!!.clubs.size)
         val news = season(w)
         assertTrue(news.any { it.kind == "final" }, news.map { it.kind }.distinct().toString())
         assertTrue(w.plan!!.post.any { it.comp == Comp.TITLE_PLAYOFF })
         val first = rollover(w)
         val kinds = first.honours.map { it.kind }.toSet()
-        for (k in listOf("REG", "L0", "L0R", "L1", "L2", "CUP", "CUP2", "CL", "CL2")) assertTrue(k in kinds, "$k missing from $kinds")
+        for (k in listOf("REG", "L0", "L0R", "L1", "L2", "CUP", "CUP2", "CL", "CL2", "CLUB", "CLUB2")) assertTrue(k in kinds, "$k missing from $kinds")
+        // The clubs' window ran: retired members left, children may be drafted, every member is alive.
+        val clubbed = w.clubs!!.clubs.flatMap { it.squad }
+        assertTrue(clubbed.all { it in w.members }, "a club member left the league")
+        assertEquals(clubbed.size, clubbed.toSet().size)
         assertTrue(first.events.any { it.kind == "promoted" } && first.events.any { it.kind == "relegated" })
         // Evolution: 4 retired, 4 born, and the children join the next season's lowest division.
         assertEquals(4, first.events.count { it.kind == "born" })
@@ -105,6 +110,7 @@ class LeagueWorldTest {
         assertEquals(w.plan!!.comps.map { it.comp }, back.plan!!.comps.map { it.comp })
         assertEquals(w.honours.all, back.honours.all)
         assertEquals(w.players.alive.map { it.key }.sorted(), back.players.alive.map { it.key }.sorted())
+        assertEquals(w.clubs!!.clubs, back.clubs!!.clubs)
         // Two more seasons on the read-back world.
         back.config = config
         back.members = w.members
