@@ -67,21 +67,46 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
+/**
+ * Writes through a temporary file and a rename: an app killed in the middle of a save leaves the
+ * previous file, never half of the new one (a cut-off league file broke the next start).
+ */
+fun File.writeAtomically(bytes: ByteArray) {
+    val tmp = File(parentFile, ".$name.${System.nanoTime()}.tmp")
+    tmp.writeBytes(bytes)
+    if (!tmp.renameTo(this)) {
+        delete()
+        if (!tmp.renameTo(this)) {
+            tmp.delete()
+            throw java.io.IOException("cannot replace $this")
+        }
+    }
+}
+
+fun File.writeTextAtomically(text: String) = writeAtomically(text.toByteArray())
+
 /** Saved games and settings on disk. Plain java.io so it works on Android and the desktop UI check. */
 class GameStorage(val dir: File) {
     private val current = File(dir, "current.txt")
     private val settings = File(dir, "settings.txt")
     private val finished = File(dir, "games").apply { mkdirs() }
 
+    init {
+        // Temporary files of saves the app was killed in the middle of.
+        for (d in listOf(dir, finished, File(dir, "league"))) {
+            d.listFiles()?.filter { it.name.startsWith(".") && it.name.endsWith(".tmp") }?.forEach { it.delete() }
+        }
+    }
+
     fun loadCurrent(): String? = current.takeIf { it.exists() }?.readText()
     fun saveCurrent(text: String?) {
-        if (text == null) current.delete() else current.writeText(text)
+        if (text == null) current.delete() else current.writeTextAtomically(text)
     }
 
     fun loadHistory(): List<String> =
         finished.listFiles()?.filter { it.name.endsWith(".txt") }?.map { it.readText() } ?: emptyList()
 
-    fun saveFinished(id: Long, text: String) = File(finished, "$id.txt").writeText(text)
+    fun saveFinished(id: Long, text: String) = File(finished, "$id.txt").writeTextAtomically(text)
 
     /** Finished games on disk (for a backup). */
     fun gameFiles(): List<File> = finished.listFiles()?.filter { it.name.endsWith(".txt") }.orEmpty()
@@ -90,7 +115,7 @@ class GameStorage(val dir: File) {
     fun importGame(name: String, text: String): Boolean {
         val f = File(finished, File(name).name)
         if (!f.name.endsWith(".txt") || f.exists()) return false
-        f.writeText(text)
+        f.writeTextAtomically(text)
         return true
     }
 
@@ -111,7 +136,7 @@ class GameStorage(val dir: File) {
         ?.toMap() ?: emptyMap()
 
     fun saveSettings(values: Map<String, String>) =
-        settings.writeText(values.entries.joinToString("\n") { "${it.key}=${it.value}" })
+        settings.writeTextAtomically(values.entries.joinToString("\n") { "${it.key}=${it.value}" })
 }
 
 enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ, LEAGUE, WATCH, BUILDER }
@@ -1174,6 +1199,14 @@ class AppController(
     // ---- backup ----------------------------------------------------------------------------------
 
     /** Everything worth keeping as one zip: finished games, settings and the league (not the tables). */
+    /** Builds the backup off the main thread (hundreds of game files) and hands it to [done]. */
+    fun backup(done: (name: String, bytes: ByteArray) -> Unit) {
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) { backupBytes() }
+            done(backupName(), bytes)
+        }
+    }
+
     fun backupBytes(): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         java.util.zip.ZipOutputStream(out).use { zip ->
@@ -1194,16 +1227,23 @@ class AppController(
 
     /**
      * Restores a backup: finished games are added (ones already here are skipped); my AIs are
-     * added; the league record is taken only when this app's league has no games yet.
-     * Returns a sentence for the screen.
+     * added; the league record is taken only when this app's league has no games yet. The
+     * files are read and written off the main thread; [done] gets a sentence for the screen.
      */
-    fun restore(bytes: ByteArray): String {
+    fun restore(bytes: ByteArray, done: (String) -> Unit) {
+        scope.launch {
+            val read = withContext(Dispatchers.IO) { readBackup(bytes) }
+            done(if (read == null) "백업 파일을 읽지 못했어요." else applyBackup(read))
+        }
+    }
+
+    private class BackupContents(val added: Int, val skipped: Int, val leagueFiles: Map<String, ByteArray>)
+
+    private fun readBackup(bytes: ByteArray): BackupContents? {
         var added = 0
         var skipped = 0
-        var leagueTaken = false
-        var customs = 0
         val leagueFiles = HashMap<String, ByteArray>()
-        runCatching {
+        return runCatching {
             java.util.zip.ZipInputStream(bytes.inputStream()).use { zip ->
                 while (true) {
                     val e = zip.nextEntry ?: break
@@ -1214,7 +1254,16 @@ class AppController(
                     }
                 }
             }
-        }.onFailure { return "백업 파일을 읽지 못했어요." }
+            BackupContents(added, skipped, leagueFiles)
+        }.getOrNull()
+    }
+
+    private suspend fun applyBackup(read: BackupContents): String {
+        val added = read.added
+        val skipped = read.skipped
+        val leagueFiles = read.leagueFiles
+        var leagueTaken = false
+        var customs = 0
         leagueFiles["custom.txt"]?.let { data ->
             for (spec in String(data).lines().mapNotNull { yacht.engine.league.CustomAiSpec.decode(it) }) {
                 if (league.customs.none { it.id == spec.id }) {
@@ -1224,8 +1273,10 @@ class AppController(
             }
         }
         if ((league.view?.matches ?: 0L) == 0L && leagueFiles["ladder.txt"] != null) {
-            val dir = File(storage.dir, "league").apply { mkdirs() }
-            for (name in listOf("ladder.txt", "season.txt")) leagueFiles[name]?.let { File(dir, name).writeBytes(it) }
+            withContext(Dispatchers.IO) {
+                val dir = File(storage.dir, "league").apply { mkdirs() }
+                for (name in listOf("ladder.txt", "season.txt")) leagueFiles[name]?.let { File(dir, name).writeAtomically(it) }
+            }
             league.reload()
             leagueTaken = true
         }

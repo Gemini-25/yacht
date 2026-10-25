@@ -19,6 +19,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.Screen
@@ -93,8 +96,11 @@ private fun loadTables(context: Context): Tables {
 /** A file request waiting for the system picker. */
 private class PendingFiles {
     var save: Pair<ByteArray, (Boolean) -> Unit>? = null
-    var open: ((ByteArray?) -> Unit)? = null
+    var open: ((ByteArray?, String?) -> Unit)? = null
 }
+
+/** A backup is a few MB at most: anything far bigger is the wrong file (and would not fit in memory). */
+private const val MAX_BACKUP_BYTES = 64L shl 20
 
 class MainActivity : ComponentActivity() {
     private val vm: GameViewModel by viewModels()
@@ -122,14 +128,44 @@ class MainActivity : ComponentActivity() {
                 pending.save = null
                 // Cancelled: nothing to report.
                 if (p != null && uri != null) {
-                    val ok = runCatching { contentResolver.openOutputStream(uri)!!.use { it.write(p.first) } }.isSuccess
-                    p.second(ok)
+                    // Off the main thread: the target can be a cloud folder.
+                    vm.viewModelScope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching { contentResolver.openOutputStream(uri)!!.use { it.write(p.first) } }.isSuccess
+                        }
+                        p.second(ok)
+                    }
                 }
             }
             val opener = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 val cb = pending.open
                 pending.open = null
-                cb?.invoke(uri?.let { u -> runCatching { contentResolver.openInputStream(u)!!.use { it.readBytes() } }.getOrNull() })
+                if (cb == null || uri == null) return@rememberLauncherForActivityResult
+                // Off the main thread: a file in Drive downloads while it is read.
+                vm.viewModelScope.launch {
+                    val read = withContext(Dispatchers.IO) {
+                        runCatching {
+                            contentResolver.openInputStream(uri)!!.use { input ->
+                                val out = java.io.ByteArrayOutputStream()
+                                val buf = ByteArray(1 shl 16)
+                                var total = 0L
+                                while (true) {
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    total += n
+                                    if (total > MAX_BACKUP_BYTES) return@runCatching null
+                                    out.write(buf, 0, n)
+                                }
+                                out.toByteArray()
+                            }
+                        }
+                    }
+                    when {
+                        read.isFailure -> cb(null, "파일을 읽지 못했어요.")
+                        read.getOrNull() == null -> cb(null, "백업 파일이 아니에요(너무 커요).")
+                        else -> cb(read.getOrNull(), null)
+                    }
+                }
             }
             val port = remember(saver, opener) {
                 object : FilePort {
@@ -138,7 +174,7 @@ class MainActivity : ComponentActivity() {
                         saver.launch(name)
                     }
 
-                    override fun open(got: (ByteArray?) -> Unit) {
+                    override fun open(got: (ByteArray?, String?) -> Unit) {
                         pending.open = got
                         opener.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
                     }

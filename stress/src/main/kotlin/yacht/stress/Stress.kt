@@ -156,9 +156,12 @@ private fun run(args: Array<String>): Int {
                 }
             }
             9 -> {
-                val bytes = onMain { c.backupBytes() }
-                val note = onMain { c.restore(bytes) }
-                check(note.isNotEmpty())
+                var built: ByteArray? = null
+                onMain { c.backup { _, b -> built = b } }
+                waitFor("backup", 60_000) { built != null }
+                var note: String? = null
+                onMain { c.restore(built!!) { note = it } }
+                waitFor("restore", 60_000) { note != null }
             }
             10 -> {
                 onMain { c.league.changeSpeed(LeagueSpeed.entries[rng.nextInt(LeagueSpeed.entries.size)]) }

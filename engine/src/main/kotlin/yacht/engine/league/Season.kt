@@ -253,6 +253,9 @@ class Season private constructor(
                 }
                 if (f[0] == "division") divisions += f.getOrElse(2) { "" }.split(',').filter { it.isNotEmpty() }.toMutableList()
             }
+            // A file without divisions (cut off, or not a season) is not a season: start a new one.
+            require(divisions.any { it.isNotEmpty() }) { "no divisions in the saved season" }
+            divisions.removeAll { it.isEmpty() }
             val s = Season(number, divisions)
             s.fixturesTotal = total
             for (d in divisions) for (k in d) s.standings[k] = Standing(k)

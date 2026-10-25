@@ -294,8 +294,13 @@ class LeagueController(
         val rules = t.rules
         val r = LeagueTables(
             rules, threads = cores,
-            load = { key, believed -> tableFile(key).takeIf { it.exists() }?.let { TableIO.readEv(ByteBuffer.wrap(it.readBytes()), believed) } },
-            save = { key, table: EvTable -> tableFile(key).outputStream().use { TableIO.writeEv(it, table.rules, table.values) } },
+            // A table that cannot be read (cut off by an older version) is built again.
+            load = { key, believed -> runCatching { tableFile(key).takeIf { it.exists() }?.let { TableIO.readEv(ByteBuffer.wrap(it.readBytes()), believed) } }.getOrNull() },
+            save = { key, table: EvTable ->
+                val out = java.io.ByteArrayOutputStream()
+                TableIO.writeEv(out, table.rules, table.values)
+                tableFile(key).writeAtomically(out.toByteArray())
+            },
         )
         extra = r
         baseRoster = LeagueRoster.build(t, r)
@@ -340,7 +345,7 @@ class LeagueController(
 
     fun changeSpeed(s: LeagueSpeed) {
         speed = s
-        scope.launch(Dispatchers.IO) { runCatching { prefs.writeText(s.name) } }
+        scope.launch(Dispatchers.IO) { runCatching { prefs.writeTextAtomically(s.name) } }
         if (running) {
             stop()
             start()
@@ -397,7 +402,7 @@ class LeagueController(
 
     private fun persistCustoms() {
         val text = customs.joinToString("\n") { it.encode() }
-        scope.launch(Dispatchers.IO) { runCatching { customFile.writeText(text) } }
+        scope.launch(Dispatchers.IO) { runCatching { customFile.writeTextAtomically(text) } }
     }
 
     // ---- running ---------------------------------------------------------------------------------
@@ -505,8 +510,8 @@ class LeagueController(
                     }
                     save?.let { (text, s) ->
                         scope.launch(Dispatchers.IO) {
-                            runCatching { file.writeText(text) }
-                            s?.let { runCatching { seasonFile.writeText(it) } }
+                            runCatching { file.writeTextAtomically(text) }
+                            s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
                         }
                     }
                 }
@@ -589,14 +594,14 @@ class LeagueController(
     private suspend fun save() = withContext(Dispatchers.Default) {
         val (text, s) = synchronized(lock) { ladder?.encode() to season?.encode() }
         withContext(Dispatchers.IO) {
-            text?.let { runCatching { file.writeText(it) } }
-            s?.let { runCatching { seasonFile.writeText(it) } }
+            text?.let { runCatching { file.writeTextAtomically(it) } }
+            s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
         }
     }
 
     private fun saveSeasonAsync() {
         val s = season?.encode() ?: return
-        scope.launch(Dispatchers.IO) { runCatching { seasonFile.writeText(s) } }
+        scope.launch(Dispatchers.IO) { runCatching { seasonFile.writeTextAtomically(s) } }
     }
 
     // ---- ranked games ----------------------------------------------------------------------------

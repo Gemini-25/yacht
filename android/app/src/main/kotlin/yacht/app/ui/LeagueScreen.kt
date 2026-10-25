@@ -523,7 +523,7 @@ private fun noteText(lg: LeagueController, note: String): String? {
 @Composable
 private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    if (season == null) {
+    if (season == null || season.divisions.isEmpty()) {
         CenterText("▶ 리그를 시작하면 지금 순위대로 1부·2부·3부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 한 번씩 맞붙어 승점(승 3, 무 1, 한 판씩이면 합계 점수로 승부)을 쌓고, 시즌이 끝나면 위아래 ${Season.SWAP}팀씩 승강해요.")
         return
     }

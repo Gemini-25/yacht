@@ -248,11 +248,23 @@ fun HomeScreen(c: AppController) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 val f = files ?: return@OutlinedButton
-                f.save(c.backupName(), c.backupBytes()) { ok -> backupNote = if (ok) "백업 파일을 저장했어요." else "저장하지 못했어요." }
+                backupNote = "백업 파일을 만드는 중…"
+                c.backup { name, bytes ->
+                    backupNote = null
+                    f.save(name, bytes) { ok -> backupNote = if (ok) "백업 파일을 저장했어요." else "저장하지 못했어요." }
+                }
             }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("💾 백업 저장") }
             OutlinedButton(onClick = {
                 val f = files ?: return@OutlinedButton
-                f.open { bytes -> backupNote = bytes?.let { c.restore(it) } }
+                f.open { bytes, problem ->
+                    when {
+                        problem != null -> backupNote = problem
+                        bytes != null -> {
+                            backupNote = "불러오는 중…"
+                            c.restore(bytes) { backupNote = it }
+                        }
+                    }
+                }
             }, enabled = files != null, modifier = Modifier.weight(1f)) { Text("📂 불러오기") }
         }
         backupNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.secondary) }
