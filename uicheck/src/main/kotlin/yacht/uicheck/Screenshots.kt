@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.jetbrains.skia.EncodedImageFormat
+import yacht.app.core.AiPace
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.Screen
@@ -127,8 +128,13 @@ private fun run(args: Array<String>) {
     shot(c, out, "13_quiz_result")
     c.closeQuiz()
 
-    // Against the AI, moving second: my turn starts with the AI's turn and its reasons.
+    // Against the AI, moving second: the AI's turn plays back throw by throw, then my turn
+    // starts with its summary and reasons.
+    c.changeAiPace(AiPace.SLOW)
     c.newGame(DiceSource.RANDOM, Side.OPP)
+    waitFor("ai playback", 120_000) { c.aiSteps.let { it != null && c.aiShown == it.size } }
+    shot(c, out, "10a_ai_playback", heightDp = 1100)
+    c.skipAiPlayback()
     waitFor("ai turn", 120_000) { c.state!!.toMove == Side.ME }
     waitPlan(c)
     shot(c, out, "10_vs_ai", heightDp = 1100)
@@ -149,12 +155,32 @@ private fun run(args: Array<String>) {
     // Playing alone: no advice during the game.
     c.changeStyle(PlayStyle.SOLO)
     c.screen = Screen.HOME
-    shot(c, out, "14_home_solo")
+    shot(c, out, "14_home_solo", heightDp = 1300)
     c.newGame(DiceSource.RANDOM, Side.ME)
     c.firstThrow()
     waitPlan(c)
     shot(c, out, "15_solo")
     c.changeStyle(PlayStyle.ASSISTED)
+
+    // The AI league: start it, let a few hundred matches finish, then look at every tab.
+    c.screen = Screen.LEAGUE
+    waitFor("league view") { c.league.view != null }
+    shot(c, out, "16a_league_empty")
+    c.league.changeSpeed(yacht.app.core.LeagueSpeed.FULL)
+    c.league.start()
+    waitFor("league matches", 300_000) { (c.league.view?.rows?.count { it.rank != null } ?: 0) >= c.league.size - 2 }
+    shot(c, out, "16_league_ladder", heightDp = 1500)
+    c.league.tab = 1
+    shot(c, out, "17_league_feed", heightDp = 1100)
+    c.league.tab = 2
+    shot(c, out, "18_league_families", heightDp = 1500)
+    c.league.tab = 0
+    c.league.detail = "win"
+    shot(c, out, "19_league_detail", heightDp = 1000)
+    c.league.detail = null
+    c.league.stop()
+    waitFor("league stopped", 60_000) { !c.league.running }
+    println("league: ${c.league.view?.matches} matches; top: " + c.league.view?.rows?.take(5)?.joinToString { "${it.name} ${it.rating}" })
 
     c.screen = Screen.VERIFY
     c.startVerify(4)

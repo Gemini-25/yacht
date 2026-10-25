@@ -79,28 +79,34 @@ class RulePlayer(private val rules: RuleSet, override val name: String = "rule")
 /**
  * Follows a turn plan, but at each decision takes the second-best option with probability
  * [slip]: a strong player who sometimes misjudges. The plan comes from [planner] (max
- * expectation by default, or e.g. the win search).
+ * expectation by default, or e.g. the win search). [slipOf] sets the chance per turn instead
+ * (tired, tilted, moody players); [keeps]/[boxes] choose which decisions can slip.
  */
 class SlipPlayer(
     private val planner: (Board, Board) -> TurnPlan,
     private val slip: Double,
     private val rng: Random,
     override val name: String = "slip",
+    private val keeps: Boolean = true,
+    private val boxes: Boolean = true,
+    private val slipOf: ((me: Board, opp: Board) -> Double)? = null,
 ) : Player {
     constructor(ev: EvTable, slip: Double, rng: Random, name: String = "slip") :
         this({ me, _ -> TurnPlan(me, ExpectedAfter(ev, me.mask)) }, slip, rng, name)
 
     private lateinit var plan: TurnPlan
     private lateinit var me: Board
+    private var now = slip
 
     override fun startTurn(me: Board, opp: Board) {
         this.me = me
         plan = planner(me, opp)
+        now = slipOf?.invoke(me, opp) ?: slip
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int): Int {
         val best = plan.bestKeep(rollsDone, r)
-        if (rng.nextDouble() >= slip) return best
+        if (!keeps || rng.nextDouble() >= now) return best
         val second = (Dice.subStart[r] until Dice.subStart[r + 1]).map { Dice.subKeep[it] }
             .filter { it != best }.maxByOrNull { plan.keepValue(rollsDone, it) }
         return second ?: best
@@ -108,9 +114,83 @@ class SlipPlayer(
 
     override fun chooseCategory(r: Int): Category {
         val best = plan.bestCategory(r)
-        if (rng.nextDouble() >= slip) return best
+        if (!boxes || rng.nextDouble() >= now) return best
         return me.openCategories.filter { it != best }.maxByOrNull { plan.categoryValue(r, it.ordinal) } ?: best
     }
+}
+
+/** Plays like [early] until only [lateFrom] boxes are left, then like [late]. */
+class PhasePlayer(override val name: String, private val early: Player, private val late: Player, private val lateFrom: Int) : Player {
+    private var active: Player = early
+
+    override fun startTurn(me: Board, opp: Board) {
+        active = if (Category.COUNT - me.filledCount <= lateFrom) late else early
+        active.startTurn(me, opp)
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int) = active.chooseKeep(rollsDone, r)
+    override fun chooseCategory(r: Int) = active.chooseCategory(r)
+}
+
+/**
+ * Reads the scoreboard each turn: by the expected final scores (points so far plus
+ * max-expectation of the rest) it plays [ahead] when leading by at least [margin], [behind]
+ * when trailing by that much, and max expectation in between. Null planners mean max expectation.
+ */
+class SituationalPlayer(
+    override val name: String,
+    private val ev: EvTable,
+    private val margin: Double,
+    private val ahead: ((Board, Board) -> TurnPlan)?,
+    private val behind: ((Board, Board) -> TurnPlan)?,
+) : Player {
+    private lateinit var plan: TurnPlan
+
+    override fun startTurn(me: Board, opp: Board) {
+        fun expected(b: Board) = b.total + if (b.isComplete) 0.0 else ev[b.mask, b.u]
+        val lead = expected(me) - expected(opp)
+        val pick = when {
+            lead >= margin -> ahead
+            lead <= -margin -> behind
+            else -> null
+        }
+        plan = pick?.invoke(me, opp) ?: TurnPlan(me, ExpectedAfter(ev, me.mask))
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int) = plan.bestKeep(rollsDone, r)
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
+}
+
+/** Max-expectation play, but never throws more than [maxThrows] times in a turn (a habit). */
+class LimitedThrowsPlayer(private val ev: EvTable, private val maxThrows: Int, override val name: String = "throws$maxThrows") : Player {
+    private lateinit var plan: TurnPlan
+
+    override fun startTurn(me: Board, opp: Board) {
+        plan = TurnPlan(me, ExpectedAfter(ev, me.mask))
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int) = if (rollsDone >= maxThrows) Dice.rollAsKeep[r] else plan.bestKeep(rollsDone, r)
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
+}
+
+/** Keeps the most common face like [KeeperPlayer], but writes its box like the max-expectation plan. */
+class KeeperEvBoxPlayer(private val ev: EvTable, override val name: String = "keeper-ev") : Player {
+    private lateinit var plan: TurnPlan
+
+    override fun startTurn(me: Board, opp: Board) {
+        plan = TurnPlan(me, ExpectedAfter(ev, me.mask))
+    }
+
+    override fun chooseKeep(rollsDone: Int, r: Int): Int {
+        val counts = Dice.rollCounts[r]
+        val face = (5 downTo 0).maxBy { counts[it] }
+        if (counts[face] == 5) return Dice.rollAsKeep[r]
+        val keep = IntArray(6)
+        keep[face] = counts[face]
+        return Dice.keepIndex(keep)
+    }
+
+    override fun chooseCategory(r: Int) = plan.bestCategory(r)
 }
 
 /** Plays the best moves of the turn plan [planner] builds each turn (any end-of-turn valuation). */

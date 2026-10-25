@@ -3,6 +3,7 @@ package yacht.app.core
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import yacht.engine.Advice
 import yacht.engine.Advisor
 import yacht.engine.AdvisorPlayer
@@ -29,6 +31,9 @@ import yacht.engine.Mode
 import yacht.engine.PlannedTurn
 import yacht.engine.Tables
 import yacht.engine.Outlook
+import yacht.engine.explain.AiStep
+import yacht.engine.explain.Comment
+import yacht.engine.explain.Commentary
 import yacht.engine.explain.Explainer
 import yacht.engine.explain.Explanation
 import yacht.engine.explain.HabitReport
@@ -59,7 +64,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 /** Saved games and settings on disk. Plain java.io so it works on Android and the desktop UI check. */
-class GameStorage(private val dir: File) {
+class GameStorage(val dir: File) {
     private val current = File(dir, "current.txt")
     private val settings = File(dir, "settings.txt")
     private val finished = File(dir, "games").apply { mkdirs() }
@@ -85,10 +90,17 @@ class GameStorage(private val dir: File) {
         settings.writeText(values.entries.joinToString("\n") { "${it.key}=${it.value}" })
 }
 
-enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ }
+enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ, LEAGUE }
 
 /** Practice record (saved). */
 data class QuizStats(val answered: Int = 0, val correct: Int = 0, val lossSum: Double = 0.0)
+
+/** How the AI's turn is shown against the AI: throw by throw at some pace, or at once. */
+enum class AiPace(val stepMs: Long, val label: String) {
+    SLOW(1_800L, "천천히"),
+    NORMAL(1_100L, "보통"),
+    INSTANT(0L, "바로 보기"),
+}
 
 /** How long the app may think about one turn (the first answer is always immediate). */
 enum class ThinkTime(val seconds: Double, val label: String) {
@@ -151,6 +163,17 @@ class AppController(
     var thinkTime by mutableStateOf(ThinkTime.NORMAL)
         private set
 
+    /** Pace of the AI's turn playback (saved). */
+    var aiPace by mutableStateOf(AiPace.NORMAL)
+        private set
+
+    /** The AI's turn being played back throw by throw, and how many throws are shown so far. */
+    var aiSteps by mutableStateOf<List<AiStep>?>(null)
+        private set
+    var aiShown by mutableStateOf(0)
+        private set
+    private var aiSkip: CompletableDeferred<Unit>? = null
+
     /** How the next game is played: with recommendations or alone (saved, last choice). */
     var nextStyle by mutableStateOf(PlayStyle.ASSISTED)
         private set
@@ -191,8 +214,15 @@ class AppController(
     var whatIfBusy by mutableStateOf<Set<DecisionRecord>>(emptySet())
         private set
 
+    /** The AI league (its own background runner, started and stopped from its screen). */
+    val league = LeagueController(scope, storage.dir)
+
     private var advisor: Advisor? = null
     private var explainer: Explainer? = null
+    private var commentary: Commentary? = null
+
+    /** Dice held for each of my throws, by (turn, throw number), for that throw's commentary. */
+    private val heldForThrow = HashMap<Pair<Int, Int>, List<Int>>()
     private var quizEngine: Quiz? = null
     private val cores = Runtime.getRuntime().availableProcessors()
     private val pool = Executors.newFixedThreadPool(maxOf(2, cores)) { r ->
@@ -236,10 +266,13 @@ class AppController(
                 val t = withContext(Dispatchers.IO) { loadTables() }
                 advisor = Advisor(t, pool)
                 explainer = Explainer(t).also { quizEngine = Quiz(Advisor(t, pool), it) }
+                commentary = Commentary(t)
+                league.attach(t)
                 tables = t
                 val settings = withContext(Dispatchers.IO) { storage.loadSettings() }
                 settings["objective"]?.let { v -> Mode.entries.firstOrNull { it.name == v }?.let { objective = it } }
                 settings["think"]?.let { v -> ThinkTime.entries.firstOrNull { it.name == v }?.let { thinkTime = it } }
+                settings["aiPace"]?.let { v -> AiPace.entries.firstOrNull { it.name == v }?.let { aiPace = it } }
                 settings["style"]?.let { v -> PlayStyle.entries.firstOrNull { it.name == v && it != PlayStyle.PEEKED }?.let { nextStyle = it } }
                 settings["tags"]?.let { v -> tags = v.split(TAG_SEP).filter { it.isNotBlank() } }
                 settings["why"]?.let { whyOpen = it == "1" }
@@ -266,6 +299,7 @@ class AppController(
     }
 
     fun shutdown() {
+        league.stop()
         verifyJob?.cancel()
         stopDuel()
         pool.shutdown()
@@ -281,6 +315,7 @@ class AppController(
     /** App hidden: stop background computation to save battery. */
     fun onBackground() {
         foreground = false
+        league.onBackground()
         stopDuel()
         verifyJob?.cancel()
         prefetch?.cancel()
@@ -295,6 +330,7 @@ class AppController(
         val values = mapOf(
             "objective" to objective.name,
             "think" to thinkTime.name,
+            "aiPace" to aiPace.name,
             "style" to nextStyle.name,
             "tags" to tags.joinToString(TAG_SEP),
             "why" to if (whyOpen) "1" else "0",
@@ -413,6 +449,42 @@ class AppController(
             return cached(listOf("opponent", s.moves.size, last, before)) { e.opponentMove(s.opp, last, before, who) }
         }
 
+    /**
+     * Live commentary in my turn: before the first throw what the turn may bring, after each
+     * throw how lucky it was and where the turn is going. Playing alone only dice facts.
+     */
+    val turnComments: List<Comment>?
+        get() {
+            val talk = commentary ?: return null
+            val s = state ?: return null
+            if (s.isOver || s.toMove != Side.ME) return null
+            val p = currentPlan ?: return null
+            val d = s.draft
+            return when {
+                d.rollsDone == 0 -> if (hintsHidden) null else cached(listOf("preview", p)) {
+                    talk.turnPreview(p, s.opp, s.moves.mapNotNull { it.winAfter })
+                }
+                d.deciding -> {
+                    val held = if (d.rollsDone == 1) emptyList() else heldForThrow[s.myTurnNumber to d.rollsDone] ?: return null
+                    val alone = hintsHidden
+                    cached(listOf("throw", p, d.rollsDone, d.faces.sorted(), held, alone)) {
+                        talk.afterThrow(p, d.rollsDone, d.faces, held, factsOnly = alone)
+                    }
+                }
+                else -> null
+            }
+        }
+
+    /** How the opponent's last turn ranks and what it has left, until my turn starts. */
+    val opponentResultComments: List<Comment>?
+        get() {
+            val talk = commentary ?: return null
+            val s = state ?: return null
+            val last = s.moves.lastOrNull()?.takeIf { it.side == Side.OPP } ?: return null
+            val who = if (s.source == DiceSource.RANDOM) "AI" else "상대"
+            return cached(listOf("oppResult", s.moves.size, last)) { talk.opponentResult(s.opp, last, who) }
+        }
+
     fun gameSummary(g: GameState): Explanation? {
         val e = explainer ?: return null
         return cached(listOf("summary", g.createdAt, g.moves.size, g.decisions.size)) { e.gameSummary(g) }
@@ -508,6 +580,16 @@ class AppController(
         saveSettings()
     }
 
+    fun changeAiPace(p: AiPace) {
+        aiPace = p
+        saveSettings()
+    }
+
+    /** Shows the rest of the AI's turn at once. */
+    fun skipAiPlayback() {
+        aiSkip?.complete(Unit)
+    }
+
     fun changeStyle(style: PlayStyle) {
         nextStyle = style
         saveSettings()
@@ -537,6 +619,7 @@ class AppController(
         aiJob?.cancel()
         aiThinking = false
         lastNote = null
+        heldForThrow.clear()
         stopDuel()
         duelTable = null
         oppOutlook = null
@@ -564,6 +647,7 @@ class AppController(
     fun reroll() {
         val note = keepNote()
         val before = state
+        before?.let { heldForThrow[it.myTurnNumber to it.draft.rollsDone + 1] = it.draft.heldFaces }
         val v = state?.let { valueBeforeThrow(it) }
         act { Game.reroll(it, advice, rng, note?.let { n -> DecisionNote(n.reason, n.chosenSd, n.bestSd) }, v) }
         if (state !== before) lastNote = note?.full?.takeIf { !hintsHidden }
@@ -801,29 +885,56 @@ class AppController(
     private fun runAi(s: GameState) {
         val adv = advisor ?: return
         aiJob?.cancel()
+        val winBefore = winBeforeOpponent(s)
+        val table = duelTable
+        val forWin = objective == Mode.WIN
         aiJob = scope.launch {
             aiThinking = true
             val started = System.currentTimeMillis()
             try {
                 delay(350)
-                val move = withContext(Dispatchers.Default) { aiTurn(adv, s) }
+                val (move, steps) = withContext(Dispatchers.Default) { aiTurn(adv, s, winBefore, table, forWin) }
                 // Leave time to take back a mis-tapped box before the AI's dice are shown.
                 if (canUndo) delay(UNDO_GRACE_MS - (System.currentTimeMillis() - started))
+                if (state != s) return@launch
+                // The AI's dice are about to be shown: nothing before them can be undone any more.
+                lastNote = null
+                undoStack.clear()
+                canUndo = false
+                aiThinking = false
+                playBack(steps)
                 if (state == s) {
-                    lastNote = null
-                    undoStack.clear()
-                    canUndo = false
                     state = Game.opponentScore(s, move.category, move.points, aiLog(s, move), winBeforeOpponent(s), move)
                     onStateChanged()
                 }
             } finally {
                 aiThinking = false
+                aiSteps = null
+                aiSkip = null
             }
         }
     }
 
-    /** The AI plays its turn: every throw, the dice it held, its box, and why (from its own plan). */
-    private fun aiTurn(adv: Advisor, s: GameState): MoveRecord {
+    /** Shows the AI's throws one by one at [aiPace] (or until skipped). */
+    private suspend fun playBack(steps: List<AiStep>) {
+        val pace = aiPace.stepMs
+        if (steps.isEmpty() || pace == 0L) return
+        val skip = CompletableDeferred<Unit>()
+        aiSkip = skip
+        aiSteps = steps
+        for (i in 1..steps.size) {
+            aiShown = i
+            // The last throw stays a little longer: it is the result.
+            withTimeoutOrNull(if (i == steps.size) pace * 3 / 2 else pace) { skip.await() }
+            if (skip.isCompleted) break
+        }
+    }
+
+    /**
+     * The AI plays its turn: every throw, the dice it held, its box, and why (from its own plan),
+     * with the throw-by-throw playback from my side ([winBefore]: my P(win) before its turn).
+     */
+    private fun aiTurn(adv: Advisor, s: GameState, winBefore: Double?, table: DuelSearch?, forWin: Boolean): Pair<MoveRecord, List<AiStep>> {
         val deadline = System.nanoTime() + (thinkTime.seconds * 1e9).toLong()
         val turn = adv.planTurnAnytime(s.opp, s.me, deadline)
         val throws = ArrayList<List<Int>>()
@@ -839,8 +950,24 @@ class AppController(
         }
         val c = turn.bestCategory(r)
         val points = adv.tables.scores[r, c.ordinal]
-        val why = explainer?.let { e -> runCatching { e.aiTurn(turn, s.me, throws, held, c) }.getOrNull() }
-        return MoveRecord(Side.OPP, c, points, throws = throws, held = held, why = why)
+        val e = explainer
+        val why = e?.let { runCatching { it.aiTurn(turn, s.me, throws, held, c) }.getOrNull() }
+        val steps = commentary?.let { talk ->
+            runCatching {
+                val t = adv.tables
+                val winOf = if (!forWin) null else {
+                    val now = winBefore ?: table?.valueAt(s.me, s.opp)?.first ?: when {
+                        s.me.isComplete -> OutlookAnalysis(t).quick(s.me, s.opp)
+                        else -> adv.planTurn(s.me, s.opp, Mode.WIN, depth = 1).startValue
+                    }
+                    OutlookAnalysis(t).winAfter(s.me, s.opp, now, table?.let { tb -> { o: Board -> tb.valueAt(s.me, o)?.first } })
+                        ?.let { w -> now to w }
+                }
+                val reasons = e?.let { ex -> throws.mapIndexed { k, d -> runCatching { ex.advice(turn, s.me, turn.advise(k + 1, d)).summary }.getOrNull() } }
+                talk.aiSteps(turn, s.opp, throws, held, c, winOf?.second?.let { w -> { b: Board -> w(b) } }, winOf?.first, reasons)
+            }.getOrNull()
+        }.orEmpty()
+        return MoveRecord(Side.OPP, c, points, throws = throws, held = held, why = why) to steps
     }
 
     private fun aiLog(s: GameState, m: MoveRecord): String =

@@ -43,6 +43,8 @@ fun main(args: Array<String>) {
         "versus" -> versus(opts)
         "quiz" -> quizSamples(opts)
         "review" -> reviewSamples(opts)
+        "commentary" -> commentarySamples(opts)
+        "ladder" -> ladderRun(opts)
         "cost" -> cost(opts)
         "league" -> league(opts, loadTables(File(opts["tables"] ?: "tables")).withoutRisk())
         "league-report" -> {

@@ -69,6 +69,7 @@ fun AppRoot(c: AppController) {
                 Screen.REVIEW -> ReviewScreen(c)
                 Screen.VERIFY -> VerifyScreen(c)
                 Screen.QUIZ -> QuizScreen(c)
+                Screen.LEAGUE -> LeagueScreen(c)
             }
         }
     }
@@ -209,6 +210,12 @@ fun HomeScreen(c: AppController) {
                 FilterChip(selected = c.thinkTime == t, onClick = { c.changeThinkTime(t) }, label = { Text(t.label) })
             }
         }
+
+        SectionTitle("AI 리그")
+        MenuCard(
+            "🏆 AI 리그 · ${c.league.size}개 AI 솔랭",
+            "승률 AI부터 실수하는 AI, 단순 규칙까지 계속 붙여서 실시간 순위표로 보기 · 티어, 레이팅, 승률, 연승",
+        ) { c.screen = Screen.LEAGUE }
 
         SectionTitle("기록과 검증")
         MenuCard("기록 · 통계 · 복기", "추천/혼자·상대별 승률, 운 분석, 내 습관, 판별 실수와 승률 그래프") { c.openHistory() }

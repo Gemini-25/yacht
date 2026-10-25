@@ -33,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.engine.Mode
 import yacht.engine.Outlook
+import yacht.engine.explain.Comment
+import yacht.engine.explain.Tone
 
 // ---- formatting ------------------------------------------------------------------------------
 
@@ -214,4 +216,45 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+// ---- live commentary -------------------------------------------------------------------------
+
+/** Pill colours for a comment's tone. */
+@Composable
+private fun toneColors(tone: Tone): Pair<Color, Color> {
+    val cs = MaterialTheme.colorScheme
+    return when (tone) {
+        Tone.GOOD -> cs.primaryContainer to cs.onPrimaryContainer
+        Tone.BAD -> cs.errorContainer to cs.onErrorContainer
+        Tone.HOT -> cs.secondaryContainer to cs.onSecondaryContainer
+        Tone.CALM -> cs.surfaceVariant to cs.tertiary
+        Tone.INFO -> cs.surfaceVariant to cs.onSurfaceVariant
+    }
+}
+
+/** Commentary lines: a coloured tag, then the sentence in [color]. */
+@Composable
+fun CommentLines(lines: List<Comment>, color: Color, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (l in lines) {
+            val (bg, fg) = toneColors(l.tone)
+            Row(verticalAlignment = Alignment.Top) {
+                Text(
+                    l.tag,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(bg).padding(horizontal = 6.dp, vertical = 1.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+                Text(
+                    l.text,
+                    modifier = Modifier.padding(start = 6.dp).weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = color,
+                )
+            }
+        }
+    }
 }

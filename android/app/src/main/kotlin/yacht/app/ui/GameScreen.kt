@@ -52,11 +52,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import yacht.app.core.AiPace
 import yacht.app.core.AppController
 import yacht.app.core.Screen
 import yacht.engine.Advice
 import yacht.engine.Category
 import yacht.engine.Mode
+import yacht.engine.explain.AiStep
+import yacht.engine.explain.Comment
 import yacht.engine.explain.Explanation
 import yacht.engine.game.DiceSource
 import yacht.engine.game.GameState
@@ -114,6 +117,16 @@ fun GameScreen(c: AppController) {
                                 text = { Text((if (c.objective == Mode.EXPECTED_SCORE) "✓ " else "   ") + "목표: 기대점수 최대") },
                                 onClick = { c.changeObjective(Mode.EXPECTED_SCORE); menu = false },
                             )
+                            if (s.source == DiceSource.RANDOM) {
+                                HorizontalDivider()
+                                for (p in AiPace.entries) {
+                                    DropdownMenuItem(
+                                        text = { Text((if (c.aiPace == p) "✓ " else "   ") + "AI 턴 보기: ${p.label}") },
+                                        onClick = { c.changeAiPace(p); menu = false },
+                                    )
+                                }
+                                HorizontalDivider()
+                            }
                             if (s.style == PlayStyle.SOLO && !s.isOver) {
                                 DropdownMenuItem(text = { Text("힌트 보기") }, onClick = { menu = false; peekAsk = true })
                             }
@@ -450,6 +463,7 @@ private fun ActionArea(c: AppController, s: GameState, onPeek: () -> Unit) {
             return@Column
         }
         c.lastOpponentMove?.let { LastOpponentTurnCard(c, s, it) }
+        c.turnComments?.takeIf { it.isNotEmpty() }?.let { TurnCommentCard(it, s.draft.rollsDone) }
         val advice = c.shownAdvice
         if (c.hintsHidden) SoloCard(s, onPeek) else RecommendationCard(c, s, advice)
         val d = s.draft
@@ -462,11 +476,67 @@ private fun ActionArea(c: AppController, s: GameState, onPeek: () -> Unit) {
     }
 }
 
+/** Live commentary of my turn: the preview before the first throw, then each throw's story. */
+@Composable
+private fun TurnCommentCard(lines: List<Comment>, rollsDone: Int) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                if (rollsDone == 0) "🎙️ 이번 턴 미리보기" else "🎙️ ${rollsDone}번째 굴림 해설",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = cs.onSurfaceVariant,
+            )
+            CommentLines(lines, cs.onSurface)
+        }
+    }
+}
+
+/**
+ * The AI's turn as it happens: each throw with what it kept, my P(win) after it, and the
+ * commentary of the latest throw (alone: the dice only).
+ */
+@Composable
+private fun AiPlayback(c: AppController, steps: List<AiStep>, shown: Int) {
+    val cs = MaterialTheme.colorScheme
+    val on = cs.onTertiaryContainer
+    val hidden = c.hintsHidden
+    val visible = steps.take(shown.coerceIn(1, steps.size))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("🎙️ AI 턴 실황", fontWeight = FontWeight.Bold, color = on, modifier = Modifier.weight(1f))
+        TextButton(onClick = { c.skipAiPlayback() }) { Text("건너뛰기 ▶▶", color = on, fontWeight = FontWeight.Bold) }
+    }
+    val win = if (hidden) null else visible.lastOrNull { it.myWin != null }?.myWin
+    if (win != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("내 승률", style = MaterialTheme.typography.labelSmall, color = on)
+            WinBar(win, Modifier.weight(1f).padding(horizontal = 8.dp), height = 8.dp)
+            Text(pct(win), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = on)
+        }
+    }
+    for (st in visible) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${st.throwNo}번째  ", style = MaterialTheme.typography.labelSmall, color = on)
+            MiniDice(st.dice, 18.dp)
+            val act = st.held?.let { yacht.engine.game.Game.keepText(it) }
+                ?: yacht.engine.game.Game.scoreText(st.category!!, st.points)
+            Text("  → $act", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = on)
+        }
+    }
+    if (!hidden) visible.lastOrNull()?.lines?.takeIf { it.isNotEmpty() }?.let { CommentLines(it, on) }
+}
+
 @Composable
 private fun OpponentTurnCard(c: AppController, s: GameState) {
     val cs = MaterialTheme.colorScheme
+    val steps = c.aiSteps
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (s.source == DiceSource.RANDOM && steps != null) {
+                AiPlayback(c, steps, c.aiShown)
+                return@Column
+            }
             if (s.source == DiceSource.RANDOM) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (c.aiThinking) {
@@ -559,6 +629,7 @@ private fun LastOpponentTurnCard(c: AppController, s: GameState, m: yacht.engine
             }
             if (!c.hintsHidden) {
                 c.opponentComment?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onTertiaryContainer) }
+                c.opponentResultComments?.takeIf { it.isNotEmpty() }?.let { CommentLines(it, cs.onTertiaryContainer) }
                 val why = m.why
                 if (!why.isNullOrEmpty()) {
                     TertiaryToggle(if (open) "▴ AI의 생각 접기" else "▾ AI는 왜 이렇게 뒀을까?") { c.toggleWhy() }

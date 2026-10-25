@@ -28,6 +28,18 @@ class OpponentOutlook(
     val details: List<String>,
 )
 
+/** My P(win) after the opponent's turn as a function of its card (memoised). */
+class WinAfter internal constructor(
+    /** Exact values (end-game table, or my card full) rather than anchored estimates. */
+    val exact: Boolean,
+    private val f: (Board) -> Double,
+) {
+    private val memo = HashMap<Board, Double>()
+
+    @Synchronized
+    operator fun invoke(card: Board): Double = memo.getOrPut(card) { f(card) }
+}
+
 class OutlookAnalysis(private val tables: Tables) {
     private val rules = tables.rules
 
@@ -50,13 +62,8 @@ class OutlookAnalysis(private val tables: Tables) {
         return best
     }
 
-    /**
-     * [now]: my P(win) before the opponent's turn from the plans (the quick estimates are shifted
-     * to average to it); [exactAt]: my exact P(win) after a given opponent card when an end-game
-     * table has it.
-     */
-    fun opponentTurn(me: Board, opp: Board, now: Double?, exactAt: ((Board) -> Double?)? = null): OpponentOutlook? {
-        if (opp.isComplete || tables.dist == null) return null
+    /** The opponent's cards after its turn under max-expectation play, with their probabilities. */
+    private fun cardsAfter(opp: Board): Pair<TurnOutcomes, List<Board>> {
         val cap = rules.bonusThreshold
         val oc = TurnOutcomes.of(tables, opp.mask, opp.u)
         val cards = ArrayList<Board>(oc.size)
@@ -66,15 +73,40 @@ class OutlookAnalysis(private val tables: Tables) {
             val pts = if (c < 6 && opp.u < cap && gain >= rules.bonusPoints) gain - rules.bonusPoints else gain
             cards += opp.with(Category.of(c), pts)
         }
+        return oc to cards
+    }
+
+    /**
+     * My P(win) once the opponent's turn ends in any card: exact with my card full or from
+     * [exactAt] (an end-game table); otherwise quick estimates shifted so that the opponent's
+     * expected result averages to [now]. Null when the opponent has nothing left or the
+     * distribution table is missing.
+     */
+    fun winAfter(me: Board, opp: Board, now: Double?, exactAt: ((Board) -> Double?)? = null): WinAfter? {
+        if (opp.isComplete || tables.dist == null) return null
+        val (oc, cards) = cardsAfter(opp)
         // With my card full the quick value is exact: P(the opponent ends below my total).
-        val exact = if (me.isComplete) cards.map { quick(me, it) }
-        else exactAt?.let { f -> cards.map { f(it) } }?.takeIf { v -> v.all { it != null } }?.map { it!! }
-        var wins = exact ?: cards.map { quick(me, it) }
-        if (exact == null && now != null) {
-            val mean = (0 until oc.size).sumOf { oc.prob[it] * wins[it] }
-            val shift = now - mean
-            wins = wins.map { (it + shift).coerceIn(0.0, 1.0) }
+        if (me.isComplete) return WinAfter(true) { quick(me, it) }
+        if (exactAt != null && cards.all { exactAt(it) != null }) return WinAfter(true) { exactAt(it) ?: quick(me, it) }
+        val q = cards.associateWith { quick(me, it) }
+        var shift = 0.0
+        if (now != null) {
+            val mean = (0 until oc.size).sumOf { oc.prob[it] * q.getValue(cards[it]) }
+            shift = now - mean
         }
+        return WinAfter(false) { ((q[it] ?: quick(me, it)) + shift).coerceIn(0.0, 1.0) }
+    }
+
+    /**
+     * [now]: my P(win) before the opponent's turn from the plans (the quick estimates are shifted
+     * to average to it); [exactAt]: my exact P(win) after a given opponent card when an end-game
+     * table has it.
+     */
+    fun opponentTurn(me: Board, opp: Board, now: Double?, exactAt: ((Board) -> Double?)? = null): OpponentOutlook? {
+        val after = winAfter(me, opp, now, exactAt) ?: return null
+        val (oc, cards) = cardsAfter(opp)
+        val wins = cards.map { after(it) }
+        val exact = if (after.exact) wins else null
         val order = (0 until oc.size).sortedBy { wins[it] }
         fun quantile(q: Double): Double {
             var acc = 0.0
