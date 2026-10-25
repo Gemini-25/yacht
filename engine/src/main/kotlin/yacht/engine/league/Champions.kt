@@ -43,7 +43,8 @@ class ChampionsLeague private constructor(
         if (f.id in stage) stage.release(f.id) else bracket?.release(f.id)
     }
 
-    override fun record(r: JobResult): List<LeagueEvent> = put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r))
+    override fun record(r: JobResult): List<LeagueEvent> =
+        if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
 
     private fun put(id: Int, a: String, b: String, s: TieScore): List<LeagueEvent> {
         if (id in stage) {
