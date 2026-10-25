@@ -48,6 +48,9 @@ class Season private constructor(
     private val remaining = java.util.TreeSet<Int>()
     private val inProgress = HashSet<Int>()
 
+    /** The games of every played fixture (for the calendar and the odds), by fixture id. */
+    private val results = HashMap<Int, List<GameScore>>()
+
     /** Positions after each completed matchday: positions[d][k][i] = place of divisions[d][i]. */
     val positions: List<MutableList<ByteArray>> = divisions.map { ArrayList() }
     private val matchdayLeft = HashMap<Pair<Int, Int>, Int>()
@@ -80,6 +83,12 @@ class Season private constructor(
     fun matchday(k: Int): List<LeagueFixture> = fixtures.filter { it.matchday == k }
 
     fun isPlayed(id: Int): Boolean = id !in remaining && id !in inProgress
+
+    /** The games of fixture [id] once played (its [LeagueFixture.a] is "a"); null before. */
+    fun result(id: Int): List<GameScore>? = results[id]
+
+    /** Every fixture not played yet (in progress included), in id order. */
+    fun unplayed(): List<LeagueFixture> = fixtures.filter { !isPlayed(it.id) }
 
     private fun build(rng: Random) {
         // Ids in matchday order (then division), so the open matchdays come first in [remaining].
@@ -154,6 +163,7 @@ class Season private constructor(
         val f = fixtures[id]
         val a = standings.getValue(f.a)
         val b = standings.getValue(f.b)
+        results[id] = games
         for (g in games) {
             a.scored += g.a
             a.conceded += g.b
@@ -209,7 +219,11 @@ class Season private constructor(
         append("season 3\n")
         append("number $number $seed ${if (double) 1 else 0}\n")
         for ((i, d) in divisions.withIndex()) append("division $i ${d.joinToString(",")}\n")
-        for (f in fixtures) append("fx ${f.id} ${f.division} ${f.matchday} ${f.a} ${f.b} ${if (isPlayed(f.id)) 1 else 0}\n")
+        for (f in fixtures) {
+            append("fx ${f.id} ${f.division} ${f.matchday} ${f.a} ${f.b} ${if (isPlayed(f.id)) 1 else 0}")
+            results[f.id]?.let { gs -> append(' ').append(gs.joinToString(";") { encodeGame(it) }) }
+            append('\n')
+        }
         for (s in standings.values) {
             append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts} ${s.aggPoints}\n")
         }
@@ -217,6 +231,18 @@ class Season private constructor(
     }
 
     companion object {
+        /** "a:b:flags" with flags bits 1 aYacht, 2 bYacht, 4 aBonus, 8 bBonus. */
+        fun encodeGame(g: GameScore): String {
+            val flags = (if (g.aYacht) 1 else 0) or (if (g.bYacht) 2 else 0) or (if (g.aBonus) 4 else 0) or (if (g.bBonus) 8 else 0)
+            return "${g.a}:${g.b}:$flags"
+        }
+
+        fun decodeGame(t: String): GameScore {
+            val p = t.split(':')
+            val flags = p.getOrNull(2)?.toInt() ?: 0
+            return GameScore(p[0].toInt(), p[1].toInt(), flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, flags and 8 != 0)
+        }
+
         /** A new season of the league stage with these [divisions] (best division first). */
         fun start(number: Int, seed: Long, divisions: List<List<String>>, double: Boolean = false): Season {
             val s = Season(number, seed, divisions.filter { it.isNotEmpty() }, double)
@@ -274,6 +300,7 @@ class Season private constructor(
                         s.fixtures += fx
                         val gone = fx.a !in known || fx.b !in known
                         if (f[6] == "0" && !gone) s.remaining += fx.id
+                        f.getOrNull(7)?.let { r -> runCatching { r.split(';').map { decodeGame(it) } }.getOrNull()?.let { s.results[fx.id] = it } }
                     }
                     "standing" -> s.standings[f[1]]?.apply {
                         played = f[2].toInt()

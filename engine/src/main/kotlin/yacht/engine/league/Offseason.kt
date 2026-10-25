@@ -19,6 +19,8 @@ object Offseason {
         val config: LeagueConfig,
         /** Builders of the next season's competitions: each may return null (not this season). */
         val factories: List<(SeasonStart) -> Competition?> = emptyList(),
+        /** Every season's honours before this rollover (oldest first). */
+        val history: List<Honour> = emptyList(),
     )
 
     /** Seed of season [number] from the league's own seed. */
@@ -58,7 +60,8 @@ object Offseason {
         val minPlayed = (all.maxOfOrNull { it.played } ?: 0) / 2
         all.filter { it.played >= minPlayed }.maxByOrNull { it.avgScore }?.let { out += Honour(n, "SCORER", it.key) }
         all.maxByOrNull { it.yachts }?.takeIf { it.yachts > 0 }?.let { out += Honour(n, "YACHT", it.key) }
-        for (c in plan.comps + plan.post) if (c.comp != Comp.TITLE_PLAYOFF) out += c.honours()
+        // The title playoff's L0 is above; the promotion playoff's winners are in the moves.
+        for (c in plan.comps + plan.post) if (c.comp != Comp.TITLE_PLAYOFF && c.comp != Comp.PROMOTION_PLAYOFF) out += c.honours()
         return out
     }
 
@@ -139,7 +142,7 @@ object Offseason {
     ): SeasonPlan {
         val league = Season.start(number, seed, divisions, ctx.config.doubleRoundRobin)
         val ranking = ctx.keys.sortedByDescending { ctx.rating(it) }
-        val start = SeasonStart(number, seed, ctx.config, ranking, ctx.rating, divisions, lastTables, lastHonours, ctx.family, ctx.hometown)
+        val start = SeasonStart(number, seed, ctx.config, ranking, ctx.rating, divisions, lastTables, lastHonours, ctx.family, ctx.hometown, ctx.history + lastHonours)
         val comps = ctx.factories.mapNotNull { f -> runCatching { f(start) }.getOrNull() }.toMutableList()
         return SeasonPlan(league, ctx.config, comps)
     }

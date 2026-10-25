@@ -501,7 +501,7 @@ class LeagueController(
         val keys = roster.map { it.key }
         return Offseason.Context(
             keys, { k -> l.rating(k).takeIf { !it.isNaN() } ?: START_RATING }, { k -> byKey[k]?.family }, { k -> hometown(k) },
-            config, factories,
+            config, factories, honours.all.toList(),
         )
     }
 

@@ -52,6 +52,8 @@ class SeasonStart(
     val lastHonours: List<Honour>,
     val family: (String) -> Family?,
     val hometown: (String) -> String,
+    /** Every season's honours so far (oldest first), e.g. for the family cup's last squads. */
+    val history: List<Honour> = emptyList(),
 )
 
 /**
@@ -82,6 +84,9 @@ interface Competition {
 
     /** Titles once finished (winner, runner-up, ...); empty before. */
     fun honours(): List<Honour>
+
+    /** News when the competition is set up (the draw, squads); asked once, right after the factory. */
+    fun opening(): List<LeagueEvent> = emptyList()
 
     /** This competition's lines for season.txt; [CompetitionCodec] reads them back. */
     fun encode(out: StringBuilder)

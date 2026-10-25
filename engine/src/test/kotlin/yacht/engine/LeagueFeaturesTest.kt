@@ -73,6 +73,10 @@ class LeagueFeaturesTest {
         val back = SeasonPlan.decode(saved!!, keys, emptyMap())
         assertEquals(season.fixturesTotal - 150, back.league.fixturesLeft)
         assertEquals(150, back.league.standings.values.sumOf { it.played } / 2)
+        // Each played fixture keeps its games (the calendar), saved with the season.
+        val firstPlayed = (0 until season.fixturesTotal).first { back.league.isPlayed(it) }
+        assertEquals(season.result(firstPlayed), back.league.result(firstPlayed))
+        assertEquals(season.fixturesTotal - 150, back.league.unplayed().size)
         // Off-season: two down, two up, the playoff place stays without a playoff.
         assertTrue(!plan.finished)
         plan.startPost(emptyList())
