@@ -895,7 +895,11 @@ private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
 private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
     val lg = c.league
     val cs = MaterialTheme.colorScheme
-    val (best, worst) = remember(r.key, r.games) { lg.matchups(r.key) }
+    // Read with the profile, off the main thread (the ladder's lock is busy while the league runs).
+    androidx.compose.runtime.LaunchedEffect(r.key) { lg.loadProfile(r.key) }
+    val profile = lg.profile?.takeIf { it.key == r.key }
+    val best = profile?.best.orEmpty()
+    val worst = profile?.worst.orEmpty()
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },

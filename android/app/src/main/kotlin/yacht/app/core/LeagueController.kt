@@ -230,6 +230,9 @@ data class ProfileView(
     val titles: Int,
     /** Genes in words, for generated and evolved players. */
     val genes: String?,
+    /** Its best and worst opponents (at least 4 games against them). */
+    val best: List<Matchup> = emptyList(),
+    val worst: List<Matchup> = emptyList(),
 )
 
 /** A retired player or legend for the 레전드 보관소. */
@@ -1246,7 +1249,7 @@ class LeagueController(
                     b.ancestors(key).map { gen -> gen.map { nm(it) } }, b.descendants(key).map { gen -> gen.map { name(it) } },
                     w.honours.of(key).sortedByDescending { it.season }, w.honours.titles(key),
                     (alive?.spec ?: b.legend(key)?.spec)?.describe(),
-                )
+                ).let { pv -> matchups(key).let { (best, worst) -> pv.copy(best = best, worst = worst) } }
             }
             scope.launch { profile = v }
         }
