@@ -78,7 +78,7 @@ fun BuilderScreen(c: AppController) {
             SectionTitle("기본 실력")
             Chips(CustomBase.entries.map { it to it.label }, spec.base) { b ->
                 // "감으로" works on points only: other bases turn it into the matching slip rate.
-                val n = spec.copy(base = b)
+                val n = spec.copy(base = b, belief = if (b == CustomBase.EV) spec.belief else null)
                 spec = if (n.mistake == CustomMistake.FEEL && b != CustomBase.EV) n.copy(mistake = CustomMistake.SLIP, amount = n.effectiveAmount) else n
             }
             Text(
@@ -103,7 +103,12 @@ fun BuilderScreen(c: AppController) {
                 CustomMistake.FEEL -> LabeledSlider("감(τ, 이만큼의 점수 차이는 헷갈림)", spec.amount, 0.1f..4f, { String.format(Locale.ROOT, "%.1f점", it) }) { spec = spec.copy(amount = it) }
                 CustomMistake.NONE -> {}
             }
+            SectionTitle("기질")
+            Chips(yacht.engine.league.Temper.entries.map { it to it.label }, spec.temper) { spec = spec.copy(temper = it) }
+            Text(spec.temper.desc, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             if (spec.base == CustomBase.EV) {
+                SectionTitle("규칙 착각")
+                Chips(listOf<String?>(null).map { it to "정확히 앎" } + CustomAiSpec.BELIEFS.map { (k, v) -> k to v }, spec.belief) { spec = spec.copy(belief = it) }
                 SectionTitle("취향")
                 LabeledSlider("요트 성공", spec.yacht, -30f..60f, { signed(it) }) { spec = spec.copy(yacht = it) }
                 LabeledSlider("스트레이트 성공", spec.straight, -10f..20f, { signed(it) }) { spec = spec.copy(straight = it) }
