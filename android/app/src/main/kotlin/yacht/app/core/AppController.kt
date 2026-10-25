@@ -364,7 +364,7 @@ class AppController(
                 // The clone must be in the roster before the league is read, or its saved
                 // record is dropped as an unknown AI.
                 history = withContext(Dispatchers.IO) { readHistory() }
-                league.updateClone(CloneProfile.of(history))
+                league.updateClone(withContext(Dispatchers.Default) { CloneProfile.of(history) })
                 league.attach(t)
                 tables = t
                 val settings = withContext(Dispatchers.IO) { storage.loadSettings() }
@@ -1286,7 +1286,7 @@ class AppController(
         // The restored games may make (or change) the clone: it joins the roster before the
         // restored league is read, so its record there is kept.
         history = withContext(Dispatchers.IO) { readHistory() }
-        league.updateClone(CloneProfile.of(history))
+        league.updateClone(withContext(Dispatchers.Default) { CloneProfile.of(history) })
         // Decided on the loaded league, not on the screen: a restore that arrives right after
         // the app was restarted (killed while the file picker was open) comes before the
         // league is read, and must not take that for an empty league.
