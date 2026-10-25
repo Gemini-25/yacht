@@ -479,11 +479,13 @@ class Commentary(private val tables: Tables) {
         if (p < 0.01) return null
         val ifYacht = mass / p
         val now = turn.startValue
+        // Every turn has a Yacht chance while the box is open: only worth saying when it swings a lot.
         return if (turn.mode == Mode.WIN) {
-            if (ifYacht - now < 0.1) return null
-            Comment("🎉 요트 찬스", "이번 턴에 요트가 나올 확률은 ${Ko.pct(p)}. 나오면 승률이 ${Ko.pct(now)} → ${Ko.ro(Ko.pct(ifYacht))} 뛰어요.", Tone.HOT)
+            if (ifYacht - now < 0.25) return null
+            Comment("🎉 요트 찬스", "이번 턴에 요트가 나올 확률은 ${Ko.ieyo(Ko.pct(p))}. 나오면 승률이 ${Ko.pct(now)} → ${Ko.ro(Ko.pct(ifYacht))} 뛰어요.", Tone.HOT)
         } else {
-            Comment("🎉 요트 찬스", "이번 턴에 요트가 나올 확률은 ${Ko.pct(p)}. 나오면 예상 최종 점수가 ${Ko.int(ifYacht)}점이 돼요.")
+            if (turn.me.filledCount < 6) return null
+            Comment("🎉 요트 찬스", "이번 턴에 요트가 나올 확률은 ${Ko.ieyo(Ko.pct(p))}. 나오면 예상 최종 점수가 ${Ko.int(ifYacht)}점이 돼요.")
         }
     }
 
