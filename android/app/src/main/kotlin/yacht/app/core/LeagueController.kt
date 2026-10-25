@@ -627,6 +627,7 @@ class LeagueController(
                 Ladder.ME, ai,
                 listOf(GameScore(me.total, opp.total, (me[Category.YACHT] ?: 0) > 0, (opp[Category.YACHT] ?: 0) > 0, me.bonus > 0, opp.bonus > 0)),
             )
+            l.fit()
             val e = l.entry(Ladder.ME)!!
             RankResult(
                 name(ai), me.total > opp.total, me.total == opp.total, before?.roundToInt(),
@@ -803,6 +804,8 @@ class LeagueController(
 
     private fun snapshot(): LeagueView? {
         val l = ladder ?: return null
+        // Matches only nudge the fit; the table shows it converged.
+        l.fit()
         val s = season
         val ranking = l.ranking().filter { it != Ladder.ME || l.entry(it)!!.games > 0 }
         val rows = ranking.mapNotNull { k ->

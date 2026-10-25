@@ -210,7 +210,9 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             games++
         }
         matches++
-        fit()
+        // A few sweeps from the last fit: one match moves the ratings only a little, and the
+        // full fit (hundreds of sweeps, the league's bottleneck) runs when the table is shown.
+        fit(RECORD_SWEEPS)
         for (k in listOf(i, j)) {
             val e = entries[k]
             val r = ratings[k]
@@ -263,7 +265,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
      * Bradley-Terry strengths by minorisation-maximisation. Each AI also gets a tenth of a win and
      * of a loss against a virtual average player, which keeps unbeaten or winless records finite.
      */
-    fun fit() {
+    fun fit(maxSweeps: Int = MAX_ITER) {
         val active = (0 until n).filter { entries[it].games > 0 }
         if (active.isEmpty()) return
         val wins = DoubleArray(n)
@@ -273,7 +275,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             wins[i] = w
         }
         val pi = strength
-        for (iter in 0 until MAX_ITER) {
+        for (iter in 0 until maxSweeps) {
             var change = 0.0
             for (i in active) {
                 var denom = 2 * PRIOR / (pi[i] + 1.0)
@@ -340,6 +342,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         const val RECORD_SCORE = 300
         private const val PRIOR = 0.1
         private const val MAX_ITER = 3000
+        private const val RECORD_SWEEPS = 25
 
         /** Restores [text] onto a ladder for [keys]; unknown AIs (an older roster) are skipped. */
         fun decode(keys: List<String>, text: String, anchor: String = "ev"): Ladder {

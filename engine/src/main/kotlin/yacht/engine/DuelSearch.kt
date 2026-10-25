@@ -157,9 +157,18 @@ class DuelSearch(
                 val kernel = BlockKernel()
                 pairs.map { (mm, om) -> checkStop(); key(mm, om) to node(mm, om, myTurn, kernel) }
             } else {
-                val kernels = ThreadLocal.withInitial { BlockKernel() }
+                // Work buffers shared by this table's tasks and dropped with it (see WinSearch).
+                val kernels = java.util.concurrent.ConcurrentLinkedQueue<BlockKernel>()
                 pool.invokeAll(pairs.map { (mm, om) ->
-                    Callable { checkStop(); key(mm, om) to node(mm, om, myTurn, kernels.get()) }
+                    Callable {
+                        checkStop()
+                        val kernel = kernels.poll() ?: BlockKernel()
+                        try {
+                            key(mm, om) to node(mm, om, myTurn, kernel)
+                        } finally {
+                            kernels.add(kernel)
+                        }
+                    }
                 }).map {
                     try {
                         it.get()

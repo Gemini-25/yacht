@@ -261,6 +261,8 @@ private fun parsePlayer(plain: Advisor, risky: Advisor, spec: String): AdvisorPl
         s == "win" -> AdvisorPlayer(advisor, Mode.WIN, name = spec)
         s.startsWith("win-d") -> AdvisorPlayer(advisor, Mode.WIN, fixedDepth = s.removePrefix("win-d").toInt(), name = spec)
         s.startsWith("win-b") -> AdvisorPlayer(advisor, Mode.WIN, budgetOps = s.removePrefix("win-b").toDouble().toLong(), name = spec)
+        // "win-xK": this turn only, and exact to the end with K boxes left or fewer.
+        s.startsWith("win-x") -> AdvisorPlayer(advisor, Mode.WIN, fixedDepth = 1, exactAt = s.removePrefix("win-x").toInt(), name = spec)
         // "duel-X": default budget, plus the exact duel search when it costs at most X ops.
         s.startsWith("duel-") -> AdvisorPlayer(advisor, Mode.WIN, duelOps = s.removePrefix("duel-").toDouble().toLong(), name = spec)
         else -> error("unknown player $spec")

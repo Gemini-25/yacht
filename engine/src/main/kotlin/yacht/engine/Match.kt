@@ -22,6 +22,8 @@ class AdvisorPlayer(
     private val tieValue: Double = 0.0,
     /** Points added to the opponent's expected final (misjudging it). */
     private val oppShift: Int = 0,
+    /** With this many boxes left or fewer, search exactly to the end (0 = by [budgetOps]/[fixedDepth]). */
+    private val exactAt: Int = 0,
 ) : Player {
     private lateinit var turn: PlannedTurn
 
@@ -36,7 +38,9 @@ class AdvisorPlayer(
         ) {
             table = advisor.buildDuelTable(me, opp, meToMove = true)
         }
-        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth, table = table, tieValue = tieValue, oppShift = oppShift)
+        val left = Category.COUNT - me.filledCount
+        val depth = if (left <= exactAt) left else fixedDepth
+        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = depth, table = table, tieValue = tieValue, oppShift = oppShift)
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)

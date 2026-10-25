@@ -110,11 +110,22 @@ class WinSearch(
                     grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernel)
                 }
             } else {
-                val kernels = ThreadLocal.withInitial { BlockKernel() }
+                // Work buffers shared by this search's tasks and dropped with it (a ThreadLocal on
+                // the app's long-lived pool kept every search's buffers alive: hundreds of MB).
+                val kernels = java.util.concurrent.ConcurrentLinkedQueue<BlockKernel>()
                 val tasks = masks.map { m ->
                     Callable {
                         checkDeadline()
-                        grids[m] = if (leaf) leafGrid(m) else interiorGrid(m, kernels.get())
+                        if (leaf) {
+                            grids[m] = leafGrid(m)
+                        } else {
+                            val kernel = kernels.poll() ?: BlockKernel()
+                            try {
+                                grids[m] = interiorGrid(m, kernel)
+                            } finally {
+                                kernels.add(kernel)
+                            }
+                        }
                     }
                 }
                 for (f in pool.invokeAll(tasks)) {
