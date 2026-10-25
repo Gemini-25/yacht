@@ -54,7 +54,12 @@ fun WatchScreen(c: AppController) {
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
-                title = { Text("👀 경기 관전", fontWeight = FontWeight.Bold) },
+                title = {
+                    Column {
+                        Text(if (w?.title != null) "🎬 하이라이트" else "👀 경기 관전", fontWeight = FontWeight.Bold)
+                        w?.title?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+                    }
+                },
                 navigationIcon = {
                     TextButton(onClick = {
                         lg.stopWatch()
@@ -66,6 +71,10 @@ fun WatchScreen(c: AppController) {
     ) { pad ->
         if (w == null) {
             CenterText("관전할 경기가 없어요")
+            return@Scaffold
+        }
+        if (w.message != null) {
+            CenterText(w.message)
             return@Scaffold
         }
         Column(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

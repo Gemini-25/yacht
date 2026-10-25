@@ -205,7 +205,8 @@ object News {
             ).let { all -> if (v["p"] != null) all.dropLast(1) else all } to 3
         }
         "record" -> {
-            arg(0)?.let { v["rec"] = RECORD_LABELS[it] ?: it.replace('_', ' ') }
+            // The stats module names records by RecordKind; older codes are lower case.
+            arg(0)?.let { v["rec"] = runCatching { RecordKind.valueOf(it).label }.getOrNull() ?: RECORD_LABELS[it.lowercase(Locale.ROOT)] ?: it.replace('_', ' ') }
             arg(1)?.let { v["value"] = number(it) }
             arg(2)?.let { v["prev"] = number(it) }
             listOf(
@@ -219,6 +220,8 @@ object News {
             val a0 = arg(0)
             v["t"] = when {
                 a0 != null && a0.all { it.isDigit() } -> "${a0.toInt() + 1}부 리그"
+                // A competition's code (the club league's "K").
+                a0 != null && a0.length == 1 && Comp.of(a0[0]) != null -> Comp.of(a0[0])!!.label
                 a0 != null -> a0
                 else -> e.comp?.label ?: Comp.LEAGUE.label
             }
@@ -423,7 +426,8 @@ object News {
             T("전설이 된 {a}", "{a|이} 명예의 전당에 들어갔어요. 쌓아 온 기록이 그 자격을 증명해요."),
         ) to 4
         "dynasty" -> {
-            val kind = arg(0).orEmpty()
+            // The stats module sends (RUN, count, title kind) for runs of titles.
+            val kind = arg(0).orEmpty().let { if (it == "RUN") arg(2).orEmpty() else it }
             arg(1)?.let { v["count"] = it }
             when (kind.lowercase(Locale.ROOT)) {
                 "double" -> listOf(T("{a}, 리그·컵 더블 달성", "{a|이} 한 시즌에 리그와 요트컵을 모두 차지했어요. 흔치 않은 더블이에요."))

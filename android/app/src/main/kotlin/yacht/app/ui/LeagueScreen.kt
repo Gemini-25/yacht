@@ -155,7 +155,7 @@ fun LeagueScreen(c: AppController) {
                     LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
                     LeagueTab.COMPS -> CompsTab(lg, v.comps) { lg.detail = it }
                     LeagueTab.CLUBS -> ClubsTab(lg, v.clubs) { lg.detail = it }
-                    LeagueTab.NEWS -> FeedList(lg, v)
+                    LeagueTab.NEWS -> NewsTab(c, v) { FeedList(lg, v) }
                     LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
                 }
             }
@@ -537,6 +537,7 @@ private fun FeedCard(lg: LeagueController, m: FeedItem) {
                 FeedSide(m.bName, m.deltaB, bPts > aPts, Modifier.weight(1f), TextAlign.End)
             }
             for (n in m.notes) noteText(lg, n)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.secondary, fontWeight = FontWeight.Bold) }
+            m.curve?.let { cv -> WinCurve(ByteArray(cv.size) { cv[it].toByte() }, "", "", height = 40.dp) }
         }
     }
 }

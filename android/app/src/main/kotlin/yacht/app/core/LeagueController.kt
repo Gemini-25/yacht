@@ -53,6 +53,10 @@ import yacht.engine.league.MetaReport
 import yacht.engine.league.SeasonLine
 import yacht.engine.league.SeasonReview
 import yacht.engine.league.SeasonSummary
+import yacht.engine.league.Article
+import yacht.engine.league.Highlight
+import yacht.engine.league.LiveFrame
+import yacht.engine.league.WatchTurn
 import yacht.engine.league.PlayerBook
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
@@ -127,6 +131,8 @@ data class FeedItem(
     val time: Long,
     /** "kind|key|value" news, e.g. "승급|win|다이아몬드". */
     val notes: List<String>,
+    /** [a]'s P(win) after each half-turn of the first game, percent (when the live board still has it). */
+    val curve: IntArray? = null,
 )
 
 data class LeagueView(
@@ -140,6 +146,11 @@ data class LeagueView(
     /** This season's competitions as the 대회 tab draws them (post-season last). */
     val comps: List<Pair<Comp, CompetitionView>> = emptyList(),
     val clubs: ClubsView? = null,
+    /** News articles, newest first. */
+    val news: List<Article> = emptyList(),
+    /** This season's most dramatic games and the all-time best, best first. */
+    val highlights: List<Highlight> = emptyList(),
+    val allTime: List<Highlight> = emptyList(),
 )
 
 /** The 클럽 tab: this season's club table, every club and the latest transfers and draft picks. */
@@ -339,6 +350,10 @@ data class WatchView(
     val complete: Boolean,
     val shown: Int,
     val playing: Boolean,
+    /** A highlight's caption when one is replayed (not counted anywhere). */
+    val title: String? = null,
+    /** Why it cannot be shown (an AI changed since), instead of the game. */
+    val message: String? = null,
 )
 
 /**
@@ -554,6 +569,8 @@ class LeagueController(
         w.config = config
         w.family = { k -> byKey[k]?.family }
         w.name = { k -> name(k) }
+        // What a highlight replay checks: an AI's play (its description and, for players, its genes).
+        w.version = { k -> (byKey[k]?.desc ?: "") + (customs.firstOrNull { it.key == k }?.encode() ?: "") + (w.players[k]?.spec?.genes()?.joinToString(",") ?: "") }
         w.members = members(w)
     }
 
@@ -782,7 +799,7 @@ class LeagueController(
                     val w = world ?: return@synchronized
                     if (flag.get()) return@synchronized
                     // Statistics, the ladder and the season, in that order (see LeagueWorld.recordJob).
-                    val rec = w.recordJob(result)
+                    val rec = w.recordJob(result, System.currentTimeMillis())
                     for (m in rec.matches) {
                         lastDelta[m.a] = m.deltaA
                         lastDelta[m.b] = m.deltaB
@@ -1042,28 +1059,51 @@ class LeagueController(
         val t = tables ?: return
         val a = byKey[first] ?: return
         val b = byKey[second] ?: return
-        stopWatch()
-        watch = WatchView(first, second, a.name, b.name, emptyList(), false, 0, true)
-        val steps = ArrayList<WatchStep>()
-        watchJob = scope.launch {
+        watchGame(first, second, pace, null) {
             val rng = Random()
-            val turns = withContext(Dispatchers.Default) { WatchMatch.play(t.rules, a.make(Random(rng.nextLong())), b.make(Random(rng.nextLong())), rng) }
+            val turns = WatchMatch.play(t.rules, a.make(Random(rng.nextLong())), b.make(Random(rng.nextLong())), rng)
             val last = turns.last()
-            withContext(Dispatchers.Default) {
-                synchronized(lock) {
-                    ladder?.let { l ->
-                        if (l.entry(first) != null && l.entry(second) != null) {
-                            l.record(
-                                first, second,
-                                listOf(GameScore(last.first.total, last.second.total, (last.first[Category.YACHT] ?: 0) > 0, (last.second[Category.YACHT] ?: 0) > 0, last.first.bonus > 0, last.second.bonus > 0)),
-                            )
-                        }
+            synchronized(lock) {
+                ladder?.let { l ->
+                    if (l.entry(first) != null && l.entry(second) != null) {
+                        l.record(
+                            first, second,
+                            listOf(GameScore(last.first.total, last.second.total, (last.first[Category.YACHT] ?: 0) > 0, (last.second[Category.YACHT] ?: 0) > 0, last.first.bonus > 0, last.second.bonus > 0)),
+                        )
                     }
                 }
             }
             publish(force = true)
             // The watched game is on the ladder: saved now, the league may not be running.
             save()
+            turns
+        }
+    }
+
+    /**
+     * Replays a highlight (하이라이트 다시보기) from its deal through the same code, throw by
+     * throw; not counted anywhere. When an AI has changed since, the scores differ and the
+     * screen says so instead.
+     */
+    fun replayHighlight(h: Highlight, pace: () -> Long) {
+        val t = tables ?: return
+        if (byKey[h.first] == null || byKey[h.second] == null) {
+            watch = WatchView(h.first, h.second, name(h.first), name(h.second), emptyList(), true, 0, false, h.caption, "이 경기의 AI가 리그를 떠나서 다시 볼 수 없어요.")
+            return
+        }
+        watchGame(h.first, h.second, pace, h.caption) {
+            val r = h.replay(t.rules, { byKey[it] }) ?: return@watchGame null
+            if (!r.same) null.also { scope.launch { watch = watch?.copy(message = r.message, complete = true, playing = false) } } else r.turns
+        }
+    }
+
+    private fun watchGame(first: String, second: String, pace: () -> Long, title: String?, play: suspend () -> List<WatchTurn>?) {
+        val t = tables ?: return
+        stopWatch()
+        watch = WatchView(first, second, name(first), name(second), emptyList(), false, 0, true, title)
+        val steps = ArrayList<WatchStep>()
+        watchJob = scope.launch {
+            val turns = withContext(Dispatchers.Default) { play() } ?: return@launch
             val advisor = Advisor(t.withoutRisk())
             val outlook = OutlookAnalysis(t)
             val talk = Commentary(t)
@@ -1071,8 +1111,8 @@ class LeagueController(
             var y = Board(t.rules)
             for ((i, turn) in turns.withIndex()) {
                 val (mover, other) = if (turn.side == 0) x to y else y to x
-                val moverName = if (turn.side == 0) a.name else b.name
-                val waitingName = if (turn.side == 0) b.name else a.name
+                val moverName = name(if (turn.side == 0) first else second)
+                val waitingName = name(if (turn.side == 0) second else first)
                 val made = withContext(Dispatchers.Default) {
                     runCatching {
                         val plan = advisor.planTurn(mover, other, Mode.WIN, depth = 1)
@@ -1224,14 +1264,24 @@ class LeagueController(
                 Origin.of(k), world?.hometown(k) ?: "",
             )
         }
-        val feed = l.feed.take(FEED).map { m -> FeedItem(m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes) }
+        val curves = world?.live
+        val feed = l.feed.take(FEED).map { m ->
+            FeedItem(
+                m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes,
+                curves?.curves(m.a, m.b)?.firstOrNull()?.let { c -> if (c.a == m.a) c.curveA() else IntArray(c.curveA().size) { 100 - c.curveA()[it] } },
+            )
+        }
         val comps = s?.let { runCatching { Competitions.views(it) }.getOrNull() }.orEmpty()
         val clubs = world?.clubs?.let { b ->
             val cl = s?.competition(Comp.CLUB) as? ClubLeague
             clubNames = b.clubs.associate { it.id to it.name }
             ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty())
         }
-        return LeagueView(rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps, clubs)
+        val w = world
+        return LeagueView(
+            rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps, clubs,
+            w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
+        )
     }
 
     private fun seasonView(p: SeasonPlan): SeasonView {
@@ -1381,6 +1431,25 @@ class LeagueController(
         }
     }
 
+    /** 라이브 스코어보드: the newest finished fixtures replayed turn by turn while the board is open. */
+    var liveFrames by mutableStateOf<List<LiveFrame>>(emptyList())
+        private set
+    private var liveJob: Job? = null
+
+    /** Opens (true) or closes the live scoreboard; while open it is redrawn four times a second. */
+    fun watchLive(open: Boolean) {
+        liveJob?.cancel()
+        if (!open) return
+        val start = System.currentTimeMillis()
+        liveJob = scope.launch(Dispatchers.Default) {
+            while (true) {
+                val frames = synchronized(lock) { world?.live?.window(System.currentTimeMillis(), start).orEmpty() }
+                scope.launch { liveFrames = frames }
+                delay(250)
+            }
+        }
+    }
+
     /** The matchday shown in the calendar (일정표), read off the main thread on request. */
     var calendar by mutableStateOf<CalendarView?>(null)
         private set
@@ -1447,6 +1516,7 @@ class LeagueController(
 
         /** Share of matches given to AIs waiting for the next season, so they get a rating. */
         private const val CLUB_MOVES = 60
+        private const val NEWS = 120
         private const val FRIENDLY_SHARE = 0.2
         private const val FRIENDLY_RUSH = 0.6
 

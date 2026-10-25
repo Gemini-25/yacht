@@ -113,6 +113,11 @@ class LeagueWorldTest {
         assertTrue(w.archive.summary(1) != null)
         assertTrue(w.stats.career("ev") != null)
         assertEquals(w.stats.career("ev")!!.games, back.stats.career("ev")!!.games)
+        // News: every event of the season written up, Korean, no placeholders left; saved.
+        assertTrue(w.news.all.size >= 50, "news ${w.news.all.size}")
+        assertTrue(w.news.all.none { it.headline.contains('{') || it.body.contains('{') })
+        assertTrue(w.news.all.any { it.kind == "season_review" })
+        assertEquals(w.news.all.map { it.headline }, back.news.all.map { it.headline })
         // Two more seasons on the read-back world.
         back.config = config
         back.members = w.members

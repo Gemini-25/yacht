@@ -23,8 +23,22 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     /** Past seasons: summaries, season lines, dynasties, hall of fame, highlights, the review. */
     var archive = Archive()
 
-    /** Display names (the awards and the season review name AIs), from the app's roster. */
+    /** Display names (the awards, the season review and the news name AIs), from the app's roster. */
     var name: (String) -> String = { it }
+
+    /** A short string that changes when an AI's play changes (a highlight can then not be replayed). */
+    var version: (String) -> String = { "" }
+
+    /** The season's most dramatic games and the all-time best (league/highlights.txt). */
+    var highlights = HighlightBook()
+
+    /** News articles made from the events, newest first (league/news.txt). */
+    var news = NewsBook()
+
+    /** The newest finished fixtures, replayed on the live scoreboard, and the feed's win curves (memory only). */
+    val live = LiveBoard()
+
+    private val titleRace = TitleRaceWatch()
 
     /** News events, oldest first (the newest [EVENTS] are kept). */
     val events = ArrayDeque<LeagueEvent>()
@@ -70,6 +84,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         // Start ratings (기량발전상) and rookies of the new season; the retired leave the stats.
         stats.retain(members + ladder.keys)
         stats.startSeason(p.number, members.associateWith { ladder.rating(it) })
+        highlights.startSeason(p.number)
         val out = p.comps.flatMap { c -> runCatching { c.opening() }.getOrDefault(emptyList()) }
         note(out)
         return out
@@ -95,7 +110,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * Records a finished job: statistics first (they want the ratings from before the match),
      * then every rated board on the ladder, then the season (friendlies are only on the ladder).
      */
-    fun recordJob(r: JobResult): Recorded {
+    fun recordJob(r: JobResult, nowMs: Long = 0L): Recorded {
         val out = ArrayList<LeagueEvent>()
         val season = plan?.number ?: 0
         val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::hometown)) }.getOrDefault(emptyList())
@@ -108,7 +123,19 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 matches += ladder.record(b.a, b.b, b.games)
             }
         }
-        if (r.fixture.comp != Comp.FRIENDLY) out += record(r)
+        if (r.fixture.comp != Comp.FRIENDLY) {
+            out += record(r)
+            plan?.let { p ->
+                runCatching {
+                    highlights.offer(r, p.number, ::rating, ::hometown, version, Drama.titleRace(p.league, r.fixture))
+                }
+                if (r.fixture.comp == Comp.LEAGUE) titleRace.check(p.league)?.let { e ->
+                    note(listOf(e))
+                    out += e
+                }
+            }
+        }
+        live.add(r, nowMs)
         return Recorded(matches, out)
     }
 
@@ -144,6 +171,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         honours.add(h + end?.awards.orEmpty())
         val out = ArrayList<LeagueEvent>()
         end?.let { out += it.events }
+        // The season's three best games go to the archive.
+        runCatching { archive.putHighlights(p.number, highlights.archiveLines(p.number)) }
+        val champion = h.firstOrNull { it.kind == "L0" }?.key ?: "-"
+        val cup = h.firstOrNull { it.kind == "CUP" }?.key ?: "-"
+        out += LeagueEvent("season_review", p.number, listOf(champion, cup))
         // Titles and moves the competitions did not announce themselves (the title playoff and
         // the promotion playoff do).
         fun announced(kind: String, key: String) = events.any { it.season == p.number && it.kind == kind && it.keys.firstOrNull() == key }
@@ -181,9 +213,14 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         return market + opened(next)
     }
 
+    /** Keeps the events and writes them up as news articles. */
     private fun note(e: List<LeagueEvent>) {
+        if (e.isEmpty()) return
         for (x in e) events.addLast(x)
         while (events.size > EVENTS) events.removeFirst()
+        runCatching {
+            news.add(News.articles(e, name, { id -> clubs?.club(id)?.name ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }))
+        }
     }
 
     // ---- saving --------------------------------------------------------------------------------
@@ -197,6 +234,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         clubs?.let { put(CLUBS, it.encode()) }
         put(STATS, stats.encode())
         put(ARCHIVE, archive.encode())
+        put(HIGHLIGHTS, highlights.encode())
+        put(NEWS, news.encode())
     }
 
     companion object {
@@ -207,9 +246,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val CLUBS = "clubs.txt"
         const val STATS = "stats.txt"
         const val ARCHIVE = "archive.txt"
+        const val HIGHLIGHTS = HighlightBook.FILE
+        const val NEWS = NewsBook.FILE
 
         /** Files [encodeFiles] writes. */
-        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE)
+        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS)
 
         /** Readers of every competition in season.txt. */
         val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec)
@@ -235,6 +276,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             w.clubs = files[CLUBS]?.let { t -> runCatching { ClubBook.decode(t) }.getOrNull() }
             w.stats = files[STATS]?.let { t -> runCatching { StatsBook.decode(t) }.getOrNull() } ?: StatsBook()
             w.archive = files[ARCHIVE]?.let { t -> runCatching { Archive.decode(t) }.getOrNull() } ?: Archive()
+            w.highlights = files[HIGHLIGHTS]?.let { t -> runCatching { HighlightBook.decode(t) }.getOrNull() } ?: HighlightBook()
+            w.news = files[NEWS]?.let { t -> runCatching { NewsBook.decode(t) }.getOrNull() } ?: NewsBook()
             return w
         }
 
