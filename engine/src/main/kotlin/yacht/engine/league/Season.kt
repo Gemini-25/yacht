@@ -38,7 +38,8 @@ data class SeasonSummary(
 /**
  * The season structure on top of the rating ladder: divisions that each play a single round
  * robin of matches (two games on the same dice, seats swapped). A match won 2-0 (or 1.5-0.5)
- * gives 3 points, a level match 1 each. When every fixture is played the bottom [SWAP] of each
+ * gives 3 points; at one game each the higher two-game total wins it (most close matches split
+ * the games, since each side gets the same dice once); only equal totals are a draw, 1 each. When every fixture is played the bottom [SWAP] of each
  * division swap places with the top [SWAP] of the one below, and newcomers start at the bottom.
  * Not thread-safe: callers synchronise.
  */
@@ -121,15 +122,17 @@ class Season private constructor(
             if (g.bYacht) b.yachts++
         }
         val bw = games.size - aw
+        val aTotal = games.sumOf { it.a }
+        val bTotal = games.sumOf { it.b }
         a.played++
         b.played++
         when {
-            aw > bw -> {
+            aw > bw || (aw == bw && aTotal > bTotal) -> {
                 a.wins++
                 b.losses++
                 a.points += 3
             }
-            bw > aw -> {
+            bw > aw || (aw == bw && bTotal > aTotal) -> {
                 b.wins++
                 a.losses++
                 b.points += 3

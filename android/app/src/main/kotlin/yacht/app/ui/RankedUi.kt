@@ -101,7 +101,7 @@ fun RankResultCard(r: RankResult) {
         val after = r.after
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                when {
+                (if (r.placementLeft > 0) "임시 " else "") + when {
                     before != null && after != null -> "레이팅 $before → $after"
                     after != null -> "레이팅 $after"
                     else -> "레이팅 계산 중"

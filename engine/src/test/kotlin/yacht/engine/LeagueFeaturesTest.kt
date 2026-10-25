@@ -74,6 +74,16 @@ class LeagueFeaturesTest {
         val round = Season.decode(season.encode(), keys + "newbie")
         assertEquals(season.history, round.history)
         assertEquals(season.divisions, round.divisions)
+        // One game each: the higher total takes the match; equal totals draw.
+        val two = Season.start(listOf("a", "b"))
+        val f = two.next(rng, emptySet())!!
+        two.record(f, listOf(GameScore(200, 150), GameScore(170, 190)))
+        assertEquals(3, two.standings.getValue(f.first).points)
+        assertEquals(0, two.standings.getValue(f.second).points)
+        val level = Season.start(listOf("a", "b"))
+        val g = level.next(rng, emptySet())!!
+        level.record(g, listOf(GameScore(200, 150), GameScore(150, 200)))
+        assertEquals(1, level.standings.getValue(g.first).draws)
     }
 
     @Test

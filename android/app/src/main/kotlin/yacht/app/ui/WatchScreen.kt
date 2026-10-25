@@ -99,7 +99,7 @@ fun WatchScreen(c: AppController) {
                     } else {
                         // This turn so far, latest throw with its commentary.
                         val turnSteps = shown.takeLastWhile { it.side == cur.side && it.turn == cur.turn }
-                        Card(colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
+                        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
                                     "${cur.turn}턴 · ${if (cur.side == 0) w.firstName else w.secondName}",

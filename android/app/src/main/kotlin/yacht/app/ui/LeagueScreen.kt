@@ -524,7 +524,7 @@ private fun noteText(lg: LeagueController, note: String): String? {
 private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (season == null) {
-        CenterText("▶ 리그를 시작하면 지금 순위대로 1부·2부·3부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 한 번씩 맞붙어 승점(승 3, 무 1)을 쌓고, 시즌이 끝나면 위아래 ${Season.SWAP}팀씩 승강해요.")
+        CenterText("▶ 리그를 시작하면 지금 순위대로 1부·2부·3부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 한 번씩 맞붙어 승점(승 3, 무 1, 한 판씩이면 합계 점수로 승부)을 쌓고, 시즌이 끝나면 위아래 ${Season.SWAP}팀씩 승강해요.")
         return
     }
     var division by remember { mutableStateOf(0) }
@@ -542,7 +542,7 @@ private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "부마다 모두 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 동점이면 득실. 🟢 승격권 · 🔴 강등권",
+                        "부마다 모두 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 한 판씩 나눠 가지면 두 판 합계 점수로 승부. 🟢 승격권 · 🔴 강등권",
                         style = MaterialTheme.typography.labelSmall,
                         color = cs.onSurfaceVariant,
                     )
@@ -788,8 +788,10 @@ private fun MatchupLine(name: String, score: Double, games: Int) {
 private fun RatingLine(points: List<Int>) {
     val line = gameColors.me
     val grid = MaterialTheme.colorScheme.outlineVariant
-    val lo = points.min()
-    val hi = points.max()
+    // At least 20 points tall, so a 1-point wobble does not look like a swing.
+    val mid = (points.min() + points.max()) / 2
+    val lo = minOf(points.min(), mid - 10)
+    val hi = maxOf(points.max(), mid + 10)
     Column {
         Canvas(Modifier.fillMaxWidth().height(70.dp)) {
             drawLine(grid, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), strokeWidth = 1f)
