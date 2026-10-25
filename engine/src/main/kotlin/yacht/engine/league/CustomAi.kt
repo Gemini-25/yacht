@@ -3,8 +3,10 @@ package yacht.engine.league
 import yacht.engine.Advisor
 import yacht.engine.Board
 import yacht.engine.Category
+import yacht.engine.EvTable
 import yacht.engine.PlanPlayer
 import yacht.engine.Player
+import yacht.engine.RuleSet
 import yacht.engine.SlipPlayer
 import yacht.engine.SoftmaxPlayer
 import yacht.engine.Tables
@@ -16,6 +18,7 @@ import yacht.engine.riskPlanner
 import yacht.engine.shapedPlanner
 import yacht.engine.winPlanner
 import java.util.Locale
+import java.util.Random
 
 enum class CustomBase(val label: String) {
     EV("기대점수 정석"),
@@ -31,7 +34,8 @@ enum class CustomMistake(val label: String) {
 
 /**
  * An AI the player builds: a base plan, a way of making mistakes, and (with the max-expectation
- * base) tastes that shift how it values the end of a turn.
+ * base) tastes that shift how it values the end of a turn. Generated and evolved players
+ * (Players.kt) are specs too: their genes are these fields.
  */
 data class CustomAiSpec(
     val id: String,
@@ -51,6 +55,13 @@ data class CustomAiSpec(
     val saveChoice: Boolean = false,
     /** Share of the expected rest it counts (1 = as it is). */
     val future: Double = 1.0,
+    /** How its mistakes change within a game (see [Tempers]). */
+    val temper: Temper = Temper.NONE,
+    /**
+     * A misremembered rule, a key of [BELIEFS] (= [LeagueRoster.beliefs]): with the
+     * max-expectation base it plays for that game instead of the real one. Null = the real rules.
+     */
+    val belief: String? = null,
 ) {
     val key: String get() = "custom-$id"
 
@@ -61,6 +72,9 @@ data class CustomAiSpec(
     val effectiveMistake: CustomMistake get() = if (mistake == CustomMistake.FEEL && base != CustomBase.EV) CustomMistake.SLIP else mistake
     val effectiveAmount: Double get() = if (mistake == CustomMistake.FEEL && base != CustomBase.EV) minOf(0.5, amount / 10) else amount
 
+    /** Makes mistakes at some point of a game (the "only flawed AIs" preset keeps these). */
+    val flawed: Boolean get() = effectiveMistake != CustomMistake.NONE || temper != Temper.NONE
+
     fun describe(): String {
         val parts = ArrayList<String>()
         parts += when (base) {
@@ -69,6 +83,7 @@ data class CustomAiSpec(
             CustomBase.RISK -> "위험 성향 θ=" + (if (theta > 0) "+" else "") + fmt(theta)
         }
         if (base == CustomBase.EV) {
+            belief?.let { parts += BELIEFS[it] ?: "규칙 착각" }
             if (future != 1.0) parts += "미래 ${(future * 100).toInt()}%"
             if (yacht != 0.0) parts += "요트 ${signed(yacht)}"
             if (straight != 0.0) parts += "스트레이트 ${signed(straight)}"
@@ -81,54 +96,143 @@ data class CustomAiSpec(
             CustomMistake.SLIP -> "실수 ${fmt(effectiveAmount * 100)}%"
             CustomMistake.FEEL -> "감(τ=${fmt(amount)}점)"
         }
+        if (temper != Temper.NONE) parts += temper.label
         return parts.joinToString(" · ")
     }
 
-    fun encode(): String = listOf(
-        id, name.replace('|', ' ').replace('\n', ' '), base.name, theta, mistake.name, amount, yacht, straight, bonus, zero, saveChoice, future,
-    ).joinToString("|")
+    /**
+     * One line, fields separated by '|'. Old versions read the first twelve fields and ignore the
+     * rest, so the temper and belief are appended, and only when set (a plain AI keeps its line).
+     */
+    fun encode(): String {
+        val fields = mutableListOf<Any>(
+            id, name.replace('|', ' ').replace('\n', ' '), base.name, theta, mistake.name, amount, yacht, straight, bonus, zero, saveChoice, future,
+        )
+        if (temper != Temper.NONE || belief != null) fields.addAll(listOf(temper.name, belief ?: "-"))
+        return fields.joinToString("|")
+    }
+
+    /**
+     * The play fields (everything but [id] and [name]) as [GENES] space-free tokens, for
+     * space-separated save files such as roster.txt; [ofGenes] reads them back.
+     */
+    fun genes(): List<String> = listOf(
+        base.name, theta.toString(), mistake.name, amount.toString(), yacht.toString(), straight.toString(), bonus.toString(),
+        zero.toString(), saveChoice.toString(), future.toString(), temper.name, belief ?: "-",
+    )
 
     companion object {
         private fun fmt(x: Double) = String.format(Locale.ROOT, "%.2f", x).trimEnd('0').trimEnd('.')
         private fun signed(x: Double) = (if (x > 0) "+" else "") + fmt(x)
+
+        /**
+         * Misremembered rules an AI can believe in (the keys of [LeagueRoster.beliefs]) and their
+         * labels. The order is fixed: generated players draw from it.
+         */
+        val BELIEFS: Map<String, String> = linkedMapOf(
+            "no-bonus" to "보너스를 모름",
+            "big-bonus" to "보너스 70점 착각",
+            "fh-no-yacht" to "요트는 풀하우스 아님 착각",
+            "four-only" to "포카드 네 개만 착각",
+            "yahtzee-straights" to "야찌 점수 습관",
+            "cheap-yacht" to "요트 25점 착각",
+        )
+
+        /** Play fields of [genes]. */
+        const val GENES = 12
 
         fun decode(line: String): CustomAiSpec? = runCatching {
             val f = line.split('|')
             CustomAiSpec(
                 f[0], f[1], CustomBase.valueOf(f[2]), f[3].toDouble(), CustomMistake.valueOf(f[4]), f[5].toDouble(),
                 f[6].toDouble(), f[7].toDouble(), f[8].toDouble(), f[9].toDouble(), f[10].toBoolean(), f[11].toDouble(),
+                temperOf(f.getOrNull(12)), beliefOf(f.getOrNull(13)),
             )
         }.getOrNull()
+
+        /**
+         * A spec from the tokens of [genes]; the first ten are needed (the temper and belief may
+         * be missing). Throws on a bad field.
+         */
+        fun ofGenes(id: String, name: String, f: List<String>): CustomAiSpec = CustomAiSpec(
+            id, name, CustomBase.valueOf(f[0]), f[1].toDouble(), CustomMistake.valueOf(f[2]), f[3].toDouble(),
+            f[4].toDouble(), f[5].toDouble(), f[6].toDouble(), f[7].toDouble(), f[8].toBooleanStrict(), f[9].toDouble(),
+            temperOf(f.getOrNull(10)), beliefOf(f.getOrNull(11)),
+        )
+
+        // A temper or belief from a newer version is read as none rather than losing the AI.
+        private fun temperOf(s: String?) = Temper.entries.firstOrNull { it.name == s } ?: Temper.NONE
+        private fun beliefOf(s: String?) = s?.takeIf { it.isNotEmpty() && it != "-" }
     }
 }
 
-/** Builds league entrants for the player's own AIs and clone. */
+/** Builds league entrants for the player's own AIs and clone (and, through [build]'s key and family, generated players). */
 object CustomAis {
-    fun build(spec: CustomAiSpec, tables: Tables, extra: LeagueTables, budget: Long = LeagueRoster.BUDGET): LeagueAi {
+    /**
+     * The league AI of [spec]: by default one of mine ([Family.MINE], key [CustomAiSpec.key]);
+     * generated and evolved players pass their own [key], [name], [family] and [desc]. Extra
+     * tables (risk attitude, believed rules) are fetched on first play, not here.
+     */
+    fun build(
+        spec: CustomAiSpec,
+        tables: Tables,
+        extra: LeagueTables,
+        budget: Long = LeagueRoster.BUDGET,
+        key: String = spec.key,
+        name: String = spec.name,
+        family: Family = Family.MINE,
+        desc: String = "내가 만든 AI · " + spec.describe(),
+    ): LeagueAi {
         val t = tables.withoutRisk()
         val ev = t.ev
         val planner: (Board, Board) -> TurnPlan = when (spec.base) {
             CustomBase.WIN -> winPlanner(Advisor(t), budget, LeagueRoster.EXACT_AT)
             CustomBase.RISK -> { me, opp -> riskPlanner(extra.risk(spec.theta), spec.theta)(me, opp) }
-            CustomBase.EV -> shapedPlanner(ev, spec.future) { me, c, p, u2 ->
-                var x = 0.0
-                if (c == Category.YACHT && p > 0) x += spec.yacht
-                if ((c == Category.SMALL_STRAIGHT || c == Category.LARGE_STRAIGHT) && p > 0) x += spec.straight
-                if (c.isUpper) x += spec.bonus * (u2 - me.u)
-                if (p == 0) x -= spec.zero
-                if (spec.saveChoice && c == Category.CHOICE && me.filledCount < 9) x -= 10.0
-                x
+            CustomBase.EV -> {
+                val taste: (Board, Category, Int, Int) -> Double = { me, c, p, u2 ->
+                    var x = 0.0
+                    if (c == Category.YACHT && p > 0) x += spec.yacht
+                    if ((c == Category.SMALL_STRAIGHT || c == Category.LARGE_STRAIGHT) && p > 0) x += spec.straight
+                    if (c.isUpper) x += spec.bonus * (u2 - me.u)
+                    if (p == 0) x -= spec.zero
+                    if (spec.saveChoice && c == Category.CHOICE && me.filledCount < 9) x -= 10.0
+                    x
+                }
+                // An unknown belief (a newer version's) plays the real rules.
+                val believed = spec.belief?.let { b -> LeagueRoster.beliefs(t.rules)[b]?.let { b to it } }
+                if (believed == null) {
+                    shapedPlanner(ev, spec.future, taste)
+                } else {
+                    val (b, rules) = believed
+                    believedPlanner(rules, { extra.believed(b, rules) }, spec.future, taste)
+                }
             }
         }
-        val key = spec.key
-        return LeagueAi(key, spec.name, Family.MINE, "내가 만든 AI · " + spec.describe(), heavy = spec.base == CustomBase.WIN) { r ->
-            when (spec.effectiveMistake) {
-                CustomMistake.NONE -> PlanPlayer(key, planner)
-                CustomMistake.SLIP -> SlipPlayer(planner, spec.effectiveAmount, r, key)
-                CustomMistake.FEEL -> SoftmaxPlayer(planner, spec.amount, r, key)
-            }
+        val mistake = spec.effectiveMistake
+        val amount = spec.effectiveAmount
+        // The player at a mistake level: level 1 is the spec as it is (the only level without a temper).
+        fun player(r: Random, level: Double): Player = when (mistake) {
+            CustomMistake.NONE -> Tempers.slip(0.0, level).let { p -> if (p <= 0.0) PlanPlayer(key, planner) else SlipPlayer(planner, p, r, key) }
+            CustomMistake.SLIP -> SlipPlayer(planner, Tempers.slip(amount, level), r, key)
+            CustomMistake.FEEL -> SoftmaxPlayer(planner, Tempers.feel(amount, level), r, key)
+        }
+        val temper = spec.temper
+        return LeagueAi(key, name, family, desc, heavy = spec.base == CustomBase.WIN) { r ->
+            if (temper == Temper.NONE) player(r, 1.0) else TemperPlayer(key, Tempers.mood(temper, ev, r)) { player(r, it) }
         }
     }
+
+    /**
+     * Max expectation (with [taste], as [shapedPlanner]) for the game the AI believes in: it
+     * reads its card under [belief] (same bonus threshold) and plans with that game's [table],
+     * as the 규칙 착각 family's [yacht.engine.BeliefPlayer] does.
+     */
+    private fun believedPlanner(
+        belief: RuleSet,
+        table: () -> EvTable,
+        future: Double,
+        taste: (Board, Category, Int, Int) -> Double,
+    ): (Board, Board) -> TurnPlan = { me, opp -> shapedPlanner(table(), future, taste)(Board.of(belief, me.toList()), opp) }
 
     const val CLONE = "clone"
 
