@@ -259,6 +259,7 @@ class LeagueController(
     private val configFile = File(folder, "config.txt")
     private val customFile = File(folder, "custom.txt")
     private val prefs = File(folder, "prefs.txt")
+    private val favouriteFile = File(folder, "favourites.txt")
     private val cores = Runtime.getRuntime().availableProcessors()
 
     var view by mutableStateOf<LeagueView?>(null)
@@ -285,6 +286,16 @@ class LeagueController(
         private set
     var clone by mutableStateOf<CloneProfile?>(null)
         private set
+
+    /** 응원 AI: the AIs the player follows (starred on the ladder, their news first). */
+    var favourites by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun toggleFavourite(key: String) {
+        favourites = if (key in favourites) favourites - key else favourites + key
+        val text = favourites.sorted().joinToString("\n")
+        scope.launch(fileWrites) { runCatching { favouriteFile.writeTextAtomically(text) } }
+    }
 
     /** A season that just ended (shown until dismissed). */
     var seasonNews by mutableStateOf<SeasonHistoryItem?>(null)
@@ -339,7 +350,11 @@ class LeagueController(
         }
         customs = runCatching { customFile.takeIf { it.exists() }?.readLines()?.mapNotNull { CustomAiSpec.decode(it) } }.getOrNull().orEmpty()
         config = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: LeagueConfig()
+        favourites = readFavourites()
     }
+
+    private fun readFavourites(): Set<String> =
+        runCatching { favouriteFile.takeIf { it.exists() }?.readLines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() }.getOrNull().orEmpty()
 
     /** Number of AIs in the league. */
     val size: Int get() = roster.size
@@ -1066,7 +1081,7 @@ class LeagueController(
     }
 
     /** The saved league files, for a backup. */
-    fun files(): List<File> = listOf(file, seasonFile, honourFile, configFile, customFile, prefs).filter { it.exists() }
+    fun files(): List<File> = listOf(file, seasonFile, honourFile, configFile, customFile, prefs, favouriteFile).filter { it.exists() }
 
     companion object {
         private val DIVISION = Regex("L\\d")

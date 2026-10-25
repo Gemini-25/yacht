@@ -254,7 +254,13 @@ private fun SeasonNews(h: SeasonHistoryItem, onDismiss: () -> Unit) {
 private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     var family by remember { mutableStateOf<Family?>(null) }
     var sort by remember { mutableStateOf(LadderSort.RATING) }
-    val rows = v.rows.filter { family == null || it.family == family }.let { r ->
+    var onlyFavourites by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    val favs = lg.favourites
+    val rows = v.rows.filter {
+        (family == null || it.family == family) && (!onlyFavourites || it.key in favs) &&
+            (query.isBlank() || it.name.contains(query.trim(), ignoreCase = true))
+    }.let { r ->
         when (sort) {
             LadderSort.RATING -> r
             LadderSort.WIN_RATE -> r.sortedByDescending { it.winRate }
@@ -265,7 +271,18 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
     }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
+            androidx.compose.material3.OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("AI 이름 검색", fontSize = 13.sp) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원 ${favs.size}", fontSize = 12.sp) })
                 FilterChip(selected = family == null, onClick = { family = null }, label = { Text("전체", fontSize = 12.sp) })
                 for (f in Family.entries) {
                     FilterChip(selected = family == f, onClick = { family = if (family == f) null else f }, label = { Text(f.label, fontSize = 12.sp) })
@@ -300,7 +317,10 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
                 )
             }
         }
-        items(rows, key = { it.key }) { r -> LadderItem(r) { onOpen(r.key) } }
+        if (onlyFavourites && rows.isEmpty()) {
+            item { Text("AI를 눌러 ‘☆ 응원하기’를 고르면 여기에 모여요.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        items(rows, key = { it.key }) { r -> LadderItem(r, r.key in favs) { onOpen(r.key) } }
         item {
             Text(
                 "레이팅: 모든 판을 브래들리-테리 모형(엘로와 같은 눈금)으로 맞춘 값, 기대점수 AI = 1500. ±는 95% 범위, 7점 ≈ 승률 1%p. " +
@@ -314,7 +334,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
 }
 
 @Composable
-private fun LadderItem(r: LadderRow, onClick: () -> Unit) {
+private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -334,6 +354,7 @@ private fun LadderItem(r: LadderRow, onClick: () -> Unit) {
             TierBadge(r.tier, r.games, Modifier.width(78.dp), if (r.isMe) Ladder.ME_PLACEMENT else Ladder.PLACEMENT)
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (favourite) Text("★ ", color = cs.secondary, fontSize = 13.sp)
                     Text(
                         if (r.isMe) "🙋 나 (랭크전)" else r.name,
                         fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -882,6 +903,8 @@ private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
                 }
                 if (!r.isMe) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val fav = r.key in lg.favourites
+                        AssistChip(onClick = { lg.toggleFavourite(r.key) }, label = { Text(if (fav) "★ 응원 중" else "☆ 응원하기") })
                         AssistChip(onClick = { onDismiss(); c.newRankedGame(r.key) }, label = { Text("🎮 이 AI와 랭크전") })
                         AssistChip(
                             onClick = {
