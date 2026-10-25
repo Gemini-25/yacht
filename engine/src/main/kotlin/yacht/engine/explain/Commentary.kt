@@ -236,8 +236,8 @@ class Commentary(private val tables: Tables) {
         }
         val top = better + same / 2
         when {
-            top <= 0.1 -> out += Comment("🎲 상대 운", "${who}에게는 상위 ${Ko.pct(top.coerceAtLeast(0.001))} 수준의 잘 풀린 턴이었어요.", Tone.BAD)
-            top >= 0.9 -> out += Comment("🎲 상대 운", "${who}에게는 하위 ${Ko.pct((1 - top).coerceAtLeast(0.001))} 수준의 안 풀린 턴이었어요.", Tone.GOOD)
+            top <= 0.1 -> out += Comment("🎲 상대 운", "상위 ${Ko.pct(top.coerceAtLeast(0.001))}: 이만큼 잘 풀리는 턴은 ${oneIn(top.coerceAtLeast(0.001))} 나와요.", Tone.BAD)
+            top >= 0.9 -> out += Comment("🎲 상대 운", "하위 ${Ko.pct((1 - top).coerceAtLeast(0.001))}: 이만큼 안 풀리는 턴은 ${oneIn((1 - top).coerceAtLeast(0.001))} 나와요.", Tone.GOOD)
         }
         threat(oppAfter, who)?.let { out += it }
         return out
@@ -394,11 +394,14 @@ class Commentary(private val tables: Tables) {
         if (hi - lo < (if (win) 0.002 else 0.2)) return null
         if (win && decided(before) && decided(actual)) return null
         val top = (better + same / 2).coerceIn(0.0, 1.0)
-        val change = if (win) {
-            val (b, a) = Ko.pctPair(before, actual)
-            "승률 $b → $a"
-        } else {
-            "예상 최종 ${Ko.num(before)} → ${Ko.num(actual)}점"
+        val change = when {
+            win && abs(actual - before) < 0.0005 -> "승률은 ${Ko.pct(actual)} 그대로"
+            win -> {
+                val (b, a) = Ko.pctPair(before, actual)
+                "승률 $b → $a"
+            }
+            abs(actual - before) < 0.05 -> "예상 최종 점수는 ${Ko.num(actual)}점 그대로"
+            else -> "예상 최종 ${Ko.num(before)} → ${Ko.num(actual)}점"
         }
         val me = who.isEmpty()
         val topText = Ko.pct(top.coerceAtLeast(0.001))

@@ -57,17 +57,19 @@ class LadderTest {
     @Test
     fun placementStreaksAndTheFeed() {
         val ladder = Ladder(listOf("ev", "x"))
-        repeat(4) { ladder.record("ev", "x", listOf(GameScore(200, 100), GameScore(210, 120))) }
+        val matches = Ladder.PLACEMENT / 2
+        repeat(matches - 1) { ladder.record("ev", "x", listOf(GameScore(200, 100), GameScore(210, 120))) }
         assertNull(ladder.rankOf("x"))
         val r = ladder.record("ev", "x", listOf(GameScore(310, 100), GameScore(200, 120)))
         assertEquals(1, ladder.rankOf("ev"))
         assertTrue(r.notes.any { it.startsWith("배치 완료|ev") }, r.notes.toString())
-        assertTrue(r.notes.any { it == "연승|ev|10" }, r.notes.toString())
-        assertTrue(r.notes.any { it == "연패|x|10" }, r.notes.toString())
+        assertTrue(r.notes.any { it == "연승|ev|${Ladder.PLACEMENT}" }, r.notes.toString())
+        assertTrue(r.notes.any { it == "연패|x|${Ladder.PLACEMENT}" }, r.notes.toString())
         assertTrue(r.notes.any { it == "대기록|ev|310" }, r.notes.toString())
-        assertEquals(10, ladder.entry("ev")!!.streak)
+        assertEquals(Ladder.PLACEMENT, ladder.entry("ev")!!.streak)
         assertEquals("WWWWWWWWWW", ladder.entry("ev")!!.recent.joinToString(""))
-        assertEquals(5, ladder.feed.size)
+        assertEquals(matches, ladder.feed.size)
+        assertEquals(ladder.rating("ev"), ladder.entry("ev")!!.peak)
     }
 
     @Test
@@ -102,7 +104,7 @@ class LadderTest {
         val keys = listOf("ev") + (1..20).map { "p$it" }
         val ladder = Ladder(keys)
         // Fake a ladder spread: p_k loses to ev more the larger k is.
-        for (k in 1..20) repeat(10) { g -> ladder.record("ev", "p$k", listOf(if (g < k / 2) GameScore(100, 200) else GameScore(200, 100))) }
+        for (k in 1..20) repeat(Ladder.PLACEMENT) { g -> ladder.record("ev", "p$k", listOf(if (g < k) GameScore(100, 200) else GameScore(200, 100))) }
         val rng = Random(3)
         var far = 0
         repeat(2000) {

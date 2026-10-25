@@ -220,7 +220,7 @@ private fun LadderList(v: LeagueView, onOpen: (String) -> Unit) {
             item {
                 Text(
                     "▶ 시작을 누르면 AI들이 비슷한 레이팅끼리 붙어요. 한 경기는 같은 주사위로 선공·후공을 바꿔 두 판이고, " +
-                        "${Ladder.PLACEMENT}판을 두면 배치가 끝나 티어가 붙어요.",
+                        "${Ladder.PLACEMENT}판을 두면 배치가 끝나 티어가 붙어요. 처음 몇십 판은 레이팅이 크게 흔들리고(± 표시), 판이 쌓일수록 자리를 잡아요.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp),
@@ -259,7 +259,7 @@ private fun LadderItem(r: LadderRow, onClick: () -> Unit) {
                     if (r.playing) Text(" ⚔️", fontSize = 11.sp)
                 }
                 Text(
-                    "${r.wins}승 ${if (r.ties > 0) "${r.ties}무 " else ""}${r.losses}패 · 승률 ${"%.1f".format(100 * r.winRate)}% · 평균 ${"%.0f".format(r.avgScore)}점",
+                    "${r.wins}승 ${if (r.ties > 0) "${r.ties}무 " else ""}${r.losses}패 · ${"%.1f".format(100 * r.winRate)}% · ${"%.0f".format(r.avgScore)}점",
                     style = MaterialTheme.typography.labelSmall,
                     color = cs.onSurfaceVariant,
                     maxLines = 1,

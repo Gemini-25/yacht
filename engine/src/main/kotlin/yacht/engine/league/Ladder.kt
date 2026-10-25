@@ -217,8 +217,12 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             if (!r.isNaN()) {
                 e.history.addLast(r.roundToInt())
                 while (e.history.size > LadderEntry.HISTORY) e.history.removeFirst()
-                if (placed(e.key) && (e.peak.isNaN() || r > e.peak)) e.peak = r
             }
+        }
+        // Every refit moves everyone a little: peaks follow all placed AIs.
+        for ((k, e) in entries.withIndex()) {
+            val r = ratings[k]
+            if (!r.isNaN() && e.games >= PLACEMENT && (e.peak.isNaN() || r > e.peak)) e.peak = r
         }
         fun delta(k: String) = (rating(k) - before.getValue(k)).takeIf { !it.isNaN() }?.roundToInt() ?: 0
         val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore))
@@ -318,8 +322,8 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     private fun flag(b: Boolean) = if (b) '1' else '0'
 
     companion object {
-        /** Games before an AI gets a rank and a tier. */
-        const val PLACEMENT = 10
+        /** Games before an AI gets a rank and a tier (ten matches: ratings swing a lot before that). */
+        const val PLACEMENT = 20
         const val FEED = 80
         const val STREAK_NEWS = 5
         const val UPSET = 150.0

@@ -87,7 +87,7 @@ class CommentaryTest {
         val before = Board(rules).with(Category.CHOICE, 20)
         val talk = Commentary(tables)
         val yacht = talk.opponentResult(before.with(Category.YACHT, 50), MoveRecord(Side.OPP, Category.YACHT, 50), "AI")
-        assertTrue(yacht.any { it.tone == Tone.BAD && it.text.startsWith("AI에게는 상위") }, yacht.toString())
+        assertTrue(yacht.any { it.tone == Tone.BAD && it.text.startsWith("상위") && it.text.contains("번에 한 번꼴로") }, yacht.toString())
         val zero = talk.opponentResult(before.with(Category.LARGE_STRAIGHT, 0), MoveRecord(Side.OPP, Category.LARGE_STRAIGHT, 0), "AI")
         assertTrue(zero.any { it.tone == Tone.GOOD && it.text.contains("하위") }, zero.toString())
     }
