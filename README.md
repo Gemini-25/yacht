@@ -3,6 +3,7 @@
 요트 다이스(닌텐도 『세계의 아소비 대전 51』 규칙)에서 1:1 **승률**을 최대화하는 안드로이드 AI 앱.
 
 - 설계·측정 결과: [docs/DESIGN.md](docs/DESIGN.md)
+- AI 36개 리그 순위(15만 판): [docs/DESIGN.md의 "AI 36개 리그"](docs/DESIGN.md#ai-36개-리그-tools-league-모든-쌍--120판--선후공--151200게임-시드-2026)
 - APK: GitHub Actions의 **Android APK** 워크플로 실행 결과에서 `yacht-ai-apk` 아티팩트(약 63 MB)를 받아 설치
 
 ## 앱이 하는 일
@@ -39,6 +40,7 @@ tools/build/install/tools/bin/tools review --tables tables --games 2            
 tools/build/install/tools/bin/tools cost --tables tables --time 30                                 # 더 정확한 계산(끝까지·대결 표·전체 표)의 연산량·메모리
 tools/build/install/tools/bin/tools headroom --tables tables --games 100 --strong 3e9,1e10        # 더 깊은 탐색이 더해 줄 승률 추정
 tools/build/install/tools/bin/tools arena --tables tables --games 1000 --opp rule,greedy,slip10,ev,self   # 다른 AI와 맞대결 승률
+tools/build/install/tools/bin/tools league --tables tables --deals 120 --csv league.csv --out league.json   # AI 36개 리그: 레이팅과 95% 범위 (끊겨도 이어서, --only a,b,...)
 ./gradlew -p uicheck compileKotlin                        # 안드로이드 SDK 없이 UI 컴파일 검사
 # APK (안드로이드 SDK 필요)
 tools/build/install/tools/bin/tools gen --out android/app/src/main/assets
