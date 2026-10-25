@@ -638,11 +638,21 @@ class LeagueController(
         }
     }
 
-    /** App hidden: no league in the background (battery). */
+    /** App hidden: no league in the background (battery); it goes on when the app is back. */
     fun onBackground() {
+        if (running) resumeOnForeground = true
         stop()
         pauseWatch()
     }
+
+    /** App shown again: the league goes on if it was running when the app was hidden. */
+    fun onForeground() {
+        if (!resumeOnForeground) return
+        resumeOnForeground = false
+        start()
+    }
+
+    private var resumeOnForeground = false
 
     /** True when the app ships a seed ladder to start from. */
     val hasSeed: Boolean by lazy { seed() != null }

@@ -175,7 +175,7 @@ private fun run(args: Array<String>): Int {
             val v = c.league.view
             println(
                 "  ${(deadline - System.currentTimeMillis()) / 1000}s left · $games games · league ${v?.matches} matches " +
-                    "(season ${v?.season?.number}: ${v?.season?.played}/${v?.season?.total}) · heap peak ${peakHeap shr 20} MB",
+                    "(season ${v?.season?.number}: ${v?.season?.played}/${v?.season?.total}) · running ${c.league.running} ${c.league.preparing ?: ""} · heap peak ${peakHeap shr 20} MB",
             )
         }
     }

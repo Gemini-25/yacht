@@ -407,6 +407,7 @@ class AppController(
     /** App visible again: resume background work that was paused. */
     fun onForeground() {
         foreground = true
+        league.onForeground()
         state?.let { maybeStartDuel(it) }
     }
 
