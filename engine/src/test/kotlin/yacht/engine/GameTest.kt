@@ -103,3 +103,40 @@ class GameTest {
         assertFalse(4 in possibleScores(RuleSet.NINTENDO, Category.FOUR_OF_A_KIND))
     }
 }
+
+/** The league's simple bots finish games with sensible scores. */
+class BotsTest {
+    private val tables get() = SolverTest.tables
+
+    @Test
+    fun everyBotPlaysWholeGames() {
+        val rules = tables.rules
+        val ev = tables.ev
+        val rng = java.util.Random(3)
+        val bots = listOf(
+            SoftmaxPlayer(ev, 0.3, rng), LazyPlayer(), KeeperPlayer(rules, upperFirst = true), KeeperPlayer(rules, upperFirst = false),
+            HalfEvPlayer(ev, rules), RandomPlayer(rng), PlanPlayer("myopic", shapedPlanner(ev, 0.5)),
+            PlanPlayer("yacht", shapedPlanner(ev) { _, c, p, _ -> if (c == Category.YACHT && p > 0) 25.0 else 0.0 }),
+            SlipPlayer(winPlanner(Advisor(tables), 10_000_000L), 0.1, rng),
+        )
+        val avg = HashMap<String, Double>()
+        for (b in bots) {
+            val scores = (0 until 20).map { Match.play(rules, b, GreedyPlayer(), java.util.Random(it.toLong()))[0] }
+            avg[b.name + "@" + bots.indexOf(b)] = scores.average()
+        }
+        println(avg)
+        assertTrue(avg.values.all { it in 20.0..320.0 }, "$avg")
+        // A sharp softmax player is close to max expectation; random play is far below.
+        assertTrue(avg.getValue("soft@0") > avg.getValue("random@5") + 60)
+    }
+
+    @Test
+    fun riskPlannerFollowsItsUtility() {
+        val rules = tables.rules
+        val theta = 0.03
+        val evTheta = EvTable(rules, TableBuilder(rules, theta = theta).build(withDist = false).ev)
+        val plan = riskPlanner(evTheta, theta)(Board(rules), Board(rules))
+        // The value of the start is sign(theta) * E[exp(theta * final)]: positive and above exp(theta * 150).
+        assertTrue(plan.startValue > Math.exp(theta * 150))
+    }
+}

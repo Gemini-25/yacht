@@ -19,8 +19,9 @@ object WinCurve {
      */
     class Curve(val values: DoubleArray, val oppMin: Int, val oppMax: Int, val ties: DoubleArray = DoubleArray(values.size))
 
-    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0): Curve {
-        val base = opp.total
+    /** [oppShift]: points added to every opponent final (a player that misjudges the opponent's strength). */
+    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0, oppShift: Int = 0): Curve {
+        val base = opp.total + oppShift
         val pmf: DoubleArray
         val lo: Int
         if (opp.isComplete) {

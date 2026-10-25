@@ -44,6 +44,15 @@ fun main(args: Array<String>) {
         "quiz" -> quizSamples(opts)
         "review" -> reviewSamples(opts)
         "cost" -> cost(opts)
+        "league" -> league(opts, loadTables(File(opts["tables"] ?: "tables")).withoutRisk())
+        "league-report" -> {
+            val t = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
+            val budget = opts["budget"]?.toDouble()?.toLong() ?: 100_000_000L
+            leagueReport(
+                File(opts["csv"] ?: "league.csv"), File(opts["out"] ?: "league.json"), leagueRoster(t, budget),
+                opts["deals"]?.toInt() ?: 0, opts["seed"]?.toLong() ?: 2026L, budget,
+            )
+        }
         "bench" -> bench(File(opts["tables"] ?: "tables"), opts["budget"]?.toLong() ?: Advisor.DEFAULT_BUDGET, opts["only"], opts["ties"] != null)
         else -> println(
             """

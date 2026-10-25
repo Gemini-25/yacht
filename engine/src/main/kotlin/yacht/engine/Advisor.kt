@@ -157,6 +157,8 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         table: DuelSearch? = null,
         /** Also compute P(tie) along the plan (about twice the search cost). */
         ties: Boolean = false,
+        /** Points added to the opponent's final in the fixed-opponent model (misjudging it; 0 = as modelled). */
+        oppShift: Int = 0,
     ): PlannedTurn {
         require(me.rules == tables.rules)
         val evPlan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
@@ -172,7 +174,7 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
             val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos, adversarial = adversarial, ties = ties)
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true, weightBase = oppExpected)
         }
-        val curve = WinCurve.against(tables, opp, tieValue)
+        val curve = WinCurve.against(tables, opp, tieValue, oppShift)
         val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps, opp)
         val search = WinSearch(tables, me, curve, d, pool, deadlineNanos, ties = ties)
         return PlannedTurn(me, Mode.WIN, d, evPlan, TurnPlan(me, search))

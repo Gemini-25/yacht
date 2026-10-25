@@ -18,6 +18,10 @@ class AdvisorPlayer(
     override val name: String = mode.name.lowercase(),
     /** Use the exact duel search once its estimated cost is below this many operations. */
     private val duelOps: Long = 0,
+    /** Value of a tie in WIN mode (0 = a tie counts as a loss). */
+    private val tieValue: Double = 0.0,
+    /** Points added to the opponent's expected final (misjudging it). */
+    private val oppShift: Int = 0,
 ) : Player {
     private lateinit var turn: PlannedTurn
 
@@ -31,7 +35,7 @@ class AdvisorPlayer(
         ) {
             table = advisor.buildDuelTable(me, opp, meToMove = true)
         }
-        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth, table = table)
+        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = fixedDepth, table = table, tieValue = tieValue, oppShift = oppShift)
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)
