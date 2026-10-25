@@ -312,6 +312,7 @@ class LeagueController(
     private var roster: List<LeagueAi> = emptyList()
     @Volatile
     private var byKey: Map<String, LeagueAi> = emptyMap()
+    private var heavyKeys: Set<String> = emptySet()
     private var extra: LeagueTables? = null
     private var ladder: Ladder? = null
     private var plan: SeasonPlan? = null
@@ -340,7 +341,9 @@ class LeagueController(
     private var startRanks: Map<String, Int> = emptyMap()
     private var stop = AtomicBoolean(true)
     private var runJob: Job? = null
-    private var sinceSave = 0
+    /** The ladder and its version the last full fit was made for. */
+    private var fittedLadder: Ladder? = null
+    private var fittedVersion = -1L
     private var runStart = 0L
     private var runMatches = 0
     private var lastPublish = 0L
@@ -420,6 +423,7 @@ class LeagueController(
         synchronized(lock) {
             roster = all
             byKey = all.associateBy { it.key }
+            heavyKeys = all.filter { it.heavy }.map { it.key }.toSet()
             val keys = ladderKeys()
             ladder?.let { l -> if (l.keys != keys) ladder = Ladder.decode(keys, l.encode()) }
         }
@@ -531,7 +535,9 @@ class LeagueController(
             val dispatcher = pool.asCoroutineDispatcher()
             try {
                 val workers = (0 until threads).map { w -> launch(dispatcher) { work(t, flag, Random(System.nanoTime() + w)) } }
+                val upkeep = launch(Dispatchers.Default) { upkeep(flag) }
                 workers.joinAll()
+                upkeep.cancel()
             } finally {
                 pool.shutdown()
                 dispatcher.close()
@@ -560,6 +566,8 @@ class LeagueController(
         var p = plan ?: return null
         if (p.league.finished && !p.postStarted) p.startPost(postFactories)
         if (p.finished) {
+            // Next season's divisions and seeds from the converged ratings.
+            l.fit()
             val (next, h) = Offseason.next(p, offseasonContext(l))
             honours.add(h)
             plan = next
@@ -575,7 +583,9 @@ class LeagueController(
         }
         val cost = { f: yacht.engine.league.LeagueFixture -> (costMs[f.a] ?: 5.0) + (costMs[f.b] ?: 5.0) }
         p.next(busy, cupsInFlight, maxOf(1, speed.threads(cores) - 1), cost)?.let { return it }
-        return Matchmaker.pick(l, rng, busy)?.let { friendly(it, rng) }
+        // Fillers only between light AIs: a heavy one would burn a worker on a game that does
+        // not move the season, and hold up its own fixtures.
+        return Matchmaker.pick(l, rng, busy + heavyKeys)?.let { friendly(it, rng) }
     }
 
     private fun friendly(pair: Pair<String, String>, rng: Random) = Fixture(Comp.FRIENDLY, -1, pair.first, pair.second, rng.nextLong())
@@ -606,9 +616,9 @@ class LeagueController(
             var recorded = false
             try {
                 val result = LeagueMatch.playJob(t.rules, job, { byKey[it] }, config.matchFormat, estimate) { flag.get() } ?: forfeit(job)
-                val save = synchronized(lock) {
+                synchronized(lock) {
                     val l = ladder!!
-                    if (flag.get()) return@synchronized null
+                    if (flag.get()) return@synchronized
                     if (result.fixture.rated) {
                         for (b in result.boards) {
                             if (l.entry(b.a) == null || l.entry(b.b) == null) continue
@@ -621,19 +631,6 @@ class LeagueController(
                     recorded = true
                     meter(result)
                     runMatches += result.boards.size
-                    sinceSave++
-                    if (sinceSave >= SAVE_EVERY) {
-                        sinceSave = 0
-                        l.encode() to plan?.encode()
-                    } else {
-                        null
-                    }
-                }
-                save?.let { (text, s) ->
-                    scope.launch(fileWrites) {
-                        runCatching { file.writeTextAtomically(text) }
-                        s?.let { runCatching { seasonFile.writeTextAtomically(it) } }
-                    }
                 }
             } catch (e: CancellationException) {
                 // stopped mid-match: the match is dropped
@@ -646,6 +643,40 @@ class LeagueController(
                 }
             }
             publish()
+        }
+    }
+
+    /**
+     * While the league runs: the full rating fit every [FIT_MS] (solved off the lock; a match
+     * only nudges its two players) and a save every [CHECKPOINT_MS] (stop saves at once).
+     */
+    private suspend fun upkeep(flag: AtomicBoolean) {
+        var lastSave = System.currentTimeMillis()
+        while (!flag.get()) {
+            delay(FIT_MS)
+            refit()
+            if (System.currentTimeMillis() - lastSave >= CHECKPOINT_MS && !flag.get()) {
+                lastSave = System.currentTimeMillis()
+                save()
+            }
+            publish()
+        }
+    }
+
+    /** The full fit of the ladder when it changed since the last one; the lock is held only to copy and to apply. */
+    private fun refit() {
+        val (l, input) = synchronized(lock) {
+            val l = ladder ?: return
+            if (l === fittedLadder && l.version == fittedVersion) return
+            if (l.matches == 0L) return
+            l to l.fitInput()
+        }
+        val r = Ladder.solve(input)
+        synchronized(lock) {
+            if (ladder !== l) return
+            l.applyFit(r)
+            fittedLadder = l
+            fittedVersion = l.version
         }
     }
 
@@ -991,8 +1022,6 @@ class LeagueController(
 
     private fun snapshot(): LeagueView? {
         val l = ladder ?: return null
-        // Matches only nudge the fit; the table shows it converged.
-        l.fit()
         val s = plan
         val ranking = l.ranking().filter { it != Ladder.ME || l.entry(it)!!.games > 0 }
         val rows = ranking.mapNotNull { k ->
@@ -1126,7 +1155,8 @@ class LeagueController(
     companion object {
         private val DIVISION = Regex("L\\d")
         val HOMETOWNS = listOf("서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "수원", "춘천", "청주", "전주", "포항", "창원", "제주", "강릉")
-        private const val SAVE_EVERY = 10
+        private const val FIT_MS = 2_000L
+        private const val CHECKPOINT_MS = 30_000L
         private const val PUBLISH_MS = 300L
         private const val FEED = 60
 

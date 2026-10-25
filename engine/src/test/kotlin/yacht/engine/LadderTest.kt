@@ -95,6 +95,8 @@ class LadderTest {
             assertNotEquals(x, y)
             ladder.record(x, y, List(2) { GameScore(rng.nextInt(300), rng.nextInt(300), rng.nextBoolean(), false, true, rng.nextBoolean()) }, time = it.toLong())
         }
+        // A match nudges only its two players; the full fit (as a decode runs) settles everyone.
+        ladder.fit()
         val back = Ladder.decode(keys, ladder.encode())
         for (k in keys) {
             assertEquals(ladder.rating(k), back.rating(k), 0.05, k)
@@ -110,6 +112,41 @@ class LadderTest {
         val next = Ladder.decode(listOf("ev", "a", "b", "d"), ladder.encode())
         assertEquals(0, next.entry("d")!!.games)
         assertTrue(next.rating("d").isNaN())
+    }
+
+    @Test
+    fun quickStepsStayNearTheFullFitAndTheSplitFitMatchesIt() {
+        val text = java.io.File("../android/app/src/main/assets/league_seed.txt").readText()
+        val keys = text.lines().filter { it.startsWith("p ") }.map { it.split(' ')[1] }
+        val ladder = Ladder.decode(keys, text)
+        val rng = Random(5)
+        val t0 = System.nanoTime()
+        repeat(2000) {
+            val (x, y) = Matchmaker.pick(ladder, rng, emptySet())!!
+            ladder.record(x, y, List(2) { GameScore(150 + rng.nextInt(120), 150 + rng.nextInt(120)) })
+        }
+        val perRecord = (System.nanoTime() - t0) / 2000 / 1e6
+        val quick = keys.associateWith { ladder.rating(it) }
+        val input = ladder.fitInput()
+        val solved = Ladder.solve(input)
+        ladder.applyFit(solved)
+        val full = keys.associateWith { ladder.rating(it) }
+        val worst = keys.filter { !full.getValue(it).isNaN() }.maxOf { abs(quick.getValue(it) - full.getValue(it)) }
+        assertTrue(worst < 15.0, "quick ratings drift $worst from the full fit")
+        // Ranks follow the ratings.
+        val ranked = ladder.ranking().filter { ladder.rankOf(it) != null }
+        assertTrue(ranked.zipWithNext().all { (a, b) -> ladder.rating(a) >= ladder.rating(b) })
+        assertEquals((1..ranked.size).toList(), ranked.map { ladder.rankOf(it) })
+        // Matches recorded while the fit is solved elsewhere are not lost.
+        val before = ladder.entry("ev")!!.games
+        val pending = ladder.fitInput()
+        repeat(20) { ladder.record("ev", keys[1 + it % 5], listOf(GameScore(300, 100))) }
+        ladder.applyFit(Ladder.solve(pending))
+        assertEquals(before + 20, ladder.entry("ev")!!.games)
+        ladder.fit()
+        val again = Ladder.decode(keys, ladder.encode())
+        for (k in keys) assertEquals(ladder.rating(k), again.rating(k), 0.05, k)
+        assertTrue(perRecord < 1.0, "a match takes $perRecord ms on the ladder")
     }
 
     @Test

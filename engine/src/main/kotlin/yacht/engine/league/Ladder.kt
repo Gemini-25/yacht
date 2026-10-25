@@ -146,6 +146,10 @@ data class MatchRecord(
  * The live ladder: everyone's record, results between every pair, and ratings fitted to all
  * games so far (Bradley-Terry with ties as half a win, on the Elo scale; the max-expectation AI
  * is pinned at 1500). Not thread-safe: callers synchronise.
+ *
+ * A match moves only its two players ([record]: two minorisation steps each, O(n)); the full
+ * fit, which every match nudges a little away from, runs now and then: [fit] here, or
+ * [fitInput] / [solve] / [applyFit] with the solving off the caller's lock.
  */
 class Ladder(keys: List<String>, private val anchor: String = "ev") {
     val keys: List<String> = keys.toList()
@@ -157,9 +161,22 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     private val points = Array(n) { DoubleArray(n) }
     private val played = Array(n) { IntArray(n) }
     private val strength = DoubleArray(n) { 1.0 }
-    var ratings = DoubleArray(n) { Double.NaN }
-        private set
-    var errors = DoubleArray(n) { Double.NaN }
+
+    /** PRIOR plus the points each AI won: the numerator of its minorisation step. */
+    private val winSum = DoubleArray(n) { PRIOR }
+    private val ratings = DoubleArray(n) { Double.NaN }
+    private val errors = DoubleArray(n) { Double.NaN }
+
+    /** Placed AIs by rating, best first ([orderSize] of them), and each one's place in it (-1: not placed). */
+    private val order = IntArray(n)
+    private var orderSize = 0
+    private val pos = IntArray(n) { -1 }
+
+    /** AIs that played since the last [fitInput] (their games are not in that fit yet). */
+    private val dirty = BooleanArray(n)
+
+    /** Bumped by every change of the ratings, so views can tell they are stale. */
+    var version = 0L
         private set
     val feed = ArrayDeque<MatchRecord>()
     var matches = 0L
@@ -179,20 +196,56 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         return points[i][j] to played[i][j]
     }
 
-    /** Placed AIs by rating, best first, then the ones still in placement. */
-    fun ranking(): List<String> = ranked().first
-
-    /** The order and each key's position in it, kept until the next fit (the screen asks for every rank). */
-    private var rankCache: Pair<List<String>, Map<String, Int>>? = null
-
-    private fun ranked(): Pair<List<String>, Map<String, Int>> = rankCache ?: run {
-        val (placed, rest) = keys.partition { placed(it) }
-        val order = placed.sortedByDescending { rating(it) } + rest.sortedByDescending { entry(it)!!.games }
-        (order to order.withIndex().associate { (i, k) -> k to i }).also { rankCache = it }
+    /** Placed AIs by rating, best first, then the ones still in placement (most games first). */
+    fun ranking(): List<String> {
+        val out = ArrayList<String>(n)
+        for (r in 0 until orderSize) out += keys[order[r]]
+        (0 until n).filter { pos[it] < 0 }.sortedByDescending { entries[it].games }.mapTo(out) { keys[it] }
+        return out
     }
 
     /** 1-based rank among placed AIs, or null while in placement. */
-    fun rankOf(key: String): Int? = if (!placed(key)) null else ranked().second[key]?.plus(1)
+    fun rankOf(key: String): Int? {
+        val i = index[key] ?: return null
+        return if (pos[i] < 0) null else pos[i] + 1
+    }
+
+    private fun isPlaced(i: Int) = entries[i].games >= placementOf(keys[i]) && !ratings[i].isNaN()
+
+    /** Moves [i] to its place in [order] after its rating changed (or it was just placed). */
+    private fun reorder(i: Int) {
+        if (pos[i] < 0) {
+            if (!isPlaced(i)) return
+            order[orderSize] = i
+            pos[i] = orderSize++
+        }
+        var at = pos[i]
+        val r = ratings[i]
+        while (at > 0 && ratings[order[at - 1]] < r) {
+            val k = order[at - 1]
+            order[at] = k
+            pos[k] = at
+            at--
+        }
+        while (at < orderSize - 1 && ratings[order[at + 1]] > r) {
+            val k = order[at + 1]
+            order[at] = k
+            pos[k] = at
+            at++
+        }
+        order[at] = i
+        pos[i] = at
+    }
+
+    private fun rebuildOrder() {
+        val placed = (0 until n).filter { isPlaced(it) }.sortedByDescending { ratings[it] }
+        pos.fill(-1)
+        orderSize = 0
+        for (i in placed) {
+            order[orderSize] = i
+            pos[i] = orderSize++
+        }
+    }
 
     fun tier(key: String): Tier? {
         val rank = rankOf(key) ?: return null
@@ -211,26 +264,25 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             val s = if (g.a > g.b) 1.0 else if (g.a == g.b) 0.5 else 0.0
             points[i][j] += s
             points[j][i] += 1 - s
+            winSum[i] += s
+            winSum[j] += 1 - s
             played[i][j]++
             played[j][i]++
             games++
         }
         matches++
-        // A few sweeps from the last fit: one match moves the ratings only a little. The full
-        // fit (a hundred sweeps, on the league's one lock for every match) runs for the table.
-        fit(RECORD_SWEEPS, intArrayOf(i, j))
-        for (k in listOf(i, j)) {
+        dirty[i] = true
+        dirty[j] = true
+        // One match moves the fit only a little, and mostly for its two players: a couple of
+        // steps for them (the full fit, all pairs, runs now and then off the lock).
+        settle(i, j)
+        for (k in intArrayOf(i, j)) {
             val e = entries[k]
             val r = ratings[k]
             if (!r.isNaN()) {
                 e.history.addLast(r.roundToInt())
                 while (e.history.size > LadderEntry.HISTORY) e.history.removeFirst()
             }
-        }
-        // Every refit moves everyone a little: peaks follow all placed AIs.
-        for ((k, e) in entries.withIndex()) {
-            val r = ratings[k]
-            if (!r.isNaN() && e.games >= placementOf(e.key) && (e.peak.isNaN() || r > e.peak)) e.peak = r
         }
         fun delta(k: String) = (rating(k) - before.getValue(k)).takeIf { !it.isNaN() }?.roundToInt() ?: 0
         val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore))
@@ -267,73 +319,141 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         return out
     }
 
+    /** One minorisation step of [i]'s strength against everyone it played (O(n)). */
+    private fun step(i: Int) {
+        val p = strength[i]
+        val row = played[i]
+        var denom = 2 * PRIOR / (p + 1.0)
+        for (j in 0 until n) {
+            val g = row[j]
+            if (g > 0) denom += g / (p + strength[j])
+        }
+        strength[i] = winSum[i] / denom
+    }
+
+    /** The anchor's index while it has games (its rating is 1500 by definition), else null. */
+    private fun anchorIndex(): Int? = index[anchor]?.takeIf { entries[it].games > 0 }
+
+    /** Rating scale offset: the anchor's log-strength, or the mean over everyone with games. */
+    private fun base(): Double {
+        anchorIndex()?.let { return log10(strength[it]) }
+        var sum = 0.0
+        var count = 0
+        for (i in 0 until n) if (entries[i].games > 0) {
+            sum += log10(strength[i])
+            count++
+        }
+        return if (count == 0) 0.0 else sum / count
+    }
+
+    /** Standard error of [i]'s rating from the curvature of the log-likelihood. */
+    private fun errorOf(i: Int): Double {
+        val p = strength[i]
+        var info = 2 * PRIOR * p / ((p + 1.0) * (p + 1.0))
+        val row = played[i]
+        for (j in 0 until n) {
+            val g = row[j]
+            if (g > 0) {
+                val s = p + strength[j]
+                info += g * p * strength[j] / (s * s)
+            }
+        }
+        return 400 / ln(10.0) / sqrt(info)
+    }
+
     /**
-     * Bradley-Terry strengths by minorisation-maximisation. Each AI also gets a tenth of a win and
-     * of a loss against a virtual average player, which keeps unbeaten or winless records finite.
+     * After [i] and [j] played: two alternating steps for each (the anchor is never stepped, so
+     * nobody else's rating moves), then their ratings, ranges, peaks and places.
      */
-    fun fit(maxSweeps: Int = MAX_ITER, touched: IntArray = IntArray(0)) {
-        rankCache = null
+    private fun settle(i: Int, j: Int) {
+        val a = anchorIndex()
+        repeat(2) {
+            if (i != a) step(i)
+            if (j != a) step(j)
+        }
+        // Without the anchor the scale is the mean over everyone, which this match moved; and
+        // the anchor's first match moves everyone onto its scale.
+        val rescale = a == null || ratings[a].isNaN()
+        if (rescale) {
+            val b = base()
+            for (k in 0 until n) if (entries[k].games > 0) ratings[k] = 1500 + 400 * (log10(strength[k]) - b)
+        } else {
+            val b = log10(strength[a!!])
+            for (k in intArrayOf(i, j)) ratings[k] = 1500 + 400 * (log10(strength[k]) - b)
+        }
+        for (k in intArrayOf(i, j)) {
+            errors[k] = errorOf(k)
+            val e = entries[k]
+            if (isPlaced(k) && (e.peak.isNaN() || ratings[k] > e.peak)) e.peak = ratings[k]
+            if (!rescale) reorder(k)
+        }
+        if (rescale) rebuildOrder()
+        version++
+    }
+
+    /** The results the full fit needs, copied (under the caller's lock) so it can be solved elsewhere. */
+    class FitInput internal constructor(
+        internal val active: IntArray,
+        internal val points: Array<DoubleArray>,
+        internal val played: Array<IntArray>,
+        internal val strength: DoubleArray,
+        internal val anchor: Int,
+        internal val owner: Ladder,
+    )
+
+    /** A solved full fit, for [applyFit]. */
+    class FitResult internal constructor(
+        internal val input: FitInput,
+        internal val strength: DoubleArray,
+        internal val ratings: DoubleArray,
+        internal val errors: DoubleArray,
+    )
+
+    /** Copies what the full fit needs (O(n²) copying, no solving): see [solve] and [applyFit]. */
+    fun fitInput(): FitInput {
         val active = (0 until n).filter { entries[it].games > 0 }.toIntArray()
-        if (active.isEmpty()) return
-        val wins = DoubleArray(n)
-        for (i in active) {
-            var w = PRIOR
-            for (j in active) w += points[i][j]
-            wins[i] = w
+        val m = active.size
+        val pts = Array(m) { a -> DoubleArray(m) { b -> points[active[a]][active[b]] } }
+        val pl = Array(m) { a -> IntArray(m) { b -> played[active[a]][active[b]] } }
+        dirty.fill(false)
+        val anchorAt = anchorIndex()?.let { active.indexOf(it) } ?: -1
+        return FitInput(active, pts, pl, DoubleArray(m) { strength[active[it]] }, anchorAt, this)
+    }
+
+    /** Puts a solved fit in place; AIs that played since [fitInput] get their quick steps again. */
+    fun applyFit(r: FitResult) {
+        val input = r.input
+        require(input.owner === this) { "a fit of another ladder" }
+        for ((a, i) in input.active.withIndex()) {
+            strength[i] = r.strength[a]
+            ratings[i] = r.ratings[a]
+            errors[i] = r.errors[a]
         }
-        val pi = strength
-        // Converged when no rating moves relative to the others: all strengths also drift
-        // together under the weak prior, which a plain change test kept chasing for thousands
-        // of sweeps (1e-6 here is 0.0002 rating points).
-        val delta = DoubleArray(n)
-        for (iter in 0 until maxSweeps) {
-            for (i in active) {
-                val p = pi[i]
-                val row = played[i]
-                var denom = 2 * PRIOR / (p + 1.0)
-                for (j in active) {
-                    val g = row[j]
-                    if (g > 0) denom += g / (p + pi[j])
-                }
-                val next = wins[i] / denom
-                delta[i] = ln(next / p)
-                pi[i] = next
+        val since = (0 until n).filter { dirty[it] }
+        for (i in since) {
+            if (i != anchorIndex()) {
+                step(i)
+                step(i)
             }
-            var mean = 0.0
-            for (i in active) mean += delta[i]
-            mean /= active.size
-            var change = 0.0
-            for (i in active) change = maxOf(change, abs(delta[i] - mean))
-            if (change < 1e-6) break
         }
-        val a = index[anchor]?.takeIf { entries[it].games > 0 }
-        val base = if (a != null) log10(pi[a]) else active.sumOf { log10(pi[it]) } / active.size
-        val r = DoubleArray(n) { Double.NaN }
-        for (i in active) r[i] = 1500 + 400 * (log10(pi[i]) - base)
-        ratings = r
-        // The ranges only change slowly: a match's quick refit updates its two players (and
-        // anyone without one yet); a full fit all of them.
-        run {
-            val full = maxSweeps == MAX_ITER
-            val e = if (full) DoubleArray(n) { Double.NaN } else errors.copyOf()
-            for (i in active) {
-                if (!full && i !in touched && !e[i].isNaN()) continue
-                // Standard error from the curvature of the log-likelihood (natural-log strength units).
-                val p = pi[i]
-                var info = 2 * PRIOR * p / ((p + 1.0) * (p + 1.0))
-                val row = played[i]
-                for (j in active) {
-                    val g = row[j]
-                    if (g > 0) {
-                        val s = p + pi[j]
-                        info += g * p * pi[j] / (s * s)
-                    }
-                }
-                e[i] = 400 / ln(10.0) / sqrt(info)
-            }
-            errors = e
+        if (since.isNotEmpty()) {
+            val b = base()
+            for (i in 0 until n) if (entries[i].games > 0) ratings[i] = 1500 + 400 * (log10(strength[i]) - b)
+            for (i in since) errors[i] = errorOf(i)
         }
-        rankCache = null
+        // Every refit moves everyone a little: peaks follow all placed AIs.
+        for ((k, e) in entries.withIndex()) {
+            val x = ratings[k]
+            if (isPlaced(k) && (e.peak.isNaN() || x > e.peak)) e.peak = x
+        }
+        rebuildOrder()
+        version++
+    }
+
+    /** The full fit, solved here. */
+    fun fit() {
+        if (entries.none { it.games > 0 }) return
+        applyFit(solve(fitInput()))
     }
 
     // ---- saving --------------------------------------------------------------------------------
@@ -377,7 +497,57 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         const val RECORD_SCORE = 300
         private const val PRIOR = 0.1
         private const val MAX_ITER = 3000
-        private const val RECORD_SWEEPS = 20
+
+        /**
+         * Bradley-Terry strengths by minorisation-maximisation, from the last strengths. Each AI
+         * also gets a tenth of a win and of a loss against a virtual average player, which keeps
+         * unbeaten or winless records finite. Pure: may run off the lock the input came from.
+         */
+        fun solve(input: FitInput, maxSweeps: Int = MAX_ITER): FitResult {
+            val m = input.active.size
+            val pi = input.strength.copyOf()
+            val wins = DoubleArray(m) { a -> PRIOR + input.points[a].sum() }
+            // Converged when no rating moves relative to the others: all strengths also drift
+            // together under the weak prior, which a plain change test kept chasing for thousands
+            // of sweeps (1e-6 here is 0.0002 rating points).
+            val delta = DoubleArray(m)
+            for (iter in 0 until maxSweeps) {
+                for (a in 0 until m) {
+                    val p = pi[a]
+                    val row = input.played[a]
+                    var denom = 2 * PRIOR / (p + 1.0)
+                    for (b in 0 until m) {
+                        val g = row[b]
+                        if (g > 0) denom += g / (p + pi[b])
+                    }
+                    val next = wins[a] / denom
+                    delta[a] = ln(next / p)
+                    pi[a] = next
+                }
+                var mean = 0.0
+                for (a in 0 until m) mean += delta[a]
+                mean /= maxOf(1, m)
+                var change = 0.0
+                for (a in 0 until m) change = maxOf(change, abs(delta[a] - mean))
+                if (change < 1e-6) break
+            }
+            val base = if (input.anchor >= 0) log10(pi[input.anchor]) else (0 until m).sumOf { log10(pi[it]) } / maxOf(1, m)
+            val ratings = DoubleArray(m) { 1500 + 400 * (log10(pi[it]) - base) }
+            val errors = DoubleArray(m) { a ->
+                val p = pi[a]
+                var info = 2 * PRIOR * p / ((p + 1.0) * (p + 1.0))
+                val row = input.played[a]
+                for (b in 0 until m) {
+                    val g = row[b]
+                    if (g > 0) {
+                        val s = p + pi[b]
+                        info += g * p * pi[b] / (s * s)
+                    }
+                }
+                400 / ln(10.0) / sqrt(info)
+            }
+            return FitResult(input, pi, ratings, errors)
+        }
 
         /** Restores [text] onto a ladder for [keys]; unknown AIs (an older roster) are skipped. */
         /** One saved line into [l]; every field is read before anything is set (a cut line changes nothing). */
@@ -415,6 +585,8 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
                     val j = l.index[f[2]] ?: return
                     val pts = f[3].toDouble()
                     val n = f[4].toInt()
+                    l.winSum[i] += pts - l.points[i][j]
+                    l.winSum[j] += (n - pts) - l.points[j][i]
                     l.points[i][j] = pts
                     l.points[j][i] = n - pts
                     l.played[i][j] = n
