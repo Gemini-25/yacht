@@ -178,6 +178,12 @@ data class CalendarItem(
     val live: Boolean,
 )
 
+/**
+ * 상대 전적 매트릭스: [score][i][j] is row [i]'s points share against column [j] (ties half),
+ * NaN with fewer than 2 games; [games][i][j] the games between them.
+ */
+class H2hMatrix(val title: String, val labels: List<String>, val score: Array<DoubleArray>, val games: Array<IntArray>)
+
 /** A matchday of a division in the calendar. */
 data class CalendarView(val division: Int, val matchday: Int, val matchdays: Int, val current: Int, val items: List<CalendarItem>)
 
@@ -1037,6 +1043,40 @@ class LeagueController(
             honours.seasons.reversed().map { historyItem(it, honours.of(it)) },
             s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday,
         )
+    }
+
+    /** The head-to-head matrix asked for last (read off the main thread). */
+    var h2h by mutableStateOf<H2hMatrix?>(null)
+        private set
+
+    /** Loads the matrix between these AIs into [h2h]. */
+    fun loadH2h(title: String, keys: List<String>) = loadMatrix(title, keys.map { listOf(it) }, keys.map { name(it) })
+
+    /** Loads the matrix between these groups of AIs (e.g. families) into [h2h]. */
+    fun loadMatrix(title: String, groups: List<List<String>>, labels: List<String>) {
+        scope.launch(Dispatchers.Default) {
+            val m = synchronized(lock) {
+                val l = ladder ?: return@synchronized null
+                val n = groups.size
+                val score = Array(n) { DoubleArray(n) { Double.NaN } }
+                val games = Array(n) { IntArray(n) }
+                for (i in 0 until n) for (j in 0 until n) {
+                    if (i == j) continue
+                    var w = 0.0
+                    var g = 0
+                    for (a in groups[i]) for (b in groups[j]) {
+                        if (a == b) continue
+                        val (x, y) = l.headToHead(a, b)
+                        w += x
+                        g += y
+                    }
+                    games[i][j] = g
+                    if (g >= 2) score[i][j] = w / g
+                }
+                H2hMatrix(title, labels, score, games)
+            }
+            scope.launch { h2h = m }
+        }
     }
 
     /** The matchday shown in the calendar (일정표), read off the main thread on request. */

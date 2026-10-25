@@ -2,6 +2,8 @@ package yacht.app.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -22,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -172,5 +178,86 @@ fun BarRow(label: String, value: Double, max: Double, text: String, color: Color
             Box(Modifier.fillMaxWidth(f).height(10.dp).clip(CircleShape).background(color))
         }
         Text(text, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(0.15f).padding(start = 4.dp))
+    }
+}
+
+/** Red (0) through grey (0.5) to green (1): a points share as a colour. */
+fun shareColor(p: Double, neutral: Color): Color {
+    if (p.isNaN()) return neutral
+    val t = ((p - 0.5) * 2).coerceIn(-1.0, 1.0).toFloat()
+    val good = Color(0xFF2E9D4A)
+    val bad = Color(0xFFD9443A)
+    val mid = Color(0xFFBFC5BC)
+    return if (t >= 0) lerpColor(mid, good, t) else lerpColor(mid, bad, -t)
+}
+
+private fun lerpColor(a: Color, b: Color, t: Float) = Color(
+    a.red + (b.red - a.red) * t, a.green + (b.green - a.green) * t, a.blue + (b.blue - a.blue) * t, 1f,
+)
+
+/**
+ * 상대 전적 매트릭스: row i's points share against column j as a coloured cell; tap a cell for
+ * the numbers.
+ */
+@Composable
+fun H2hGrid(m: yacht.app.core.H2hMatrix) {
+    val cs = MaterialTheme.colorScheme
+    val n = m.labels.size
+    var picked by androidx.compose.runtime.remember(m) { androidx.compose.runtime.mutableStateOf<Pair<Int, Int>?>(null) }
+    val cell = if (n <= 12) 24.dp else if (n <= 30) 16.dp else 11.dp
+    val neutral = cs.surfaceVariant
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            picked?.let { (i, j) ->
+                val g = m.games[i][j]
+                val sc = m.score[i][j]
+                if (g == 0) "${m.labels[i]} 대 ${m.labels[j]}: 아직 맞붙은 적이 없어요"
+                else "${m.labels[i]} 대 ${m.labels[j]}: ${g}판에서 승점 ${"%.0f".format(100 * (if (sc.isNaN()) 0.5 else sc))}%"
+            } ?: "칸을 누르면 두 AI의 상대 전적이 나와요. 초록일수록 행(왼쪽) AI가 강했어요.",
+            style = MaterialTheme.typography.labelSmall,
+            color = cs.onSurfaceVariant,
+        )
+        Row {
+            Column {
+                Box(Modifier.height(cell))
+                for (i in 0 until n) {
+                    Box(Modifier.height(cell).width(96.dp), contentAlignment = Alignment.CenterStart) {
+                        Text(
+                            "${i + 1} ${m.labels[i]}", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            fontSize = if (n > 30) androidx.compose.ui.unit.TextUnit(8f, androidx.compose.ui.unit.TextUnitType.Sp) else MaterialTheme.typography.labelSmall.fontSize,
+                        )
+                    }
+                }
+            }
+            Column(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState())) {
+                Row {
+                    for (j in 0 until n) {
+                        Box(Modifier.size(cell), contentAlignment = Alignment.Center) {
+                            Text("${j + 1}", fontSize = androidx.compose.ui.unit.TextUnit(8f, androidx.compose.ui.unit.TextUnitType.Sp), color = cs.onSurfaceVariant)
+                        }
+                    }
+                }
+                val px = cell
+                Canvas(
+                    Modifier.size(px * n, px * n).pointerInput(m) {
+                        detectTapGestures { o ->
+                            val s = size.width / n.toFloat()
+                            val i = (o.y / s).toInt()
+                            val j = (o.x / s).toInt()
+                            if (i in 0 until n && j in 0 until n && i != j) picked = i to j
+                        }
+                    },
+                ) {
+                    val s = size.width / n
+                    for (i in 0 until n) for (j in 0 until n) {
+                        val c = if (i == j) neutral.copy(alpha = 0.4f) else shareColor(m.score[i][j], neutral)
+                        drawRect(c, topLeft = Offset(j * s + 0.5f, i * s + 0.5f), size = androidx.compose.ui.geometry.Size(s - 1f, s - 1f))
+                    }
+                    picked?.let { (i, j) ->
+                        drawRect(Color.Black, topLeft = Offset(j * s, i * s), size = androidx.compose.ui.geometry.Size(s, s), style = Stroke(width = 3f))
+                    }
+                }
+            }
+        }
     }
 }

@@ -143,7 +143,7 @@ fun LeagueScreen(c: AppController) {
                     0 -> LadderList(lg, v) { lg.detail = it }
                     1 -> SeasonList(lg, v.season) { lg.detail = it }
                     2 -> FeedList(lg, v)
-                    else -> FamilyList(v) { lg.detail = it }
+                    else -> FamilyList(lg, v) { lg.detail = it }
                 }
             }
         }
@@ -605,6 +605,17 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
             }
             SeasonMode.CALENDAR -> item { CalendarCard(lg, d, onOpen) }
             SeasonMode.CHART -> item { RankChartCard(lg, season, d) }
+            SeasonMode.H2H -> item {
+                val keys = season.divisions[d].map { it.key }
+                androidx.compose.runtime.LaunchedEffect(d, keys) { lg.loadH2h("${d + 1}부", keys) }
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                    Column(Modifier.padding(10.dp)) {
+                        val m = lg.h2h
+                        if (m == null || m.title != "${d + 1}부") Text("상대 전적을 모으는 중…", style = MaterialTheme.typography.bodySmall)
+                        else H2hGrid(m)
+                    }
+                }
+            }
             SeasonMode.TABLE -> {}
         }
         if (mode == SeasonMode.TABLE) item {
@@ -661,6 +672,7 @@ private enum class SeasonMode(val label: String) {
     LUCK("운 보정 순위"),
     CALENDAR("일정표"),
     CHART("순위 변동"),
+    H2H("상대 전적"),
 }
 
 @Composable
@@ -832,11 +844,31 @@ private fun SeasonHistoryCard(h: SeasonHistoryItem) {
 // ---- families ----------------------------------------------------------------------------------
 
 @Composable
-private fun FamilyList(v: LeagueView, onOpen: (String) -> Unit) {
+private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val groups = Family.entries.map { f -> f to v.rows.filter { it.family == f } }
             .sortedByDescending { (_, rows) -> rows.mapNotNull { it.rating }.average().takeIf { !it.isNaN() } ?: -1.0 }
+        item {
+            var open by remember { mutableStateOf(false) }
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically) {
+                        Text("계열 대 계열 상대 전적", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text(if (open) "접기" else "펼치기", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+                    }
+                    if (open) {
+                        val shown = groups.filter { it.second.isNotEmpty() }
+                        androidx.compose.runtime.LaunchedEffect(shown.size) {
+                            lg.loadMatrix("계열", shown.map { (_, rows) -> rows.map { it.key } }, shown.map { it.first.label })
+                        }
+                        val m = lg.h2h
+                        if (m == null || m.title != "계열") Text("상대 전적을 모으는 중…", style = MaterialTheme.typography.bodySmall)
+                        else H2hGrid(m)
+                    }
+                }
+            }
+        }
         items(groups, key = { it.first.name }) { (f, rows) ->
             val rated = rows.filter { it.rating != null }
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
