@@ -190,11 +190,20 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         }
         var changed = false
         if (config.evolution > 0) {
-            val r = Evolution.run(players, p.number, { ladder.rating(it) }, honours::titles, config.evolution, p.seed, { honours.of(it) })
+            // Players who sat the season out (a preset left them out) neither retire nor breed;
+            // children keep the book at the configured size, and the chaos preset breeds only
+            // flawed ones (others would never play).
+            val played = p.league.standings.keys
+            val r = Evolution.run(
+                players, p.number, { k -> if (k in played) ladder.rating(k) else Double.NaN }, honours::titles, config.evolution, p.seed,
+                { honours.of(it) }, population = config.generated, accept = { s -> !config.onlyFlawed || s.flawed },
+            )
             out += r.events
             changed = r.born.isNotEmpty() || r.retired.isNotEmpty()
+        } else if (players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) {
+            // Without evolution, a raised setting brings in the next generated players.
+            changed = true
         }
-        if (players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) changed = true
         note(out)
         return Closing(p.number, h + end?.awards.orEmpty(), out, changed)
     }

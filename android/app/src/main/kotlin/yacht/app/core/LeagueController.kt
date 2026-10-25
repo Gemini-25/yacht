@@ -509,7 +509,9 @@ class LeagueController(
             // The generated and evolved players first: they are AIs of the roster, so the
             // ladder and the season read with them.
             val players = texts[LeagueWorld.ROSTER]?.let { runCatching { PlayerBook.decode(it, reserved) }.getOrNull() } ?: PlayerBook(reserved)
-            players.ensureGenerated(cfg.generated)
+            // Players added mid-league debut in the season being played.
+            val season = texts[LeagueWorld.SEASON]?.let { t -> Regex("(?m)^number (\\d+) ").find(t)?.groupValues?.get(1)?.toIntOrNull() } ?: 1
+            players.ensureGenerated(cfg.generated, season)
             synchronized(lock) { pendingPlayers = players }
             rebuildRoster()
             val w = synchronized(lock) { LeagueWorld.decode(texts, ladderKeys(), reserved) }
@@ -581,8 +583,10 @@ class LeagueController(
     private fun members(w: LeagueWorld): List<String> {
         val c = config
         var keys = roster.filter { ai ->
-            !c.onlyFlawed || ai.family == Family.MINE || ai.family in LeagueWorld.FLAWED ||
-                w.players[ai.key]?.spec?.flawed == true
+            val player = w.players[ai.key]
+            // No generated players asked for: the book's players sit out (they stay on the ladder).
+            (player == null || c.generated > 0) &&
+                (!c.onlyFlawed || ai.family == Family.MINE || ai.family in LeagueWorld.FLAWED || player?.spec?.flawed == true)
         }.map { it.key }
         if (c.onlyTop > 0) {
             val mine = keys.filter { byKey[it]?.family == Family.MINE }
