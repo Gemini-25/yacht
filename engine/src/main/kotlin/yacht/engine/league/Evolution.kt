@@ -18,6 +18,9 @@ object Evolution {
 
     /** Chance of each gene of a child changing by a small step. */
     const val MUTATION = 0.15
+
+    /** Draws of a child's parents and genes before [run] gives up on a child its `accept` refuses. */
+    const val TRIES = 20
     private const val SALT = 0xE7011L
 
     /** Plain expectation (θ = 0) between the risk attitudes: a style mutation moves one place along it. */
@@ -29,12 +32,16 @@ object Evolution {
      * result, rebuilt from the book.
      *
      * Every rated player that played the season ([rating] not NaN, debut ≤ [season]) is ranked
-     * by [rating]. The [count] lowest retire, from the bottom half only (the top half is kept as
-     * the parents); those with [titles] or [hasHonour] become legends with a summary of
-     * [honours]. Then [children] children (default: one per retired AI, so the population stays
-     * the same; pass fewer to shrink it towards a lowered `generated` setting) are made: each
-     * parent is the best of [TOURNAMENT] random players of the top half, genes by uniform
-     * crossover, then [mutate]. A child is `e<season>_<n>`, takes parent A's hometown and
+     * by [rating]; pass NaN for a player that sat the season out (e.g. left out by a preset's
+     * filter): it neither retires nor breeds. The [count] lowest retire, from the bottom half
+     * only (the top half is kept as the parents); those with [titles] or [hasHonour] become
+     * legends with a summary of [honours]. Then the children are made: [children] if given, else
+     * as many as bring the book back to [population] (e.g. `config.generated`, so a lowered
+     * setting shrinks the book by the retirements and a raised one refills it), else one per
+     * retired AI (the population stays). Each parent is the best of [TOURNAMENT] random players
+     * of the top half, genes by uniform crossover, then [mutate]; a child whose genes [accept]
+     * refuses (e.g. `{ it.flawed }` under the only-flawed preset) is drawn again, up to [TRIES]
+     * times, and otherwise not born. A child is `e<season>_<n>`, takes parent A's hometown and
      * debuts in season + 1. Deterministic from [seed] and the inputs.
      */
     fun run(
@@ -47,6 +54,8 @@ object Evolution {
         honours: (String) -> List<Honour> = { emptyList() },
         hasHonour: (String) -> Boolean = { k -> honours(k).any { isHonour(it.kind) } },
         children: Int? = null,
+        population: Int? = null,
+        accept: (CustomAiSpec) -> Boolean = { true },
     ): EvolutionResult {
         if (season <= book.evolvedSeason) return replay(book, season)
         val rated = book.alive.filter { it.born <= season && !rating(it.key).isNaN() }
@@ -67,13 +76,23 @@ object Evolution {
         val born = ArrayList<String>()
         if (pool.isNotEmpty()) {
             val taken = book.names().toMutableSet()
-            for (n in 1..(children ?: retired.size).coerceAtLeast(0)) {
-                val a = tournament(pool, rng)
-                val b = if (pool.size > 1) tournament(pool.filter { it.key != a.key }, rng) else a
+            val wanted = children ?: population?.let { it - book.size } ?: retired.size
+            for (n in 1..wanted.coerceAtLeast(0)) {
+                var drawn: Triple<PlayerRecord, PlayerRecord, CustomAiSpec>? = null
+                for (attempt in 1..TRIES) {
+                    val a = tournament(pool, rng)
+                    val b = if (pool.size > 1) tournament(pool.filter { it.key != a.key }, rng) else a
+                    val genes = mutate(cross(a.spec, b.spec, rng), rng)
+                    if (accept(genes)) {
+                        drawn = Triple(a, b, genes)
+                        break
+                    }
+                }
+                val (a, b, genes) = drawn ?: continue
                 val key = "e${season}_$n"
                 val name = KoreanNames.unique(rng, taken)
                 taken += name
-                val spec = mutate(cross(a.spec, b.spec, rng), rng).copy(id = key, name = name)
+                val spec = genes.copy(id = key, name = name)
                 val child = PlayerRecord(key, name, a.hometown, Origin.EVOLVED, season + 1, a.key, b.key, spec)
                 if (!book.add(child)) continue
                 born += key

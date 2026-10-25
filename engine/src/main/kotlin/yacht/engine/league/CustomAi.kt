@@ -72,8 +72,8 @@ data class CustomAiSpec(
     val effectiveMistake: CustomMistake get() = if (mistake == CustomMistake.FEEL && base != CustomBase.EV) CustomMistake.SLIP else mistake
     val effectiveAmount: Double get() = if (mistake == CustomMistake.FEEL && base != CustomBase.EV) minOf(0.5, amount / 10) else amount
 
-    /** Makes mistakes at some point of a game (the "only flawed AIs" preset keeps these). */
-    val flawed: Boolean get() = effectiveMistake != CustomMistake.NONE || temper != Temper.NONE
+    /** Makes mistakes at some point of a game (the "only flawed AIs" preset keeps these); slips at 0% are none. */
+    val flawed: Boolean get() = (effectiveMistake != CustomMistake.NONE && effectiveAmount > 0) || temper != Temper.NONE
 
     fun describe(): String {
         val parts = ArrayList<String>()
@@ -84,7 +84,7 @@ data class CustomAiSpec(
         }
         if (base == CustomBase.EV) {
             belief?.let { parts += BELIEFS[it] ?: "규칙 착각" }
-            if (future != 1.0) parts += "미래 ${(future * 100).toInt()}%"
+            if (future != 1.0) parts += "미래 ${Math.round(future * 100)}%"
             if (yacht != 0.0) parts += "요트 ${signed(yacht)}"
             if (straight != 0.0) parts += "스트레이트 ${signed(straight)}"
             if (bonus != 0.0) parts += "상단 1점당 ${signed(bonus)}"

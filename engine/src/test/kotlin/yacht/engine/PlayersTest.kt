@@ -8,6 +8,7 @@ import yacht.engine.league.Evolution
 import yacht.engine.league.Family
 import yacht.engine.league.Honour
 import yacht.engine.league.Hometowns
+import yacht.engine.league.KoreanNames
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueRoster
@@ -185,12 +186,15 @@ class PlayersTest {
         // Retired generated keys never come back, even once their records are gone.
         assertTrue(back.ensureGenerated(20).isEmpty())
         assertEquals(1, back.ensureGenerated(21).size)
-        // Cut anywhere: never throws, keeps whole lines only.
-        for (cut in PlayerBook.HEADER.length until text.length step 7) {
+        // Cut anywhere: never throws, keeps whole lines only (a last line cut inside its peak,
+        // "1611.5" read as "16", or inside its titles, is dropped rather than read short).
+        for (cut in PlayerBook.HEADER.length until text.length) {
             val part = PlayerBook.decode(text.substring(0, cut))
             assertTrue(b.alive.map { it.key }.containsAll(part.alive.map { it.key }))
-            for (p in part.alive.dropLast(1)) assertEquals(b[p.key], p)
-            assertTrue(part.retired.size <= b.retired.size)
+            for (p in part.alive) assertEquals(b[p.key], p)
+            assertEquals(b.retired.take(part.retired.size), part.retired)
+            for (l in part.legends) assertEquals(b.legend(l.key), l)
+            assertEquals(part.encode(), PlayerBook.decode(part.encode()).encode())
         }
         // A line from a newer version or garbage is skipped.
         val noisy = PlayerBook.decode(text.replace("\nretired ", "\nfuture x y z\nai broken\nretired "))
@@ -276,6 +280,62 @@ class PlayersTest {
         val few = PlayerBook().apply { ensureGenerated(6) }
         assertEquals(3, Evolution.run(few, 1, ::rating, { 0 }, 8, 1L).retired.size)
         assertEquals(6, few.size)
+    }
+
+    @Test
+    fun evolutionFollowsThePopulationAndThePresetFilter() {
+        val ratings = HashMap<String, Double>()
+        fun rating(k: String) = ratings.getOrPut(k) { ratingOf(k) }
+        // A lowered setting shrinks the book by the retirements; raised again, it refills
+        // (the g-keys already used never come back, so only children can).
+        val book = PlayerBook().apply { ensureGenerated(100) }
+        val shrink = Evolution.run(book, 1, ::rating, { 0 }, 8, 3L, population = 60)
+        assertEquals(8, shrink.retired.size)
+        assertTrue(shrink.born.isEmpty())
+        assertEquals(92, book.size)
+        assertTrue(book.ensureGenerated(100, season = 2).isEmpty())
+        val refill = Evolution.run(book, 2, ::rating, { 0 }, 8, 3L, population = 100)
+        assertEquals(8, refill.retired.size)
+        assertEquals(16, refill.born.size)
+        assertEquals(100, book.size)
+        // An explicit number of children wins over the population.
+        assertEquals(2, Evolution.run(book, 3, ::rating, { 0 }, 8, 3L, children = 2, population = 100).born.size)
+        // Only flawed AIs (the chaos preset): every child makes mistakes.
+        val chaos = PlayerBook().apply { ensureGenerated(150) }
+        for (season in 1..6) {
+            val r = Evolution.run(chaos, season, ::rating, { 0 }, 20, 9L, accept = { it.flawed })
+            assertEquals(20, r.born.size)
+            assertTrue(r.born.all { chaos[it]!!.spec.flawed }, "${r.born.map { chaos[it]!!.spec.describe() }}")
+        }
+        // A filter nothing passes: the retirements still happen, no child is born.
+        val none = Evolution.run(PlayerBook().apply { ensureGenerated(40) }, 1, ::rating, { 0 }, 8, 1L, accept = { false })
+        assertEquals(8, none.retired.size)
+        assertTrue(none.born.isEmpty())
+    }
+
+    @Test
+    fun namesAndDescriptionsReadNaturally() {
+        // Never the surname twice ("정정우") or a doubled syllable ("민민").
+        val rng = Random(3)
+        repeat(20_000) {
+            val n = KoreanNames.draw(rng)
+            assertEquals(3, n.length, n)
+            assertTrue(n[0] != n[1] && n[1] != n[2], n)
+        }
+        // Shares of the expected rest read as whole percents, as the builder's slider shows them.
+        for (k in 6..30) {
+            val f = k / 20.0
+            if (k != 20) assertTrue(CustomAiSpec("f", "f", future = f).describe().contains("미래 ${k * 5}%"), "$f")
+        }
+        assertTrue(CustomAiSpec("f", "f", future = 0.57f.toDouble()).describe().contains("미래 57%"))
+        // A 0% slip is no mistake (the chaos preset leaves it out).
+        assertTrue(!CustomAiSpec("s", "s", mistake = CustomMistake.SLIP, amount = 0.0).flawed)
+        assertTrue(CustomAiSpec("s", "s", mistake = CustomMistake.SLIP, amount = 0.01).flawed)
+        // Children are listed by debut and then in number order (e3_2 before e3_10).
+        val b = PlayerBook().apply { ensureGenerated(2) }
+        for (n in 1..12) assertTrue(b.add(PlayerRecord("e3_$n", "아이$n", "서울", Origin.EVOLVED, 4, "g001", "g002", PlayerGenerator.spec(1))))
+        assertEquals((1..12).map { "e3_$it" }, b.children("g001"))
+        assertEquals((1..12).map { "e3_$it" }, b.descendants("g002").single())
     }
 
     @Test
