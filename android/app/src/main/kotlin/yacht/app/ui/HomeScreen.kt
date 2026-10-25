@@ -107,6 +107,8 @@ fun HomeScreen(c: AppController) {
             }
         }
 
+        c.lastCrash?.let { CrashCard(it, onDismiss = { c.dismissCrash() }) }
+
         val current = c.state
         if (current != null && !current.isOver) {
             Card(
@@ -263,6 +265,39 @@ fun HomeScreen(c: AppController) {
         )
     }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
+}
+
+/** Why the app closed last time, to copy and send. */
+@Composable
+private fun CrashCard(text: String, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var open by remember { mutableStateOf(false) }
+    var copied by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.errorContainer)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("⚠️ 지난번에 앱이 갑자기 꺼졌어요", fontWeight = FontWeight.Bold, color = cs.onErrorContainer)
+            Text(
+                "원인 기록을 복사해서 보내 주면 고칠 수 있어요. 진행 중이던 게임과 리그 기록은 저장돼 있어요.",
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onErrorContainer,
+            )
+            Text(
+                if (open) text else text.lines().take(4).joinToString("\n"),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = cs.onErrorContainer,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                    copied = true
+                }) { Text(if (copied) "복사됨" else "복사") }
+                OutlinedButton(onClick = { open = !open }) { Text(if (open) "접기" else "자세히") }
+                OutlinedButton(onClick = onDismiss) { Text("닫기") }
+            }
+        }
+    }
 }
 
 @Composable

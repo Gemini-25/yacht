@@ -89,6 +89,26 @@ private fun run(args: Array<String>): Int {
     }.apply { isDaemon = true; start() }
     check(heap.isAlive)
 
+    // Watchdog: how long the main thread takes to run an empty task, and what it was doing.
+    Thread {
+        while (true) {
+            val t0 = System.nanoTime()
+            val f = mainExecutor.submit {}
+            var where: String? = null
+            while (!f.isDone) {
+                Thread.sleep(5)
+                if (where == null && System.nanoTime() - t0 > 300_000_000L) {
+                    where = mainThread.stackTrace.filter { it.className.startsWith("yacht.") && !it.className.startsWith("yacht.stress") }
+                        .take(3).joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+                        .ifEmpty { "(stress harness)" }
+                }
+            }
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            if (ms > 300 && where != null) blocked.merge(where, ms, ::maxOf)
+            Thread.sleep(50)
+        }
+    }.apply { isDaemon = true; start() }
+
     val scope = CoroutineScope(SupervisorJob() + Main + CoroutineExceptionHandler { _, e -> record("coroutine", e) })
     val seedFile = File("../android/app/src/main/assets/league_seed.txt")
     val c = AppController(
@@ -163,6 +183,14 @@ private fun run(args: Array<String>): Int {
         println("state written off the main thread:")
         for ((k, n) in offMain.entries.sortedByDescending { it.value }) println("  $n× $k")
     }
+    if (slowMain.isNotEmpty()) {
+        println("main thread held over 100 ms by an action (ms):")
+        for ((k, ms) in slowMain.entries.sortedByDescending { it.value }) println("  $ms ms · $k")
+    }
+    if (blocked.isNotEmpty()) {
+        println("main thread blocked (watchdog, ms):")
+        for ((k, ms) in blocked.entries.sortedByDescending { it.value }.take(15)) println("  $ms ms · $k")
+    }
     println(if (failures.isEmpty()) "NO FAILURES" else "${failures.size} FAILURES")
     return if (failures.isEmpty()) 0 else 1
 }
@@ -181,6 +209,7 @@ private fun playGame(c: AppController, rng: Random, source: DiceSource?) {
     val abandonAt = if (rng.nextInt(6) == 0) rng.nextInt(20) else Int.MAX_VALUE
     var steps = 0
     var aiWaitSince = 0L
+    var undoAt = Long.MAX_VALUE
     val start = System.currentTimeMillis()
     while (true) {
         val s = c.state ?: return
@@ -189,7 +218,11 @@ private fun playGame(c: AppController, rng: Random, source: DiceSource?) {
         check(System.currentTimeMillis() - start < 600_000) { "game stuck: $s" }
         if (s.source == DiceSource.RANDOM && s.toMove == Side.OPP) {
             // The AI's turn (with its playback): sometimes skip, sometimes undo my box before it shows.
-            if (aiWaitSince == 0L) aiWaitSince = System.currentTimeMillis()
+            if (aiWaitSince == 0L) {
+                aiWaitSince = System.currentTimeMillis()
+                // Now and then a person takes back the box just written, once, before the AI's dice show.
+                undoAt = if (rng.nextInt(8) == 0) aiWaitSince + rng.nextInt(1500) else Long.MAX_VALUE
+            }
             if (System.currentTimeMillis() - aiWaitSince > 60_000) {
                 record(
                     "AI never moved",
@@ -200,7 +233,10 @@ private fun playGame(c: AppController, rng: Random, source: DiceSource?) {
                 )
                 return
             }
-            if (rng.nextInt(10) == 0) act("undo") { c.undo() }
+            if (System.currentTimeMillis() >= undoAt) {
+                undoAt = Long.MAX_VALUE
+                act("undo") { c.undo() }
+            }
             if (rng.nextInt(3) == 0) act("skip") { c.skipAiPlayback() }
             Thread.sleep(50)
             continue
@@ -331,7 +367,22 @@ private fun review(c: AppController, rng: Random) {
     onMain { c.screen = Screen.HOME }
 }
 
-private fun <T> onMain(block: () -> T): T = runBlocking(Main) { block() }
+/** Longest time each action held the main thread (over 1 s on this server is an ANR risk on a phone). */
+private val slowMain = ConcurrentHashMap<String, Long>()
+
+/** Main thread blocked over 300 ms, by what it was running. */
+private val blocked = ConcurrentHashMap<String, Long>()
+
+private fun <T> onMain(block: () -> T): T = runBlocking(Main) {
+    val t0 = System.nanoTime()
+    val r = block()
+    val ms = (System.nanoTime() - t0) / 1_000_000
+    if (ms > 100) {
+        val name = synchronized(lastActions) { lastActions.lastOrNull() } ?: "?"
+        slowMain.merge(name, ms, ::maxOf)
+    }
+    r
+}
 
 /** The last actions, for a failure report. */
 private val lastActions = ArrayDeque<String>()

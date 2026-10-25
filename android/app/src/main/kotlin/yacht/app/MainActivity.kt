@@ -33,7 +33,36 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 
+/**
+ * Writes why the app closed (any uncaught exception, out of memory included) to crash.txt, then
+ * lets Android close it as usual; the home screen shows it at the next start.
+ */
+private object CrashLog {
+    private var installed = false
+
+    fun install(app: Application) {
+        if (installed) return
+        installed = true
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            runCatching {
+                val version = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull()
+                val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
+                java.io.File(app.filesDir, "crash.txt").writeText(
+                    "$time · ${app.packageName} $version · ${android.os.Build.MODEL} (Android ${android.os.Build.VERSION.RELEASE})\n" +
+                        "thread ${thread.name}\n${e.stackTraceToString().take(6000)}",
+                )
+            }
+            previous?.uncaughtException(thread, e)
+        }
+    }
+}
+
 class GameViewModel(app: Application) : AndroidViewModel(app) {
+    init {
+        CrashLog.install(app)
+    }
+
     val controller = AppController(
         viewModelScope, GameStorage(app.filesDir), { loadTables(app) },
         loadAsset = { name -> runCatching { app.assets.open(name).use { String(it.readBytes()) } }.getOrNull() },
@@ -82,6 +111,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CrashLog.install(application)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {

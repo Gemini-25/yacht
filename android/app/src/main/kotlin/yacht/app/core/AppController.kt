@@ -96,6 +96,15 @@ class GameStorage(val dir: File) {
     /** A finished game reopened by undo is not finished any more. */
     fun deleteFinished(id: Long) = File(finished, "$id.txt").delete()
 
+    /** Where the app writes why it closed unexpectedly (read at the next start). */
+    val crashFile = File(dir, "crash.txt")
+
+    fun loadCrash(): String? = crashFile.takeIf { it.exists() }?.readText()?.takeIf { it.isNotBlank() }
+
+    fun clearCrash() {
+        crashFile.delete()
+    }
+
     fun loadSettings(): Map<String, String> = settings.takeIf { it.exists() }?.readLines()
         ?.mapNotNull { l -> l.indexOf('=').takeIf { it > 0 }?.let { l.substring(0, it) to l.substring(it + 1) } }
         ?.toMap() ?: emptyMap()
@@ -237,6 +246,15 @@ class AppController(
     var rankResult by mutableStateOf<RankResult?>(null)
         private set
 
+    /** Why the app closed unexpectedly last time (shown once on the home screen). */
+    var lastCrash by mutableStateOf<String?>(null)
+        private set
+
+    fun dismissCrash() {
+        lastCrash = null
+        scope.launch(Dispatchers.IO) { storage.clearCrash() }
+    }
+
     /** My AI open in the builder; null builds a new one. */
     var editingAi by mutableStateOf<yacht.engine.league.CustomAiSpec?>(null)
 
@@ -312,6 +330,7 @@ class AppController(
                     storage.loadCurrent()?.let { runCatching { GameCodec.decode(it, t.rules) }.getOrNull() }
                 }
                 history = withContext(Dispatchers.IO) { readHistory() }
+                lastCrash = withContext(Dispatchers.IO) { storage.loadCrash() }
                 league.updateClone(CloneProfile.of(history))
                 if (saved != null) {
                     state = saved
