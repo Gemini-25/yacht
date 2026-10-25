@@ -135,6 +135,51 @@ object LeagueMatch {
         return JobResult(job, boards, winner, System.nanoTime() - t0)
     }
 
+    /**
+     * The deal of game [game] (its index in the board's games, deciders last) of board [board] of
+     * [job], exactly as [playJob] dealt it, so that one game can be played again alone with
+     * [playGame]. [perMatch] is the number of games per match (1 for SINGLE, else 2); the games
+     * after the matches (all legs of a tie) are the decider games.
+     */
+    fun deal(job: Fixture, board: Int, game: Int, perMatch: Int): GameDeal {
+        require(perMatch in 1..2 && game >= 0) { "game $game with $perMatch per match" }
+        val legs = if (job.kind == JobKind.TIE) maxOf(1, job.legs) else 1
+        // Deciders hang off the tie's seed or the match's (a team board is a match of its own).
+        val unit = if (job.kind == JobKind.TEAM) DiceStream.mix(job.seed, 200L + board) else job.seed
+        val matchGames = legs * perMatch
+        if (game < matchGames) {
+            val seed = if (job.kind == JobKind.TIE) DiceStream.mix(unit, 100L + game / perMatch) else unit
+            val g = (game % perMatch).toLong()
+            return GameDeal(DiceStream.mix(seed, 0), DiceStream.mix(seed, 1), DiceStream.mix(seed, 7, g, 0), DiceStream.mix(seed, 7, g, 1), g == 0L)
+        }
+        val k = (game - matchGames).toLong()
+        return GameDeal(
+            DiceStream.mix(unit, 300L + k, 0), DiceStream.mix(unit, 300L + k, 1),
+            DiceStream.mix(unit, 301L + k, 0), DiceStream.mix(unit, 301L + k, 1), k % 2 == 0L,
+        )
+    }
+
+    /**
+     * Plays one game again alone on its [deal] (see [deal]) through the same code as a job, and
+     * records nothing. [a] and [b] are the board's sides; the score is from A's side. With
+     * [watch], the game is also kept turn by turn for the watch screen.
+     */
+    fun playGame(
+        rules: RuleSet,
+        deal: GameDeal,
+        a: LeagueAi,
+        b: LeagueAi,
+        estimate: WinEstimate? = null,
+        watch: Boolean = false,
+        cancelled: () -> Boolean = { false },
+    ): SingleGame {
+        val (x, y) = if (deal.aFirst) a to b else b to a
+        val turns = if (watch) ArrayList<WatchTurn>(2 * Category.COUNT) else null
+        val g = game(rules, x.make(Random(deal.rng0)), y.make(Random(deal.rng1)), DiceStream(deal.dice0), DiceStream(deal.dice1), estimate, cancelled, turns)
+        val s = if (deal.aFirst) score(g.first, g.second) else score(g.second, g.first)
+        return SingleGame(s, g.facts, turns.orEmpty())
+    }
+
     /** Decider game [k]: a fresh deal, A first on even k, B first on odd k. */
     private fun decider(
         rules: RuleSet,
@@ -176,32 +221,63 @@ object LeagueMatch {
         s1: DiceStream,
         estimate: WinEstimate?,
         cancelled: () -> Boolean,
+        watch: MutableList<WatchTurn>? = null,
     ): Played {
         var x = Board(rules)
         var y = Board(rules)
         val trace = if (estimate != null) ArrayList<Pair<Board, Board>>(2 * Category.COUNT) else null
         for (turn in 0 until Category.COUNT) {
             if (cancelled()) throw CancellationException("league stopped")
-            x = turn(rules, first, x, y, s0, turn)
+            val l0 = watch?.let { TurnLog() }
+            x = turn(rules, first, x, y, s0, turn, l0)
             trace?.add(x to y)
-            y = turn(rules, second, y, x, s1, turn)
+            l0?.let { watch!! += WatchTurn(0, it.throws, it.held, it.category, it.points, x, y) }
+            val l1 = watch?.let { TurnLog() }
+            y = turn(rules, second, y, x, s1, turn, l1)
             trace?.add(x to y)
+            l1?.let { watch!! += WatchTurn(1, it.throws, it.held, it.category, it.points, x, y) }
         }
         return Played(x, y, trace?.let { GameFacts.of(it, estimate!!) })
     }
 
-    private fun turn(rules: RuleSet, p: Player, me: Board, opp: Board, stream: DiceStream, turn: Int): Board {
+    /** What one turn did, kept only while watching. */
+    private class TurnLog {
+        val throws = ArrayList<List<Int>>(3)
+        val held = ArrayList<List<Int>>(2)
+        var category = Category.CHOICE
+        var points = 0
+    }
+
+    private fun turn(rules: RuleSet, p: Player, me: Board, opp: Board, stream: DiceStream, turn: Int, log: TurnLog? = null): Board {
         p.startTurn(me, opp)
         var r = stream.throwDice(Dice.EMPTY_KEEP, turn, 0)
+        log?.throws?.add(Dice.rollFaces(r))
         for (rollsDone in 1..2) {
             val keep = p.chooseKeep(rollsDone, r)
             if (keep == Dice.rollAsKeep[r]) break
+            log?.held?.add(Dice.keepFaces(keep))
             r = stream.throwDice(keep, turn, rollsDone)
+            log?.throws?.add(Dice.rollFaces(r))
         }
         val c = p.chooseCategory(r)
-        return me.with(c, rules.score(Dice.rollCounts[r], c))
+        val points = rules.score(Dice.rollCounts[r], c)
+        log?.let {
+            it.category = c
+            it.points = points
+        }
+        return me.with(c, points)
     }
 }
+
+/**
+ * Where one game of a job was dealt (see [LeagueMatch.deal]): the dice stream and the player's
+ * random source of the seat that moves first ([dice0], [rng0]) and of the other ([dice1],
+ * [rng1]), and whether the board's side A has the first seat.
+ */
+data class GameDeal(val dice0: Long, val dice1: Long, val rng0: Long, val rng1: Long, val aFirst: Boolean)
+
+/** One game played again alone ([LeagueMatch.playGame]): its score from side A, its facts and turns (when watched). */
+class SingleGame(val score: GameScore, val facts: GameFacts?, val turns: List<WatchTurn>)
 
 /** One turn of a watched game: who moved (0 = first player), its throws, held dice and box. */
 data class WatchTurn(
