@@ -122,11 +122,17 @@ object LeagueRoster {
     fun tableSpecs(rules: RuleSet): List<LeagueTables.Spec> =
         THETAS.map { LeagueTables.riskSpec(rules, it) } + beliefs(rules).map { (k, r) -> LeagueTables.Spec("rules_$k", r) }
 
-    /** Ops budget of the win-search AIs: the same as the 36-AI study (a few hundred ms per game on a server). */
+    /**
+     * The win-search AIs solve this turn and search exactly to the end from this many boxes
+     * (about 15 ms a game on a server instead of 350 with the budget search, -0.5%p of wins).
+     */
+    const val EXACT_AT = 4
+
+    /** Ops cap of the win-search AIs' searches. */
     const val BUDGET = 100_000_000L
 
     /** End-game duel tables are built for the duel AIs once they fit this many operations. */
-    const val DUEL_OPS = 200_000_000L
+    const val DUEL_OPS = 60_000_000L
 
     fun build(tables: Tables, extra: LeagueTables, budget: Long = BUDGET, duelOps: Long = DUEL_OPS): List<LeagueAi> {
         val t = tables.withoutRisk()
@@ -145,10 +151,14 @@ object LeagueRoster {
         fun character(key: String, name: String, desc: String, heavy: Boolean = false, make: (Random) -> Player) =
             LeagueAi(key, name, Family.CHARACTER, desc, heavy, make)
         fun target(score: Int, name: String, desc: String) =
-            LeagueAi("target$score", name, Family.TARGET, desc, heavy = true) { PlanPlayer("target$score", targetPlanner(plain, score, budget)) }
+            LeagueAi("target$score", name, Family.TARGET, desc, heavy = true) { PlanPlayer("target$score", targetPlanner(plain, score, budget, EXACT_AT)) }
         fun winAi(key: String, name: String, desc: String, make: (Random) -> Player) = LeagueAi(key, name, Family.WIN, desc, heavy = true, make = make)
-        fun winSearch(key: String, mode: Mode = Mode.WIN, depth: Int? = null, duel: Long = 0, tie: Double = 0.0, shift: Int = 0, adv: Advisor = plain) =
-            AdvisorPlayer(adv, mode, budget, fixedDepth = depth, name = key, duelOps = duel, tieValue = tie, oppShift = shift)
+        // This turn only, exact to the end from EXACT_AT boxes (a fixed [depth] keeps its own).
+        fun winSearch(key: String, mode: Mode = Mode.WIN, depth: Int? = null, duel: Long = 0, tie: Double = 0.0, shift: Int = 0, adv: Advisor = plain, exactAt: Int = EXACT_AT) =
+            AdvisorPlayer(
+                adv, mode, budget, fixedDepth = depth ?: 1, name = key, duelOps = duel, tieValue = tie, oppShift = shift,
+                exactAt = if (depth == null) exactAt else 0,
+            )
         fun shaped(key: String, name: String, desc: String, future: Double = 1.0, extra: (Board, Category, Int, Int) -> Double = { _, _, _, _ -> 0.0 }) =
             LeagueAi(key, name, Family.EV, desc) { PlanPlayer(key, shapedPlanner(ev, future, extra)) }
         fun riskAi(key: String, name: String, theta: Double, desc: String) =
@@ -162,7 +172,7 @@ object LeagueRoster {
 
         return listOf(
             // ---- win search -------------------------------------------------------------------
-            winAi("win", "승률 AI (앱 기본)", "승률을 최대화. 앞 몇 턴은 정확히, 막판 8~9칸부터는 끝까지 정확히 계산") { winSearch("win") },
+            winAi("win", "승률 AI (앱 기본)", "승률을 최대화. 이번 턴은 정확히, 막판 5칸부터는 끝까지 정확히 계산") { winSearch("win", exactAt = 5) },
             winAi("win-d1", "승률 AI · 이번 턴만", "이번 턴만 정확히 풀고 이후는 기대점수 방식으로 근사") { winSearch("win-d1", depth = 1) },
             winAi("win-d2", "승률 AI · 2턴", "앞 2턴을 정확히 풀고 이후는 근사") { winSearch("win-d2", depth = 2) },
             winAi("duel", "승률 AI · 막판 대결표", "막판(약 5칸)부터 상대의 실제 결과에 대응하는 표로 끝까지 정확") { winSearch("duel", duel = duelOps) },
@@ -173,9 +183,9 @@ object LeagueRoster {
             winAi("win-over15", "상대를 높게 보는 승률 AI", "상대가 실제보다 15점 더 낼 거라고 믿고 둠 (지나치게 모험)") { winSearch("win-over15", shift = 15) },
             winAi("win-under30", "상대를 무시하는 승률 AI", "상대가 30점 덜 낼 거라고 믿음 (아주 소극적)") { winSearch("win-under30", shift = -30) },
             winAi("win-over30", "상대를 두려워하는 승률 AI", "상대가 30점 더 낼 거라고 믿음 (늘 무리수)") { winSearch("win-over30", shift = 30) },
-            winAi("win-slip5", "가끔 실수하는 승률 AI", "승률 AI지만 판단마다 5% 확률로 차선") { r -> SlipPlayer(winPlanner(plain, budget), 0.05, r, "win-slip5") },
-            winAi("win-slip10", "실수가 잦은 승률 AI", "승률 AI지만 판단마다 10% 확률로 차선") { r -> SlipPlayer(winPlanner(plain, budget), 0.10, r, "win-slip10") },
-            winAi("win-slip20", "덜렁이 승률 AI", "승률 AI지만 판단마다 20% 확률로 차선") { r -> SlipPlayer(winPlanner(plain, budget), 0.20, r, "win-slip20") },
+            winAi("win-slip5", "가끔 실수하는 승률 AI", "승률 AI지만 판단마다 5% 확률로 차선") { r -> SlipPlayer(winPlanner(plain, budget, EXACT_AT), 0.05, r, "win-slip5") },
+            winAi("win-slip10", "실수가 잦은 승률 AI", "승률 AI지만 판단마다 10% 확률로 차선") { r -> SlipPlayer(winPlanner(plain, budget, EXACT_AT), 0.10, r, "win-slip10") },
+            winAi("win-slip20", "덜렁이 승률 AI", "승률 AI지만 판단마다 20% 확률로 차선") { r -> SlipPlayer(winPlanner(plain, budget, EXACT_AT), 0.20, r, "win-slip20") },
             winAi("late-win", "막판 승부사", "기대점수로 두다가 남은 4칸부터 승률을 계산") {
                 PhasePlayer("late-win", PlanPlayer("ev", evPlanner), winSearch("late-win"), lateFrom = 4)
             },
@@ -298,7 +308,7 @@ object LeagueRoster {
                 }
             },
             character("ch-clutch", "뒤질 때만 계산", "평소엔 정석, 10점 이상 뒤지면 승률을 계산하는 승부사", heavy = true) {
-                PlanPlayer("ch-clutch") { me, opp -> if (lead(me, opp) <= -10) winPlanner(plain, budget)(me, opp) else evPlanner(me, opp) }
+                PlanPlayer("ch-clutch") { me, opp -> if (lead(me, opp) <= -10) winPlanner(plain, budget, EXACT_AT)(me, opp) else evPlanner(me, opp) }
             },
 
             // ---- human-like mistakes ------------------------------------------------------------

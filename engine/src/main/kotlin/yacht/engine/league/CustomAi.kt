@@ -108,7 +108,7 @@ object CustomAis {
         val t = tables.withoutRisk()
         val ev = t.ev
         val planner: (Board, Board) -> TurnPlan = when (spec.base) {
-            CustomBase.WIN -> winPlanner(Advisor(t), budget)
+            CustomBase.WIN -> winPlanner(Advisor(t), budget, LeagueRoster.EXACT_AT)
             CustomBase.RISK -> { me, opp -> riskPlanner(extra.risk(spec.theta), spec.theta)(me, opp) }
             CustomBase.EV -> shapedPlanner(ev, spec.future) { me, c, p, u2 ->
                 var x = 0.0
@@ -138,7 +138,7 @@ object CustomAis {
         return LeagueAi(
             CLONE, "내 분신", Family.MINE,
             "내 기록 ${profile.games}판에서 뽑은 실수율: 주사위 ${pct(profile.keepSlip)}, 칸 ${pct(profile.boxSlip)}", heavy = true,
-        ) { r -> SlipPlayer(winPlanner(plain, budget), profile.keepSlip, r, CLONE, boxSlip = profile.boxSlip) }
+        ) { r -> SlipPlayer(winPlanner(plain, budget, LeagueRoster.EXACT_AT), profile.keepSlip, r, CLONE, boxSlip = profile.boxSlip) }
     }
 
     private fun pct(p: Double) = String.format(Locale.ROOT, "%.1f%%", 100 * p)

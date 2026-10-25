@@ -362,8 +362,20 @@ class RandomPlayer(private val rng: Random, override val name: String = "random"
 }
 
 /** The win search's plan, for [SlipPlayer] (a win AI that sometimes slips). */
-fun winPlanner(advisor: Advisor, budgetOps: Long): (Board, Board) -> TurnPlan = { me, opp ->
-    advisor.planTurn(me, opp, Mode.WIN, budgetOps).active
+fun winPlanner(advisor: Advisor, budgetOps: Long, exactAt: Int = 0): (Board, Board) -> TurnPlan = { me, opp ->
+    advisor.planTurn(me, opp, Mode.WIN, budgetOps, depth = quickDepth(me, exactAt)).active
+}
+
+/**
+ * Depth of a quick win search: this turn only, then exact to the end once [exactAt] boxes or
+ * fewer are left (null with [exactAt] 0: the deepest the budget allows). Measured against the
+ * budget search with 1e8 operations, exact from 4 boxes costs 1/25 of the time for -0.5%p
+ * (±0.4) of wins, from 5 boxes 1/6 for -0.2%p (±0.3).
+ */
+fun quickDepth(me: Board, exactAt: Int): Int? {
+    if (exactAt <= 0) return null
+    val left = Category.COUNT - me.filledCount
+    return if (left <= exactAt) left else 1
 }
 
 /**
@@ -406,9 +418,9 @@ class BeliefPlayer(private val belief: RuleSet, private val beliefEv: EvTable, o
  * Ignores the opponent and maximises P(final score >= [target]) with the win search, as if the
  * opponent had already finished on [target] - 1.
  */
-fun targetPlanner(advisor: Advisor, target: Int, budgetOps: Long): (Board, Board) -> TurnPlan = { me, _ ->
+fun targetPlanner(advisor: Advisor, target: Int, budgetOps: Long, exactAt: Int = 0): (Board, Board) -> TurnPlan = { me, _ ->
     val goal = Board.of(me.rules, Category.ALL.map { if (it == Category.CHOICE) target - 1 else 0 })
-    advisor.planTurn(me, goal, Mode.WIN, budgetOps).active
+    advisor.planTurn(me, goal, Mode.WIN, budgetOps, depth = quickDepth(me, exactAt)).active
 }
 
 /** Always holds its longest run of faces, chasing straights; writes like the max-expectation plan. */
