@@ -68,6 +68,7 @@ import yacht.app.core.LeagueSpeed
 import yacht.app.core.LeagueView
 import yacht.app.core.Screen
 import yacht.app.core.SeasonHistoryItem
+import yacht.app.core.SeasonRow
 import yacht.app.core.SeasonView
 import yacht.engine.explain.Ko
 import yacht.engine.league.Family
@@ -91,6 +92,7 @@ fun LeagueScreen(c: AppController) {
     val tab = lg.tab
     var resetAsk by remember { mutableStateOf(false) }
     var rankedAsk by remember { mutableStateOf(false) }
+    var rulesAsk by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Scaffold(
         containerColor = cs.background,
@@ -108,7 +110,10 @@ fun LeagueScreen(c: AppController) {
                     }
                 },
                 navigationIcon = { TextButton(onClick = { c.screen = Screen.HOME }) { Text("홈") } },
-                actions = { TextButton(onClick = { resetAsk = true }) { Text("초기화") } },
+                actions = {
+                    TextButton(onClick = { rulesAsk = true }) { Text("규칙") }
+                    TextButton(onClick = { resetAsk = true }) { Text("초기화") }
+                },
             )
         },
     ) { pad ->
@@ -136,7 +141,7 @@ fun LeagueScreen(c: AppController) {
             } else {
                 when (tab) {
                     0 -> LadderList(lg, v) { lg.detail = it }
-                    1 -> SeasonList(v.season) { lg.detail = it }
+                    1 -> SeasonList(lg, v.season) { lg.detail = it }
                     2 -> FeedList(lg, v)
                     else -> FamilyList(v) { lg.detail = it }
                 }
@@ -147,6 +152,7 @@ fun LeagueScreen(c: AppController) {
     val row = v?.rows?.firstOrNull { it.key == key }
     if (row != null) AiDetail(c, row) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
+    if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }
     if (resetAsk) {
         AlertDialog(
             onDismissRequest = { resetAsk = false },
@@ -520,13 +526,14 @@ private fun noteText(lg: LeagueController, note: String): String? {
 // ---- season ------------------------------------------------------------------------------------
 
 @Composable
-private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
+private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (season == null || season.divisions.isEmpty()) {
         CenterText("▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점(승 3, 무 1, 한 판씩이면 합계 점수로 승부)을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.")
         return
     }
     var division by remember { mutableStateOf(0) }
+    var mode by remember { mutableStateOf(SeasonMode.TABLE) }
     val d = division.coerceIn(0, season.divisions.size - 1)
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
@@ -563,6 +570,23 @@ private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
             }
         }
         item {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (m in SeasonMode.entries) {
+                    FilterChip(selected = mode == m, onClick = { mode = m; if (m == SeasonMode.CALENDAR) lg.loadCalendar(d) }, label = { Text(m.label, fontSize = 12.sp) })
+                }
+            }
+        }
+        when (mode) {
+            SeasonMode.LUCK -> {
+                item { LuckHeader() }
+                val rows = season.divisions[d].sortedWith(compareByDescending<SeasonRow> { it.aggPoints }.thenByDescending { it.diff })
+                itemsIndexed(rows, key = { _, r -> "a-${r.key}" }) { i, r -> LuckRow(i, r, season.divisions[d].indexOf(r)) { onOpen(r.key) } }
+            }
+            SeasonMode.CALENDAR -> item { CalendarCard(lg, d, onOpen) }
+            SeasonMode.CHART -> item { RankChartCard(lg, season, d) }
+            SeasonMode.TABLE -> {}
+        }
+        if (mode == SeasonMode.TABLE) item {
             Row(Modifier.padding(horizontal = 8.dp)) {
                 Text("#", Modifier.width(24.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 Text("팀", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
@@ -572,7 +596,7 @@ private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
                 Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
             }
         }
-        itemsIndexed(season.divisions[d], key = { _, r -> "s-${r.key}" }) { i, r ->
+        if (mode == SeasonMode.TABLE) itemsIndexed(season.divisions[d], key = { _, r -> "s-${r.key}" }) { i, r ->
             val zone = when (r.zone) {
                 1 -> gameColors.good
                 -1 -> cs.error
@@ -607,6 +631,158 @@ private fun SeasonList(season: SeasonView?, onOpen: (String) -> Unit) {
                 }
             }
             items(season.history, key = { "h-${it.number}" }) { h -> SeasonHistoryCard(h) }
+        }
+    }
+}
+
+private enum class SeasonMode(val label: String) {
+    TABLE("순위표"),
+    LUCK("운 보정 순위"),
+    CALENDAR("일정표"),
+    CHART("순위 변동"),
+}
+
+@Composable
+private fun LuckHeader() {
+    val cs = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "같은 주사위로 두 판을 두니까, 두 판 합계 점수가 높은 쪽에 3점(같으면 1점)을 주면 판 운을 뺀 순위가 나와요. '운'은 실제 승점에서 운 보정 승점을 뺀 값이에요.",
+            style = MaterialTheme.typography.labelSmall,
+            color = cs.onSurfaceVariant,
+        )
+        Row(Modifier.padding(horizontal = 8.dp)) {
+            Text("#", Modifier.width(24.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Text("팀", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Text("실제", Modifier.width(40.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+            Text("운", Modifier.width(40.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+            Text("보정", Modifier.width(40.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+        }
+    }
+}
+
+@Composable
+private fun LuckRow(i: Int, r: SeasonRow, realPlace: Int, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val luck = r.points - r.aggPoints
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable(onClick = onClick).padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("${i + 1}", Modifier.width(24.dp).padding(start = 8.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+        Column(Modifier.weight(1f).padding(start = 6.dp)) {
+            Text(r.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (realPlace != i) {
+                Text("실제 ${realPlace + 1}위", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+        }
+        Text("${r.points}", Modifier.width(40.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
+        Text(
+            "%+d".format(luck), Modifier.width(40.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End,
+            color = if (luck > 0) gameColors.good else if (luck < 0) cs.error else cs.onSurfaceVariant,
+        )
+        Text("${r.aggPoints}", Modifier.width(40.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
+    }
+}
+
+/** 일정표: one matchday of a division, played and to come. */
+@Composable
+private fun CalendarCard(lg: LeagueController, division: Int, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val cal = lg.calendar
+    androidx.compose.runtime.LaunchedEffect(division) { if (cal?.division != division) lg.loadCalendar(division) }
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (cal == null || cal.division != division) {
+                Text("일정을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            } else {
+                CalendarBody(lg, cal, division, onOpen)
+            }
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: LeagueController, cal: yacht.app.core.CalendarView, division: Int, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { lg.loadCalendar(division, cal.matchday - 1) }, enabled = cal.matchday > 0) { Text("◀") }
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("${cal.matchday + 1}라운드 / ${cal.matchdays}", fontWeight = FontWeight.Bold)
+            Text(
+                when {
+                    cal.matchday < cal.current -> "끝난 라운드"
+                    cal.matchday == cal.current -> "진행 중인 라운드"
+                    else -> "다가오는 라운드"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = { lg.loadCalendar(division, cal.matchday + 1) }, enabled = cal.matchday < cal.matchdays - 1) { Text("▶") }
+    }
+    if (cal.matchday != cal.current) {
+        TextButton(onClick = { lg.loadCalendar(division) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("지금 라운드로") }
+    }
+    for (f in cal.items) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            val g = f.games
+            val aWon = g != null && yacht.engine.league.TieRule.match(g) > 0
+            val bWon = g != null && yacht.engine.league.TieRule.match(g) < 0
+            Text(
+                f.aName, Modifier.weight(1f).clickable { onOpen(f.a) }, style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (aWon) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                when {
+                    g != null -> g.joinToString(" ") { "${it.a}:${it.b}" }
+                    f.live -> "⚔️ 경기 중"
+                    else -> "vs"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (g != null) FontWeight.Bold else FontWeight.Normal,
+                color = if (g == null) cs.onSurfaceVariant else cs.onSurface,
+                modifier = Modifier.padding(horizontal = 6.dp),
+            )
+            Text(
+                f.bName, Modifier.weight(1f).clickable { onOpen(f.b) }, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End,
+                fontWeight = if (bWon) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** 순위 변동 그래프: the division's top and bottom places over the matchdays. */
+@Composable
+private fun RankChartCard(lg: LeagueController, season: SeasonView, division: Int) {
+    val cs = MaterialTheme.colorScheme
+    val order = season.order.getOrNull(division).orEmpty()
+    val positions = season.positions.getOrNull(division).orEmpty()
+    val table = season.divisions.getOrNull(division).orEmpty()
+    // The top 4 and the bottom 2 now, unless some are picked.
+    var picked by remember(division) { mutableStateOf<List<String>>(emptyList()) }
+    val shown = picked.ifEmpty { (table.take(4) + table.takeLast(2)).map { it.key }.distinct() }
+    val series = shown.mapIndexedNotNull { i, k ->
+        val at = order.indexOf(k)
+        if (at < 0) null else RankSeries(lg.name(k), positions.map { it[at].toInt() }, chartColors[i % chartColors.size])
+    }
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("라운드마다 순위가 어떻게 바뀌었는지 보여줘요. 아래에서 팀을 눌러 골라 보세요 (최대 8팀).", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            RankChart(series, order.size)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (r in table) {
+                    val on = r.key in shown
+                    FilterChip(
+                        selected = on,
+                        onClick = {
+                            val base = picked.ifEmpty { shown }
+                            picked = if (on) base - r.key else (base + r.key).takeLast(8)
+                        },
+                        label = { Text(r.name, fontSize = 11.sp, maxLines = 1) },
+                    )
+                }
+            }
         }
     }
 }

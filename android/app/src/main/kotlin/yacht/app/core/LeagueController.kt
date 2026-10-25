@@ -133,8 +133,10 @@ data class SeasonRow(
     val diff: Int,
     val avgScore: Double,
     val yachts: Int,
-    /** +1 promotion zone, -1 relegation zone, 0 otherwise. */
+    /** +1 promotion zone, -1 relegation zone, +-2 the playoff places, 0 otherwise. */
     val zone: Int,
+    /** 운 보정 승점: 3 for the higher two-game total on the same dice, 1 when equal. */
+    val aggPoints: Int = 0,
 )
 
 data class SeasonHistoryItem(
@@ -157,7 +159,27 @@ data class SeasonView(
     val newcomers: List<String>,
     /** Latest first. */
     val history: List<SeasonHistoryItem>,
+    /** Places after each finished matchday per division, in [order] (순위 변동 그래프). */
+    val positions: List<List<ByteArray>> = emptyList(),
+    /** Each division's AIs in the order [positions] uses. */
+    val order: List<List<String>> = emptyList(),
+    val matchdays: Int = 0,
+    val currentMatchday: Int = 0,
 )
+
+/** One fixture in the calendar (일정표): its games once played, or whether it is being played. */
+data class CalendarItem(
+    val id: Int,
+    val a: String,
+    val aName: String,
+    val b: String,
+    val bName: String,
+    val games: List<GameScore>?,
+    val live: Boolean,
+)
+
+/** A matchday of a division in the calendar. */
+data class CalendarView(val division: Int, val matchday: Int, val matchdays: Int, val current: Int, val items: List<CalendarItem>)
 
 /** A ranked game counted: my rating and tier before and after. */
 data class RankResult(
@@ -990,6 +1012,7 @@ class LeagueController(
                         playoff && d < s.divisions.size - 1 && i == table.size - down - 1 -> -2
                         else -> 0
                     },
+                    st.aggPoints,
                 )
             }
         }
@@ -997,7 +1020,29 @@ class LeagueController(
         return SeasonView(
             s.number, s.fixturesPlayed, s.fixturesTotal, divisions, roster.map { it.key }.filter { it !in inLeague }.map { name(it) },
             honours.seasons.reversed().map { historyItem(it, honours.of(it)) },
+            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday,
         )
+    }
+
+    /** The matchday shown in the calendar (일정표), read off the main thread on request. */
+    var calendar by mutableStateOf<CalendarView?>(null)
+        private set
+
+    /** Loads [matchday] of [division] into [calendar] (null: the current matchday). */
+    fun loadCalendar(division: Int, matchday: Int? = null) {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val s = plan?.league ?: return@synchronized null
+                if (s.divisions.isEmpty()) return@synchronized null
+                val d = division.coerceIn(0, s.divisions.size - 1)
+                val md = (matchday ?: s.currentMatchday).coerceIn(0, maxOf(0, s.matchdays - 1))
+                val items = s.matchday(md).filter { it.division == d }.map { f ->
+                    CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), s.result(f.id), !s.isPlayed(f.id) && (f.a to f.b) in live)
+                }
+                CalendarView(d, md, s.matchdays, s.currentMatchday, items)
+            }
+            scope.launch { calendar = v }
+        }
     }
 
     /** A past season for the hall of fame, from its honours. */
