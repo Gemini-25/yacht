@@ -1,0 +1,1004 @@
+package yacht.engine.league
+
+import yacht.engine.Board
+import yacht.engine.Category
+import java.util.Locale
+import kotlin.math.roundToInt
+import kotlin.math.roundToLong
+import kotlin.math.sqrt
+
+/**
+ * One AI's numbers over a season or over its career (docs/LEAGUE_SPEC.md section 3). Fixed
+ * size whatever the number of games, so memory and stats.txt stay bounded however long the
+ * league runs. Box sums and zeros count only the games whose final cards are known ([carded]).
+ */
+class AiStats {
+    var games = 0
+    var gameWins = 0
+    var gameDraws = 0
+    var matchWins = 0
+    var matchDraws = 0
+    var matchLosses = 0
+    var scoreSum = 0L
+    var scoreSquares = 0L
+    var best = 0
+    var worst = 0
+
+    /** Games with both final cards known: [boxSums] and [boxZeros] are over these. */
+    var carded = 0
+
+    /** Points written in each box, [Category.ALL] order. */
+    val boxSums = IntArray(Category.COUNT)
+
+    /** Times each box was written as 0. */
+    val boxZeros = IntArray(Category.COUNT)
+    var yachts = 0
+    var bonuses = 0
+    var over300 = 0
+
+    /** Games won after its own P(win) fell below [COMEBACK_P]. */
+    var comebacks = 0
+
+    /** Games lost after its own P(win) rose above [BLOWN_P]. */
+    var blownLeads = 0
+
+    /** Games won or lost by at most [CLOSE] points. */
+    var closeWins = 0
+    var closeLosses = 0
+
+    /** Matches won against an AI rated at least [GIANT] higher before the match. */
+    var giantKills = 0
+
+    /** Single decider games of best-of-three matches and knockout ties. */
+    var deciderWins = 0
+    var deciderLosses = 0
+
+    /** Sum and count of the per-game match ratings (평점). */
+    var ratingSum = 0.0
+    var ratingCount = 0
+
+    /** 운 보정 승점: 3 when its total over a match's mirrored games beat the opponent's, 1 when level. */
+    var aggPoints = 0
+
+    /** Games by score, [BIN]-point bins (the last bin takes everything above). */
+    val histogram = IntArray(BINS)
+
+    /** Moving average of its ms per game (NaN before the first timed job). */
+    var cost = Double.NaN
+
+    /** Games won in a row (negative: lost in a row), and the longest winning run. */
+    var streak = 0
+    var bestStreak = 0
+
+    /** Matches won and lost against AIs of its own hometown (derbies). */
+    var derbyWins = 0
+    var derbyLosses = 0
+
+    /** League seasons finished (career only). */
+    var seasons = 0
+
+    val gameLosses: Int get() = games - gameWins - gameDraws
+    val matches: Int get() = matchWins + matchDraws + matchLosses
+
+    /** Share of games won, a level game counting half. */
+    val winRate: Double get() = if (games == 0) 0.0 else (gameWins + 0.5 * gameDraws) / games
+    val avgScore: Double get() = if (games == 0) 0.0 else scoreSum.toDouble() / games
+
+    /** Standard deviation of its game scores. */
+    val scoreSd: Double
+        get() {
+            if (games < 2) return 0.0
+            val m = avgScore
+            return sqrt(maxOf(0.0, scoreSquares.toDouble() / games - m * m))
+        }
+
+    /** Average match rating (평점), NaN before the first rated game. */
+    val avgRating: Double get() = if (ratingCount == 0) Double.NaN else ratingSum / ratingCount
+
+    fun boxAverage(c: Category): Double = if (carded == 0) Double.NaN else boxSums[c.ordinal].toDouble() / carded
+    fun zeroRate(c: Category): Double = if (carded == 0) Double.NaN else boxZeros[c.ordinal].toDouble() / carded
+
+    internal fun addGame(g: SideGame) {
+        val won = g.own > g.opp
+        val lost = g.own < g.opp
+        games++
+        if (won) gameWins++ else if (!lost) gameDraws++
+        scoreSum += g.own
+        scoreSquares += g.own.toLong() * g.own
+        if (games == 1) {
+            best = g.own
+            worst = g.own
+        } else {
+            best = maxOf(best, g.own)
+            worst = minOf(worst, g.own)
+        }
+        histogram[(g.own / BIN).coerceIn(0, BINS - 1)]++
+        if (g.yacht) yachts++
+        if (g.bonus) bonuses++
+        if (g.own >= 300) over300++
+        g.card?.let { card ->
+            carded++
+            for (c in Category.ALL) {
+                val p = card[c] ?: 0
+                boxSums[c.ordinal] += p
+                if (p == 0) boxZeros[c.ordinal]++
+            }
+        }
+        if (!g.minP.isNaN()) {
+            if (won && g.minP < COMEBACK_P) comebacks++
+            if (lost && g.maxP > BLOWN_P) blownLeads++
+        }
+        if (won && g.own - g.opp <= CLOSE) closeWins++
+        if (lost && g.opp - g.own <= CLOSE) closeLosses++
+        if (g.decider) {
+            if (won) deciderWins++ else if (lost) deciderLosses++
+        }
+        if (!g.rating.isNaN()) {
+            ratingSum += g.rating
+            ratingCount++
+        }
+        streak = when {
+            won -> maxOf(streak, 0) + 1
+            lost -> minOf(streak, 0) - 1
+            else -> 0
+        }
+        bestStreak = maxOf(bestStreak, streak)
+    }
+
+    /** One match (a board) from this AI's side: [result] +1 won, 0 level, -1 lost; [agg] its total minus the opponent's. */
+    internal fun addMatch(result: Int, agg: Int, giantKill: Boolean, derby: Boolean) {
+        when {
+            result > 0 -> matchWins++
+            result < 0 -> matchLosses++
+            else -> matchDraws++
+        }
+        aggPoints += if (agg > 0) 3 else if (agg == 0) 1 else 0
+        if (result > 0 && giantKill) giantKills++
+        if (derby) {
+            if (result > 0) derbyWins++ else if (result < 0) derbyLosses++
+        }
+    }
+
+    internal fun addCost(ms: Double) {
+        if (ms.isNaN() || ms < 0) return
+        cost = if (cost.isNaN()) ms else cost * (1 - COST_ALPHA) + ms * COST_ALPHA
+    }
+
+    /** Adds [o]'s numbers to these (streaks and cost are kept from the newer side, [o]). */
+    fun add(o: AiStats) {
+        if (o.games > 0) {
+            best = if (games == 0) o.best else maxOf(best, o.best)
+            worst = if (games == 0) o.worst else minOf(worst, o.worst)
+        }
+        games += o.games
+        gameWins += o.gameWins
+        gameDraws += o.gameDraws
+        matchWins += o.matchWins
+        matchDraws += o.matchDraws
+        matchLosses += o.matchLosses
+        scoreSum += o.scoreSum
+        scoreSquares += o.scoreSquares
+        carded += o.carded
+        for (i in 0 until Category.COUNT) {
+            boxSums[i] += o.boxSums[i]
+            boxZeros[i] += o.boxZeros[i]
+        }
+        yachts += o.yachts
+        bonuses += o.bonuses
+        over300 += o.over300
+        comebacks += o.comebacks
+        blownLeads += o.blownLeads
+        closeWins += o.closeWins
+        closeLosses += o.closeLosses
+        giantKills += o.giantKills
+        deciderWins += o.deciderWins
+        deciderLosses += o.deciderLosses
+        ratingSum += o.ratingSum
+        ratingCount += o.ratingCount
+        aggPoints += o.aggPoints
+        for (i in 0 until BINS) histogram[i] += o.histogram[i]
+        if (!o.cost.isNaN()) cost = o.cost
+        if (o.games > 0) streak = o.streak
+        bestStreak = maxOf(bestStreak, o.bestStreak)
+        derbyWins += o.derbyWins
+        derbyLosses += o.derbyLosses
+        seasons += o.seasons
+    }
+
+    fun copy(): AiStats = AiStats().also { it.add(this) }
+
+    /**
+     * Space-separated fields ([FIELDS] of them), numbers in base 36, the score bins (from the
+     * first one in use), box sums and zeros as fixed-width runs ([Field.run]). 400 AIs' season
+     * and career lines take 160 KB this way instead of 230 in plain decimal lists. The box runs
+     * come last: their exact length makes a line cut anywhere unreadable rather than wrong.
+     */
+    fun encode(): String {
+        val out = StringBuilder(256)
+        fun n(x: Long) = out.append(java.lang.Long.toString(x, 36)).append(' ')
+        for (x in intArrayOf(games, gameWins, gameDraws, matchWins, matchDraws, matchLosses)) n(x.toLong())
+        n(scoreSum)
+        n(scoreSquares)
+        for (x in intArrayOf(best, worst, carded, yachts, bonuses, over300, comebacks, blownLeads, closeWins, closeLosses, giantKills, deciderWins, deciderLosses)) {
+            n(x.toLong())
+        }
+        n((ratingSum * 100).roundToLong())
+        n(ratingCount.toLong())
+        n(aggPoints.toLong())
+        // The lowest and highest bins are nearly always empty.
+        val lo = histogram.indexOfFirst { it != 0 }
+        if (lo < 0) out.append("- ") else out.append(lo.toString(36)).append(Field.run(histogram.copyOfRange(lo, histogram.indexOfLast { it != 0 } + 1))).append(' ')
+        if (cost.isNaN()) out.append("- ") else n((cost * 10).roundToLong())
+        for (x in intArrayOf(streak, bestStreak, derbyWins, derbyLosses, seasons)) n(x.toLong())
+        out.append(Field.run(boxSums)).append(' ')
+        out.append(Field.run(boxZeros))
+        return out.toString()
+    }
+
+    override fun equals(other: Any?): Boolean = other is AiStats && other.encode() == encode()
+    override fun hashCode(): Int = encode().hashCode()
+    override fun toString(): String = "AiStats(${encode()})"
+
+    companion object {
+        const val BINS = 16
+        const val BIN = 25
+        const val COMEBACK_P = 0.2
+        const val BLOWN_P = 0.8
+        const val CLOSE = 5
+        const val GIANT = 100.0
+        private const val COST_ALPHA = 0.2
+
+        /** Space-separated fields of [encode]. */
+        const val FIELDS = 33
+
+        /** Reads the [FIELDS] fields of [encode] from [f] at [from]; throws on a short or bad line. */
+        fun decode(f: List<String>, from: Int): AiStats {
+            require(f.size >= from + FIELDS) { "short stats line" }
+            fun int(t: String) = t.toInt(36)
+            fun arr(t: String, n: Int): IntArray = Field.unrun(t).also { require(it.size == n) }
+            var i = from
+            val s = AiStats()
+            val counts = IntArray(6) { int(f[i++]) }
+            val scoreSum = f[i++].toLong(36)
+            val squares = f[i++].toLong(36)
+            val best = int(f[i++])
+            val worst = int(f[i++])
+            val carded = int(f[i++])
+            val more = IntArray(10) { int(f[i++]) }
+            val ratingSum = f[i++].toLong(36) / 100.0
+            val ratingCount = int(f[i++])
+            val agg = int(f[i++])
+            val hist = IntArray(BINS)
+            f[i++].takeIf { it != "-" }?.let { t ->
+                val lo = t[0].digitToInt(36)
+                val used = Field.unrun(t.substring(1))
+                require(lo + used.size <= BINS)
+                used.copyInto(hist, lo)
+            }
+            val cost = f[i++].let { if (it == "-") Double.NaN else it.toLong(36) / 10.0 }
+            val tail = IntArray(5) { int(f[i++]) }
+            val sums = arr(f[i++], Category.COUNT)
+            val zeros = arr(f[i++], Category.COUNT)
+            // Everything read: a bad field above leaves nothing half set.
+            s.games = counts[0]
+            s.gameWins = counts[1]
+            s.gameDraws = counts[2]
+            s.matchWins = counts[3]
+            s.matchDraws = counts[4]
+            s.matchLosses = counts[5]
+            s.scoreSum = scoreSum
+            s.scoreSquares = squares
+            s.best = best
+            s.worst = worst
+            s.carded = carded
+            sums.copyInto(s.boxSums)
+            zeros.copyInto(s.boxZeros)
+            s.yachts = more[0]
+            s.bonuses = more[1]
+            s.over300 = more[2]
+            s.comebacks = more[3]
+            s.blownLeads = more[4]
+            s.closeWins = more[5]
+            s.closeLosses = more[6]
+            s.giantKills = more[7]
+            s.deciderWins = more[8]
+            s.deciderLosses = more[9]
+            s.ratingSum = ratingSum
+            s.ratingCount = ratingCount
+            s.aggPoints = agg
+            hist.copyInto(s.histogram)
+            s.cost = cost
+            s.streak = tail[0]
+            s.bestStreak = tail[1]
+            s.derbyWins = tail[2]
+            s.derbyLosses = tail[3]
+            s.seasons = tail[4]
+            return s
+        }
+    }
+}
+
+/** One game seen from one side, as [AiStats] takes it (NaN where the facts were not collected). */
+internal class SideGame(
+    val own: Int,
+    val opp: Int,
+    val yacht: Boolean,
+    val bonus: Boolean,
+    val card: Board?,
+    /** Its lowest and highest P(win) during the game. */
+    val minP: Double,
+    val maxP: Double,
+    val rating: Double,
+    val decider: Boolean,
+)
+
+/**
+ * What [StatsBook.record] needs to know besides the result. [rating] must give the ratings from
+ * before this match (record the stats before the ladder). [counts] says whether a fixture counts
+ * for the season's numbers; the career counts every rated game.
+ */
+class StatsContext(
+    val season: Int,
+    val rating: (String) -> Double,
+    val hometown: (String) -> String = { "" },
+    val counts: (Fixture) -> Boolean = { StatsBook.countsForSeason(it.comp) },
+)
+
+/** The share of one trait value among the top fifth by rating and among the rest (메타 리포트). */
+data class TraitShare(
+    val trait: String,
+    val value: String,
+    val top: Double,
+    val rest: Double,
+    /** Change of [top] since the season before (NaN when it was not seen then). */
+    val change: Double,
+)
+
+/**
+ * League meta of a season (리그 메타): average points and zero rate per box over every counted
+ * game, and which traits the generated and evolved AIs at the top have.
+ */
+data class MetaReport(
+    val season: Int,
+    /** Cards counted (two per game when the facts were collected). */
+    val cards: Int,
+    val avgScore: Double,
+    /** Per box, [Category.ALL] order (NaN before any card). */
+    val boxAverages: List<Double>,
+    val zeroRates: List<Double>,
+    val traits: List<TraitShare> = emptyList(),
+) {
+    fun boxAverage(c: Category): Double = boxAverages[c.ordinal]
+    fun zeroRate(c: Category): Double = zeroRates[c.ordinal]
+
+    /** Change of box [c]'s average points since [before] (NaN without it). */
+    fun boxChange(before: MetaReport?, c: Category): Double = if (before == null) Double.NaN else boxAverage(c) - before.boxAverage(c)
+
+    internal fun encode(out: StringBuilder) {
+        out.append("meta $season $cards ${Field.num(avgScore, 2)} ")
+        boxAverages.joinTo(out, ",") { Field.num(it, 2) }.append(' ')
+        zeroRates.joinTo(out, ",") { Field.num(it, 4) }.append('\n')
+        for (t in traits) {
+            out.append("mt $season ${Field.esc(t.trait)} ${Field.esc(t.value)} ${Field.num(t.top, 4)} ${Field.num(t.rest, 4)} ${Field.num(t.change, 4)}\n")
+        }
+    }
+
+    companion object {
+        internal fun decode(f: List<String>): MetaReport {
+            val boxes = f[4].split(',').map { Field.dbl(it) }
+            val zeros = f[5].split(',').map { Field.dbl(it) }
+            require(boxes.size == Category.COUNT && zeros.size == Category.COUNT)
+            return MetaReport(f[1].toInt(), f[2].toInt(), Field.dbl(f[3]), boxes, zeros)
+        }
+    }
+}
+
+/**
+ * Every AI's season and career [AiStats], the league records, milestones and the league meta
+ * (league/stats.txt, docs/LEAGUE_SPEC.md section 3). [record] takes every finished job, O(1)
+ * per game; [startSeason] and [endSeason] frame a season. Not thread-safe: callers synchronise.
+ */
+class StatsBook(
+    /** Official games before broken records make news (early on everything is a record). */
+    private val recordWarmup: Int = RECORD_WARMUP,
+) {
+    /** The season being recorded. */
+    var season = 0
+        private set
+
+    /** The last season [endSeason] closed (it is not closed twice). */
+    var ended = 0
+        private set
+
+    /** Official games recorded in the whole league (each game once). */
+    var officialGames = 0L
+        private set
+
+    private val seasonStats = HashMap<String, AiStats>()
+    private val careerStats = HashMap<String, AiStats>()
+    private val startRatings = HashMap<String, Double>()
+    private val rookieKeys = HashSet<String>()
+
+    val records = Records()
+
+    /** Records broken this season (the latest break per kind), for the season summary. */
+    private val breaks = LinkedHashMap<RecordKind, RecordBreak>()
+    private val milestoneList = ArrayDeque<LeagueEvent>()
+
+    // League meta of the season so far: cards, their box points and zeros; side-games and points.
+    private var metaCards = 0
+    private val metaSums = LongArray(Category.COUNT)
+    private val metaZeros = IntArray(Category.COUNT)
+    private var metaGames = 0
+    private var metaScore = 0L
+
+    /** The meta of the last finished season and of the one before. */
+    var meta: MetaReport? = null
+        private set
+    var previousMeta: MetaReport? = null
+        private set
+
+    fun season(key: String): AiStats? = seasonStats[key]
+    fun career(key: String): AiStats? = careerStats[key]
+
+    /** AIs with a career here. */
+    val keys: Set<String> get() = careerStats.keys
+
+    /** The rating [key] started this season with (NaN when unknown). */
+    fun startRating(key: String): Double = startRatings[key] ?: Double.NaN
+
+    fun isRookie(key: String): Boolean = key in rookieKeys
+
+    /** Records broken this season so far. */
+    val brokenThisSeason: List<RecordBreak> get() = breaks.values.toList()
+
+    /** The newest milestones (마일스톤), newest first. */
+    val milestones: List<LeagueEvent> get() = milestoneList.toList()
+
+    /** The best [n] AIs by [by] over their careers (or this season), with their stats. */
+    fun top(n: Int, career: Boolean = true, min: (AiStats) -> Boolean = { true }, by: (AiStats) -> Double): List<Pair<String, AiStats>> =
+        (if (career) careerStats else seasonStats).entries.filter { min(it.value) && !by(it.value).isNaN() }
+            .sortedByDescending { by(it.value) }.take(n).map { it.key to it.value }
+
+    /** The meta of the season so far (boxes only; traits come at the season's end). */
+    fun liveMeta(): MetaReport = boxMeta(season)
+
+    /**
+     * Starts recording season [number]: remembers everyone's rating at the start (for 기량발전상)
+     * and the rookies (default: AIs that never finished a season here). Called again for the
+     * same season (a restart), it keeps what it has and adds AIs it did not know.
+     */
+    fun startSeason(number: Int, ratings: Map<String, Double>, rookies: Collection<String>? = null) {
+        if (number != season) {
+            season = number
+            startRatings.clear()
+            rookieKeys.clear()
+            seasonStats.clear()
+            breaks.clear()
+            resetMeta()
+        }
+        // Whole points, as stats.txt keeps them (the same after a restart).
+        for ((k, r) in ratings) startRatings.putIfAbsent(k, if (r.isNaN()) r else Math.rint(r))
+        if (rookies != null) rookieKeys += rookies
+        else for (k in ratings.keys) if ((careerStats[k]?.seasons ?: 0) == 0) rookieKeys += k
+    }
+
+    internal fun putCareer(key: String, s: AiStats) {
+        careerStats[key] = s
+    }
+
+    internal fun putSeason(key: String, s: AiStats) {
+        seasonStats[key] = s
+    }
+
+    internal fun putMeta(m: MetaReport) {
+        previousMeta = meta
+        meta = m
+    }
+
+    /** Forgets AIs no longer in the league (retired or deleted), so the file stays bounded. */
+    fun retain(alive: Collection<String>) {
+        val keep = alive.toHashSet()
+        careerStats.keys.retainAll(keep)
+        seasonStats.keys.retainAll(keep)
+        startRatings.keys.retainAll(keep)
+        rookieKeys.retainAll(keep)
+    }
+
+    /**
+     * Records a finished job: per game and side into the season's stats (when [StatsContext.counts]
+     * says so) and the career (rated jobs); lab and unrated jobs are left out. Returns the news:
+     * "record" events for broken records and "milestone" events.
+     */
+    fun record(r: JobResult, ctx: StatsContext): List<LeagueEvent> {
+        val f = r.fixture
+        if (!f.rated || f.comp == Comp.LAB) return emptyList()
+        val official = ctx.counts(f)
+        val events = ArrayList<LeagueEvent>(0)
+        val jobGames = r.boards.sumOf { it.games.size }
+        // Half of each game's time per side, as the app's cost meter does.
+        val ms = if (jobGames == 0 || r.nanos <= 0) Double.NaN else r.nanos / 1e6 / jobGames / 2
+        for (b in r.boards) {
+            if (b.games.isEmpty()) continue
+            val result = if (f.kind != JobKind.TEAM && r.boards.size == 1) r.winner else TieRule.match(b.games)
+            val ra = ctx.rating(b.a)
+            val rb = ctx.rating(b.b)
+            val town = ctx.hometown(b.a)
+            val derby = town.isNotEmpty() && town == ctx.hometown(b.b)
+            val nd = b.games.size - b.deciders
+            var agg = 0
+            for (i in 0 until nd) agg += b.games[i].a - b.games[i].b
+            val (sideA, sideB) = sides(b)
+            val sa = if (official) seasonStats.getOrPut(b.a) { AiStats() } else null
+            val sb = if (official) seasonStats.getOrPut(b.b) { AiStats() } else null
+            val ca = careerStats.getOrPut(b.a) { AiStats() }
+            val cb = careerStats.getOrPut(b.b) { AiStats() }
+            for (i in b.games.indices) {
+                val ga = sideA[i]
+                val gb = sideB[i]
+                sa?.addGame(ga)
+                sb?.addGame(gb)
+                ca.addGame(ga)
+                cb.addGame(gb)
+                milestones(b.a, ca, ga, ctx.season, events)
+                milestones(b.b, cb, gb, ctx.season, events)
+                if (official) {
+                    officialGames++
+                    meta(ga)
+                    meta(gb)
+                    gameRecords(b.a, b.b, ga, ctx.season, f.comp, events)
+                    gameRecords(b.b, b.a, gb, ctx.season, f.comp, events)
+                }
+                streakRecord(b.a, ca, ga, ctx.season, f.comp, events)
+                streakRecord(b.b, cb, gb, ctx.season, f.comp, events)
+            }
+            val giantA = !ra.isNaN() && !rb.isNaN() && rb - ra >= AiStats.GIANT
+            val giantB = !ra.isNaN() && !rb.isNaN() && ra - rb >= AiStats.GIANT
+            for ((stats, mine) in listOf(sa to true, sb to false, ca to true, cb to false)) {
+                stats ?: continue
+                stats.addMatch(if (mine) result else -result, if (mine) agg else -agg, if (mine) giantA else giantB, derby)
+                stats.addCost(ms)
+            }
+            if (official) {
+                val ya = b.games.count { it.aYacht }.toDouble()
+                val yb = b.games.count { it.bYacht }.toDouble()
+                if (records.beats(RecordKind.YACHTS_MATCH, ya)) offer(LeagueRecord(RecordKind.YACHTS_MATCH, b.a, ya, ctx.season, b.b, f.comp), events)
+                if (records.beats(RecordKind.YACHTS_MATCH, yb)) offer(LeagueRecord(RecordKind.YACHTS_MATCH, b.b, yb, ctx.season, b.a, f.comp), events)
+            }
+        }
+        return events
+    }
+
+    private fun meta(g: SideGame) {
+        metaGames++
+        metaScore += g.own
+        val card = g.card ?: return
+        metaCards++
+        for (c in Category.ALL) {
+            val p = card[c] ?: 0
+            metaSums[c.ordinal] += p.toLong()
+            if (p == 0) metaZeros[c.ordinal]++
+        }
+    }
+
+    private fun resetMeta() {
+        metaCards = 0
+        metaSums.fill(0)
+        metaZeros.fill(0)
+        metaGames = 0
+        metaScore = 0
+    }
+
+    private fun boxMeta(n: Int, traits: List<TraitShare> = emptyList()) = MetaReport(
+        n, metaCards, if (metaGames == 0) Double.NaN else metaScore.toDouble() / metaGames,
+        List(Category.COUNT) { if (metaCards == 0) Double.NaN else metaSums[it].toDouble() / metaCards },
+        List(Category.COUNT) { if (metaCards == 0) Double.NaN else metaZeros[it].toDouble() / metaCards },
+        traits,
+    )
+
+    private fun milestones(key: String, c: AiStats, g: SideGame, season: Int, out: MutableList<LeagueEvent>) {
+        if (isMilestone(c.games, 1000)) milestone(key, "games", c.games, season, out)
+        if (g.own > g.opp && isMilestone(c.gameWins, 100)) milestone(key, "wins", c.gameWins, season, out)
+        if (g.yacht && isMilestone(c.yachts, 50)) milestone(key, "yachts", c.yachts, season, out)
+        if (g.own >= 300 && (c.over300 == 1 || isMilestone(c.over300, 10))) milestone(key, "300", c.over300, season, out)
+    }
+
+    internal fun milestone(key: String, kind: String, value: Int, season: Int, out: MutableList<LeagueEvent>) {
+        val e = LeagueEvent("milestone", season, listOf(key), listOf(kind, value.toString()))
+        out += e
+        milestoneList.addFirst(e)
+        while (milestoneList.size > MAX_MILESTONES) milestoneList.removeLast()
+    }
+
+    private fun gameRecords(key: String, opp: String, g: SideGame, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
+        if (records.beats(RecordKind.BEST_GAME, g.own.toDouble())) offer(LeagueRecord(RecordKind.BEST_GAME, key, g.own.toDouble(), season, opp, comp), out)
+        if (g.own <= g.opp) return
+        val margin = (g.own - g.opp).toDouble()
+        if (records.beats(RecordKind.MARGIN, margin)) offer(LeagueRecord(RecordKind.MARGIN, key, margin, season, opp, comp), out)
+        if (!g.minP.isNaN()) {
+            val p = (g.minP * 100).roundToInt().toDouble()
+            if (records.beats(RecordKind.COMEBACK, p)) offer(LeagueRecord(RecordKind.COMEBACK, key, p, season, opp, comp), out)
+        }
+    }
+
+    private fun streakRecord(key: String, c: AiStats, g: SideGame, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
+        if (g.own <= g.opp) return
+        val s = c.streak.toDouble()
+        if (records.beats(RecordKind.STREAK, s)) offer(LeagueRecord(RecordKind.STREAK, key, s, season, null, comp), out)
+    }
+
+    /** Puts [r] in the records if it beats the holder; news once the league has warmed up. */
+    internal fun offer(r: LeagueRecord, out: MutableList<LeagueEvent>, warm: Boolean = officialGames >= recordWarmup) {
+        if (r.value <= 0 && !r.kind.lowerIsBetter) return
+        val b = records.offer(r) ?: return
+        val prev = b.previous ?: return
+        if (!warm) return
+        // A winning run going on past the record is one break, not one per game.
+        val own = r.kind == RecordKind.STREAK && prev.holder == r.holder && breaks[r.kind]?.record?.holder == r.holder
+        breaks[r.kind] = if (own) RecordBreak(r, breaks.getValue(r.kind).previous) else b
+        if (own) return
+        out += LeagueEvent("record", r.season, listOf(r.holder, prev.holder), listOf(r.kind.name, r.kind.plain(r.value), r.kind.plain(prev.value)), r.comp)
+    }
+
+    /**
+     * Closes season [plan] (docs/LEAGUE_SPEC.md section 5 step 2): awards (MVP, 신인왕, 기량발전상;
+     * 득점왕 and 최다 요트상 come from [Offseason]), records of the season, title milestones,
+     * the hall of fame, dynasties, season lines, the season summary and review ([archive]), and
+     * the league meta; then resets the season's stats. Call it after [Offseason.next] with the
+     * season's honours it returned ([seasonHonours]) and add [SeasonEnd.awards] together with
+     * them ([HonourBook.add] replaces a whole season). [honours] holds the earlier seasons (this
+     * one may be in it already). Closing the same season again returns the saved awards only.
+     */
+    fun endSeason(
+        plan: SeasonPlan,
+        seasonHonours: List<Honour>,
+        honours: HonourBook,
+        archive: Archive,
+        rating: (String) -> Double,
+        family: (String) -> Family? = { null },
+        name: (String) -> String = { it },
+        isRookie: ((String) -> Boolean)? = null,
+        traits: (String) -> Map<String, String>? = { null },
+    ): SeasonEnd {
+        val n = plan.number
+        if (n <= ended) {
+            val saved = archive.summary(n)?.honours.orEmpty().filter { it.kind in Awards.KINDS }
+            return SeasonEnd(n, saved, emptyList(), emptyList(), emptyList(), archive.review?.takeIf { it.season == n })
+        }
+        val league = plan.league
+        // Sorted, so that ties come out the same every time.
+        val keys = league.standings.keys.sorted()
+        val events = ArrayList<LeagueEvent>()
+
+        val awards = ArrayList<Honour>()
+        Awards.mvp(plan) { seasonStats[it] }?.let { awards += Honour(n, "MVP", it) }
+        Awards.rookie(keys, isRookie ?: { it in rookieKeys }, rating)?.let { awards += Honour(n, "ROOKIE", it) }
+        Awards.mip(keys, { startRating(it) }, rating)?.let { awards += Honour(n, "MIP", it) }
+        // The season's titles as Offseason gave them (or as already added to the book).
+        val titles = seasonHonours.filter { it.season == n }.ifEmpty { honours.of(n).filter { it.kind !in Awards.KINDS } }
+        val won = titles + awards
+        for (h in won) if (h.kind in Awards.ANNOUNCED) events += LeagueEvent("award", n, listOf(h.key), listOf(h.kind))
+
+        // Every season's honours with this one in place, for titles and MVPs.
+        val book = HonourBook().apply { add(honours.all.filter { it.season != n } + won) }
+        val titleCount = book.all.filter { Awards.isAiTitle(it.kind) }.groupingBy { it.key }.eachCount()
+        val mvpCount = book.all.filter { it.kind == "MVP" }.groupingBy { it.key }.eachCount()
+
+        // Records of the season (its best only, so one break per kind): points, match rating, titles.
+        val warm = n > 1
+        // Level: the higher division's (tables in order), then the first key.
+        league.divisions.indices.flatMap { league.table(it) }.filter { it.played > 0 }.maxByOrNull { it.points }?.let { s ->
+            offer(LeagueRecord(RecordKind.SEASON_POINTS, s.key, s.points.toDouble(), n, null, Comp.LEAGUE), events, warm)
+        }
+        seasonStats.entries.filter { it.value.matches >= Awards.RATING_MATCHES && !it.value.avgRating.isNaN() }
+            .maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.avgRating }.thenByDescending { it.key })?.let { (k, st) ->
+                offer(LeagueRecord(RecordKind.SEASON_RATING, k, Math.round(st.avgRating * 100) / 100.0, n), events, warm)
+            }
+        Records.mostTitles(book)?.let { offer(it, events, warm) }
+
+        // Title milestones: the first, then every fifth.
+        for (k in won.filter { Awards.isAiTitle(it.kind) }.map { it.key }.distinct()) {
+            val t = titleCount[k] ?: 0
+            if (t == 1 || t % 5 == 0) milestone(k, "title", t, n, events)
+        }
+
+        // Hall of fame (AIs only: team competitions' honours are keyed by the team).
+        val inducted = ArrayList<HallOfFameEntry>()
+        val candidates = LinkedHashSet<String>().apply {
+            addAll(keys)
+            addAll(careerStats.keys)
+        }
+        for (k in candidates) {
+            if (archive.inHallOfFame(k)) continue
+            val c = careerStats[k]
+            val titles = titleCount[k] ?: 0
+            val mvps = mvpCount[k] ?: 0
+            val reason = Awards.hallOfFame(titles, mvps, c) ?: continue
+            inducted += HallOfFameEntry(k, name(k), n, reason, titles, c?.games ?: 0, c?.winRate ?: 0.0)
+        }
+        for (e in inducted) {
+            archive.induct(e)
+            events += LeagueEvent("hall_of_fame", n, listOf(e.key), listOf(e.reason))
+        }
+
+        // Dynasties.
+        val dynasties = Awards.dynasties(n, won, book.of(n - 1), league, archive.dynasties)
+        for (d in dynasties) {
+            archive.putDynasty(d)
+            events += LeagueEvent("dynasty", n, listOf(d.key), listOf(d.kind, d.count.toString(), d.title))
+        }
+
+        // Season lines (성장 곡선) and careers.
+        for (d in league.divisions.indices) {
+            for ((pos, s) in league.table(d).withIndex()) {
+                val st = seasonStats[s.key]
+                archive.addLine(s.key, SeasonLine(n, d, pos + 1, s.wins, s.draws, s.losses, rating(s.key), st?.avgRating ?: Double.NaN))
+                careerStats.getOrPut(s.key) { AiStats() }.seasons++
+            }
+        }
+
+        // League meta: boxes over the season, traits among the generated and evolved AIs.
+        val report = boxMeta(n, traitShares(keys, rating, traits, meta))
+        val before = meta
+        previousMeta = before
+        meta = report
+
+        val broken = breaks.values.toList()
+        val scorer = won.firstOrNull { it.kind == "SCORER" }?.key
+        archive.putSummary(
+            SeasonSummary(
+                n, won.filter { Awards.inSummary(it.kind) }, scorer, scorer?.let { league.standings[it]?.avgScore } ?: Double.NaN,
+                broken, metaGames / 2, report.avgScore,
+            ),
+        )
+        val review = SeasonReview.of(
+            plan, won, keys, { startRating(it) }, rating, { seasonStats[it]?.avgRating ?: Double.NaN }, broken, report, before, family, name,
+        )
+        archive.putReview(review)
+
+        // The next season starts from nothing.
+        seasonStats.clear()
+        breaks.clear()
+        resetMeta()
+        ended = n
+        return SeasonEnd(n, awards, events, inducted, dynasties, review)
+    }
+
+    private fun traitShares(keys: List<String>, rating: (String) -> Double, traits: (String) -> Map<String, String>?, last: MetaReport?): List<TraitShare> {
+        val pop = keys.mapNotNull { k -> traits(k)?.let { t -> Triple(k, rating(k), t) } }.filter { !it.second.isNaN() }
+            .sortedByDescending { it.second }
+        if (pop.size < 5) return emptyList()
+        val topN = (pop.size + 4) / 5
+        val counts = HashMap<Pair<String, String>, IntArray>()
+        for ((i, p) in pop.withIndex()) for ((t, v) in p.third) counts.getOrPut(t to v) { IntArray(2) }[if (i < topN) 0 else 1]++
+        val rest = pop.size - topN
+        return counts.entries.sortedByDescending { it.value[0] + it.value[1] }.take(MAX_TRAITS).map { (tv, c) ->
+            val top = c[0].toDouble() / topN
+            val was = last?.traits?.firstOrNull { it.trait == tv.first && it.value == tv.second }?.top
+            TraitShare(tv.first, tv.second, top, if (rest == 0) Double.NaN else c[1].toDouble() / rest, if (was == null) Double.NaN else top - was)
+        }.sortedWith(compareBy<TraitShare> { it.trait }.thenByDescending { it.top })
+    }
+
+    // ---- saving --------------------------------------------------------------------------------
+
+    fun encode(): String = buildString {
+        append("stats 1\n")
+        append("book $season $ended $officialGames\n")
+        for (k in (startRatings.keys + seasonStats.keys).sorted()) {
+            val s = seasonStats[k] ?: AiStats()
+            append("s ${Field.esc(k)} ${Field.num(startRatings[k] ?: Double.NaN, 0)} ${if (k in rookieKeys) 1 else 0} ${s.encode()}\n")
+        }
+        for (k in careerStats.keys.sorted()) append("c ${Field.esc(k)} ${careerStats.getValue(k).encode()}\n")
+        for (r in records.all) append("rec ${r.encode()}\n")
+        for (b in breaks.values) append("brk ${b.encode()}\n")
+        append("box $metaGames $metaScore $metaCards ${metaSums.joinToString(",")} ${metaZeros.joinToString(",")}\n")
+        previousMeta?.encode(this)
+        meta?.encode(this)
+        for (e in milestoneList.reversed()) append("ms ${e.encode()}\n")
+    }
+
+    companion object {
+        const val RECORD_WARMUP = 2000
+        const val MAX_MILESTONES = 100
+        const val MAX_TRAITS = 32
+
+        /** League, cups, champions league, club boards, playoffs: yes; friendlies, the all-star game, exhibitions and the lab: no. */
+        fun countsForSeason(c: Comp): Boolean = c != Comp.FRIENDLY && c != Comp.ALL_STAR && c != Comp.LEGEND && c != Comp.LAB
+
+        /** 1000, 5000, 10000, 50000, ... from [first] (wins from 100, Yachts from 50). */
+        internal fun isMilestone(n: Int, first: Int): Boolean {
+            if (n < first) return false
+            var p = 1L
+            while (p * 10 <= n) p *= 10
+            return n.toLong() == p || n.toLong() == 5 * p
+        }
+
+        /**
+         * Each game of a pairing from A's side and from B's: which card is whose comes from the
+         * totals, and for level games from the seat order [LeagueMatch] plays (mirrored games
+         * alternate from A, single games all have A first, deciders alternate from A).
+         */
+        internal fun sides(b: BoardResult): Pair<List<SideGame>, List<SideGame>> {
+            val first = seats(b)
+            val nd = b.games.size - b.deciders
+            val xs = ArrayList<SideGame>(b.games.size)
+            val ys = ArrayList<SideGame>(b.games.size)
+            for ((i, g) in b.games.withIndex()) {
+                val f = b.facts.getOrNull(i)
+                val decider = i >= nd
+                if (f == null) {
+                    xs += SideGame(g.a, g.b, g.aYacht, g.aBonus, null, Double.NaN, Double.NaN, Double.NaN, decider)
+                    ys += SideGame(g.b, g.a, g.bYacht, g.bBonus, null, Double.NaN, Double.NaN, Double.NaN, decider)
+                    continue
+                }
+                var lo = 100
+                var hi = 0
+                for (p in f.curve) {
+                    lo = minOf(lo, p.toInt())
+                    hi = maxOf(hi, p.toInt())
+                }
+                val (r1, r2) = f.ratings
+                // The first player's P range; the second's is its mirror.
+                val firstGame = { own: Int, opp: Int, y: Boolean, bo: Boolean -> SideGame(own, opp, y, bo, f.first, lo / 100.0, hi / 100.0, r1, decider) }
+                val secondGame = { own: Int, opp: Int, y: Boolean, bo: Boolean -> SideGame(own, opp, y, bo, f.second, (100 - hi) / 100.0, (100 - lo) / 100.0, r2, decider) }
+                if (first[i]) {
+                    xs += firstGame(g.a, g.b, g.aYacht, g.aBonus)
+                    ys += secondGame(g.b, g.a, g.bYacht, g.bBonus)
+                } else {
+                    xs += secondGame(g.a, g.b, g.aYacht, g.aBonus)
+                    ys += firstGame(g.b, g.a, g.bYacht, g.bBonus)
+                }
+            }
+            return xs to ys
+        }
+
+        /** True where A moved first in game i of [b]. */
+        internal fun seats(b: BoardResult): BooleanArray {
+            val nd = b.games.size - b.deciders
+            // Mirrored matches have an even number of games; single-game legs may too, so a game
+            // whose totals differ tells them apart.
+            var single = nd % 2 == 1
+            if (!single) {
+                for (i in 1 until minOf(nd, b.facts.size) step 2) {
+                    val g = b.games[i]
+                    if (g.a == g.b) continue
+                    single = b.facts[i].first.total == g.a
+                    break
+                }
+            }
+            return BooleanArray(b.games.size) { i ->
+                val f = b.facts.getOrNull(i)
+                val g = b.games[i]
+                when {
+                    f != null && g.a != g.b -> f.first.total == g.a
+                    i < nd -> single || i % 2 == 0
+                    else -> (i - nd) % 2 == 0
+                }
+            }
+        }
+
+        /** Reads stats.txt; throws when it is not a stats file at all (the caller starts fresh). */
+        fun decode(text: String, recordWarmup: Int = RECORD_WARMUP): StatsBook {
+            val lines = text.lines()
+            require(lines.firstOrNull()?.trim() == "stats 1") { "not a stats file" }
+            val book = StatsBook(recordWarmup)
+            val metas = ArrayList<MetaReport>()
+            val shares = ArrayList<Pair<Int, TraitShare>>()
+            for (line in lines) {
+                runCatching {
+                    val f = line.split(' ')
+                    when (f[0]) {
+                        "book" -> {
+                            val s = f[1].toInt()
+                            val e = f[2].toInt()
+                            val g = f[3].toLong()
+                            book.season = s
+                            book.ended = e
+                            book.officialGames = g
+                        }
+                        "s" -> {
+                            val k = Field.unesc(f[1])
+                            val start = Field.dbl(f[2])
+                            val rookie = f[3] == "1"
+                            val st = AiStats.decode(f, 4)
+                            if (!start.isNaN()) book.startRatings[k] = start
+                            if (rookie) book.rookieKeys += k
+                            if (st.games > 0 || st.matches > 0) book.seasonStats[k] = st
+                        }
+                        "c" -> book.careerStats[Field.unesc(f[1])] = AiStats.decode(f, 2)
+                        "rec" -> LeagueRecord.decode(f, 1)?.let { book.records.put(it) }
+                        "brk" -> RecordBreak.decode(f, 1)?.let { book.breaks[it.record.kind] = it }
+                        "box" -> {
+                            val games = f[1].toInt()
+                            val score = f[2].toLong()
+                            val cards = f[3].toInt()
+                            val sums = f[4].split(',').map { it.toLong() }
+                            val zeros = f[5].split(',').map { it.toInt() }
+                            require(sums.size == Category.COUNT && zeros.size == Category.COUNT)
+                            book.metaGames = games
+                            book.metaScore = score
+                            book.metaCards = cards
+                            sums.forEachIndexed { i, x -> book.metaSums[i] = x }
+                            zeros.forEachIndexed { i, x -> book.metaZeros[i] = x }
+                        }
+                        "meta" -> metas += MetaReport.decode(f)
+                        "mt" -> shares += f[1].toInt() to TraitShare(Field.unesc(f[2]), Field.unesc(f[3]), Field.dbl(f[4]), Field.dbl(f[5]), Field.dbl(f[6]))
+                        "ms" -> LeagueEvent.decode(line.substringAfter(' '))?.let { book.milestoneList.addFirst(it) }
+                    }
+                }
+            }
+            val reports = metas.sortedBy { it.season }.takeLast(2).map { m -> m.copy(traits = shares.filter { it.first == m.season }.map { it.second }) }
+            book.meta = reports.lastOrNull()
+            book.previousMeta = reports.getOrNull(reports.size - 2)
+            while (book.milestoneList.size > MAX_MILESTONES) book.milestoneList.removeLast()
+            return book
+        }
+    }
+}
+
+/** Text fields of stats.txt and archive.txt: no spaces or separators inside, "-" for none. */
+internal object Field {
+    private const val SPECIAL = "% ,;:|\n\r\t\u001f"
+
+    fun esc(s: String?): String {
+        if (s.isNullOrEmpty()) return "-"
+        if (s == "-") return "%2D"
+        if (s.none { it in SPECIAL }) return s
+        val b = StringBuilder(s.length + 8)
+        for (ch in s) if (ch in SPECIAL) b.append('%').append(String.format(Locale.ROOT, "%02X", ch.code)) else b.append(ch)
+        return b.toString()
+    }
+
+    /** The text of [esc] back ("" for "-"). */
+    fun unesc(s: String): String {
+        if (s == "-") return ""
+        if ('%' !in s) return s
+        val b = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val ch = s[i]
+            if (ch == '%' && i + 2 < s.length) {
+                b.append(s.substring(i + 1, i + 3).toInt(16).toChar())
+                i += 3
+            } else {
+                b.append(ch)
+                i++
+            }
+        }
+        return b.toString()
+    }
+
+    fun opt(s: String): String? = if (s == "-") null else unesc(s)
+
+    /** [x] with up to [digits] decimals and no trailing zeros; "-" for NaN. */
+    fun num(x: Double, digits: Int): String {
+        if (x.isNaN() || x.isInfinite()) return "-"
+        val s = String.format(Locale.ROOT, "%.${digits}f", x)
+        return if ('.' in s) s.trimEnd('0').trimEnd('.') else s
+    }
+
+    fun dbl(s: String): Double = if (s == "-") Double.NaN else s.toDouble()
+
+    /**
+     * Counts as one fixed-width base-36 run: the width in one digit, then every value padded to
+     * it, with no separators ("3" + "01k" + "2b0" + ... for 12 box sums). Counts are never
+     * negative; one would be saved as 0 rather than fail the save.
+     */
+    fun run(xs: IntArray): String {
+        val digits = xs.map { it.coerceAtLeast(0).toString(36) }
+        val w = maxOf(1, digits.maxOfOrNull { it.length } ?: 1)
+        val b = StringBuilder(1 + w * xs.size).append(w.toString(36))
+        for (d in digits) {
+            repeat(w - d.length) { b.append('0') }
+            b.append(d)
+        }
+        return b.toString()
+    }
+
+    /** The values of [run]; throws on a cut or bad run. */
+    fun unrun(s: String): IntArray {
+        val w = s[0].digitToInt(36)
+        require(w >= 1 && (s.length - 1) % w == 0) { "bad run" }
+        return IntArray((s.length - 1) / w) { s.substring(1 + it * w, 1 + (it + 1) * w).toInt(36) }
+    }
+}
