@@ -325,6 +325,15 @@ data class RankResult(
 data class Matchup(val other: String, val name: String, val score: Double, val games: Int)
 
 /** How many cores the league may use (battery). */
+/** What the league does while the app is hidden. */
+enum class LeagueBackground(val label: String) {
+    /** It stops (battery) and goes on when the app is back. */
+    PAUSE("나가면 멈춤"),
+
+    /** It keeps playing: the app shows a notification and keeps the phone awake while it runs. */
+    KEEP("나가도 계속"),
+}
+
 enum class LeagueSpeed(val label: String) {
     ECO("절약 · 1코어"),
     NORMAL("보통 · 절반"),
@@ -386,6 +395,10 @@ class LeagueController(
     private val configFile = File(folder, "config.txt")
     private val customFile = File(folder, "custom.txt")
     private val prefs = File(folder, "prefs.txt")
+    private val backgroundFile = File(folder, "background.txt")
+
+    /** Present while the league should be running: it goes on by itself the next time the app opens. */
+    private val resumeFile = File(folder, "resume.txt")
     private val favouriteFile = File(folder, "favourites.txt")
     private val cores = Runtime.getRuntime().availableProcessors()
 
@@ -393,6 +406,20 @@ class LeagueController(
         private set
     var running by mutableStateOf(false)
         private set
+
+    /** What the league does while the app is hidden (saved). */
+    var background by mutableStateOf(LeagueBackground.PAUSE)
+        private set
+
+    /** Why the league stopped by itself (errors), shown on its screen until the next start. */
+    var stopReason by mutableStateOf<String?>(null)
+        private set
+
+    /** Told about every error the league meets while it runs (the app logs it). */
+    var onError: (Throwable) -> Unit = {}
+
+    /** Errors in a row while running (reset by every recorded match). */
+    private val failures = java.util.concurrent.atomic.AtomicInteger()
 
     /** Progress text while the extra tables are built (first start only). */
     var preparing by mutableStateOf<String?>(null)
@@ -494,6 +521,9 @@ class LeagueController(
         runCatching {
             prefs.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueSpeed.entries.firstOrNull { it.name == v }?.let { speed = it } }
         }
+        runCatching {
+            backgroundFile.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueBackground.entries.firstOrNull { it.name == v }?.let { background = it } }
+        }
         customs = runCatching { customFile.takeIf { it.exists() }?.readLines()?.mapNotNull { CustomAiSpec.decode(it) } }.getOrNull().orEmpty()
         config = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: LeagueConfig()
         favourites = readFavourites()
@@ -571,7 +601,10 @@ class LeagueController(
             legendAis.clear()
             oddsNow = null
         }
+        val first = !loaded.isCompleted
         loaded.complete(Unit)
+        // Running when the app was last closed (or killed): it goes on by itself.
+        if (first && resumeFile.exists()) scope.launch { start() }
         // A restore may have brought the rules and the favourites too.
         val favs = readFavourites()
         val rv = synchronized(lock) { w.archive.pendingReview }
@@ -682,7 +715,7 @@ class LeagueController(
         speed = s
         scope.launch(fileWrites) { runCatching { prefs.writeTextAtomically(s.name) } }
         if (running) {
-            stop()
+            stop(keepResume = true)
             start()
         }
     }
@@ -750,6 +783,9 @@ class LeagueController(
         val t = tables ?: return
         if (running || ladder == null || restoring) return
         running = true
+        stopReason = null
+        failures.set(0)
+        scope.launch(fileWrites) { runCatching { resumeFile.writeTextAtomically("1") } }
         val flag = AtomicBoolean(false)
         stop = flag
         val previous = runJob
@@ -794,9 +830,16 @@ class LeagueController(
                     pool.shutdown()
                     dispatcher.close()
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Preparing the tables or starting the season failed: shown, not a silent stop.
+                withContext(kotlinx.coroutines.NonCancellable) { onError(e) }
+                stopReason = reasonOf(e)
+                clearResume()
             } finally {
-                // A worker that failed (the error is logged by the scope) ends the run: the screen
-                // must not show a league running with no one playing.
+                // A run that ended by itself (errors) must not leave the screen showing a league
+                // running with no one playing.
                 withContext(kotlinx.coroutines.NonCancellable) {
                     if (stop === flag && running) {
                         flag.set(true)
@@ -902,19 +945,16 @@ class LeagueController(
     private suspend fun work(t: Tables, flag: AtomicBoolean, rng: Random) {
         while (!flag.get()) {
             var seasonFormat = config.matchFormat
-            val job = synchronized(lock) {
-                nextJob(rng)?.also {
-                    // The season keeps the format it started with (a change applies next season);
-                    // read after nextJob, which may have opened the next season.
-                    world?.plan?.config?.matchFormat?.let { f -> seasonFormat = f }
-                    // Lab games may run while their AIs play league games: they take no one's slot.
-                    if (it.comp == Comp.LAB) labInFlight++ else {
-                        busy += it.players
-                        live += it.a to it.b
-                    }
-                    if (isCup(it.comp)) cupsInFlight++
-                    if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
-                }
+            val job = try {
+                synchronized(lock) { takeJob(rng) { f -> seasonFormat = f } }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Even the next fixture failed (a season that cannot close): retried a few times,
+                // then the league stops and says why.
+                if (failed(e, flag)) break
+                delay(ERROR_PAUSE_MS)
+                continue
             }
             if (job == null) {
                 delay(50)
@@ -950,8 +990,12 @@ class LeagueController(
                     meter(result)
                     runMatches += result.boards.size
                 }
+                failures.set(0)
             } catch (e: CancellationException) {
                 // stopped mid-match: the match is dropped
+            } catch (e: Exception) {
+                // This match failed: it is given back to the season and the league goes on.
+                failed(e, flag)
             } finally {
                 synchronized(lock) {
                     if (!recorded && job.comp != Comp.FRIENDLY) world?.release(job)
@@ -967,6 +1011,45 @@ class LeagueController(
         }
     }
 
+    /** The next job, marked as taken (under the lock); [format] gets the season's match format. */
+    private fun takeJob(rng: Random, format: (MatchFormat) -> Unit): Fixture? =
+        nextJob(rng)?.also {
+            // The season keeps the format it started with (a change applies next season); read
+            // after nextJob, which may have opened the next season.
+            world?.plan?.config?.matchFormat?.let(format)
+            // Lab games may run while their AIs play league games: they take no one's slot.
+            if (it.comp == Comp.LAB) labInFlight++ else {
+                busy += it.players
+                live += it.a to it.b
+            }
+            if (isCup(it.comp)) cupsInFlight++
+            if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
+        }
+
+    /**
+     * An error while running: told to the app; true (and the league stops, saying why) once
+     * [MAX_FAILURES] came in a row.
+     */
+    private fun failed(e: Exception, flag: AtomicBoolean): Boolean {
+        // Told on the main thread (the app shows it).
+        scope.launch { onError(e) }
+        if (failures.incrementAndGet() < MAX_FAILURES) return false
+        if (!flag.getAndSet(true)) {
+            scope.launch {
+                stopReason = reasonOf(e)
+                clearResume()
+            }
+        }
+        return true
+    }
+
+    private fun reasonOf(e: Throwable): String =
+        "리그가 오류로 멈췄어요: ${e.javaClass.simpleName}${e.message?.let { ": " + it.take(120) } ?: ""}. ‘이어서’를 누르면 다시 해 봐요."
+
+    private fun clearResume() {
+        scope.launch(fileWrites) { runCatching { resumeFile.delete() } }
+    }
+
     /**
      * While the league runs: the full rating fit every [FIT_MS] (solved off the lock; a match
      * only nudges its two players) and a save every [CHECKPOINT_MS] (stop saves at once).
@@ -975,11 +1058,17 @@ class LeagueController(
         var lastSave = System.currentTimeMillis()
         while (!flag.get()) {
             delay(FIT_MS)
-            refit()
-            refreshOdds()
-            if (System.currentTimeMillis() - lastSave >= CHECKPOINT_MS && !flag.get()) {
-                lastSave = System.currentTimeMillis()
-                save()
+            try {
+                refit()
+                refreshOdds()
+                if (System.currentTimeMillis() - lastSave >= CHECKPOINT_MS && !flag.get()) {
+                    lastSave = System.currentTimeMillis()
+                    save()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (failed(e, flag)) break
             }
             publish()
         }
@@ -1042,8 +1131,12 @@ class LeagueController(
         scope.launch(Dispatchers.Default) { synchronized(lock) { world?.config = c } }
     }
 
-    /** Stops after abandoning the matches in progress, and saves. */
-    fun stop() {
+    /**
+     * Stops after abandoning the matches in progress, and saves. [keepResume]: it goes on by
+     * itself later (the app hidden or closed, a speed change); a plain stop is the player's.
+     */
+    fun stop(keepResume: Boolean = false) {
+        if (!keepResume) clearResume()
         if (!running) return
         stop.set(true)
         running = false
@@ -1060,10 +1153,15 @@ class LeagueController(
         }
     }
 
-    /** App hidden: no league in the background (battery); it goes on when the app is back. */
+    /**
+     * App hidden: by default no league in the background (battery), and it goes on when the app
+     * is back; with [LeagueBackground.KEEP] it keeps playing (the app keeps a notification up).
+     */
     fun onBackground() {
-        if (running) resumeOnForeground = true
-        stop()
+        if (background == LeagueBackground.PAUSE) {
+            if (running) resumeOnForeground = true
+            stop(keepResume = true)
+        }
         pauseWatch()
         if (liveJob?.isActive == true) {
             liveJob?.cancel()
@@ -1084,6 +1182,12 @@ class LeagueController(
 
     private var resumeOnForeground = false
     private var liveOnForeground = false
+
+    /** Sets what the league does while the app is hidden (saved). */
+    fun changeBackground(b: LeagueBackground) {
+        background = b
+        scope.launch(fileWrites) { runCatching { backgroundFile.writeTextAtomically(b.name) } }
+    }
 
     /** True when the app ships a seed ladder to start from. */
     val hasSeed: Boolean by lazy { seed() != null }
@@ -1859,6 +1963,10 @@ class LeagueController(
         private const val NEWS = 120
         private const val FRIENDLY_SHARE = 0.2
         private const val FRIENDLY_RUSH = 0.6
+
+        /** Errors in a row after which the league stops and says why. */
+        private const val MAX_FAILURES = 12
+        private const val ERROR_PAUSE_MS = 500L
 
         /** My assumed rating before my first ranked game (a solid amateur). */
         const val START_RATING = 1400.0

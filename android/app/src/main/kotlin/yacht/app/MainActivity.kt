@@ -1,7 +1,10 @@
 package yacht.app
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -16,13 +19,19 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import yacht.app.core.AppController
+import yacht.app.core.LeagueBackground
 import yacht.app.core.GameStorage
 import yacht.app.core.Screen
 import yacht.app.ui.AppRoot
@@ -73,9 +82,28 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         controller.start()
+        // The league kept going while the app is hidden: its service runs while the league does
+        // in that mode (a short stop, like a speed change, does not end it).
+        LeagueService.stopLeague = { viewModelScope.launch { controller.league.stop() } }
+        viewModelScope.launch {
+            snapshotFlow { controller.league.running && controller.league.background == LeagueBackground.KEEP }
+                .distinctUntilChanged()
+                .collectLatest { keep ->
+                    if (keep) {
+                        LeagueService.start(app)
+                    } else {
+                        delay(1_500)
+                        LeagueService.stop(app)
+                    }
+                }
+        }
     }
 
-    override fun onCleared() = controller.shutdown()
+    override fun onCleared() {
+        LeagueService.stopLeague = null
+        LeagueService.stop(getApplication())
+        controller.shutdown()
+    }
 }
 
 /** ev.bin is small and read into memory; dist.bin (~50 MB) is memory-mapped from the APK. */
@@ -161,6 +189,18 @@ class MainActivity : ComponentActivity() {
                         else -> c0.restore(bytes) { c0.backupNote = it }
                     }
                 }
+            }
+            // ‘나가도 계속’ shows a notification while the league runs: asked for when chosen.
+            val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+            DisposableEffect(notify) {
+                c0.requestNotifications = {
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+                onDispose { c0.requestNotifications = {} }
             }
             val port = remember(saver, opener) {
                 object : FilePort {

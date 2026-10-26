@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import yacht.app.core.AiPace
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
+import yacht.app.core.LeagueBackground
 import yacht.app.core.LeagueSpeed
 import yacht.app.core.Screen
 import yacht.app.core.ThinkTime
@@ -111,8 +112,11 @@ private fun run(args: Array<String>): Int {
 
     val scope = CoroutineScope(SupervisorJob() + Main + CoroutineExceptionHandler { _, e -> record("coroutine", e) })
     val seedFile = File("../android/app/src/main/assets/league_seed.txt")
+    val dir = Files.createTempDirectory("yacht-stress").toFile()
+    // One set of tables for both apps (the second one checks that the league goes on by itself).
+    val tables by lazy { load(tablesDir) }
     val c = AppController(
-        scope, GameStorage(Files.createTempDirectory("yacht-stress").toFile()), loadTables = { load(tablesDir) },
+        scope, GameStorage(dir), loadTables = { tables },
         loadAsset = { name -> if (name == "league_seed.txt" && seedFile.exists()) seedFile.readText() else null },
     )
     c.errorListener = { e -> record("caught by the app's safety net", e) }
@@ -147,13 +151,17 @@ private fun run(args: Array<String>): Int {
             6 -> watch(c, rng)
             7 -> myAis(c, rng)
             8 -> {
-                // Background and back, as when the phone is locked.
+                // Background and back, as when the phone is locked: with ‘나가면 멈춤’ the league
+                // stops and goes on when the app is back; with ‘나가도 계속’ it never stops.
+                val mode = LeagueBackground.entries[rng.nextInt(LeagueBackground.entries.size)]
+                onMain { c.chooseLeagueBackground(mode) }
+                val wasRunning = onMain { c.league.running }
                 onMain { c.onBackground() }
                 Thread.sleep(rng.nextInt(1500).toLong())
-                onMain {
-                    c.onForeground()
-                    if (rng.nextBoolean()) c.league.start()
-                }
+                if (mode == LeagueBackground.KEEP && wasRunning && !onMain { c.league.running }) failures += "league stopped in the background with 나가도 계속"
+                onMain { c.onForeground() }
+                if (wasRunning) waitFor("league going on after the app came back ($mode)", 60_000) { c.league.running }
+                if (rng.nextBoolean()) onMain { c.league.start() }
             }
             9 -> {
                 var built: ByteArray? = null
@@ -181,6 +189,8 @@ private fun run(args: Array<String>): Int {
             }
             else -> review(c, rng)
         }
+        // The league never stops by itself.
+        c.league.stopReason?.let { failures += "league stopped by itself: $it" }
         if (actions % 5 == 0) {
             val v = c.league.view
             println(
@@ -189,9 +199,27 @@ private fun run(args: Array<String>): Int {
             )
         }
     }
-    onMain { c.league.stop() }
-    waitFor("league stop", 120_000) { !c.league.running }
+    // Closed while the league runs (not the player's stop): the next app goes on by itself.
+    onMain { c.league.start() }
+    waitFor("league running before closing", 120_000) { c.league.running }
     onMain { c.shutdown() }
+    waitFor("league stop", 120_000) { !c.league.running }
+    waitFor("resume mark", 30_000) { File(dir, "league/resume.txt").exists() }
+    Thread.sleep(1_000)
+    val again = AppController(
+        scope, GameStorage(dir), loadTables = { tables },
+        loadAsset = { name -> if (name == "league_seed.txt" && seedFile.exists()) seedFile.readText() else null },
+    )
+    again.errorListener = { e -> record("caught by the app's safety net (reopened)", e) }
+    onMain { again.start() }
+    waitFor("league going on by itself after reopening", 180_000) { again.league.running }
+    onMain { again.league.stop() }
+    waitFor("league stop (reopened)", 120_000) { !again.league.running }
+    if (File(dir, "league/resume.txt").exists()) {
+        Thread.sleep(1_000)
+        if (File(dir, "league/resume.txt").exists()) failures += "the player's stop left the resume mark"
+    }
+    onMain { again.shutdown() }
     println("done: $actions actions, $games games, league ${c.league.view?.matches} matches, peak heap ${peakHeap shr 20} MB of ${Runtime.getRuntime().maxMemory() shr 20} MB")
     println("lock held: ${c.league.timings}")
     if (offMain.isNotEmpty()) {

@@ -286,7 +286,19 @@ class AppController(
         private set
 
     /** The AI league (its own background runner, started and stopped from its screen). */
-    val league = LeagueController(scope, storage.dir) { loadAsset(LEAGUE_SEED) }
+    val league = LeagueController(scope, storage.dir) { loadAsset(LEAGUE_SEED) }.also { lg ->
+        // Errors the league survives (or stops on) go to the crash log like any other.
+        lg.onError = { e -> onUncaught(e) }
+    }
+
+    /** Asks for the notification permission (set by the Android activity; nothing elsewhere). */
+    var requestNotifications: () -> Unit = {}
+
+    /** What the league does while the app is hidden; keeping it going wants its notification shown. */
+    fun chooseLeagueBackground(b: LeagueBackground) {
+        league.changeBackground(b)
+        if (b == LeagueBackground.KEEP) requestNotifications()
+    }
 
     /** My ranked result of the game just finished (rating and tier before and after). */
     var rankResult by mutableStateOf<RankResult?>(null)
@@ -408,7 +420,8 @@ class AppController(
 
     fun shutdown() {
         closed = true
-        league.stop()
+        // Closing the app is not the player's stop: the league goes on at the next launch.
+        league.stop(keepResume = true)
         verifyJob?.cancel()
         stopDuel()
         pool.shutdown()

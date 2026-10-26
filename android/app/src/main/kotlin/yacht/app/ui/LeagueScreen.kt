@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
 import yacht.app.core.FeedItem
 import yacht.app.core.LadderRow
+import yacht.app.core.LeagueBackground
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueSpeed
 import yacht.app.core.LeagueView
@@ -129,7 +130,7 @@ fun LeagueScreen(c: AppController) {
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            ControlCard(lg, v)
+            ControlCard(c, v)
             Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -185,7 +186,8 @@ fun LeagueScreen(c: AppController) {
 }
 
 @Composable
-private fun ControlCard(lg: LeagueController, v: LeagueView?) {
+private fun ControlCard(c: AppController, v: LeagueView?) {
+    val lg = c.league
     val cs = MaterialTheme.colorScheme
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -208,7 +210,8 @@ private fun ControlCard(lg: LeagueController, v: LeagueView?) {
                     Text(
                         when {
                             lg.running && v != null -> "분당 ${"%.0f".format(lg.pace)}경기 · 지금 ${v.live.size}경기 진행 중"
-                            else -> "앱을 나가면 멈추고, 결과는 저장돼요"
+                            lg.background == LeagueBackground.KEEP -> "앱을 나가도 계속 돌아요. 결과는 저장돼요"
+                            else -> "앱을 나가면 멈추고, 돌아오면 이어서 해요"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = cs.onSurfaceVariant,
@@ -222,10 +225,27 @@ private fun ControlCard(lg: LeagueController, v: LeagueView?) {
                     Button(onClick = { lg.start() }, enabled = v != null) { Text(if ((v?.matches ?: 0) > 0) "▶ 이어서" else "▶ 시작") }
                 }
             }
+            lg.stopReason?.let { reason ->
+                Text(reason, style = MaterialTheme.typography.bodySmall, color = cs.error)
+            }
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in LeagueSpeed.entries) {
                     FilterChip(selected = lg.speed == s, onClick = { lg.changeSpeed(s) }, label = { Text(s.label, fontSize = 12.sp) })
                 }
+            }
+            // What happens when the app is hidden: stop (battery) or keep playing.
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("앱을 나가면", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                for (b in LeagueBackground.entries) {
+                    FilterChip(selected = lg.background == b, onClick = { c.chooseLeagueBackground(b) }, label = { Text(b.label, fontSize = 12.sp) })
+                }
+            }
+            if (lg.background == LeagueBackground.KEEP) {
+                Text(
+                    "진행 중에는 알림이 떠 있고, 화면을 꺼도 계속 돌아요(배터리를 많이 써요). 알림의 ‘정지’로 멈출 수 있어요. " +
+                        "최근 앱 목록에서 앱을 지우면 멈추고, 다시 열면 이어서 해요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
             }
             if (v != null && v.matches == 0L && lg.hasSeed && !lg.running) {
                 OutlinedButton(onClick = { lg.loadSeed() }, modifier = Modifier.fillMaxWidth()) { Text("⚡ 미리 돌린 리그로 시작 (서버에서 둔 12만 경기)") }
@@ -600,7 +620,8 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "부마다 라운드마다 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 한 판씩 나눠 가지면 두 판 합계 점수로 승부. 🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프",
+                        "부마다 라운드마다 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 한 판씩 나눠 가지면 두 판 합계 점수로 승부. 🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프. " +
+                            "순위표는 모든 경기로 매긴 실력 점수(레이팅)이고, 1~4부는 이번 시즌 리그 성적(승점)이라 둘이 달라요. 실력이 좋아도 아래 부에서 시작하면 승격으로 올라와야 해요.",
                         style = MaterialTheme.typography.labelSmall,
                         color = cs.onSurfaceVariant,
                     )
