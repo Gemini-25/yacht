@@ -139,6 +139,15 @@ class ClubBook private constructor(
      */
     private var lastSeed: Long? = null
 
+    /**
+     * Clubs founded at the end of season [season] (plan seed [seed]), drafted from that season's
+     * table: that off-season is theirs already, so a repeated rollover leaves them as they are.
+     */
+    fun founded(season: Int, seed: Long) {
+        this.season = season
+        lastSeed = seed
+    }
+
     /** Every club, by id. */
     val clubs: List<Club> get() = entries.map { it.snapshot() }
 

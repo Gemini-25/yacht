@@ -317,7 +317,56 @@ class LeagueWorldTest {
                     assertTrue(r != null && !r.isNaN() && kotlin.math.abs(r - was) <= 4.0, "seed $seed, k $k: $key line $was -> $r")
                 }
             }
+            // The same kills, with the rules changed before the league is resumed (evolution
+            // then differs from the first close): clubs hold only AIs of the league, and no AI
+            // that stays loses its career.
+            for (k in 0 until order.size - 1) {
+                val mixed = before + order.take(k).associateWith { after.getValue(it) }
+                val players = yacht.engine.league.PlayerBook.decode(mixed.getValue(LeagueWorld.ROSTER), emptyList())
+                val keys = base + players.alive.map { it.key } + Ladder.ME
+                val back = LeagueWorld.decode(mixed, keys, emptyList())
+                back.config = config.copy(evolution = 2)
+                back.family = w.family
+                back.members = base + back.players.alive.map { it.key }
+                back.present = { it in keys }
+                back.ladder.fit()
+                back.closeSeason()
+                back.members = base + back.players.alive.map { it.key }
+                back.ladder = Ladder.decode(back.members + Ladder.ME, back.ladder.encode())
+                back.openSeason()
+                val inLeague = back.members.toSet()
+                for (c in back.clubs!!.clubs) assertTrue(inLeague.containsAll(c.squad), "seed $seed, k $k: ${c.id} ${c.squad - inLeague}")
+                val careers = yacht.engine.league.StatsBook.decode(before.getValue(LeagueWorld.STATS))
+                for (key in inLeague) if (careers.career(key) != null) assertTrue(back.stats.career(key) != null, "seed $seed, k $k: $key lost its career")
+            }
         }
     }
 
+
+    @Test
+    fun clubsSwitchedOnAtARolloverAreNotDraftedTwiceOnAReplay() {
+        val off = LeagueConfig(divisions = 2, generated = 10, evolution = 0, clubs = 0)
+        val on = off.copy(clubs = 8, squad = 5)
+        val w = world(off)
+        w.openFirstSeason(31L)
+        season(w)
+        w.config = on
+        w.ladder.fit()
+        val before = w.encodeFiles()
+        rollover(w)
+        val after = w.encodeFiles()
+        val clubsAfter = after.getValue(LeagueWorld.CLUBS)
+        assertTrue(clubsAfter.isNotEmpty())
+        // Killed after the clubs were written, before the season: the close is replayed.
+        val order = after.keys.toList()
+        val mixed = before + order.take(order.indexOf(LeagueWorld.CLUBS) + 1).associateWith { after.getValue(it) }
+        val back = LeagueWorld.decode(mixed, w.ladder.keys, emptyList())
+        back.config = on
+        back.family = w.family
+        back.members = w.members
+        back.ladder.fit()
+        back.closeSeason()
+        back.openSeason()
+        assertEquals(clubsAfter, back.clubs!!.encode())
+    }
 }

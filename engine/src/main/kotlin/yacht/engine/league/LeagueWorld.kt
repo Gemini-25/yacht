@@ -98,8 +98,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         players[key]?.spec?.let { s -> Traits.of(s).entries.associate { (t, v) -> (Traits.NAMES[t] ?: t) to Traits.label(t, v) } }
 
     private fun opened(p: SeasonPlan): List<LeagueEvent> {
-        // Start ratings (기량발전상) and rookies of the new season; the retired leave the stats.
-        stats.retain(members + ladder.keys)
+        // Start ratings (기량발전상) and rookies of the new season; the retired leave the stats,
+        // the closing season's a season later: a stats file saved before the roster must not
+        // wipe a career that a replayed close (after a kill) keeps in the league.
+        stats.retain(members + ladder.keys + players.retired.filter { it.retired >= p.number - 1 }.map { it.key })
         stats.startSeason(p.number, members.associateWith { ladder.rating(it) })
         highlights.startSeason(p.number)
         val out = p.comps.flatMap { c -> runCatching { c.opening() }.getOrDefault(emptyList()) }
@@ -256,7 +258,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val p = plan ?: error("no season")
         val market = clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty()
         note(market)
+        val hadClubs = clubs != null
         val (next, _) = Offseason.next(p, context(p.number))
+        // Clubs drafted just now (switched on during the season) had this off-season already.
+        if (!hadClubs) clubs?.founded(p.number, p.seed)
         closingGone = emptySet()
         plan = next
         return market + opened(next)
@@ -278,17 +283,18 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * Every file of the league, by name, in the order to write them (atomically, one by one).
      * The season goes last and the ladder just before it: killed halfway through a rollover's
      * save, the league reads the closed season again and closes it again (every book's season
-     * guard makes that a replay). The honours, clubs and archive go before the stats, and the
-     * stats before the roster: once the roster has moved on (this season's retirees gone from
-     * the ladder), the stats say the season ended and its awards, lines and review are kept as
-     * they were. No season or clubs: empty files, so an older one is not read.
+     * guard makes that a replay). The honours and archive go before the stats, the stats before
+     * the roster: once the roster has moved on (this season's retirees gone from the ladder), the
+     * stats say the season ended and its awards, lines and review are kept as they were. The
+     * clubs come after the roster they were drafted from. No season or clubs: empty files, so an
+     * older one is not read.
      */
     fun encodeFiles(): Map<String, String> = buildMap {
         put(HONOURS, honours.encode())
-        put(CLUBS, clubs?.encode() ?: "")
         put(ARCHIVE, archive.encode())
         put(STATS, stats.encode())
         put(ROSTER, players.encode())
+        put(CLUBS, clubs?.encode() ?: "")
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
         put(LAB, lab.encode())
