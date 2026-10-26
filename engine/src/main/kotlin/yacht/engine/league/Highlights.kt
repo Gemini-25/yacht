@@ -215,7 +215,20 @@ class Highlight(
     /** [HighlightBook.versionHash] of A's and B's AI version when the game was played. */
     val versionA: String,
     val versionB: String,
+    /**
+     * A's and B's genes when the game was played (generated and evolved players, who change every
+     * season): the replay plays them as they were, even after they grew, declined or retired.
+     */
+    val specA: CustomAiSpec? = null,
+    val specB: CustomAiSpec? = null,
 ) {
+    /** The genes [key] had in this game, when they were kept. */
+    fun snapshot(key: String): CustomAiSpec? = when (key) {
+        a -> specA
+        b -> specB
+        else -> null
+    }
+
     /** The board's sides: the fixture's AIs, or the lineups' AIs on [board] for a team match. */
     val a: String get() = if (fixture.kind == JobKind.TEAM) fixture.lineupA.getOrElse(board) { fixture.a } else fixture.a
     val b: String get() = if (fixture.kind == JobKind.TEAM) fixture.lineupB.getOrElse(board) { fixture.b } else fixture.b
@@ -270,8 +283,12 @@ class Highlight(
         append(scoreA).append(' ').append(scoreB).append(' ').append(MediaText.num(drama)).append(' ')
         append(if (tags.isEmpty()) "-" else tags.joinToString("") { it.code.toString() }).append(' ')
         append(versionA).append(' ').append(versionB).append(' ')
-        // The curve last and of fixed length, so a line cut short does not decode.
+        // The curve of fixed length, so a line cut short does not decode; the genes after it,
+        // closed by "end" (older versions read 22 fields and ignore the rest).
         for (v in curve) append(HEX[v.toInt() shr 4 and 15]).append(HEX[v.toInt() and 15])
+        if (specA != null || specB != null) {
+            append(" snap ").append(MediaText.esc(specA?.encode() ?: "")).append(' ').append(MediaText.esc(specB?.encode() ?: "")).append(" end")
+        }
     }
 
     companion object {
@@ -291,9 +308,12 @@ class Highlight(
                 MediaText.unlist(f[8]), MediaText.unlist(f[9]), f[11] == "1", MediaText.unesc(f[10]),
             )
             val tags = if (f[18] == "-") emptyList() else f[18].mapNotNull { DramaTag.of(it) }
+            // Genes kept with the game: only a whole snapshot (one cut short is left out).
+            val snap = f.size >= FIELDS + 4 && f[FIELDS] == "snap" && f[FIELDS + 3] == "end"
+            fun spec(s: String) = if (!snap || s == "-") null else CustomAiSpec.decode(MediaText.unesc(s))
             val h = Highlight(
                 f[0].toInt(), fixture, f[12].toInt(), f[13].toInt(), f[14].toInt(), f[15].toInt(), f[16].toInt(), f[17].toDouble(),
-                tags, curve, f[19], f[20],
+                tags, curve, f[19], f[20], spec(f.getOrElse(FIELDS + 1) { "-" }), spec(f.getOrElse(FIELDS + 2) { "-" }),
             )
             require(h.board >= 0 && h.game >= 0 && h.perMatch in 1..2)
             require(fixture.kind != JobKind.TEAM || h.board < minOf(fixture.lineupA.size, fixture.lineupB.size))
@@ -317,7 +337,7 @@ class HighlightReplay(val highlight: Highlight, val game: SingleGame) {
     val message: String? get() = if (same) null else CANNOT_REPLAY
 
     companion object {
-        const val CANNOT_REPLAY = "AI가 그동안 바뀌어서 이 경기를 그대로 다시 볼 수 없어요."
+        const val CANNOT_REPLAY = "선수가 그동안 바뀌어서 이 경기를 그대로 다시 볼 수 없어요."
     }
 }
 
@@ -365,6 +385,7 @@ class HighlightBook {
         hometown: (String) -> String = { "" },
         version: (String) -> String = { "" },
         titleRace: Boolean = false,
+        genes: (String) -> CustomAiSpec? = { null },
     ): List<Highlight> {
         val f = r.fixture
         if (f.comp == Comp.FRIENDLY || f.comp == Comp.LAB || season < this.season) return emptyList()
@@ -395,7 +416,10 @@ class HighlightBook {
                 // games exactly as the one in memory would have.
                 val drama = Math.round(d.score * 10) / 10.0
                 if (!fits(current, SEASON_TOP, drama) && !fits(best, ALL_TIME, drama)) continue
-                val h = Highlight(season, f, bi, gi, per, g.a, g.b, drama, d.tags, facts.curve.copyOf(), versionHash(version(bd.a)), versionHash(version(bd.b)))
+                val h = Highlight(
+                    season, f, bi, gi, per, g.a, g.b, drama, d.tags, facts.curve.copyOf(), versionHash(version(bd.a)), versionHash(version(bd.b)),
+                    genes(bd.a), genes(bd.b),
+                )
                 if (insert(current, h, SEASON_TOP)) out += h
                 insert(best, h, ALL_TIME)
             }

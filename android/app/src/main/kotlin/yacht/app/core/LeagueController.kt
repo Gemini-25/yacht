@@ -71,6 +71,7 @@ import yacht.engine.league.Scouting
 import yacht.engine.league.ScoutingReport
 import yacht.engine.league.boxProfile
 import yacht.engine.league.PlayerBook
+import yacht.engine.league.PlayerRecord
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
 import yacht.engine.league.TierName
@@ -1514,12 +1515,17 @@ class LeagueController(
      */
     fun replayHighlight(h: Highlight, pace: () -> Long) {
         val t = tables ?: return
-        if (byKey[h.first] == null || byKey[h.second] == null) {
-            watch = WatchView(h.first, h.second, name(h.first), name(h.second), emptyList(), true, 0, false, h.caption, "이 경기의 AI가 리그를 떠나서 다시 볼 수 없어요.")
+        val x = extra ?: return
+        // A player as it was in that game (its genes were kept), else as it is now.
+        fun aiOf(k: String): LeagueAi? = h.snapshot(k)?.let { s ->
+            leagueAi(PlayerRecord(k, name(k), "", Origin.of(k), 1, null, null, s), t, x)
+        } ?: byKey[k]
+        if (aiOf(h.first) == null || aiOf(h.second) == null) {
+            watch = WatchView(h.first, h.second, name(h.first), name(h.second), emptyList(), true, 0, false, h.caption, "이 경기의 선수가 리그를 떠나서 다시 볼 수 없어요.")
             return
         }
         watchGame(h.first, h.second, pace, h.caption) {
-            val r = h.replay(t.rules, { byKey[it] }) ?: return@watchGame null
+            val r = h.replay(t.rules, ::aiOf) ?: return@watchGame null
             if (!r.same) null.also { scope.launch { watch = watch?.copy(message = r.message, complete = true, playing = false) } } else r.turns
         }
     }

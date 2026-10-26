@@ -85,6 +85,7 @@ object News {
     val KINDS: List<String> = listOf(
         "upset", "comeback", "record", "milestone", "title", "promoted", "relegated", "cup_round", "eliminated",
         "qualified", "final", "transfer", "draft", "born", "retired", "award", "callup", "dropped", "title_race",
+        "retirements", "rookies", "debut", "breakout", "decline", "learned_rule", "league_reform", "founders_farewell",
         "hall_of_fame", "dynasty", "legend_match", "draw_cup", "draw_cl", "draw_super", "draw_allstar",
         "draw_family", "season_review",
     )
@@ -395,33 +396,99 @@ object News {
             ) to 1
         }
         "born" -> when {
-            v["b"] != null && v["c"] != null -> listOf(
-                T("{b}·{c}의 2세 {a} 탄생", "{b|과} {c}의 장점을 물려받은 {a|이} 태어났어요. 가장 낮은 부에서 데뷔 시즌을 시작해요."),
-                T("진화의 결실: {a} 탄생", "{b|과} {c} 사이에서 새로운 AI {a|이} 나왔어요. 부모를 넘어설 수 있을지 지켜봐요."),
-                T("새 얼굴 {a}, 리그 합류", "{a|은} {b|과} {c}의 유전자를 이어받은 진화형 AI예요. 다음 시즌 가장 낮은 부에서 첫발을 내디뎌요."),
+            v["b"] != null && v["c"] != null && v["b"] != v["c"] -> listOf(
+                T("{b}·{c}의 제자 {a} 데뷔", "{b|과} {c}에게 배운 {a|이} 리그에 데뷔해요. 스승의 장점을 얼마나 물려받았을지 지켜봐요."),
+                T("{b}의 제자 {a}, 첫발", "{b|이} 직접 가르친 {a|이} 가장 낮은 부에서 데뷔 시즌을 시작해요. {c}의 가르침도 받았어요."),
             )
             v["b"] != null -> listOf(
-                T("{b}의 후계자 {a} 탄생", "{b}의 유전자를 이어받은 {a|이} 태어났어요. 가장 낮은 부에서 데뷔 시즌을 시작해요."),
+                T("{b}의 후계자 {a} 데뷔", "{b}의 스타일을 이어받은 {a|이} 리그에 합류해요. 가장 낮은 부에서 데뷔 시즌을 시작해요."),
             )
             else -> listOf(
-                T("새 얼굴 {a} 탄생", "새로운 AI {a|이} 리그에 합류해요. 가장 낮은 부에서 데뷔 시즌을 시작해요."),
+                T("새 얼굴 {a} 데뷔", "새 선수 {a|이} 리그에 합류해요. 가장 낮은 부에서 데뷔 시즌을 시작해요."),
             )
         } to 1
         "retired" -> {
             arg(0)?.let { v["seasons"] = it }
+            arg(2)?.takeIf { it != "0" }?.let { v["age"] = it }
             val titles = arg(1)?.toIntOrNull() ?: 0
             if (titles > 0) {
                 v["titles"] = titles.toString()
                 listOf(
-                    T("{a}, 은퇴 선언", "{a|이}[[ {seasons}시즌의]] 선수 생활을 마쳐요. 우승 {titles}회의 기록은 레전드 보관소에 남아요."),
-                    T("굿바이 {a}", "우승 {titles}회에 빛나는 {a|이} 리그를 떠나요. 그동안 보여 준 경기는 오래 기억될 거예요."),
+                    T("{a}, {age}세로 은퇴 선언", "{a|이}[[ {seasons}시즌의]] 선수 생활을 마쳐요. 우승 {titles}회의 기록은 레전드 보관소에 남아요."),
+                    T("굿바이 {a}", "우승 {titles}회에 빛나는 {a|이}[[ {age}세에]] 유니폼을 벗어요. 그동안 보여 준 경기는 오래 기억될 거예요."),
                 ) to 3
             } else {
                 listOf(
-                    T("{a}, 은퇴", "{a|이}[[ {seasons}시즌 만에]] 리그를 떠나요. 우승과는 인연이 없었지만 끝까지 최선을 다했어요."),
-                    T("{a}, 리그와 작별", "{a|이} 은퇴해요. 그 자리는 새로 태어난 AI가 채워요."),
+                    T("{a}, {age}세로 은퇴", "{a|이}[[ {seasons}시즌 만에]] 선수 생활을 마쳐요. 우승과는 인연이 없었지만 끝까지 최선을 다했어요."),
+                    T("{a}, 리그와 작별", "{a|이} 은퇴해요. 그 자리는 새 얼굴이 채워요."),
                 ) to 2
             }
+        }
+        "retirements" -> {
+            arg(0)?.let { v["count"] = it }
+            listOf(
+                T("시즌 {season} 은퇴 선수 {count}명", "이번 시즌을 끝으로 {count}명이 선수 생활을 마쳐요. {seeds} 등이 정든 무대를 떠나요."),
+                T("베테랑 {count}명, 유니폼을 벗어요", "시즌 {season}을 끝으로 {count}명이 리그를 떠나요. {a|도} 그중 한 명이에요. 빈자리는 신인과 제자들이 채워요."),
+            ) to 2
+        }
+        "rookies" -> {
+            arg(0)?.let { v["count"] = it }
+            listOf(
+                T("시즌 {season} 신인 {count}명 합류", "올해도 새 얼굴 {count}명이 리그에 들어와요. {seeds|이} 가장 주목받는 신인이에요."),
+                T("신인 {count}명, 데뷔 준비 끝", "{a|을} 비롯한 신인 {count}명이 첫 시즌을 맞아요. 모두 가장 낮은 부에서 데뷔해요."),
+            ) to 2
+        }
+        "debut" -> {
+            val nation = Nations.of(arg(0))
+            nation?.let { v["nat"] = it.short }
+            arg(1)?.let { v["age"] = it }
+            arg(2)?.let { v["town"] = it }
+            val potential = arg(3)?.toIntOrNull() ?: 0
+            when {
+                potential >= 85 -> listOf(
+                    T("대형 신인 {a}, 리그 합류", "{nat} {town} 출신의 {age}세 {a|이} 데뷔해요. 스카우트들이 일찌감치 주목한 유망주예요."),
+                    T("{nat}의 보석 {a}", "{age}세 {a|이} 리그에 첫발을 내디뎌요. {town}에서 온 이 신인을 두고 벌써 기대가 커요."),
+                )
+                nation == null || nation == Nations.KR -> listOf(
+                    T("{town} 출신 신예 {a} 데뷔", "{age}세 {a|이} 리그에 첫발을 내디뎌요. 가장 낮은 부에서 데뷔 시즌을 시작해요."),
+                )
+                else -> listOf(
+                    T("{nat}에서 온 신예 {a} 데뷔", "{age}세 {a|이} 리그에 첫발을 내디뎌요. {town} 출신으로, 가장 낮은 부에서 데뷔 시즌을 시작해요."),
+                )
+            } to if (potential >= 85) 3 else 2
+        }
+        "breakout", "decline" -> {
+            arg(0)?.let { v["age"] = it }
+            arg(1)?.toIntOrNull()?.let { i -> Abilities.LABELS.getOrNull(i)?.let { v["skill"] = it } }
+            arg(2)?.let { v["from"] = it }
+            arg(3)?.let { v["to"] = it }
+            if (e.kind == "breakout") {
+                listOf(
+                    T("{a}, 한 시즌 만에 몰라보게 성장", "{age}세 {a}의 {skill|이} {from}에서 {to|으로} 올랐어요. 무서운 성장세예요."),
+                    T("성장하는 {a}", "{a|이} 한 시즌 사이 부쩍 늘었어요. {skill|은} {from}에서 {to|이에요}. 다음 시즌이 더 기대돼요."),
+                ) to 2
+            } else {
+                listOf(
+                    T("{a}, 세월은 못 이겨", "{age}세 {a}의 {skill|이} {from}에서 {to|으로} 떨어졌어요. 노련함으로 버틸 수 있을지 지켜봐요."),
+                    T("{a}에게 찾아온 내리막", "{a}의 {skill|이} 한 시즌 만에 {from}에서 {to|으로} 내려갔어요. 은퇴 시기를 고민할 나이예요."),
+                ) to 2
+            }
+        }
+        "learned_rule" -> {
+            arg(0)?.let { k -> PlayStyles.recipe(k)?.let { v["belief"] = it.name } }
+            listOf(
+                T("{a}, 규칙 착각에서 벗어나", "{a|이} 그동안 '{belief}'에 빠져 있었는데 이제 규칙을 제대로 알게 됐어요. 다음 시즌 진짜 실력이 나올지 지켜봐요."),
+            ) to 2
+        }
+        "league_reform" -> listOf(
+            T("리그 개편: 생성 선수들의 시대", "시즌 {season}을 끝으로 리그가 새로 태어나요. 선수마다 나라·나이·능력치가 생기고, 나이가 들면 은퇴하고 신인과 제자가 그 자리를 채워요."),
+        ) to 5
+        "founders_farewell" -> {
+            arg(0)?.let { v["count"] = it }
+            listOf(
+                T("창립 멤버 {count}명, 리그와 작별", "기본 AI {count}명이 시즌 {season}을 끝으로 리그를 떠나요. {seeds}의 우승 기록과 통산 성적은 그대로 남아요. 다음 시즌부터는 생성 선수들만의 리그예요."),
+                T("고마웠어요, 창립 멤버", "{seeds} 등 리그의 첫 시즌부터 함께한 기본 AI {count}명이 유니폼을 벗었어요. 이제 랭크 게임과 AI 연구소에서 다시 만날 수 있어요."),
+            ) to 5
         }
         "award" -> {
             val kind = arg(0)
@@ -454,7 +521,7 @@ object News {
                     T("{a}·{b}, 승점 같은 채 선두 경쟁", "1부 리그 1위와 2위의 승점이 같아요. 우승의 향방은 마지막까지 알 수 없어요."),
                 ) to 3
                 arg(1) == "lead" -> listOf(
-                    T("선두 교체! {a}, 1위로", "{a|이} {b|을} 끌어내리고 1부 리그 선두에 올랐어요. 두 AI의 승점 차는 {gap}점이에요."),
+                    T("선두 교체! {a}, 1위로", "{a|이} {b|을} 끌어내리고 1부 리그 선두에 올랐어요. 두 선수의 승점 차는 {gap}점이에요."),
                     T("{a}, 1부 리그 선두 등극", "{a|이} 1위 자리를 차지했어요. 2위 {b|과} 승점 {gap}점 차라 아직 안심할 수 없어요."),
                 ) to 4
                 else -> listOf(
@@ -513,7 +580,7 @@ object News {
             arg(1)?.let { v["round"] = it }
             arg(2)?.takeIf { it != "0" }?.let { v["byes"] = it }
             listOf(
-                T("시즌 {season} 요트컵 대진 확정", "[[AI {n}명이 나서는 ]]요트컵 대진이 나왔어요. {seeds|이} 우승 후보로 꼽혀요.[[ 상위 시드 {byes}명은 부전승으로 출발해요.]]"),
+                T("시즌 {season} 요트컵 대진 확정", "[[{n}명이 나서는 ]]요트컵 대진이 나왔어요. {seeds|이} 우승 후보로 꼽혀요.[[ 상위 시드 {byes}명은 부전승으로 출발해요.]]"),
                 T("요트컵 개막, 1번 시드는 {a}", "시즌 {season} 요트컵 대진 추첨이 끝났어요.[[ 첫 경기는 {round}부터예요.]] 1번 시드 {a|이} 정상을 노려요."),
             ) to 2
         }

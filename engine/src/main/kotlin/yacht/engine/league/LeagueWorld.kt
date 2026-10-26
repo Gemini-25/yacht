@@ -155,7 +155,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             out += record(r)
             plan?.let { p ->
                 runCatching {
-                    highlights.offer(r, p.number, ::rating, ::hometown, version, Drama.titleRace(p.league, r.fixture))
+                    highlights.offer(r, p.number, ::rating, ::hometown, version, Drama.titleRace(p.league, r.fixture)) { k -> players[k]?.spec }
                 }
                 if (r.fixture.comp == Comp.LEAGUE) titleRace.check(p.league)?.at(week)?.let { e ->
                     note(listOf(e))
@@ -229,6 +229,15 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 else -> null
             } ?: continue
             if (!announced(e.kind, x.key)) out += e
+        }
+        // The hand-made AIs' last season when the league is for generated players only: they
+        // leave it as its founders (their records stay; the app leaves them out of the members).
+        if (!config.baseAis) {
+            val founders = p.league.standings.keys.filter { Origin.of(it) == Origin.BASE && present(it) }
+            if (founders.isNotEmpty()) {
+                val named = founders.sortedWith(compareByDescending<String> { honours.titles(it) }.thenByDescending { ladder.rating(it) }.thenBy { it }).take(3)
+                out += LeagueEvent("founders_farewell", p.number, named, listOf(founders.size.toString()))
+            }
         }
         // Players age, retire and grow (with aging on), and new ones bring the book back to the
         // configured size. Players who sat the season out (a preset left them out) sit in the

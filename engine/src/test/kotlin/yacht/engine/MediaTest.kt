@@ -140,9 +140,15 @@ class MediaTest {
         val tg = listOf(GameScore(231, 230), GameScore(150, 280))
         val tf = listOf(facts(231, 230, comeback(1), swing = 30), facts(280, 150, blowout))
         book.offer(JobResult(team, listOf(BoardResult("x1", "y1", tg, tf), BoardResult("x2", "y2", tg, tf)), 0, 0), season = 4, hometown = { "서울" })
+        // A generated player's genes are kept with its games.
+        val genes = yacht.engine.league.CustomAiSpec("g7", "리암 존슨", play = yacht.engine.league.PlayGene("hunter", 1.2, overlay = "gambler"))
+        book.offer(job(30, low = 1), season = 4, version = { "v$it" }, genes = { if (it == job(30, 1).fixture.a) genes else null })
         val text = book.encode()
         assertEquals(HighlightBook.HEADER, text.lines().first())
         val back = HighlightBook.decode(text)
+        val kept = back.thisSeason.first { it.fixture.id == job(30, 1).fixture.id }
+        assertEquals(genes, kept.snapshot(kept.a))
+        assertEquals(null, kept.snapshot(kept.b))
         assertEquals(4, back.season)
         assertEquals(book.thisSeason.map { it.encode() }, back.thisSeason.map { it.encode() })
         assertEquals(book.allTime.map { it.encode() }, back.allTime.map { it.encode() })
@@ -264,6 +270,13 @@ class MediaTest {
             e("draft", listOf("ai4", "c1"), listOf("3"), Comp.CLUB), e("draft", listOf("ai4", "c1"), emptyList(), Comp.CLUB),
             e("born", listOf("e3_1", "ai1", "ai4")), e("born", listOf("e3_2", "ai1")), e("born", listOf("e3_2")),
             e("retired", listOf("ai3"), listOf("7", "2")), e("retired", listOf("ai4"), listOf("3", "0")), e("retired", listOf("ai4")),
+            e("retired", listOf("ai3"), listOf("12", "2", "34")), e("retired", listOf("ai4"), listOf("9", "0", "31")),
+            e("retirements", listOf("ai1", "ai2", "ai3"), listOf("57")), e("rookies", listOf("ai1", "ai2", "ai3"), listOf("120")),
+            e("debut", listOf("ai1"), listOf("BR", "19", "상파울루", "88")), e("debut", listOf("ai2"), listOf("KR", "18", "부산", "60")),
+            e("debut", listOf("ai3"), listOf("JP", "20", "오사카", "70")),
+            e("breakout", listOf("ai1"), listOf("21", "0", "55", "63")), e("decline", listOf("ai2"), listOf("35", "3", "70", "62")),
+            e("learned_rule", listOf("ai1"), listOf("ss3")), e("league_reform", emptyList()),
+            e("founders_farewell", listOf("ai1", "ai2", "ai3"), listOf("103")),
             e("award", listOf("ai1"), listOf("MVP")), e("award", listOf("ai4"), listOf("ROOKIE")), e("award", listOf("ai2"), listOf("MIP")),
             e("award", listOf("ai3"), listOf("YACHT")), e("award", listOf("ai1"), listOf("SCORER")),
             e("callup", listOf("ai1"), listOf("승률형"), Comp.FAMILY), e("dropped", listOf("ai2"), listOf("승률형"), Comp.FAMILY),
@@ -355,7 +368,7 @@ class MediaTest {
         assertTrue("99999999999" in title("99999999999").let { it.headline + it.body })
         // Counters for AIs read as people.
         val draws = (1..8).map { s -> News.article(LeagueEvent("draw_cup", s, listOf("ai1", "ai2"), listOf("205", "256강", "51"), Comp.CUP), name).body }
-        assertTrue(draws.none { "개 AI" in it } && draws.any { "AI 205명" in it && "상위 시드 51명" in it }, draws.toString())
+        assertTrue(draws.none { "개 AI" in it } && draws.any { "205명이 나서는" in it && "상위 시드 51명" in it }, draws.toString())
     }
 
     @Test
