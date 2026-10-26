@@ -183,16 +183,16 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      */
     fun closeSeason(): Closing {
         val p = plan ?: error("no season")
-        // AIs deleted during the season (the next in the table takes their place), decided once
-        // for both steps: evolution's retirees are still present here.
-        val gone = p.league.standings.keys.filterNot(present).toSet()
+        // AIs deleted during the season (no title, award or move), decided once for both steps.
+        // Evolution's retirees are no deletions (a replay after a kill finds them retired).
+        val gone = p.league.standings.keys.filter { !present(it) && players.retiredRecord(it) == null }.toSet()
         closingGone = gone
         val moves = Offseason.moves(p, gone)
         val h = Offseason.honours(p, moves, gone)
         // Awards, records, hall of fame, dynasties and the season's archive, from the book as it
         // was before this season; then the season's honours go in once, awards included.
         val end = runCatching {
-            stats.endSeason(p, h, honours, archive, ::rating, family, name, null, ::traits)
+            stats.endSeason(p, h, honours, archive, ::rating, family, name, null, ::traits, gone)
         }.getOrNull()
         honours.add(h + end?.awards.orEmpty())
         val out = ArrayList<LeagueEvent>()
@@ -282,8 +282,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         put(ROSTER, players.encode())
         put(HONOURS, honours.encode())
         put(CLUBS, clubs?.encode() ?: "")
-        put(STATS, stats.encode())
+        // The archive before the stats: once stats.txt says a season ended, its summary is kept.
         put(ARCHIVE, archive.encode())
+        put(STATS, stats.encode())
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
         put(LAB, lab.encode())

@@ -219,12 +219,44 @@ class LeagueWorldTest {
         val c = w.closeSeason()
         assertTrue(c.honours.none { it.key == leader }, c.honours.toString())
         assertEquals(lower[1], c.honours.single { it.kind == "L1" }.key)
+        // Its promotion place stays empty: the places are the table's as the playoff drew them.
         val up = c.honours.filter { it.kind == "UP0" }.map { it.key }.toSet()
-        val swap = minOf(config.autoSwap, upper.size / 3, (lower.size - 1) / 3)
-        assertEquals(lower.drop(1).take(swap).toSet(), up)
+        val swap = minOf(config.autoSwap, upper.size / 3, lower.size / 3)
+        assertEquals(lower.take(swap).filter { it != leader }.toSet(), up)
         w.members = w.members - leader
         w.openSeason()
         assertTrue(leader !in w.plan!!.league.standings.keys)
         assertTrue(w.plan!!.league.divisions[0].containsAll(up))
+    }
+
+    @Test
+    fun theArchiveIsWrittenBeforeTheStats() {
+        val keys = world(LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0)).encodeFiles().keys.toList()
+        assertTrue(keys.indexOf(LeagueWorld.ARCHIVE) < keys.indexOf(LeagueWorld.STATS), keys.toString())
+    }
+
+    @Test
+    fun olderSeasonFilesCountGamesFromTheirResults() {
+        val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, evolution = 0, clubs = 0))
+        w.openFirstSeason(11L)
+        repeat(30) {
+            val f = w.next(emptySet(), 0, 2) ?: return@repeat
+            if (f.comp != Comp.LEAGUE) {
+                w.release(f)
+                return@repeat
+            }
+            val g = listOf(GameScore(230, 190))
+            w.recordJob(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g), 0))
+        }
+        val league = w.plan!!.league
+        // An older file: standing lines without the games field.
+        val old = league.encode().lines().joinToString("\n") { l ->
+            if (l.startsWith("standing ")) l.split(' ').take(11).joinToString(" ") else l
+        }
+        val back = yacht.engine.league.Season.decode(old, league.standings.keys)
+        for (s in league.standings.values) {
+            assertEquals(s.games, back.standings.getValue(s.key).games, s.key)
+            assertEquals(s.avgScore, back.standings.getValue(s.key).avgScore, 1e-9)
+        }
     }
 }

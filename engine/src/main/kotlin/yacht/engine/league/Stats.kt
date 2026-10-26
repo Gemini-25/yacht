@@ -716,10 +716,14 @@ class StatsBook(
         name: (String) -> String = { it },
         isRookie: ((String) -> Boolean)? = null,
         traits: (String) -> Map<String, String>? = { null },
+        /** AIs deleted during the season: no award (the next AI gets it). */
+        gone: Set<String> = emptySet(),
     ): SeasonEnd {
         val n = plan.number
         if (n <= ended) {
-            val saved = archive.summary(n)?.honours.orEmpty().filter { it.kind in Awards.KINDS }
+            // Closed already: the awards as kept (the book's, should the archive have missed the season).
+            val saved = archive.summary(n)?.honours?.filter { it.kind in Awards.KINDS }
+                ?: honours.of(n).filter { it.kind in Awards.KINDS }
             return SeasonEnd(n, saved, emptyList(), emptyList(), emptyList(), archive.review?.takeIf { it.season == n })
         }
         val league = plan.league
@@ -728,9 +732,10 @@ class StatsBook(
         val events = ArrayList<LeagueEvent>()
 
         val awards = ArrayList<Honour>()
-        Awards.mvp(plan) { seasonStats[it] }?.let { awards += Honour(n, "MVP", it) }
-        Awards.rookie(keys, isRookie ?: { it in rookieKeys }, rating)?.let { awards += Honour(n, "ROOKIE", it) }
-        Awards.mip(keys, { startRating(it) }, rating)?.let { awards += Honour(n, "MIP", it) }
+        val awardKeys = keys.filter { it !in gone }
+        Awards.mvp(plan) { if (it in gone) null else seasonStats[it] }?.let { awards += Honour(n, "MVP", it) }
+        Awards.rookie(awardKeys, isRookie ?: { it in rookieKeys }, rating)?.let { awards += Honour(n, "ROOKIE", it) }
+        Awards.mip(awardKeys, { startRating(it) }, rating)?.let { awards += Honour(n, "MIP", it) }
         // The season's titles as Offseason gave them (or as already added to the book).
         val titles = seasonHonours.filter { it.season == n }.ifEmpty { honours.of(n).filter { it.kind !in Awards.KINDS } }
         val won = titles + awards

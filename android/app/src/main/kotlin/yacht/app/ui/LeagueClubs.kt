@@ -219,10 +219,20 @@ private fun ClubDialog(lg: LeagueController, c: Club, v: ClubsView, onOpen: (Str
         },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("선수 (레이팅 순, 상위 5명이 출전)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                // This season's lineup as it plays (fixed at the season's start), then the bench;
+                // without a club league this season, the squad by rating.
+                val lineup = v.lineups[c.id].orEmpty().filter { it in c.squad }
                 val ratings = lg.view?.rows.orEmpty().associate { it.key to (it.rating ?: Int.MIN_VALUE) }
-                for ((i, k) in c.squad.sortedByDescending { ratings[it] ?: Int.MIN_VALUE }.withIndex()) {
-                    Text("${i + 1}. ${lg.name(k)}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.clickable { onDismiss(); onOpen(k) })
+                val bench = c.squad.filter { it !in lineup }.sortedByDescending { ratings[it] ?: Int.MIN_VALUE }
+                Text(
+                    if (lineup.isNotEmpty()) "선수 (이번 시즌 출전 순서: 1~${lineup.size}번 보드, 나머지는 후보)" else "선수 (레이팅 순)",
+                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge,
+                )
+                for ((i, k) in (lineup + bench).withIndex()) {
+                    Text(
+                        "${i + 1}. ${lg.name(k)}" + if (lineup.isNotEmpty() && i >= lineup.size) " (후보)" else "",
+                        style = MaterialTheme.typography.bodySmall, modifier = Modifier.clickable { onDismiss(); onOpen(k) },
+                    )
                 }
                 val games = v.matches.filter { (it.a == c.id || it.b == c.id) && it.result != null }.takeLast(6)
                 if (games.isNotEmpty()) {

@@ -257,10 +257,13 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         }
     }
 
-    /** The tier by the same score that orders the ladder (rating less its error), so tiers follow the ranks. */
+    /**
+     * The tier by the rating shown (the legend's thresholds); the rank for the top tiers. An AI
+     * fresh out of placement can sit below one with a lower tier until its error shrinks.
+     */
     fun tier(key: String): Tier? {
         val rank = rankOf(key) ?: return null
-        return Tier.of(rankScore(key), rank)
+        return Tier.of(rating(key), rank)
     }
 
     /** Records a match of [a] against [b] and refits the ratings. */

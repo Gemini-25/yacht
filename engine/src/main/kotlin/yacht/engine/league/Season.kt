@@ -297,6 +297,8 @@ class Season private constructor(
             val known = keys.toSet()
             val s = Season(number, seed, divisions, double)
             for (d in divisions) for (k in d) s.standings[k] = Standing(k)
+            // Standings from before games were counted: counted again from the saved results.
+            val noGames = HashSet<String>()
             for (l in lines) {
                 val f = l.split(' ')
                 when (f[0]) {
@@ -318,8 +320,7 @@ class Season private constructor(
                         conceded = f[8].toInt()
                         yachts = f[9].toInt()
                         aggPoints = f.getOrNull(10)?.toInt() ?: 0
-                        // Older files: two games a match.
-                        games = f.getOrNull(11)?.toInt() ?: (2 * played)
+                        games = f.getOrNull(11)?.toInt() ?: 0.also { noGames += key }
                     }
                     // Older files kept places as signed bytes: 128..255 came out negative.
                     "pos" -> {
@@ -327,6 +328,19 @@ class Season private constructor(
                         if (d in s.positions.indices) s.positions[d] += f[3].split(',').map { v -> v.toInt().let { if (it < 0) it + 256 else it }.toShort() }.toShortArray()
                     }
                 }
+            }
+            if (noGames.isNotEmpty()) {
+                val counted = HashMap<String, Int>()
+                val matches = HashMap<String, Int>()
+                for ((id, games) in s.results) {
+                    val fx = s.fixtures.getOrNull(id) ?: continue
+                    for (k in listOf(fx.a, fx.b)) {
+                        counted.merge(k, games.size, Int::plus)
+                        matches.merge(k, 1, Int::plus)
+                    }
+                }
+                // A match without saved games counts two (the format before others existed).
+                for (k in noGames) s.standings[k]?.let { st -> st.games = (counted[k] ?: 0) + 2 * maxOf(0, st.played - (matches[k] ?: 0)) }
             }
             s.countMatchdays()
             return s

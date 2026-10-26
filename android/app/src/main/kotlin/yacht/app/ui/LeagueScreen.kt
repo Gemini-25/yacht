@@ -354,7 +354,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
             Text(
                 "레이팅: 모든 판을 브래들리-테리 모형(엘로와 같은 눈금)으로 맞춘 값, 기대점수 AI = 1500. ±는 95% 범위, 7점 ≈ 승률 1%p. " +
                     "순위는 레이팅에서 오차(± 범위의 절반)를 뺀 값 순서라, 배치를 막 끝낸 AI는 판이 쌓일 때까지 조금 아래에 놓여요. " +
-                    "티어: 마스터 1490↑, 그랜드마스터 1500↑ 상위 10, 챌린저 1505↑ 상위 3.",
+                    "티어는 레이팅으로 매겨요: 마스터 1490↑, 그랜드마스터 1500↑ 상위 10, 챌린저 1505↑ 상위 3. 그래서 판이 적은 AI는 티어가 높아도 아래에 놓일 수 있어요.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 8.dp),
@@ -651,10 +651,12 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                 // The table's order when opened (it reorders with nearly every result); the
                 // numbers come again every few seconds in the same order, keeping the cell picked.
                 val keys = remember(d, season.number) { season.divisions[d].map { it.key } }
-                androidx.compose.runtime.LaunchedEffect(keys) {
-                    while (true) {
-                        lg.loadH2h("${d + 1}부", keys)
+                androidx.compose.runtime.LaunchedEffect(keys, lg.running) {
+                    lg.loadH2h("${d + 1}부", keys)
+                    // Only while the league runs (it stops when the app is hidden).
+                    while (lg.running) {
                         kotlinx.coroutines.delay(H2H_REFRESH_MS)
+                        lg.loadH2h("${d + 1}부", keys)
                     }
                 }
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
@@ -806,26 +808,28 @@ private fun CalendarCard(lg: LeagueController, division: Int, season: Int, playe
     val cal = lg.calendar
     // Again as the season moves on (results, games in progress), on the round shown; a new
     // season or division opens on its current round.
-    androidx.compose.runtime.LaunchedEffect(division, season, played) {
-        val same = lg.calendar?.takeIf { it.division == division && it.season == season }
-        lg.loadCalendar(division, same?.matchday)
-    }
+    // The round asked for here (null: the one being played), kept for the reloads.
+    var wanted by remember(division, season) { mutableStateOf<Int?>(null) }
+    androidx.compose.runtime.LaunchedEffect(division, season, played) { lg.loadCalendar(division, wanted) }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (cal == null || cal.division != division) {
                 Text("일정을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             } else {
-                CalendarBody(lg, cal, division, onOpen)
+                CalendarBody(lg, cal, onOpen) { md ->
+                    wanted = md
+                    lg.loadCalendar(division, md)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: LeagueController, cal: yacht.app.core.CalendarView, division: Int, onOpen: (String) -> Unit) {
+private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: LeagueController, cal: yacht.app.core.CalendarView, onOpen: (String) -> Unit, onRound: (Int?) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { lg.loadCalendar(division, cal.matchday - 1) }, enabled = cal.matchday > 0) { Text("◀") }
+        TextButton(onClick = { onRound(cal.matchday - 1) }, enabled = cal.matchday > 0) { Text("◀") }
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("${cal.matchday + 1}라운드 / ${cal.matchdays}", fontWeight = FontWeight.Bold)
             Text(
@@ -838,10 +842,10 @@ private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: Leag
                 color = cs.onSurfaceVariant,
             )
         }
-        TextButton(onClick = { lg.loadCalendar(division, cal.matchday + 1) }, enabled = cal.matchday < cal.matchdays - 1) { Text("▶") }
+        TextButton(onClick = { onRound(cal.matchday + 1) }, enabled = cal.matchday < cal.matchdays - 1) { Text("▶") }
     }
     if (cal.matchday != cal.current) {
-        TextButton(onClick = { lg.loadCalendar(division) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("지금 라운드로") }
+        TextButton(onClick = { onRound(null) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("지금 라운드로") }
     }
     for (f in cal.items) {
         Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {

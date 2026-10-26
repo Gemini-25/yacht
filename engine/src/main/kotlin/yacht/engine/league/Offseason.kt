@@ -82,7 +82,7 @@ object Offseason {
      * Promotion and relegation: per boundary the bottom [LeagueConfig.autoSwap] go down and the
      * top as many come up; the promotion playoff's winners (honours "UP<d>" from the
      * PROMOTION_PLAYOFF competition, keyed by the AI) take the next place. AIs in [gone]
-     * (deleted during the season) are left out of the tables, so the next AI takes their place.
+     * (deleted during the season) do not move; their places stay empty.
      */
     fun moves(plan: SeasonPlan, gone: Set<String> = emptySet()): List<Move> {
         val league = plan.league
@@ -91,21 +91,18 @@ object Offseason {
         val promo = plan.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff
         val playoffWinners = promo?.honours().orEmpty().filter { it.kind.startsWith("UP") }
         for (d in 0 until league.divisions.size - 1) {
-            val upper = league.table(d).map { it.key }.filter { it !in gone }
-            val lower = league.table(d + 1).map { it.key }.filter { it !in gone }
+            // The places as the playoff drew them, from the full tables: a deleted AI's place
+            // is left empty rather than passed on (the next one plays the 승강전).
+            val upper = league.table(d).map { it.key }
+            val lower = league.table(d + 1).map { it.key }
             val swap = minOf(cfg.autoSwap, upper.size / 3, lower.size / 3)
-            val down = upper.takeLast(swap)
-            val up = lower.take(swap)
-            for (k in down) out += Move(k, d, d + 1)
-            for (k in up) out += Move(k, d + 1, d)
-            // Playoff: the tie played at this boundary (its places were fixed when the league
-            // stage ended): the lower side won, so the two swap.
+            for (k in upper.takeLast(swap)) if (k !in gone) out += Move(k, d, d + 1)
+            for (k in lower.take(swap)) if (k !in gone) out += Move(k, d + 1, d)
+            // Playoff: the tie played at this boundary; the lower side won, so the two swap.
             val spot = promo?.spots?.firstOrNull { it.division == d } ?: continue
             if (!cfg.promotionPlayoff || playoffWinners.none { it.key == spot.lower && it.kind == "UP$d" }) continue
-            // (A deleted AI shifts the automatic places: neither side moves twice.)
-            if (spot.lower in gone) continue
-            if (spot.lower !in up) out += Move(spot.lower, d + 1, d)
-            if (spot.upper !in gone && spot.upper !in down) out += Move(spot.upper, d, d + 1)
+            if (spot.lower !in gone) out += Move(spot.lower, d + 1, d)
+            if (spot.upper !in gone) out += Move(spot.upper, d, d + 1)
         }
         return out
     }

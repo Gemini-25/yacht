@@ -173,6 +173,8 @@ data class ClubsView(
     val moves: List<ClubMove>,
     /** This season's club fixtures, by round. */
     val matches: List<ClubMatch>,
+    /** Each club's lineup this season (board 1 first), fixed when the season started. */
+    val lineups: Map<String, List<String>> = emptyMap(),
 )
 
 /** One team in a season table. */
@@ -545,7 +547,8 @@ class LeagueController(
     /** Reads the league files into a new world (on [rosterWork]). */
     private fun readLeague() {
         val texts = LeagueWorld.FILES.associateWith { name -> runCatching { File(folder, name).takeIf { it.exists() }?.readText() }.getOrNull() }
-        val cfg = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: config
+        // As at start-up: no rules file means the default rules (a restore removes this phone's).
+        val cfg = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: LeagueConfig()
         val reserved = baseRoster.map { it.name }
         // The generated and evolved players first: they are AIs of the roster, so the
         // ladder and the season read with them.
@@ -1081,6 +1084,7 @@ class LeagueController(
                 val l = Ladder.decode(synchronized(lock) { ladderKeys() }, text)
                 synchronized(lock) { renew(world?.players ?: return@synchronized, l) }
             }
+            clearLoadedViews()
             save()
             publish(force = true)
         }
@@ -1122,9 +1126,20 @@ class LeagueController(
             }
             review = null
             seasonNews = null
+            clearLoadedViews()
             save()
             publish(force = true)
         }
+    }
+
+    /** Views loaded on request (records, legends, a profile, ...) after the league was replaced: read again or dropped. */
+    private fun clearLoadedViews() {
+        profile = null
+        h2h = null
+        calendar = null
+        preview = null
+        loadRecords()
+        loadPastPlayers()
     }
 
     private suspend fun save() = withContext(Dispatchers.Default) {
@@ -1488,7 +1503,7 @@ class LeagueController(
         val clubs = world?.clubs?.let { b ->
             val cl = s?.competition(Comp.CLUB) as? ClubLeague
             clubNames = b.clubs.associate { it.id to it.name }
-            ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty())
+            ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty(), cl?.lineups.orEmpty())
         }?.let { if (it == lastClubs) lastClubs else it }
         lastClubs = clubs
         val w = world
@@ -1755,6 +1770,8 @@ class LeagueController(
 
     /** Loads [matchday] of [division] into [calendar] (null: the current matchday). */
     fun loadCalendar(division: Int, matchday: Int? = null) {
+        // Only the newest request is shown (an older one can finish later).
+        val request = calendarRequests.incrementAndGet()
         scope.launch(Dispatchers.Default) {
             val v = synchronized(lock) {
                 val s = plan?.league ?: return@synchronized null
@@ -1766,9 +1783,11 @@ class LeagueController(
                 }
                 CalendarView(d, md, s.matchdays, s.currentMatchday, items, s.number)
             }
-            scope.launch { calendar = v }
+            scope.launch { if (request == calendarRequests.get()) calendar = v }
         }
     }
+
+    private val calendarRequests = java.util.concurrent.atomic.AtomicInteger()
 
     /** A past season for the hall of fame, from its honours. */
     private fun historyItem(season: Int, h: List<Honour>): SeasonHistoryItem {

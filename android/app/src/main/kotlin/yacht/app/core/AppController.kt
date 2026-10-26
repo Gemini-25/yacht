@@ -925,8 +925,11 @@ class AppController(
         // The refit takes a moment: off the main thread.
         scope.launch {
             val r = withContext(Dispatchers.Default) { league.recordMyGame(key, s.me, s.opp) }
-            rankResult = r
-            rankMissed = r == null
+            // Only on this game's screen (a new game may have started meanwhile).
+            if (state?.createdAt == s.createdAt) {
+                rankResult = r
+                rankMissed = r == null
+            }
         }
         val rated = s.copy(rated = true)
         state = rated
