@@ -106,8 +106,9 @@ fun ProfileSection(lg: LeagueController, key: String) {
             style = MaterialTheme.typography.labelMedium,
             color = cs.secondary,
         )
-        p.genes?.takeIf { p.origin == Origin.GENERATED || p.origin == Origin.EVOLVED }?.let {
-            Text("유전자: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        p.identity?.let { IdentityPart(it, alive = p.retired == null) }
+        p.genes?.takeIf { p.identity?.style == null && (p.origin == Origin.GENERATED || p.origin == Origin.EVOLVED) }?.let {
+            Text("스타일: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
         Honours(p)
         StatsPart(p)
@@ -242,14 +243,14 @@ private fun Honours(p: ProfileView) {
 private fun Genealogy(p: ProfileView) {
     if (p.ancestors.isEmpty() && p.descendants.isEmpty()) return
     val cs = MaterialTheme.colorScheme
-    Text("🌳 계보도", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    val up = listOf("부모", "조부모", "증조부모", "고조부모")
+    Text("🌳 사제 계보", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    val up = listOf("스승", "스승의 스승", "3대 위 스승", "4대 위 스승")
     for ((g, row) in p.ancestors.withIndex()) {
         val names = row.filterNotNull().distinct()
         if (names.isEmpty()) continue
         Text("${up.getOrElse(g) { "${g + 1}대 위" }}: ${names.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
     }
-    val down = listOf("자녀", "손주", "증손주", "고손주")
+    val down = listOf("제자", "제자의 제자", "3대 아래 제자", "4대 아래 제자")
     for ((g, row) in p.descendants.withIndex()) {
         Text("${down.getOrElse(g) { "${g + 1}대 아래" }} ${row.size}: ${row.take(8).joinToString(", ")}${if (row.size > 8) " 외" else ""}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
     }

@@ -337,7 +337,6 @@ class PlayersTest {
     fun namesComeFromTheirNations() {
         val ps = PlayerBook().apply { ensureGenerated(3000) }.alive
         assertEquals(ps.size, ps.map { it.name }.toSet().size)
-        assertTrue(ps.none { it.name in PlayerNames.BLOCKED })
         val hangul = Regex("[가-힣 ]+")
         for (p in ps) {
             assertTrue(hangul.matches(p.name), p.name)

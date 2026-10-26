@@ -634,66 +634,17 @@ object Nations {
 /**
  * Names of generated and evolved players: a family name by weight and a given name of the
  * player's gender (an older debutant draws the classic list more often), written as the nation
- * writes them, never one of [BLOCKED] (famous real people) and never the same twice ([unique]).
+ * writes them, never the same twice ([unique]).
  */
 object PlayerNames {
     /**
-     * Famous athletes and people a draw could otherwise produce: never given out. Best effort,
-     * checked against the pools (a test makes sure every entry can actually come out).
-     */
-    val BLOCKED: Set<String> = setOf(
-        "손흥민", "박지성", "김연아", "이강인", "김민재", "황희찬", "류현진", "이승엽", "박찬호", "이대호", "추신수", "김연경",
-        "안세영", "신유빈", "이상화", "박태환", "황선우", "우상혁", "오상욱", "김우진", "박인비", "고진영", "김효주", "이정후",
-        "김하성", "이승우", "기성용", "이청용", "차범근", "이영표", "서장훈", "허재", "장미란", "박세리", "최경주", "임시현",
-        "김민지", "이민호", "김수현", "박보검", "송중기", "이지은", "김태리", "한지민", "정해인", "김지원", "이준호", "박서준",
-        "오타니 쇼헤이", "스즈키 이치로", "하뉴 유즈루", "오사카 나오미", "미토마 가오루", "구보 다케후사",
-        "야오밍", "리나", "마룽", "판전둥", "쑨양", "류샹", "왕하오", "장지커", "쑨잉사", "천멍", "딩닝", "구아이링", "정친원",
-        "리오넬 메시", "마이클 조던", "르브론 제임스", "스테픈 커리", "타이거 우즈", "세리나 윌리엄스", "톰 브래디",
-        "마이클 펠프스", "데이비드 베컴", "해리 케인", "웨인 루니", "앤디 머리", "킬리앙 음바페", "티에리 앙리",
-        "토마스 뮐러", "마누엘 노이어", "토니 크로스", "로베르트 레반도프스키", "이가 시비옹테크", "세르히오 라모스",
-        "페르난도 토레스", "라파엘 나달", "카를로스 알카라스", "루카스 파케타", "가브리에우 제주스", "루이스 수아레스",
-        "엔소 페르난데스", "훌리안 알바레스", "앙헬 디마리아", "라우타로 마르티네스", "에밀리아노 마르티네스",
-        "사비 에르난데스", "페란 토레스", "페드로 로드리게스", "마르코스 알론소", "니라즈 초프라", "아르다 귈레르", "케난 일디즈", "프렝키 더용", "마테이스 더리흐트", "버질 판데이크",
-        "응우옌꽝하이", "응우옌꽁프엉", "응우옌반또안", "차나팁 송끄라신", "티라실 당다",
-        // Politicians, scandals and household names a Korean reader would know.
-        "김정은", "김건희", "이건희", "오세훈", "김민석", "정유정", "고유정", "정준영", "황하나", "성기훈",
-        "유재석", "박명수", "김종민", "전지현", "손예진", "김혜수", "한효주", "고소영", "고현정", "엄정화", "전도연", "공효진",
-        "임수정", "최지우", "박보영", "임윤아", "배수지", "장동건", "강동원", "황정민", "하정우", "권상우", "이동욱", "이준기",
-        "김우빈", "차은우", "신승훈", "방시혁", "양현석", "김지수", "박지민", "김석진", "안유진", "김채원", "유지민", "김민정",
-        "안현수", "윤성빈", "최민정", "설기현", "조현우", "이민정", "정은지", "이나영", "문채원", "한예슬", "박민영", "윤은혜",
-        "송윤아", "이승훈", "김현수", "이상민", "유소연", "최나연", "김세영", "박성현", "이성민", "이도현", "양효진", "박정아",
-        "유승민", "정수정", "송민호", "이혜인", "황예지", "이수지", "김기현", "김준호", "존 박", "그레이스 박",
-        "기무라 다쿠야", "무라카미 하루키", "마쓰이 히데키", "다나카 마사히로", "기쿠치 유세이", "마에다 겐타", "이시카와 가스미",
-        "사토 다케루", "마쓰모토 준", "사쿠라이 쇼", "오노 사토시", "오노 신지", "이토 히로키", "다케우치 유코",
-        "쑨원", "리펑", "자오쯔양", "레이쥔", "장쯔이", "탕웨이", "우이판", "우레이", "주팅", "천위페이", "류스원", "황샤오밍", "덩차오",
-        "응우옌쑤언푹", "르엉쑤언쯔엉", "부이띠엔중", "당반럼", "판반득", "응우옌반꾸옛", "응우옌호앙득", "도주이마인",
-        "마이클 잭슨", "엠마 왓슨", "엠마 톰프슨", "줄리아 로버츠", "제니퍼 로페스", "엘리자베스 테일러", "그레이스 켈리",
-        "노라 존스", "존 윌리엄스", "앤드루 잭슨", "존 애덤스", "조지 해리슨", "톰 존스", "샘 스미스", "애덤 스미스",
-        "루이스 해밀턴", "카일 워커", "존 스미스", "앙투안 뒤퐁", "장 뒤퐁", "옌스 레만", "프리츠 랑",
-        "페르난도 알론소", "사비 알론소", "라울 곤살레스", "세르히오 가르시아", "마르크 마르케스", "세르히오 페레스", "루이스 디아스",
-        "하비에르 에르난데스", "기예르모 오초아", "라울 히메네스", "우고 산체스", "우고 차베스", "디에고 리베라",
-        "크리스티안 로메로", "레안드로 파레데스", "엔소 페라리", "후안 쿠아드라도", "후안 페레스", "알레한드로 산스",
-        "라파엘 마르케스", "앙헬 코레아", "세르히오 로메로", "엑토르 에레라", "카를로스 살리나스", "라파엘 베니테스", "크리스티안 사파타",
-        "티아구 시우바", "치아구 시우바", "다니에우 아우베스", "히카르두 카르발류", "마테우스 쿠냐", "아르투르 멜루",
-        "파올로 로시", "로베르토 만치니", "페데리카 펠레그리니", "부라크 일마즈", "에네스 카야", "에미네 에르도안", "카안 아이한",
-        "헨리크 라르손", "에밀 포르스베리", "아스트리드 린드그렌", "스벤 스벤손", "얀 얀선", "뤼크 더용",
-        "솜차이 웡사왓", "수파촉 사라찻", "티라톤 분마탄", "수파난 부리랏", "아미트 샤", "라지 카푸르", "아닐 카푸르", "미라 나이르",
-        "아메드 무사", "이케추쿠 우체", "에메카 오카포르", "피오트르 지엘린스키", "얀 코발스키", "안나 레반도프스카",
-        "알리운 시세", "파페 사르", "아흐메드 하산", "아슈라프 하키미",
-    )
-
-    /** Words a joined name must not spell (vulgar or embarrassing in Korean). */
-    private val BAD = listOf("자위", "자지", "보지", "변태", "변기", "변소", "성기", "노예", "찐따", "졸라")
-
-    /**
-     * A full name that reads right: its given name is not its family name, it spells none of
-     * [BAD] (nor "선수" for a Korean: "선수민" reads as "player 민"), and a joined name does not
-     * start with another family name of the pool (선+우빈 would read as 선우빈).
+     * A full name that reads right: its given name is not its family name, a Korean one does not
+     * start with "선수" ("선수민" reads as "player 민"), and a joined name does not start with
+     * another family name of the pool (선+우빈 would read as 선우빈).
      */
     private fun acceptable(nation: Nation, family: String, given: String, full: String): Boolean {
         if (given == family) return false
         val plain = full.replace(" ", "")
-        if (BAD.any { it in plain }) return false
         if (nation.order == NameOrder.FAMILY_GIVEN) {
             // No 이이준 or 웨이웨이: a given name never starts with the family name (KR, CN, VN).
             if (given.startsWith(family)) return false
@@ -740,7 +691,7 @@ object PlayerNames {
     }
 
     /**
-     * A name not in [taken] nor [BLOCKED]: up to [TRIES] draws of a full name, then the family
+     * A name not in [taken]: up to [TRIES] draws of a full name, then the family
      * name kept and a numbered given name ("리암 존슨 2") as a last resort (a test makes sure
      * the pools never get there in a league of [Capacity] players). With [family] (a child of
      * the same nation keeping a parent's family name) that family is tried first.
@@ -748,11 +699,11 @@ object PlayerNames {
     fun unique(nation: Nation, gender: Gender, age: Int, rng: Random, taken: Set<String>, family: String? = null): String {
         if (family != null) repeat(TRIES / 4) {
             val n = draw(nation, gender, age, rng, family)
-            if (n !in taken && n !in BLOCKED) return n
+            if (n !in taken) return n
         }
         repeat(TRIES) {
             val n = draw(nation, gender, age, rng)
-            if (n !in taken && n !in BLOCKED) return n
+            if (n !in taken) return n
         }
         val base = draw(nation, gender, age, rng)
         var i = 2
