@@ -198,13 +198,17 @@ week) when it starts (or when the mode is chosen while running) and asks for fix
 `next(..., lastWeek = goal)`: the league gives no round after it (`Season.next(lastMatchday)`)
 and a competition fixture whose stage week is later is given back at once and the next one
 tried, so a later stage first in line holds up nothing. Friendlies and lab games run while the
-week does. The week is played once the clock is past it with nothing in flight; the run then
-stops (a player's stop: no auto-resume) and says what it played ("12주차를 다 치렀어요"). After a
+week does, and not once its league round is played (only the week's own fixtures are asked for
+then). The week is played once the clock is past it, nothing is in flight and nothing of it is
+free (asked and given back under the same lock); the run then stops (a player's stop: no
+auto-resume) and says what it played ("12주차를 다 치렀어요"). A run that resumes by itself (the
+app back, a speed change, a relaunch) keeps its goal; the player's ■ clears it. After a
 season's last week the next request closes the season (rollover), finds a new season and stops.
 
 **Never a silent stop (app).** Workers catch every `Throwable` from a job (a match fails, is
 retried, then voided; 12 errors in a row stop the league with the reason shown), worker threads
-get a 16 MB stack, and a run that ends by itself without a reason says so and saves. A watchdog
+get a 16 MB stack, and a run that ends by itself says why (the error that ended it, including a
+worker's failure that cancelled the run, or that it stopped) and saves. A watchdog
 in the upkeep loop: nothing in flight and no match for 20 s means something is still marked as
 taken; the busy set, cup and team counters and the league's taken fixtures
 (`Season.reclaim`) are rebuilt from the jobs really in flight, and it is told to the crash log.
@@ -242,8 +246,12 @@ match rating, best average score, best match win rate (20 matches, or 3/4 of a s
 rounds), most yachts; 통산 — longest winning streak, most games, wins, yachts and 300-point
 games (from every rated game, as the milestones); 우승·수상 — most titles, most MVPs, most
 이 주의 선수, youngest and oldest 1부 champion (by age in the title season; earlier seasons are
-counted quietly the first time, `StatsBook.honourRecords`). A count one holder keeps raising
-(`running`) is one break a season, not one a game.
+counted quietly the first time only, `StatsBook.honourRecords`, as a league whose ages stand
+still moves them). The winning run and the career counts are held only by players of official
+games (the 기준 경기 anchor plays friendlies all season). A `running` record makes the news once a
+season (later passes, by the holder or another, update the season's break quietly); a record new
+to an older league (first set long after the warm-up) settles over its first season without news
+(`first` lines in stats.txt).
 
 **Milestones** (news + 마일스톤 list): career games 1000/5000/10000/…, wins 100/500/1000/…,
 yachts 50/100/500/…, first title, every 5th title, 300+ games.

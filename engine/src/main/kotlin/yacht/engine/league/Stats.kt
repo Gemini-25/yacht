@@ -594,10 +594,15 @@ class StatsBook(
                     gameRecords(b.a, b.b, ga, ctx.season, f.comp, events, pair = true)
                     gameRecords(b.b, b.a, gb, ctx.season, f.comp, events, pair = false)
                 }
-                streakRecord(b.a, ca, ga, ctx.season, f.comp, events)
-                streakRecord(b.b, cb, gb, ctx.season, f.comp, events)
-                careerRecords(b.a, ca, ctx.season, events)
-                careerRecords(b.b, cb, ctx.season, events)
+                // The run and the career counts are over every rated game (as the ladder and the
+                // milestones), but held only by players of official games: not the 기준 경기's
+                // anchor, which plays friendlies all season.
+                if (official) {
+                    streakRecord(b.a, ca, ga, ctx.season, f.comp, events)
+                    streakRecord(b.b, cb, gb, ctx.season, f.comp, events)
+                    careerRecords(b.a, ca, ctx.season, events)
+                    careerRecords(b.b, cb, ctx.season, events)
+                }
             }
             if (official) {
                 // Ratings before the match: the best ever (once the rating has settled) and the
@@ -726,14 +731,27 @@ class StatsBook(
     internal fun offer(r: LeagueRecord, out: MutableList<LeagueEvent>, warm: Boolean = officialGames >= recordWarmup) {
         if (r.value <= 0 && !r.kind.lowerIsBetter) return
         val b = records.offer(r) ?: return
-        val prev = b.previous ?: return
-        if (!warm) return
-        // A winning run or a career count going on past the record is one break, not one per game.
-        val own = r.kind.running && prev.holder == r.holder && breaks[r.kind]?.record?.holder == r.holder
-        breaks[r.kind] = if (own) RecordBreak(r, breaks.getValue(r.kind).previous) else b
-        if (own) return
+        val prev = b.previous
+        if (prev == null) {
+            // Set first in a league long past its warm-up: a record this version added.
+            if (officialGames >= recordWarmup) firstSeason.putIfAbsent(r.kind, r.season)
+            return
+        }
+        // A record new to this league (an older league updated) settles over its first season:
+        // the players who already passed it come in one by one, which is no news.
+        if (!warm || firstSeason[r.kind] == r.season) return
+        // A winning run, a career count or the best rating makes the news once a season: going
+        // on past it, or another overtaking, updates the season's break quietly.
+        if (r.kind.running && breaks[r.kind] != null) {
+            breaks[r.kind] = RecordBreak(r, breaks.getValue(r.kind).previous)
+            return
+        }
+        breaks[r.kind] = b
         out += LeagueEvent("record", r.season, listOf(r.holder, prev.holder), listOf(r.kind.name, r.kind.plain(r.value), r.kind.plain(prev.value)), r.comp)
     }
+
+    /** The season each record new to an older league was first set in (saved): its news waits until the season after. */
+    private val firstSeason = java.util.EnumMap<RecordKind, Int>(RecordKind::class.java)
 
     /**
      * Records from the honours once season [season]'s are in [honours] (이 주의 선수 included):
@@ -744,11 +762,14 @@ class StatsBook(
     fun honourRecords(honours: HonourBook, season: Int, ageAt: (String, Int) -> Int?): List<LeagueEvent> {
         val events = ArrayList<LeagueEvent>()
         val warm = season > 1
+        // Earlier champions once (a league that had them before these records): their ages are
+        // read from today's identities, which a league whose ages stand still moves every season.
+        val backfill = records[RecordKind.YOUNGEST_CHAMPION] == null && records[RecordKind.OLDEST_CHAMPION] == null
         honours.all.filter { it.kind == "POTW" }.groupingBy { it.key }.eachCount().entries
             .maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenByDescending { it.key })?.let {
                 offer(LeagueRecord(RecordKind.POTW, it.key, it.value.toDouble(), season), events, warm)
             }
-        for (h in honours.all.filter { it.kind == "L0" }.sortedBy { it.season }) {
+        for (h in honours.all.filter { it.kind == "L0" && (backfill || it.season == season) }.sortedBy { it.season }) {
             val age = ageAt(h.key, h.season)?.takeIf { it > 0 } ?: continue
             val now = warm && h.season == season
             offer(LeagueRecord(RecordKind.YOUNGEST_CHAMPION, h.key, age.toDouble(), h.season), events, now)
@@ -973,6 +994,7 @@ class StatsBook(
             append('\n')
         }
         for (r in records.all) append("rec ${r.encode()}\n")
+        for ((k, n) in firstSeason) append("first ${k.name} $n\n")
         for (b in breaks.values) append("brk ${b.encode()}\n")
         append("box $metaGames $metaScore $metaCards ${metaSums.joinToString(",")} ${metaZeros.joinToString(",")}\n")
         previousMeta?.encode(this)
@@ -1111,6 +1133,7 @@ class StatsBook(
                             if (m > 0) book.mvpCounts[k] = m
                         }
                         "rec" -> LeagueRecord.decode(f, 1)?.let { book.records.put(it) }
+                        "first" -> runCatching { book.firstSeason[RecordKind.valueOf(f[1])] = f[2].toInt() }
                         "brk" -> RecordBreak.decode(f, 1)?.let { book.breaks[it.record.kind] = it }
                         "box" -> {
                             val games = f[1].toInt()

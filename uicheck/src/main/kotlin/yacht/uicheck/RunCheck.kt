@@ -26,7 +26,8 @@ import kotlin.system.exitProcess
  * - every 5 s: running, matches, season and week, matches in flight, why it stopped;
  * - `seed` starts from the shipped seed league; `make` adds three made players while it runs;
  * - `week` presses ▶ in 1주씩 sixty times (each run must stop by itself one week on, with
- *   nothing left over), then plays on in 계속.
+ *   nothing left over), then plays on in 계속; `week lab` the same with an AI lab experiment
+ *   running alongside (its games must not cut a week short).
  * Exits 1 when a check fails.
  */
 fun main(args: Array<String>) {
@@ -59,7 +60,7 @@ private fun run(args: Array<String>) {
         while ((c.league.view?.matches ?: 0L) == 0L) Thread.sleep(50)
     }
     when (args.getOrElse(4) { "" }) {
-        "week" -> weeks(c)
+        "week" -> weeks(c, lab = args.getOrElse(5) { "" } == "lab")
         else -> watch(c, minutes, make = args.getOrElse(4) { "" } == "make")
     }
 }
@@ -100,10 +101,20 @@ private fun watch(c: AppController, minutes: Double, make: Boolean) {
 }
 
 /** 1주씩: ▶ again and again; each run must stop by itself one week further on. */
-private fun weeks(c: AppController) {
+private fun weeks(c: AppController, lab: Boolean) {
     val lg = c.league
     lg.changeRunMode(LeagueRunMode.WEEK)
     Thread.sleep(200)
+    if (lab) {
+        // Two league players, a long experiment: it plays alongside every week.
+        val (a, b) = lg.view!!.rows.filter { it.key.startsWith("g") }.take(2).map { it.key }
+        lg.startLab(a, b, 1_000_000)
+        while (!lg.running) Thread.sleep(10)
+        while (lg.running) Thread.sleep(20)
+        Thread.sleep(400)
+        println("lab week: ${lg.weekDone} late=${lg.view?.clock?.late?.size}")
+        check(lg.view?.clock?.late.orEmpty().isEmpty()) { "the lab's first week left stages" }
+    }
     for (i in 1..60) {
         val before = lg.view?.clock?.let { it.season to it.week }
         val t0 = System.currentTimeMillis()

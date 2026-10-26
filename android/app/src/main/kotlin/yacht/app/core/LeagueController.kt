@@ -602,12 +602,21 @@ class LeagueController(
     var weekDone by mutableStateOf<String?>(null)
         private set
 
-    /** The season and week a 1주씩 run plays (null: it plays on); read and set under the lock. */
+    /**
+     * The season and week a 1주씩 run plays (null: it plays on): set under the lock by a ▶ or
+     * a change of mode, kept by a restart that resumes (the app back, a speed change), cleared
+     * by the player's ■.
+     */
+    @Volatile
     private var weekGoal: Pair<Int, Int>? = null
 
-    /** Set by a run that stops by itself and says why (its week played, errors); null otherwise. */
+    /** Why a run stopped by itself on an error (shown in red); null otherwise. */
     @Volatile
     private var endedBy: String? = null
+
+    /** What a 1주씩 run played when it stopped by itself; null otherwise. */
+    @Volatile
+    private var endedWeek: String? = null
 
     /** A stuck run was told to the app (once per run). */
     @Volatile
@@ -828,7 +837,7 @@ class LeagueController(
         // Running when the app was last closed (or killed): it goes on by itself, once the app is
         // in view (hidden while loading, it waits for the app to come back: the 나가면 멈춤
         // choice, and Android does not let a hidden app start the 나가도 계속 service).
-        if (first && resumeFile.exists()) scope.launch { if (visible) start() else resumeOnForeground = true }
+        if (first && resumeFile.exists()) scope.launch { if (visible) start(resume = true) else resumeOnForeground = true }
         // A restore may have brought the rules and the favourites too.
         val favs = readFavourites()
         val rv = synchronized(lock) { w.archive.pendingReview }
@@ -942,7 +951,7 @@ class LeagueController(
         scope.launch(fileWrites) { runCatching { prefs.writeTextAtomically(s.name) } }
         if (running) {
             stop(keepResume = true)
-            start()
+            start(resume = true)
         }
     }
 
@@ -1066,14 +1075,18 @@ class LeagueController(
 
     // ---- running ---------------------------------------------------------------------------------
 
-    /** Starts (or resumes) the league. */
-    fun start() {
+    /**
+     * Starts (or resumes) the league. [resume]: it goes on by itself (the app back, a speed
+     * change, a relaunch), so a 1주씩 run keeps the week it was playing.
+     */
+    fun start(resume: Boolean = false) {
         val t = tables ?: return
         if (running || ladder == null || restoring) return
         running = true
         stopReason = null
         weekDone = null
         endedBy = null
+        endedWeek = null
         stallTold = false
         failures.set(0)
         lastRecord = System.currentTimeMillis()
@@ -1099,7 +1112,11 @@ class LeagueController(
                             configureWorld(w)
                             w.openFirstSeason(System.nanoTime())
                         }
-                        weekGoal = if (runMode == LeagueRunMode.WEEK) w.plan?.let { it.number to it.week } else null
+                        weekGoal = when {
+                            runMode != LeagueRunMode.WEEK -> null
+                            resume && weekGoal != null -> weekGoal
+                            else -> w.plan?.let { it.number to it.week }
+                        }
                     }
                 }
                 val r = extra!!
@@ -1126,11 +1143,14 @@ class LeagueController(
                     dispatcher.close()
                 }
             } catch (e: CancellationException) {
+                // A worker failed outside its guards (its error cancelled the run): say which.
+                val cause = generateSequence(e.cause) { it.cause }.firstOrNull { it !is CancellationException }
+                if (cause != null && endedBy == null) endedBy = reasonOf(cause)
                 throw e
             } catch (e: Throwable) {
                 // Preparing the tables or starting the season failed: shown, not a silent stop.
                 withContext(kotlinx.coroutines.NonCancellable) { onError(e) }
-                stopReason = reasonOf(e)
+                endedBy = reasonOf(e)
                 clearResume()
             } finally {
                 // A run that ended by itself (errors, its week played) must not leave the screen
@@ -1140,7 +1160,14 @@ class LeagueController(
                         flag.set(true)
                         running = false
                         preparing = null
-                        if (endedBy == null) stopReason = "리그가 저절로 멈췄어요. ‘이어서’를 누르면 다시 해요."
+                        // Why: an error, or its week played (said in green), else that it stopped.
+                        val why = endedBy
+                        val week = endedWeek
+                        when {
+                            why != null -> stopReason = why
+                            week != null -> weekDone = week
+                            else -> stopReason = "리그가 저절로 멈췄어요. ‘이어서’를 누르면 다시 해요."
+                        }
                         scope.launch {
                             withContext(kotlinx.coroutines.NonCancellable) { save() }
                             publish(force = true)
@@ -1171,19 +1198,22 @@ class LeagueController(
         // quickly, against light AIs (a heavy one would hold up its own league fixtures).
         val newcomers = members.filter { it !in inLeague && it !in busy && !l.placed(it) }
         val share = if (newcomers.size * 10 > members.size) FRIENDLY_RUSH else FRIENDLY_SHARE
-        if (newcomers.isNotEmpty() && rng.nextDouble() < share) {
+        // 1주씩 past its week: only what is left of the week (no friendlies or lab games, which
+        // would be given back and keep the week's own fixtures from being tried).
+        val past = weekGoal?.let { (season, week) -> p.number != season || p.week > week } == true
+        if (!past && newcomers.isNotEmpty() && rng.nextDouble() < share) {
             Matchmaker.pick(l, rng, busy + (heavyKeys - newcomers.toSet()), among = newcomers)?.let { return friendly(it, rng) }
         }
         // 기준 경기: without the hand-made AIs in the league, the max-expectation AI (1500 by
         // definition) plays one now and then against a member near 1500, so the scale stays put.
-        if (!w.config.baseAis && ANCHOR !in busy && rng.nextDouble() < CALIBRATION_SHARE) {
+        if (!past && !w.config.baseAis && ANCHOR !in busy && rng.nextDouble() < CALIBRATION_SHARE) {
             val near = members.filter { it !in busy && l.placed(it) }
             Matchmaker.opponentFor(l, 1500.0, rng, among = near)?.let { return friendly(ANCHOR to it, rng, CALIBRATION_LABEL) }
         }
         // AI 연구소: up to half the workers on the experiment, alongside the league; a single
         // worker plays the two by turns.
         val labCap = speed.threads(cores) / 2
-        if (if (labCap > 0) labInFlight < labCap else rng.nextBoolean()) w.lab.next()?.let { return it }
+        if (!past && if (labCap > 0) labInFlight < labCap else rng.nextBoolean()) w.lab.next()?.let { return it }
         val cost = { f: yacht.engine.league.LeagueFixture -> (costMs[f.a] ?: 5.0) + (costMs[f.b] ?: 5.0) }
         val cap = maxOf(1, speed.threads(cores) - 1)
         w.next(busy, cupsInFlight, cap, cost, lastWeek(w))?.let { return it }
@@ -1388,15 +1418,25 @@ class LeagueController(
     private fun weekPlayed(flag: AtomicBoolean): Boolean {
         val note = synchronized(lock) {
             val (season, week) = weekGoal ?: return false
-            val p = world?.plan ?: return false
+            val w = world ?: return false
+            val p = w.plan ?: return false
             if (p.number == season && p.week <= week) return false
             if (live.isNotEmpty() || labInFlight > 0) return false
+            // Nothing in flight: a fixture of the week still free (a final a semi just unlocked)
+            // is played first. Asked and given back at once, under this same lock.
+            if (p.number == season) {
+                val free = w.next(busy, cupsInFlight, maxOf(1, speed.threads(cores) - 1), null, week)
+                if (free != null) {
+                    w.release(free)
+                    return false
+                }
+            }
             weekGoal = null
             if (p.number != season) "시즌 $season 일정을 다 마쳤어요. ▶를 누르면 시즌 ${p.number} 1주차를 해요."
             else "${week}주차를 다 치렀어요. ▶를 누르면 ${p.week}주차를 해요."
         }
         if (flag.getAndSet(true)) return true
-        endedBy = note
+        endedWeek = note
         scope.launch {
             weekDone = note
             // The player's stop: it does not go on by itself at the next launch.
@@ -1550,7 +1590,10 @@ class LeagueController(
      * itself later (the app hidden or closed, a speed change); a plain stop is the player's.
      */
     fun stop(keepResume: Boolean = false): Job? {
-        if (!keepResume) clearResume()
+        if (!keepResume) {
+            clearResume()
+            weekGoal = null
+        }
         if (!running) return null
         stop.set(true)
         running = false
@@ -1593,7 +1636,7 @@ class LeagueController(
         }
         if (!resumeOnForeground) return
         resumeOnForeground = false
-        start()
+        start(resume = true)
     }
 
     private var resumeOnForeground = false
@@ -1613,12 +1656,18 @@ class LeagueController(
      * and stops; 계속 plays on.
      */
     fun changeRunMode(m: LeagueRunMode) {
+        if (m == runMode) return
         runMode = m
         scope.launch(fileWrites) { runCatching { runModeFile.writeTextAtomically(m.name) } }
         if (!running) return
         scope.launch(Dispatchers.Default) {
             synchronized(lock) {
-                weekGoal = if (m == LeagueRunMode.WEEK) world?.plan?.let { it.number to it.week } else null
+                // The mode as it is when this runs (taps in a row may run out of order).
+                weekGoal = when {
+                    runMode != LeagueRunMode.WEEK -> null
+                    weekGoal != null -> weekGoal
+                    else -> world?.plan?.let { it.number to it.week }
+                }
             }
         }
     }

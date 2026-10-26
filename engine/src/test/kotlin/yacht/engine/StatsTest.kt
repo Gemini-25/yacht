@@ -256,6 +256,45 @@ class StatsTest {
     }
 
     @Test
+    fun onlyLeaguePlayersHoldCareerRecordsAndNewRecordsSettleQuietly() {
+        val book = StatsBook(recordWarmup = 10)
+        val ctx = StatsContext(1, { 1500.0 })
+        // The 기준 경기 anchor plays friendlies all season: rated, counted in its career, holding nothing.
+        repeat(50) { i -> book.record(job("ev", "p${i % 5}", GameScore(250, 200), GameScore(240, 210), comp = Comp.FRIENDLY), ctx) }
+        assertEquals(100, book.career("ev")!!.games)
+        assertNull(book.records[RecordKind.CAREER_GAMES])
+        assertNull(book.records[RecordKind.STREAK])
+        book.record(job("y", "z", GameScore(230, 200), GameScore(220, 210)), ctx)
+        assertEquals("y", book.records[RecordKind.CAREER_GAMES]!!.holder)
+        // An older league updated to these records: well past its warm-up, they start empty, and
+        // the players who already passed them come in one by one this season without news.
+        repeat(20) { book.record(job("y", "z", GameScore(230, 200), GameScore(220, 210)), ctx) }
+        val text = book.encode().lines().filter { !it.startsWith("rec ") }.joinToString("\n")
+        val old = StatsBook.decode(text, recordWarmup = 10)
+        val events = ArrayList<LeagueEvent>()
+        events += old.record(job("p1", "q", GameScore(230, 200), GameScore(220, 210)), ctx)
+        events += old.record(job("y", "q", GameScore(230, 200), GameScore(220, 210)), ctx)
+        assertEquals("y", old.records[RecordKind.CAREER_GAMES]!!.holder)
+        assertTrue(events.none { it.kind == "record" }, events.toString())
+        // Read back, it is still quiet this season.
+        val again = StatsBook.decode(old.encode(), recordWarmup = 10)
+        assertTrue(again.record(job("z", "q", GameScore(300, 100), GameScore(300, 100)), ctx).none { it.kind == "record" && it.args[0] == RecordKind.CAREER_GAMES.name })
+    }
+
+    @Test
+    fun championAgesAreReadOnceForEarlierSeasons() {
+        val book = StatsBook()
+        val h = HonourBook().apply { add(listOf(Honour(1, "L0", "a"), Honour(2, "L0", "b"))) }
+        book.honourRecords(h, 2) { k, _ -> if (k == "a") 24 else 30 }
+        assertEquals("a" to 24.0, book.records[RecordKind.YOUNGEST_CHAMPION]!!.let { it.holder to it.value })
+        // With ages standing still, the same players' title ages read lower every season: earlier
+        // titles are not read again.
+        h.add(listOf(Honour(3, "L0", "b")))
+        book.honourRecords(h, 3) { k, _ -> if (k == "a") 20 else 29 }
+        assertEquals("a" to 24.0, book.records[RecordKind.YOUNGEST_CHAMPION]!!.let { it.holder to it.value })
+    }
+
+    @Test
     fun seasonAwardAndChampionRecords() {
         val lg = threeSeasons()
         val r = lg.book.records
