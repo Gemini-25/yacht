@@ -203,4 +203,28 @@ class LeagueWorldTest {
         val back = yacht.engine.league.Season.decode(w.plan!!.league.encode(), w.plan!!.league.standings.keys)
         for (s in played) assertEquals(s.avgScore, back.standings.getValue(s.key).avgScore, 1e-9)
     }
+
+    @Test
+    fun anAiDeletedDuringTheSeasonPlacesNowhere() {
+        val config = LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0, promotionPlayoff = false, titlePlayoff = false)
+        val w = world(config)
+        w.openFirstSeason(9L)
+        season(w)
+        val p = w.plan!!
+        // The 2부 leader is deleted before the season closes.
+        val lower = p.league.table(1).map { it.key }
+        val upper = p.league.table(0).map { it.key }
+        val leader = lower.first()
+        w.present = { it != leader }
+        val c = w.closeSeason()
+        assertTrue(c.honours.none { it.key == leader }, c.honours.toString())
+        assertEquals(lower[1], c.honours.single { it.kind == "L1" }.key)
+        val up = c.honours.filter { it.kind == "UP0" }.map { it.key }.toSet()
+        val swap = minOf(config.autoSwap, upper.size / 3, (lower.size - 1) / 3)
+        assertEquals(lower.drop(1).take(swap).toSet(), up)
+        w.members = w.members - leader
+        w.openSeason()
+        assertTrue(leader !in w.plan!!.league.standings.keys)
+        assertTrue(w.plan!!.league.divisions[0].containsAll(up))
+    }
 }

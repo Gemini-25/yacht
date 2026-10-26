@@ -54,8 +54,8 @@ class Season private constructor(
     /** The games of every played fixture (for the calendar and the odds), by fixture id. */
     private val results = HashMap<Int, List<GameScore>>()
 
-    /** Positions after each completed matchday: positions[d][k][i] = place of divisions[d][i]. */
-    val positions: List<MutableList<ByteArray>> = divisions.map { ArrayList() }
+    /** Positions after each completed matchday: positions[d][k][i] = place of divisions[d][i] (a division can hold hundreds). */
+    val positions: List<MutableList<ShortArray>> = divisions.map { ArrayList() }
     private val matchdayLeft = HashMap<Pair<Int, Int>, Int>()
 
     val fixturesTotal: Int get() = fixtures.size
@@ -210,9 +210,10 @@ class Season private constructor(
         val left = (matchdayLeft[k] ?: 1) - 1
         matchdayLeft[k] = left
         if (left == 0) {
-            val order = table(f.division).map { it.key }
-            val place = ByteArray(divisions[f.division].size)
-            for ((i, key) in divisions[f.division].withIndex()) place[i] = (order.indexOf(key) + 1).toByte()
+            val rank = HashMap<String, Int>()
+            for ((i, s) in table(f.division).withIndex()) rank[s.key] = i + 1
+            val place = ShortArray(divisions[f.division].size)
+            for ((i, key) in divisions[f.division].withIndex()) place[i] = (rank[key] ?: 0).toShort()
             positions[f.division] += place
         }
         return true
@@ -320,9 +321,10 @@ class Season private constructor(
                         // Older files: two games a match.
                         games = f.getOrNull(11)?.toInt() ?: (2 * played)
                     }
+                    // Older files kept places as signed bytes: 128..255 came out negative.
                     "pos" -> {
                         val d = f[1].toInt()
-                        if (d in s.positions.indices) s.positions[d] += f[3].split(',').map { it.toInt().toByte() }.toByteArray()
+                        if (d in s.positions.indices) s.positions[d] += f[3].split(',').map { v -> v.toInt().let { if (it < 0) it + 256 else it }.toShort() }.toShortArray()
                     }
                 }
             }

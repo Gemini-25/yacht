@@ -648,8 +648,15 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                 else items(rows, key = { "o-${it.key}" }) { r -> OddsRow(r, d, season.divisions.size) { onOpen(r.key) } }
             }
             SeasonMode.H2H -> item {
-                val keys = season.divisions[d].map { it.key }
-                androidx.compose.runtime.LaunchedEffect(d, keys) { lg.loadH2h("${d + 1}부", keys) }
+                // The table's order when opened (it reorders with nearly every result); the
+                // numbers come again every few seconds in the same order, keeping the cell picked.
+                val keys = remember(d, season.number) { season.divisions[d].map { it.key } }
+                androidx.compose.runtime.LaunchedEffect(keys) {
+                    while (true) {
+                        lg.loadH2h("${d + 1}부", keys)
+                        kotlinx.coroutines.delay(H2H_REFRESH_MS)
+                    }
+                }
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                     Column(Modifier.padding(10.dp)) {
                         val m = lg.h2h
@@ -882,8 +889,9 @@ private fun RankChartCard(lg: LeagueController, season: SeasonView, division: In
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("라운드마다 순위가 어떻게 바뀌었는지 보여줘요. 아래에서 팀을 눌러 골라 보세요 (최대 8팀).", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             RankChart(series, order.size)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (r in table) {
+            // Lazy: a division can hold dozens of AIs (hundreds with one division).
+            androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(table, key = { "c-${it.key}" }) { r ->
                     val on = r.key in shown
                     FilterChip(
                         selected = on,
@@ -900,6 +908,18 @@ private fun RankChartCard(lg: LeagueController, season: SeasonView, division: In
 }
 
 // ---- families ----------------------------------------------------------------------------------
+
+/** A family card's row, from plain values: unchanged rows skip recomposing on a new snapshot. */
+@Composable
+private fun FamilyMember(key: String, rank: Int?, name: String, tier: String?, tierColor: androidx.compose.ui.graphics.Color?, rating: Int?, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clickable { onOpen(key) }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(rank?.let { "${it}위" } ?: "배치", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.width(36.dp))
+        Text(name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (tier != null && tierColor != null) Text(tier, style = MaterialTheme.typography.labelSmall, color = tierColor, fontWeight = FontWeight.Bold)
+        Text("  ${rating ?: "–"}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    }
+}
 
 @Composable
 private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
@@ -941,12 +961,7 @@ private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
                     }
                     HorizontalDivider()
                     for (r in rows.sortedBy { it.rank ?: Int.MAX_VALUE }) {
-                        Row(Modifier.fillMaxWidth().clickable { onOpen(r.key) }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(r.rank?.let { "${it}위" } ?: "배치", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.width(36.dp))
-                            Text(r.name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            r.tier?.let { Text(it.label, style = MaterialTheme.typography.labelSmall, color = tierColor(it.name), fontWeight = FontWeight.Bold) }
-                            Text("  ${r.rating ?: "–"}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                        }
+                        FamilyMember(r.key, r.rank, r.name, r.tier?.label, r.tier?.name?.let { tierColor(it) }, r.rating, onOpen)
                     }
                 }
             }
@@ -1103,3 +1118,6 @@ private fun RatingLine(points: List<Int>) {
         }
     }
 }
+
+/** How often an open 상대 전적 matrix reads the numbers again while the league runs. */
+private const val H2H_REFRESH_MS = 10_000L

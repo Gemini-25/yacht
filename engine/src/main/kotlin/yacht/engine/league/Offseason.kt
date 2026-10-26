@@ -21,6 +21,8 @@ object Offseason {
         val factories: List<(SeasonStart) -> Competition?> = emptyList(),
         /** Every season's honours before this rollover (oldest first). */
         val history: List<Honour> = emptyList(),
+        /** AIs of the closing season that left the league during it (deleted): they place nowhere. */
+        val gone: Set<String> = emptySet(),
     )
 
     /** Seed of season [number] from the league's own seed. */
@@ -36,18 +38,19 @@ object Offseason {
     /**
      * Titles of a finished season: division champions (the title playoff's winner in division 1
      * when there was one), the regular-season leader, promotions and relegations, and every
-     * competition's own honours.
+     * competition's own honours. AIs in [gone] (deleted during the season) get none: the next
+     * in the table takes their place.
      */
-    fun honours(plan: SeasonPlan, moves: List<Move>): List<Honour> {
+    fun honours(plan: SeasonPlan, moves: List<Move>, gone: Set<String> = emptySet()): List<Honour> {
         val n = plan.number
         val out = ArrayList<Honour>()
         val league = plan.league
         for (d in league.divisions.indices) {
-            val table = league.table(d)
+            val table = league.table(d).filter { it.key !in gone }
             if (table.isEmpty()) continue
             if (d == 0) {
                 out += Honour(n, "REG", table.first().key)
-                val playoff = plan.competition(Comp.TITLE_PLAYOFF)?.honours()?.firstOrNull { it.kind == "L0" }
+                val playoff = plan.competition(Comp.TITLE_PLAYOFF)?.honours()?.firstOrNull { it.kind == "L0" && it.key !in gone }
                 out += playoff ?: Honour(n, "L0", table.first().key)
             } else {
                 out += Honour(n, "L$d", table.first().key)
@@ -56,7 +59,7 @@ object Offseason {
         for (m in moves) out += Honour(n, if (m.to < m.from) "UP${m.to}" else "DOWN${m.to}", m.key)
         // Season awards from the league tables: best average score (at least half the most
         // matches played) and most Yachts.
-        val all = league.standings.values.filter { it.played > 0 }
+        val all = league.standings.values.filter { it.played > 0 && it.key !in gone }
         val minPlayed = (all.maxOfOrNull { it.played } ?: 0) / 2
         all.filter { it.played >= minPlayed }.maxByOrNull { it.avgScore }?.let { out += Honour(n, "SCORER", it.key) }
         all.maxByOrNull { it.yachts }?.takeIf { it.yachts > 0 }?.let { out += Honour(n, "YACHT", it.key) }
@@ -64,9 +67,9 @@ object Offseason {
         // playoff's winners are in the moves.
         for (c in plan.comps + plan.post) {
             when (c.comp) {
-                Comp.TITLE_PLAYOFF -> out += c.honours().filter { it.kind != "L0" }
+                Comp.TITLE_PLAYOFF -> out += c.honours().filter { it.kind != "L0" && it.key !in gone }
                 Comp.PROMOTION_PLAYOFF -> {}
-                else -> out += c.honours()
+                else -> out += c.honours().filter { it.key !in gone }
             }
         }
         return out
@@ -78,30 +81,31 @@ object Offseason {
     /**
      * Promotion and relegation: per boundary the bottom [LeagueConfig.autoSwap] go down and the
      * top as many come up; the promotion playoff's winners (honours "UP<d>" from the
-     * PROMOTION_PLAYOFF competition, keyed by the AI) take the next place.
+     * PROMOTION_PLAYOFF competition, keyed by the AI) take the next place. AIs in [gone]
+     * (deleted during the season) are left out of the tables, so the next AI takes their place.
      */
-    fun moves(plan: SeasonPlan): List<Move> {
+    fun moves(plan: SeasonPlan, gone: Set<String> = emptySet()): List<Move> {
         val league = plan.league
         val cfg = plan.config
         val out = ArrayList<Move>()
-        val playoffWinners = plan.competition(Comp.PROMOTION_PLAYOFF)?.honours().orEmpty()
-            .filter { it.kind.startsWith("UP") || it.kind.startsWith("STAY") }
+        val promo = plan.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff
+        val playoffWinners = promo?.honours().orEmpty().filter { it.kind.startsWith("UP") }
         for (d in 0 until league.divisions.size - 1) {
-            val upper = league.table(d).map { it.key }
-            val lower = league.table(d + 1).map { it.key }
+            val upper = league.table(d).map { it.key }.filter { it !in gone }
+            val lower = league.table(d + 1).map { it.key }.filter { it !in gone }
             val swap = minOf(cfg.autoSwap, upper.size / 3, lower.size / 3)
-            for (k in upper.takeLast(swap)) out += Move(k, d, d + 1)
-            for (k in lower.take(swap)) out += Move(k, d + 1, d)
-            // Playoff: the upper side's next-from-bottom against the lower side's next-from-top.
-            val upperSpot = upper.getOrNull(upper.size - swap - 1)
-            val lowerSpot = lower.getOrNull(swap)
-            if (upperSpot != null && lowerSpot != null && cfg.promotionPlayoff) {
-                val won = playoffWinners.firstOrNull { it.key == lowerSpot && it.kind == "UP$d" }
-                if (won != null) {
-                    out += Move(lowerSpot, d + 1, d)
-                    out += Move(upperSpot, d, d + 1)
-                }
-            }
+            val down = upper.takeLast(swap)
+            val up = lower.take(swap)
+            for (k in down) out += Move(k, d, d + 1)
+            for (k in up) out += Move(k, d + 1, d)
+            // Playoff: the tie played at this boundary (its places were fixed when the league
+            // stage ended): the lower side won, so the two swap.
+            val spot = promo?.spots?.firstOrNull { it.division == d } ?: continue
+            if (!cfg.promotionPlayoff || playoffWinners.none { it.key == spot.lower && it.kind == "UP$d" }) continue
+            // (A deleted AI shifts the automatic places: neither side moves twice.)
+            if (spot.lower in gone) continue
+            if (spot.lower !in up) out += Move(spot.lower, d + 1, d)
+            if (spot.upper !in gone && spot.upper !in down) out += Move(spot.upper, d, d + 1)
         }
         return out
     }
@@ -130,10 +134,10 @@ object Offseason {
 
     /** Ends [plan] and starts the next season. */
     fun next(plan: SeasonPlan, ctx: Context): Pair<SeasonPlan, List<Honour>> {
-        val moves = moves(plan)
-        val honours = honours(plan, moves)
+        val moves = moves(plan, ctx.gone)
+        val honours = honours(plan, moves, ctx.gone)
         val divisions = nextDivisions(plan, moves, ctx)
-        val lastTables = plan.league.divisions.indices.map { d -> plan.league.table(d).map { it.key } }
+        val lastTables = plan.league.divisions.indices.map { d -> plan.league.table(d).map { it.key }.filter { it !in ctx.gone } }
         val leagueSeed = plan.seed
         val n = plan.number + 1
         return start(n, DiceStream.mix(leagueSeed, 0x5EA51, n.toLong()), divisions, lastTables, honours, ctx) to honours

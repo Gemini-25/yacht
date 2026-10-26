@@ -52,6 +52,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     /** Each AI's family (the family cup), from the app's roster. */
     var family: (String) -> Family? = { null }
 
+    /** Whether an AI is still in the app's roster (one deleted during a season places nowhere at its end). */
+    var present: (String) -> Boolean = { true }
+
+    /** The closing season's AIs that left during it, from [closeSeason] to [openSeason]. */
+    private var closingGone: Set<String> = emptySet()
+
     /** Each AI's hometown: generated and evolved players have their own, the rest by key. */
     fun hometown(key: String): String = players[key]?.hometown ?: Hometowns.of(key)
 
@@ -63,7 +69,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     private fun context(historyBefore: Int): Offseason.Context = Offseason.Context(
         members, ::rating, family, ::hometown, config, factories(),
-        honours.all.filter { it.season < historyBefore },
+        honours.all.filter { it.season < historyBefore }, closingGone,
     )
 
     /** Every competition of a season: the cups and playoffs, and the club league (making the clubs the first time). */
@@ -177,8 +183,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      */
     fun closeSeason(): Closing {
         val p = plan ?: error("no season")
-        val moves = Offseason.moves(p)
-        val h = Offseason.honours(p, moves)
+        // AIs deleted during the season (the next in the table takes their place), decided once
+        // for both steps: evolution's retirees are still present here.
+        val gone = p.league.standings.keys.filterNot(present).toSet()
+        closingGone = gone
+        val moves = Offseason.moves(p, gone)
+        val h = Offseason.honours(p, moves, gone)
         // Awards, records, hall of fame, dynasties and the season's archive, from the book as it
         // was before this season; then the season's honours go in once, awards included.
         val end = runCatching {
@@ -245,6 +255,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val market = clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty()
         note(market)
         val (next, _) = Offseason.next(p, context(p.number))
+        closingGone = emptySet()
         plan = next
         return market + opened(next)
     }

@@ -218,7 +218,7 @@ data class SeasonView(
     /** Latest first. */
     val history: List<SeasonHistoryItem>,
     /** Places after each finished matchday per division, in [order] (순위 변동 그래프). */
-    val positions: List<List<ByteArray>> = emptyList(),
+    val positions: List<List<ShortArray>> = emptyList(),
     /** Each division's AIs in the order [positions] uses. */
     val order: List<List<String>> = emptyList(),
     val matchdays: Int = 0,
@@ -644,6 +644,8 @@ class LeagueController(
     private fun configureWorld(w: LeagueWorld, c: LeagueConfig = config) {
         w.config = c
         w.family = { k -> byKey[k]?.family }
+        // An AI deleted mid-season (a custom AI, the clone gone) places nowhere at its end.
+        w.present = { k -> k in byKey }
         w.name = { k -> name(k) }
         // What a highlight replay checks: an AI's play (its description and, for players, its genes).
         w.version = { k -> (byKey[k]?.desc ?: "") + (customs.firstOrNull { it.key == k }?.encode() ?: "") + (w.players[k]?.spec?.genes()?.joinToString(",") ?: "") }
@@ -1478,12 +1480,17 @@ class LeagueController(
                 curves?.curves(m.a, m.b)?.firstOrNull()?.let { c -> if (c.a == m.a) c.curveA() else IntArray(c.curveA().size) { 100 - c.curveA()[it] } },
             )
         }
+        // A view equal to the last one is handed over as the same object, so the screen skips it.
         val comps = s?.let { runCatching { Competitions.views(it) }.getOrNull() }.orEmpty()
+            .map { c -> lastComps.firstOrNull { it == c } ?: c }
+            .let { if (it == lastComps) lastComps else it }
+        lastComps = comps
         val clubs = world?.clubs?.let { b ->
             val cl = s?.competition(Comp.CLUB) as? ClubLeague
             clubNames = b.clubs.associate { it.id to it.name }
             ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty())
-        }
+        }?.let { if (it == lastClubs) lastClubs else it }
+        lastClubs = clubs
         val w = world
         w?.lab?.let { b -> val v = b.current?.results to b.history; scope.launch { lab = v } }
         return LeagueView(
@@ -1491,6 +1498,11 @@ class LeagueController(
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
         )
     }
+
+    /** The last snapshot's views (reused when equal: see [snapshot]); under the lock. */
+    private var lastComps: List<Pair<Comp, CompetitionView>> = emptyList()
+    private var lastClubs: ClubsView? = null
+    private var lastHistory: List<SeasonHistoryItem> = emptyList()
 
     private fun seasonView(p: SeasonPlan): SeasonView {
         val s = p.league
@@ -1519,7 +1531,7 @@ class LeagueController(
         return SeasonView(
             // Next season's newcomers: members not in this season (the rules keep the rest out).
             s.number, s.fixturesPlayed, s.fixturesTotal, divisions, world?.members.orEmpty().filter { it !in inLeague }.map { name(it) },
-            honours.seasons.reversed().map { historyItem(it, honours.of(it)) },
+            honours.seasons.reversed().map { historyItem(it, honours.of(it)) }.let { h -> if (h == lastHistory) lastHistory else h.also { lastHistory = it } },
             s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday,
         )
     }

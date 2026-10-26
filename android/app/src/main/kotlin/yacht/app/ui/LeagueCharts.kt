@@ -203,7 +203,8 @@ private fun lerpColor(a: Color, b: Color, t: Float) = Color(
 fun H2hGrid(m: yacht.app.core.H2hMatrix) {
     val cs = MaterialTheme.colorScheme
     val n = m.labels.size
-    var picked by androidx.compose.runtime.remember(m) { androidx.compose.runtime.mutableStateOf<Pair<Int, Int>?>(null) }
+    // Kept when the same matrix is read again (same title and AIs, newer numbers).
+    var picked by androidx.compose.runtime.remember(m.title, m.labels) { androidx.compose.runtime.mutableStateOf<Pair<Int, Int>?>(null) }
     val cell = if (n <= 12) 24.dp else if (n <= 30) 16.dp else 11.dp
     val neutral = cs.surfaceVariant
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

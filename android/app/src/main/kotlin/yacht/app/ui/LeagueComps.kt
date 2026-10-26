@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +42,6 @@ import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
 import yacht.engine.league.GroupTable
-import yacht.engine.league.TieView
 
 /** 대회: this season's cups, champions league, super cup, all-star game, family cup and playoffs. */
 @Composable
@@ -56,9 +56,13 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onO
     }
     var picked by remember { mutableStateOf<Comp?>(null) }
     val shown = comps.firstOrNull { it.first == picked } ?: comps.first()
-    val label: (String) -> String = { k -> if (shown.second.squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) }
+    // The same two functions for every snapshot (they read the newest squads), so rows whose
+    // tie did not change skip recomposing.
+    val squads by rememberUpdatedState(shown.second.squads)
+    val openAi by rememberUpdatedState(onOpen)
+    val label: (String) -> String = remember(lg) { { k -> if (squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) } }
     // A team (all-star side, family) has no page of its own: its squad is listed below.
-    val open: (String) -> Unit = { k -> if (!shown.second.squads.containsKey(k)) onOpen(k) }
+    val open: (String) -> Unit = remember { { k -> if (!squads.containsKey(k)) openAi(k) } }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -147,31 +151,42 @@ private fun RoundTies(round: BracketRound, label: (String) -> String, onOpen: (S
         if (byes > 0) Text("부전승 ${byes}팀", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         for (t in round.ties) {
             if (t.winner != null && !t.played && (t.a == null || t.b == null)) continue
-            TieLine(t, label, onOpen)
+            TieLine(t.a, t.b, t.scoreA, t.scoreB, t.winner, t.played, t.legs, label, onOpen)
         }
     }
 }
 
+/** One tie, from plain values: a tie that did not change since the last snapshot skips recomposing. */
 @Composable
-private fun TieLine(t: TieView, label: (String) -> String, onOpen: (String) -> Unit) {
+private fun TieLine(
+    a: String?,
+    b: String?,
+    scoreA: Double,
+    scoreB: Double,
+    winner: String?,
+    played: Boolean,
+    legs: Int,
+    label: (String) -> String,
+    onOpen: (String) -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceVariant.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Side(t.a, t.winner, label, onOpen, Modifier.weight(1f), TextAlign.Start)
+        Side(a, winner, label, onOpen, Modifier.weight(1f), TextAlign.Start)
         Text(
             when {
-                t.played -> "${score(t.scoreA)} : ${score(t.scoreB)}"
-                t.a == null || t.b == null -> "미정"
-                else -> if (t.legs > 1) "${t.legs}경기" else "vs"
+                played -> "${score(scoreA)} : ${score(scoreB)}"
+                a == null || b == null -> "미정"
+                else -> if (legs > 1) "${legs}경기" else "vs"
             },
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (t.played) FontWeight.Bold else FontWeight.Normal,
-            color = if (t.played) cs.onSurface else cs.onSurfaceVariant,
+            fontWeight = if (played) FontWeight.Bold else FontWeight.Normal,
+            color = if (played) cs.onSurface else cs.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 6.dp),
         )
-        Side(t.b, t.winner, label, onOpen, Modifier.weight(1f), TextAlign.End)
+        Side(b, winner, label, onOpen, Modifier.weight(1f), TextAlign.End)
     }
 }
 
