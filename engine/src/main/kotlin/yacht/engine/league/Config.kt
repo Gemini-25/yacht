@@ -146,6 +146,7 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
     ),
     ELITE(
         "강자만", "레이팅 상위 48명만 2부로, 정상급 싸움만",
-        LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false),
+        // The same players season after season: rookies would never get the rating to be picked.
+        LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false, aging = false),
     ),
 }

@@ -25,15 +25,17 @@ class SuperCup private constructor(season: Int, seed: Long, entries: List<DrawEn
 
         /**
          * Last season's champion ("L0") against its cup winner ("CUP", or "CUP2" when that is the
-         * champion); null in the first season, when off, or when either is missing or has left.
+         * champion). A champion that has left (retired) is replaced by the best of last season's
+         * 1st division still in the league, a cup winner that has left by the cup's runner-up.
+         * Null in the first season, when off, or when no pair is left.
          */
         fun create(start: SeasonStart): SuperCup? {
             if (!start.config.superCup || start.number < 2) return null
             val inLeague = start.ranking.toSet()
-            val champion = start.lastHonours.firstOrNull { it.kind == "L0" }?.key ?: return null
-            val cup = start.lastHonours.firstOrNull { it.kind == "CUP" }?.key
-            val opponent = (if (cup == champion) start.lastHonours.firstOrNull { it.kind == "CUP2" }?.key else cup) ?: return null
-            if (champion == opponent || champion !in inLeague || opponent !in inLeague) return null
+            val l0 = start.lastHonours.firstOrNull { it.kind == "L0" }?.key ?: return null
+            val champion = if (l0 in inLeague) l0 else start.lastTables.firstOrNull()?.firstOrNull { it in inLeague } ?: return null
+            val cups = listOfNotNull(start.lastHonours.firstOrNull { it.kind == "CUP" }?.key, start.lastHonours.firstOrNull { it.kind == "CUP2" }?.key)
+            val opponent = cups.firstOrNull { it != champion && it in inLeague } ?: return null
             val entries = listOf(DrawEntry(champion, 1, start.rating(champion)), DrawEntry(opponent, 2, start.rating(opponent)))
             return SuperCup(start.number, start.seed, entries)
         }

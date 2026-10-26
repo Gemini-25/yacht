@@ -64,6 +64,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     /** Each AI's hometown: generated and evolved players have their own, the rest by key. */
     fun hometown(key: String): String = players[key]?.hometown ?: Hometowns.of(key)
 
+    /** A town told apart by its nation, for derbies (코르도바 is in Spain and in Argentina). */
+    fun derbyTown(key: String): String = players[key]?.let { p -> (p.identity?.nation ?: Nations.KR.code) + "/" + p.hometown } ?: ("KR/" + Hometowns.of(key))
+
     /** Rating for seeding: the ladder's, or [START_RATING] before an AI's first game. */
     fun rating(key: String): Double = ladder.rating(key).takeIf { !it.isNaN() } ?: START_RATING
 
@@ -143,7 +146,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val f = r.fixture
         // Friendlies and exhibitions have no week of their own: their news goes in the week in play.
         val week = if (f.week != SeasonCalendar.NONE) f.week else plan?.let { p -> runCatching { p.week }.getOrNull() } ?: SeasonCalendar.NONE
-        val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::hometown)) }.getOrDefault(emptyList()).map { it.at(week) }
+        val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::derbyTown)) }.getOrDefault(emptyList()).map { it.at(week) }
         note(counted)
         out += counted
         val matches = ArrayList<MatchRecord>()
@@ -158,7 +161,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             out += record(r)
             plan?.let { p ->
                 runCatching {
-                    highlights.offer(r, p.number, ::rating, ::hometown, version, Drama.titleRace(p.league, r.fixture)) { k -> players[k]?.spec }
+                    highlights.offer(r, p.number, ::rating, ::derbyTown, version, Drama.titleRace(p.league, r.fixture)) { k -> players[k]?.spec }
                 }
                 if (r.fixture.comp == Comp.LEAGUE) titleRace.check(p.league)?.at(week)?.let { e ->
                     note(listOf(e))
@@ -261,9 +264,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val most = standings.values.maxOfOrNull { it.played }?.coerceAtLeast(1) ?: 1
         val r = Evolution.run(
             players, p.number, { k -> if (k in standings) ladder.rating(k) else Double.NaN }, honours::titles, p.seed, config.generated,
-            // A national call-up alone does not make a legend (every edition calls up a hundred).
-            { honours.of(it) }, hasHonour = { k -> honours.of(k).any { Evolution.isHonour(it.kind) && it.kind != "NSQ" } },
-            childShare = config.childShare / 100.0, played = { k -> (standings[k]?.played ?: 0).toDouble() / most },
+            { honours.of(it) }, childShare = config.childShare / 100.0, played = { k -> (standings[k]?.played ?: 0).toDouble() / most },
             accept = { s -> !config.onlyFlawed || s.flawed }, fashion = fashion, aging = config.aging,
         )
         out += r.events

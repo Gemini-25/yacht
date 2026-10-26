@@ -89,6 +89,10 @@ object Evolution {
         val pool = ranked.take((ranked.size + 1) / 2).mapNotNull { book[it.key] }
         val retired = ArrayList<String>()
         val learned = ArrayList<LeagueEvent>()
+        if (!aging) {
+            // Ages stand still while nobody ages (the debut age moves along with the seasons).
+            for (p in playing) p.identity?.let { id -> book[p.key]?.let { book.update(it.copy(identity = id.copy(debutAge = id.debutAge - 1))) } }
+        }
         if (aging) {
             for (p in playing) {
                 val id = p.identity ?: continue
@@ -313,8 +317,11 @@ object Evolution {
         return pool[best]
     }
 
-    /** Promotions, relegations and playoff stays are moves, not honours. */
-    fun isHonour(kind: String): Boolean = !kind.startsWith("UP") && !kind.startsWith("DOWN") && !kind.startsWith("STAY")
+    /** Call-ups to a family or national squad: every edition calls up a hundred, they make nobody a legend. */
+    val SQUAD_KINDS = setOf("FSQ", "NSQ")
+
+    /** Promotions, relegations and playoff stays are moves, not honours; neither are call-ups. */
+    fun isHonour(kind: String): Boolean = !kind.startsWith("UP") && !kind.startsWith("DOWN") && !kind.startsWith("STAY") && kind !in SQUAD_KINDS
 
     /** A space-free summary of [honours]: kind:count in the order first won, moves left out ("L0:2,CUP:1"; "-" for none). */
     fun summary(honours: List<Honour>): String {

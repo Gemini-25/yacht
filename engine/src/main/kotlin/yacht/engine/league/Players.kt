@@ -470,7 +470,8 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
      */
     fun retire(key: String, season: Int, titles: Int = 0, bestRating: Double = Double.NaN, honours: String? = null): RetiredRecord? {
         val p = byKey.remove(key) ?: return null
-        PlayerGenerator.index(key)?.let { gone += it }
+        // Only the keys older versions could generate again (they made g001..g300).
+        PlayerGenerator.index(key)?.takeIf { it <= OLD_GENERATED }?.let { gone += it }
         val best = listOf(bestRating, p.peak).filter { !it.isNaN() }.maxOrNull() ?: Double.NaN
         val id = p.identity
         val r = RetiredRecord(
@@ -593,8 +594,11 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
 
     companion object {
         const val HEADER = "roster 1"
-        const val MAX_RETIRED = 500
-        const val MAX_LEGENDS = 200
+        const val MAX_RETIRED = 3000
+        const val MAX_LEGENDS = 300
+
+        /** The most generated players older versions made (g001..g300): their keys are kept in `gone`. */
+        const val OLD_GENERATED = 300
 
         private const val G = CustomAiSpec.GENES
 

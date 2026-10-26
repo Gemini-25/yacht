@@ -273,10 +273,13 @@ class PlayersTest {
         val shrink = Evolution.run(a, 9, ::rating, { 0 }, 99L, 100)
         assertTrue(shrink.born.isEmpty())
         assertEquals(before - shrink.retired.size, a.size)
-        val frozen = a.alive.map { it.identity }
+        val frozen = a.alive.map { it.identity!!.abilities }
+        val ages = a.alive.map { it.age(10) }
         val off = Evolution.run(a, 10, ::rating, { 0 }, 99L, 0, aging = false)
         assertTrue(off.retired.isEmpty() && off.born.isEmpty())
-        assertEquals(frozen, a.alive.map { it.identity })
+        assertEquals(frozen, a.alive.map { it.identity!!.abilities })
+        // Nobody grows older either.
+        assertEquals(ages, a.alive.map { it.age(11) })
         // Only flawed players (the chaos preset): every newcomer makes mistakes.
         val chaos = PlayerBook().apply { ensureGenerated(150, accept = { it.flawed }) }
         assertTrue(chaos.alive.all { it.spec.flawed })
