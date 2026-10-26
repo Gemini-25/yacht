@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,7 +71,7 @@ fun NewsTab(c: AppController, v: LeagueView, results: @Composable () -> Unit) {
             NewsMode.NEWS -> {
                 val favs = lg.favourites
                 val shown = if (onlyFavourites) v.news.filter { a -> a.keys.any { it in favs } } else v.news
-                Articles(shown, onlyFavourites) { lg.detail = it }
+                Articles(shown, onlyFavourites) { if (lg.isAi(it)) lg.detail = it }
             }
             NewsMode.LIVE -> LiveBoardView(c)
             NewsMode.RESULTS -> results()
@@ -86,8 +87,17 @@ private fun Articles(news: List<Article>, favourites: Boolean, onOpen: (String) 
         CenterText(if (favourites) "응원하는 AI의 소식이 아직 없어요. 순위표에서 AI를 눌러 ‘☆ 응원하기’를 골라 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
         return
     }
+    // Two articles can read the same (the same lead change twice): number the repeats.
+    val keys = remember(news) {
+        val seen = HashMap<String, Int>()
+        news.map { a ->
+            val base = "${a.season}-${a.kind}-${a.headline}-${a.keys}"
+            val n = seen.merge(base, 1, Int::plus)!!
+            if (n == 1) base else "$base-$n"
+        }
+    }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(news, key = { "${it.season}-${it.kind}-${it.headline}-${it.keys}" }) { a ->
+        itemsIndexed(news, key = { i, _ -> keys[i] }) { _, a ->
             Card(
                 Modifier.fillMaxWidth().clickable { a.keys.firstOrNull()?.let(onOpen) },
                 colors = CardDefaults.cardColors(containerColor = if (a.importance >= 5) cs.tertiaryContainer else cs.surface),

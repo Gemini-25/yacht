@@ -26,11 +26,11 @@ object Offseason {
     /** Seed of season [number] from the league's own seed. */
     fun seasonSeed(leagueSeed: Long, number: Int): Long = DiceStream.mix(leagueSeed, 0x5EA50, number.toLong())
 
-    /** The first season: divisions by rating. */
-    fun first(leagueSeed: Long, ctx: Context): SeasonPlan {
+    /** The first season (numbered [number]: after any history kept): divisions by rating. */
+    fun first(leagueSeed: Long, ctx: Context, number: Int = 1): SeasonPlan {
         val ranking = ctx.keys.sortedByDescending { ctx.rating(it) }
         val divisions = Season.split(ranking, ctx.config.divisions)
-        return start(1, seasonSeed(leagueSeed, 1), divisions, emptyList(), emptyList(), ctx)
+        return start(number, seasonSeed(leagueSeed, number), divisions, emptyList(), emptyList(), ctx)
     }
 
     /**

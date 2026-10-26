@@ -1000,6 +1000,9 @@ private fun GameOverPanel(c: AppController, s: GameState) {
             )
             Text("나 $me : $opp ${oppName(s)}", style = MaterialTheme.typography.titleMedium)
             c.rankResult?.let { RankResultCard(it) }
+            if (c.rankMissed && s.rankedAi != null) {
+                Text("상대 AI가 시즌이 끝나며 리그를 떠나서 이 판은 레이팅에 들어가지 않았어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            }
             if (s.rankedAi != null && !s.ranked) {
                 Text("힌트를 봐서 연습 경기로 끝났어요. 레이팅은 그대로예요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             }

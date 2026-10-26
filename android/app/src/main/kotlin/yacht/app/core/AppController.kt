@@ -292,6 +292,10 @@ class AppController(
     var rankResult by mutableStateOf<RankResult?>(null)
         private set
 
+    /** Set when the ranked game just finished could not be counted (its opponent left the league). */
+    var rankMissed by mutableStateOf(false)
+        private set
+
     /** Why the app closed unexpectedly last time (shown once on the home screen). */
     var lastCrash by mutableStateOf<String?>(null)
         private set
@@ -738,6 +742,7 @@ class AppController(
         oppOutlook = null
         outlookKey = null
         rankResult = null
+        rankMissed = false
         rankedPlayer = null
         rankedKey = null
     }
@@ -755,7 +760,11 @@ class AppController(
         val key = aiKey ?: league.pickOpponent(rng, tier) ?: return false
         resetForNewGame()
         scouting = null
-        scope.launch { scouting = withContext(Dispatchers.Default) { league.scouting(key) } }
+        scope.launch {
+            val r = withContext(Dispatchers.Default) { league.scouting(key) }
+            // A newer game may have started meanwhile: its own report comes with it.
+            if (state?.rankedAi == key) scouting = r
+        }
         state = GameState.new(
             DiceSource.RANDOM, if (rng.nextBoolean()) Side.ME else Side.OPP, t.rules, PlayStyle.SOLO,
             opponent = league.name(key), rankedAi = key,
@@ -914,7 +923,11 @@ class AppController(
         val key = s.rankedAi ?: return
         if (!s.ranked || s.rated) return
         // The refit takes a moment: off the main thread.
-        scope.launch { rankResult = withContext(Dispatchers.Default) { league.recordMyGame(key, s.me, s.opp) } }
+        scope.launch {
+            val r = withContext(Dispatchers.Default) { league.recordMyGame(key, s.me, s.opp) }
+            rankResult = r
+            rankMissed = r == null
+        }
         val rated = s.copy(rated = true)
         state = rated
         // A counted game cannot be taken back.
@@ -1241,7 +1254,11 @@ class AppController(
             }
             for (f in storage.gameFiles()) put("games/${f.name}", f)
             File(storage.dir, "settings.txt").takeIf { it.exists() }?.let { put("settings.txt", it) }
-            for (f in league.files()) put("league/${f.name}", f)
+            for ((name, data) in league.backupFiles()) {
+                zip.putNextEntry(java.util.zip.ZipEntry("league/$name"))
+                zip.write(data)
+                zip.closeEntry()
+            }
         }
         return out.toByteArray()
     }
@@ -1305,11 +1322,7 @@ class AppController(
         // league is read, and must not take that for an empty league.
         val loaded = leagueFiles["ladder.txt"] != null && withTimeoutOrNull(120_000) { league.loaded.await() } != null
         if (loaded && league.matchCount() == 0L) {
-            withContext(Dispatchers.IO) {
-                val dir = File(storage.dir, "league").apply { mkdirs() }
-                for (name in LeagueController.SAVED) leagueFiles[name]?.let { File(dir, name).writeAtomically(it) }
-            }
-            league.reload()
+            league.restore(leagueFiles)
             leagueTaken = true
         }
         val parts = ArrayList<String>()

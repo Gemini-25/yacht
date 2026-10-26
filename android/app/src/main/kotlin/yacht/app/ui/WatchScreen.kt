@@ -139,7 +139,10 @@ fun WatchScreen(c: AppController) {
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                         )
-                        Text("이 경기는 리그 레이팅에도 들어갔어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                        Text(
+                            if (w.title == null) "이 경기는 리그 레이팅에도 들어갔어요." else "하이라이트 다시보기는 기록에 들어가지 않아요.",
+                            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                        )
                     }
                 }
             }

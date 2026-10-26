@@ -135,7 +135,7 @@ private fun LabCard(r: LabResult, running: Boolean) {
         Text("판 전적 ${r.gameWins}승 ${r.gameDraws}무 ${r.gameLosses}패 · 경기 ${r.matchWins}승 ${r.matchDraws}무 ${r.matchLosses}패", style = MaterialTheme.typography.labelSmall)
         Text(
             "레이팅 차이 ${"%+.0f".format(r.ratingDiff)} (${"%+.0f".format(r.ratingLow)} ~ ${"%+.0f".format(r.ratingHigh)})" +
-                " · ${r.nameA}가 더 강할 확률 ${"%.0f".format(100 * r.pStronger)}%",
+                " · ${yacht.engine.explain.Ko.i(r.nameA)} 더 강할 확률 ${"%.0f".format(100 * r.pStronger)}%",
             style = MaterialTheme.typography.labelSmall,
         )
         Text(

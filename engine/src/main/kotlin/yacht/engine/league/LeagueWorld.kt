@@ -72,9 +72,17 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         { s -> ClubBook.create(s.ranking, s.config.clubs, s.config.squad, s.seed, Hometowns.ALL).also { clubs = it } },
     )
 
-    /** The first season: divisions by rating; returns the draw news. */
+    /**
+     * The first season: divisions by rating; returns the draw news. It comes after the newest
+     * season the league already knows (an imported history, a season file that could not be
+     * read), so no kept season is written over and the books' per-season guards still run.
+     */
     fun openFirstSeason(leagueSeed: Long): List<LeagueEvent> {
-        val p = Offseason.first(leagueSeed, context(Int.MAX_VALUE))
+        val known = listOf(
+            honours.seasons.maxOrNull() ?: 0, stats.ended, archive.summaries.maxOfOrNull { it.season } ?: 0,
+            players.evolvedSeason, clubs?.season ?: 0,
+        ).max()
+        val p = Offseason.first(leagueSeed, context(Int.MAX_VALUE), known + 1)
         plan = p
         return opened(p)
     }
@@ -184,9 +192,17 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val champion = h.firstOrNull { it.kind == "L0" }?.key ?: "-"
         val cup = h.firstOrNull { it.kind == "CUP" }?.key ?: "-"
         out += LeagueEvent("season_review", p.number, listOf(champion, cup))
-        // Titles and moves the competitions did not announce themselves (the title playoff and
-        // the promotion playoff do).
-        fun announced(kind: String, key: String) = events.any { it.season == p.number && it.kind == kind && it.keys.firstOrNull() == key }
+        // Titles and moves the competitions did not announce themselves: the title playoff
+        // announces its champion and the promotion playoff its moves (read from the season, as
+        // the events are not saved).
+        val playoffChampion = p.competition(Comp.TITLE_PLAYOFF)?.honours()?.firstOrNull { it.kind == "L0" }?.key
+        val promo = p.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff
+        val promoUp = promo?.honours()?.filter { it.kind.startsWith("UP") }?.map { it.key }.orEmpty()
+        fun announced(kind: String, key: String) = when (kind) {
+            "title" -> key == playoffChampion
+            "promoted" -> key in promoUp
+            else -> promo?.spots?.any { it.upper == key && it.lower in promoUp } == true
+        }
         for (x in h) {
             val e = when {
                 DIVISION.matches(x.kind) -> LeagueEvent("title", p.number, listOf(x.key), listOf(x.kind.removePrefix("L")), Comp.LEAGUE)
@@ -208,6 +224,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             )
             out += r.events
             changed = r.born.isNotEmpty() || r.retired.isNotEmpty()
+            // A book below the configured size (generated players switched on again, nobody to
+            // breed from): the next generated players come in.
+            if (players.size < config.generated && players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) changed = true
         } else if (players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) {
             // Without evolution, a raised setting brings in the next generated players.
             changed = true
@@ -242,18 +261,23 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     // ---- saving --------------------------------------------------------------------------------
 
-    /** Every file of the league, by name, for the app to write (atomically). */
+    /**
+     * Every file of the league, by name, in the order to write them (atomically, one by one).
+     * The season goes last and the ladder just before it: killed halfway through a rollover's
+     * save, the league reads the closed season again and closes it again (every book's season
+     * guard makes that a replay). No season or clubs: empty files, so an older one is not read.
+     */
     fun encodeFiles(): Map<String, String> = buildMap {
-        put(LADDER, ladder.encode())
-        plan?.let { put(SEASON, it.encode()) }
-        put(HONOURS, honours.encode())
         put(ROSTER, players.encode())
-        clubs?.let { put(CLUBS, it.encode()) }
+        put(HONOURS, honours.encode())
+        put(CLUBS, clubs?.encode() ?: "")
         put(STATS, stats.encode())
         put(ARCHIVE, archive.encode())
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
         put(LAB, lab.encode())
+        put(LADDER, ladder.encode())
+        put(SEASON, plan?.encode() ?: "")
     }
 
     companion object {
@@ -284,7 +308,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
          * file starts that part fresh. A season file of the first version moves its history into
          * the honours (the next start begins a season of the new kind).
          */
-        fun decode(files: Map<String, String?>, keys: List<String>, reserved: Collection<String>): LeagueWorld {
+        fun decode(texts: Map<String, String?>, keys: List<String>, reserved: Collection<String>): LeagueWorld {
+            // An empty file stands for a part not made yet (see encodeFiles).
+            val files = texts.mapValues { (_, t) -> t?.takeIf { it.isNotBlank() } }
             val ladder = files[LADDER]?.let { t -> runCatching { Ladder.decode(keys, t) }.getOrNull() } ?: Ladder(keys)
             val w = LeagueWorld(ladder)
             val seasonText = files[SEASON]
@@ -298,6 +324,14 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             w.highlights = files[HIGHLIGHTS]?.let { t -> runCatching { HighlightBook.decode(t) }.getOrNull() } ?: HighlightBook()
             w.news = files[NEWS]?.let { t -> runCatching { NewsBook.decode(t) }.getOrNull() } ?: NewsBook()
             w.lab = files[LAB]?.let { t -> runCatching { LabBook.decode(t) }.getOrNull() } ?: LabBook()
+            // A season in progress that the stats do not know (stats.txt is newer than the
+            // season, or was lost): start ratings and rookies from now, so its awards are made.
+            w.plan?.let { p ->
+                if (w.stats.season != p.number && w.stats.ended < p.number) {
+                    val keys = p.league.standings.keys
+                    w.stats.startSeason(p.number, keys.associateWith { ladder.rating(it) }, keys.filter { w.players[it]?.born == p.number })
+                }
+            }
             return w
         }
 

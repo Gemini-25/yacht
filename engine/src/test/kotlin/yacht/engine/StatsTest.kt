@@ -457,7 +457,7 @@ class StatsTest {
         for (n in 5..110) a.putHighlights(n, listOf("h $n"))
         assertTrue(a.highlights(4).isEmpty())
         assertEquals(listOf("h 110"), a.highlights(110))
-        assertEquals(Archive.MAX_SEASONS, (1..110).count { a.highlights(it).isNotEmpty() })
+        assertEquals(Archive.HIGHLIGHT_SEASONS, (1..110).count { a.highlights(it).isNotEmpty() })
     }
 
     @Test

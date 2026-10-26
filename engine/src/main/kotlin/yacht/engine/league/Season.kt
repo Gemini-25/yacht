@@ -23,8 +23,11 @@ class Standing(val key: String) {
      * equal, whatever the games won.
      */
     var aggPoints = 0
+
+    /** Games played (a match is one, two or three of them, by the match format). */
+    var games = 0
     val diff: Int get() = scored - conceded
-    val avgScore: Double get() = if (played == 0) 0.0 else scored / (2.0 * played)
+    val avgScore: Double get() = if (games == 0) 0.0 else scored.toDouble() / games
 }
 
 /** A league fixture: division [division], matchday [matchday], [a] first in the first game. */
@@ -174,6 +177,8 @@ class Season private constructor(
         }
         a.played++
         b.played++
+        a.games += games.size
+        b.games += games.size
         when (TieRule.match(games)) {
             1 -> {
                 a.wins++
@@ -225,7 +230,7 @@ class Season private constructor(
             append('\n')
         }
         for (s in standings.values) {
-            append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts} ${s.aggPoints}\n")
+            append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts} ${s.aggPoints} ${s.games}\n")
         }
         for ((d, list) in positions.withIndex()) for ((k, p) in list.withIndex()) append("pos $d $k ${p.joinToString(",")}\n")
     }
@@ -312,6 +317,8 @@ class Season private constructor(
                         conceded = f[8].toInt()
                         yachts = f[9].toInt()
                         aggPoints = f.getOrNull(10)?.toInt() ?: 0
+                        // Older files: two games a match.
+                        games = f.getOrNull(11)?.toInt() ?: (2 * played)
                     }
                     "pos" -> {
                         val d = f[1].toInt()

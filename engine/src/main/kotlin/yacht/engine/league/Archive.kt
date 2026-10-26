@@ -78,13 +78,13 @@ class Archive {
     /**
      * Keeps the media module's highlight lines of [season] (opaque to the archive, at most
      * [MAX_HIGHLIGHTS], each up to [MAX_HIGHLIGHT_BYTES] bytes in UTF-8; longer ones are left
-     * out), replacing what the season had.
+     * out), replacing what the season had. The newest [HIGHLIGHT_SEASONS] seasons keep theirs.
      */
     fun putHighlights(season: Int, lines: List<String>) {
         val keep = lines.map { it.replace('\n', ' ').replace('\r', ' ') }
             .filter { it.isNotBlank() && it.encodeToByteArray().size <= MAX_HIGHLIGHT_BYTES }.take(MAX_HIGHLIGHTS)
         if (keep.isEmpty()) highlightMap.remove(season) else highlightMap[season] = keep
-        while (highlightMap.size > MAX_SEASONS) highlightMap.pollFirstEntry()
+        while (highlightMap.size > HIGHLIGHT_SEASONS) highlightMap.pollFirstEntry()
     }
 
     fun highlights(season: Int): List<String> = highlightMap[season].orEmpty()
@@ -171,7 +171,11 @@ class Archive {
         const val MAX_DYNASTIES = 200
         const val MAX_HALL_OF_FAME = 200
         const val MAX_HIGHLIGHTS = 3
-        const val MAX_HIGHLIGHT_BYTES = 200
+        /** A team match's line carries both lineups: about 190-270 bytes. */
+        const val MAX_HIGHLIGHT_BYTES = 360
+
+        /** Seasons whose best games are kept (older ones' AIs have mostly retired: no replay). */
+        const val HIGHLIGHT_SEASONS = 30
 
         // A season line packs into WIDTH base-36 digits: division 1, place 2, W/D/L 2 each, the
         // rating 2 ((rating + RATING_OFFSET) / 2: -798..1790 in 2-point steps, the league spans

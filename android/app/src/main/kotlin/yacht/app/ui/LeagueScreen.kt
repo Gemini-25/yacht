@@ -634,7 +634,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                 val rows = season.divisions[d].sortedWith(compareByDescending<SeasonRow> { it.aggPoints }.thenByDescending { it.diff })
                 itemsIndexed(rows, key = { _, r -> "a-${r.key}" }) { i, r -> LuckRow(i, r, season.divisions[d].indexOf(r)) { onOpen(r.key) } }
             }
-            SeasonMode.CALENDAR -> item { CalendarCard(lg, d, onOpen) }
+            SeasonMode.CALENDAR -> item { CalendarCard(lg, d, season.number, season.played, onOpen) }
             SeasonMode.CHART -> item { RankChartCard(lg, season, d) }
             SeasonMode.ODDS -> {
                 item {
@@ -712,7 +712,7 @@ private fun OddsRow(r: SeasonRow, division: Int, divisions: Int, onClick: () -> 
                 add("4강 PO" to o.playoff)
                 add("챔스" to o.champions)
             } else {
-                add("${division}부 1위" to o.leader)
+                add("${division + 1}부 1위" to o.leader)
                 add("승격" to o.promotion)
             }
             if (division < divisions - 1) add("강등" to o.relegation)
@@ -794,10 +794,15 @@ private fun LuckRow(i: Int, r: SeasonRow, realPlace: Int, onClick: () -> Unit) {
 
 /** 일정표: one matchday of a division, played and to come. */
 @Composable
-private fun CalendarCard(lg: LeagueController, division: Int, onOpen: (String) -> Unit) {
+private fun CalendarCard(lg: LeagueController, division: Int, season: Int, played: Int, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val cal = lg.calendar
-    androidx.compose.runtime.LaunchedEffect(division) { if (cal?.division != division) lg.loadCalendar(division) }
+    // Again as the season moves on (results, games in progress), on the round shown; a new
+    // season or division opens on its current round.
+    androidx.compose.runtime.LaunchedEffect(division, season, played) {
+        val same = lg.calendar?.takeIf { it.division == division && it.season == season }
+        lg.loadCalendar(division, same?.matchday)
+    }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (cal == null || cal.division != division) {
@@ -965,7 +970,7 @@ private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TierBadge(r.tier, r.games, Modifier.width(78.dp))
+                TierBadge(r.tier, r.games, Modifier.width(78.dp), if (r.isMe) Ladder.ME_PLACEMENT else Ladder.PLACEMENT)
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text(r.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)

@@ -146,4 +146,61 @@ class LeagueWorldTest {
             assertTrue(w.seasonOver)
         }
     }
+
+    @Test
+    fun seasonFileIsWrittenLastAndEmptyWithoutASeason() {
+        val w = world(LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0))
+        val before = w.encodeFiles()
+        assertEquals(listOf(LeagueWorld.LADDER, LeagueWorld.SEASON), before.keys.toList().takeLast(2))
+        assertEquals("", before[LeagueWorld.SEASON])
+        assertEquals("", before[LeagueWorld.CLUBS])
+        // Empty files read as parts not made yet.
+        val back = LeagueWorld.decode(before, w.ladder.keys, emptyList())
+        assertEquals(null, back.plan)
+        assertEquals(null, back.clubs)
+    }
+
+    @Test
+    fun aFirstSeasonComesAfterTheHistoryAlreadyKept() {
+        val config = LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0)
+        val w = world(config)
+        w.openFirstSeason(5L)
+        season(w)
+        rollover(w)
+        season(w)
+        rollover(w)
+        assertEquals(3, w.plan!!.number)
+        // The season file is lost: the next first season is season 3 again, not 1.
+        val files = w.encodeFiles() - LeagueWorld.SEASON
+        val back = LeagueWorld.decode(files, w.ladder.keys, emptyList())
+        back.config = config
+        back.members = w.members
+        back.family = w.family
+        back.openFirstSeason(6L)
+        assertEquals(3, back.plan!!.number)
+        assertTrue(back.honours.of(1).isNotEmpty() && back.honours.of(2).isNotEmpty())
+    }
+
+    @Test
+    fun averageScoresCountTheGamesOfEachMatch() {
+        val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, evolution = 0, clubs = 0))
+        w.openFirstSeason(7L)
+        var n = 0
+        while (n < 20) {
+            val f = w.next(emptySet(), 0, 2) ?: break
+            if (f.comp != Comp.LEAGUE) {
+                w.release(f)
+                break
+            }
+            val g = listOf(GameScore(230, 190))
+            w.recordJob(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g), 0))
+            n++
+        }
+        val played = w.plan!!.league.standings.values.filter { it.played > 0 }
+        assertTrue(played.isNotEmpty())
+        for (s in played) assertEquals(s.scored.toDouble() / s.played, s.avgScore, 1e-9)
+        // And after a save.
+        val back = yacht.engine.league.Season.decode(w.plan!!.league.encode(), w.plan!!.league.standings.keys)
+        for (s in played) assertEquals(s.avgScore, back.standings.getValue(s.key).avgScore, 1e-9)
+    }
 }

@@ -183,11 +183,11 @@ fun SeasonReviewDialog(lg: LeagueController, r: yacht.engine.league.SeasonReview
                 }
                 if (r.risers.isNotEmpty()) {
                     Text("📈 가장 많이 오른 AI", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (m in r.risers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (%+.0f)".format(m.delta), style = MaterialTheme.typography.bodySmall, color = gameColors.good)
+                    for (m in r.risers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (${"%+.0f".format(m.delta)})", style = MaterialTheme.typography.bodySmall, color = gameColors.good)
                 }
                 if (r.fallers.isNotEmpty()) {
                     Text("📉 가장 많이 내린 AI", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (m in r.fallers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (%+.0f)".format(m.delta), style = MaterialTheme.typography.bodySmall, color = cs.error)
+                    for (m in r.fallers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (${"%+.0f".format(m.delta)})", style = MaterialTheme.typography.bodySmall, color = cs.error)
                 }
                 if (r.records.isNotEmpty()) {
                     Text("📜 새 기록", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
@@ -212,7 +212,7 @@ private fun Honours(p: ProfileView) {
     val cs = MaterialTheme.colorScheme
     val shown = p.honours.filter { trophy(it.kind) != null }
     if (shown.isEmpty()) return
-    Text("🏆 수상 ${p.titles}회 우승", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    Text(if (p.titles > 0) "🏆 수상 · 우승 ${p.titles}회" else "🏆 수상", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
     // Counts first ("요트컵 우승 ×3"), then the seasons.
     val byKind = shown.groupBy { it.kind }.entries.sortedByDescending { it.value.size }
     for ((kind, hs) in byKind.take(8)) {
@@ -427,7 +427,7 @@ fun milestoneText(args: List<String>): String {
         "games" -> "통산 ${v}판"
         "wins" -> "통산 ${v}승"
         "yachts" -> "통산 요트 ${v}번"
-        "300" -> "첫 300점"
+        "300" -> if (v == "1") "첫 300점" else "통산 ${v}번째 300점 경기"
         "title" -> if (v == "1") "첫 우승" else "통산 ${v}번째 우승"
         else -> args.joinToString(" ")
     }

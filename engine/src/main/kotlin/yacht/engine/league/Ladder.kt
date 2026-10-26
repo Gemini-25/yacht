@@ -257,9 +257,10 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         }
     }
 
+    /** The tier by the same score that orders the ladder (rating less its error), so tiers follow the ranks. */
     fun tier(key: String): Tier? {
         val rank = rankOf(key) ?: return null
-        return Tier.of(rating(key), rank)
+        return Tier.of(rankScore(key), rank)
     }
 
     /** Records a match of [a] against [b] and refits the ratings. */
@@ -667,14 +668,19 @@ object Matchmaker {
      */
     fun opponentFor(ladder: Ladder, rating: Double, rng: Random, among: Collection<String>? = null): String? {
         val pool = (among ?: ladder.keys).filter { it != Ladder.ME && ladder.placed(it) && !ladder.rating(it).isNaN() }
+        return opponentFor(pool.map { it to ladder.rating(it) }, rating, rng)
+    }
+
+    /** [opponentFor] from placed AIs and their ratings as a snapshot shows them. */
+    fun opponentFor(pool: List<Pair<String, Double>>, rating: Double, rng: Random): String? {
         if (pool.isEmpty()) return null
-        val weights = pool.map { exp(-((ladder.rating(it) - rating) / (SPREAD / 2)).pow(2)) + EXPLORE / 10 }
+        val weights = pool.map { (_, r) -> exp(-((r - rating) / (SPREAD / 2)).pow(2)) + EXPLORE / 10 }
         var x = rng.nextDouble() * weights.sum()
         for ((k, w) in weights.withIndex()) {
             x -= w
-            if (x <= 0) return pool[k]
+            if (x <= 0) return pool[k].first
         }
-        return pool.last()
+        return pool.last().first
     }
 
     /** Opponents are usually within about this many rating points. */

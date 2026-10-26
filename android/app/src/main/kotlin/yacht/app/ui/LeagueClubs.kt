@@ -183,7 +183,7 @@ private fun MoveLine(lg: LeagueController, m: ClubMove, byId: Map<String, Club>)
     val text = when (m.kind) {
         ClubMoveKind.TRANSFER -> "🔁 ${lg.name(m.ai)}: ${from ?: "자유 계약"} → $to (이적료 ${m.amount})"
         ClubMoveKind.DRAFT -> "📝 ${lg.name(m.ai)}: $to 드래프트 ${m.amount}순위"
-        ClubMoveKind.RELEASED -> "👋 ${lg.name(m.ai)}: $from 에서 방출"
+        ClubMoveKind.RELEASED -> "👋 ${lg.name(m.ai)}: ${from}에서 방출"
         ClubMoveKind.RETIRED -> "🌅 ${lg.name(m.ai)}: $from 떠남 (은퇴)"
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
@@ -220,7 +220,8 @@ private fun ClubDialog(lg: LeagueController, c: Club, v: ClubsView, onOpen: (Str
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("선수 (레이팅 순, 상위 5명이 출전)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                for ((i, k) in c.squad.withIndex()) {
+                val ratings = lg.view?.rows.orEmpty().associate { it.key to (it.rating ?: Int.MIN_VALUE) }
+                for ((i, k) in c.squad.sortedByDescending { ratings[it] ?: Int.MIN_VALUE }.withIndex()) {
                     Text("${i + 1}. ${lg.name(k)}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.clickable { onDismiss(); onOpen(k) })
                 }
                 val games = v.matches.filter { (it.a == c.id || it.b == c.id) && it.result != null }.takeLast(6)
