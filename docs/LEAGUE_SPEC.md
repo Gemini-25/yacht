@@ -24,7 +24,8 @@ Ground rules for all code:
   (`baseAis` off). `LeagueConfig.generated` (default 1000, at most 3000) players, keys
   `g0001`... Player `i` comes from `Random(mix(GEN_SEED, salt, i))` only (`PlayerGenerator`).
   - **Identity** (`Identity.kt`): nation (28, `Nations.kt`: names written the nation's way,
-    cities, a confederation), gender, debut age (age = debutAge + season - born), abilities
+    cities, a confederation; drawn by population in millions held within 30..150, so no nation
+    has more than 5 times another's share), gender, debut age (age = debutAge + season - born), abilities
     1-99 (판단력 → mistake rate, 예측력 → how far it plans, 승부 감각 → late-game score sense,
     멘탈 → no temper from 50 up, a stronger temper below), potential, temper kind and whether
     its mistakes come by feel or as slips. Saved as `name=value` tokens on the roster line.

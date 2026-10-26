@@ -146,7 +146,9 @@ class PlayersTest {
         val feel = ps.count { it.identity!!.feel } / n
         assertEquals(PlayerGenerator.FEEL_SHARE, feel, 0.04)
         assertEquals(PlayerGenerator.BLEND, ps.count { it.spec.play!!.secondary != null } / n, 0.03)
-        assertEquals(0.25, ps.count { it.spec.play!!.overlay != null } / n, 0.05)
+        // 25% by the shares, more where nations that favour an overlay are big (the US, Brazil,
+        // Mexico, Türkiye...): about 30% with the nations by population.
+        assertEquals(0.30, ps.count { it.spec.play!!.overlay != null } / n, 0.05)
         assertTrue(ps.map { it.spec.play!!.primary }.toSet().size == PlayStyles.RECIPES.size)
         // Genes of v2: foresight to the hundredth (some on the far side), tastes and situations for most, nobody's twice.
         assertTrue(ps.all { it.spec.play!!.v == PlayGene.V2 })

@@ -146,14 +146,26 @@ class Nation(
 }
 
 /**
- * The 28 nations. Weights add up to [TOTAL] (106): Korea 30 (28%), then Japan, the US, China and
- * the big football nations; every nation has at least 1% (about 10 players in a league of
- * 1000, enough for a national team of 5). The order and the codes are fixed (saves keep the
- * code; generated players draw by the list): only append.
+ * The 28 nations. Weights follow the real populations, held between [MIN_WEIGHT] and
+ * [MAX_WEIGHT] millions ([population]): China, India, the US, Brazil and Nigeria at the top
+ * (about 7% each), Korea about 2.4%, the smallest about 1.4% (14 players in a league of 1000,
+ * enough for a national team of 5). No nation is favoured beyond its people. The order and the
+ * codes are fixed (saves keep the code; generated players draw by the list): only append.
  */
 object Nations {
+    /** A nation's draw weight: its population in millions, held between these (no nation more than 5 times another). */
+    const val MIN_WEIGHT = 30
+    const val MAX_WEIGHT = 150
+
+    /**
+     * The weight of a nation of [millions] people: as many players as its people, within
+     * [MIN_WEIGHT]..[MAX_WEIGHT] so the biggest do not swamp the league nor the smallest
+     * vanish from it (1000 players: 14 to 69 of each nation).
+     */
+    private fun population(millions: Int): Int = millions.coerceIn(MIN_WEIGHT, MAX_WEIGHT)
+
     val KR = Nation(
-        "KR", "대한민국", "한국", "🇰🇷", 30, NameOrder.FAMILY_GIVEN,
+        "KR", "대한민국", "한국", "🇰🇷", population(52), NameOrder.FAMILY_GIVEN,
         families = "김:215 이:147 박:84 최:47 정:43 강:24 조:21 윤:21 장:20 임:17 한:15 오:15 서:15 신:14 권:14 황:14 " +
             "안:13 송:13 유:12 전:11 홍:11 고:9 문:9 양:9 손:9 배:8 백:7 허:6 남:6 심:5 노:5 하:5 곽:4 성:4 차:4 주:4 " +
             "우:4 구:4 나:3 민:3 진:3 지:3 엄:3 채:3 원:3 천:2 방:2 공:2 현:2 함:2 변:2 염:2 여:2 추:1 도:1 소:1 석:1 " +
@@ -182,7 +194,7 @@ object Nations {
     )
 
     val JP = Nation(
-        "JP", "일본", "일본", "🇯🇵", 8, NameOrder.FAMILY_SPACE_GIVEN,
+        "JP", "일본", "일본", "🇯🇵", population(124), NameOrder.FAMILY_SPACE_GIVEN,
         families = "사토:18 스즈키:17 다카하시:14 다나카:13 와타나베:12 이토:11 야마모토:11 나카무라:10 고바야시:10 가토:9 " +
             "요시다:8 야마다:8 사사키:7 야마구치:6 마쓰모토:6 이노우에:6 기무라:6 하야시:5 사이토:5 시미즈:5 야마자키:4 " +
             "모리:4 이케다:4 하시모토:4 아베:4 이시카와:4 야마시타:3 나카지마:3 이시이:3 오가와:3 마에다:3 오카다:3 " +
@@ -208,7 +220,7 @@ object Nations {
     )
 
     val CN = Nation(
-        "CN", "중국", "중국", "🇨🇳", 7, NameOrder.FAMILY_GIVEN,
+        "CN", "중국", "중국", "🇨🇳", population(1410), NameOrder.FAMILY_GIVEN,
         families = "왕:72 리:70 장:75 류:54 천:46 양:31 황:24 자오:23 우:20 저우:19 쉬:14 쑨:14 마:13 주:12 후:11 궈:11 " +
             "허:11 가오:10 린:10 뤄:9 정:9 량:8 셰:7 쑹:7 탕:6 한:6 펑:6 덩:5 차오:5 쩡:5 샤오:5 톈:4 둥:4 판:4 위안:4 " +
             "차이:4 위:4 두:4 예:4 청:3 웨이:3 쑤:3 뤼:3 딩:3 런:3 루:3 야오:3 선:3 중:3 추이:3 탄:3 랴오:3 진:2 스:2 " +
@@ -244,7 +256,7 @@ object Nations {
         "피오나 에이미 앨리스 메이지 매틸다 이모젠 페이지 섀넌 커스틴 제마 엘리너"
 
     val US = Nation(
-        "US", "미국", "미국", "🇺🇸", 8, NameOrder.GIVEN_SPACE_FAMILY,
+        "US", "미국", "미국", "🇺🇸", population(335), NameOrder.GIVEN_SPACE_FAMILY,
         families = "스미스:10 존슨:8 윌리엄스:7 브라운:6 존스:6 가르시아:5 밀러:5 데이비스:5 로드리게스:4 마르티네스:4 " +
             "에르난데스:3 로페스:3 윌슨:3 앤더슨:3 토머스:3 테일러:3 무어:3 잭슨:3 마틴:3 리:3 페레스:2 톰프슨:2 " +
             "화이트:2 해리스:2 클라크:2 루이스:2 로빈슨:2 워커:2 영:2 앨런:2 킹:2 라이트:2 스콧:2 힐:2 그린:2 애덤스:2 " +
@@ -258,7 +270,7 @@ object Nations {
     )
 
     val GB = Nation(
-        "GB", "영국", "영국", "🇬🇧", 5, NameOrder.GIVEN_SPACE_FAMILY,
+        "GB", "영국", "영국", "🇬🇧", population(68), NameOrder.GIVEN_SPACE_FAMILY,
         families = "스미스:8 존스:6 윌리엄스:5 테일러:5 브라운:4 데이비스:4 에번스:3 윌슨:3 토머스:3 존슨:3 로버츠:3 " +
             "로빈슨:2 톰프슨:2 라이트:2 워커:2 화이트:2 에드워즈:2 휴스:2 그린:2 홀:2 루이스:2 해리스:2 클라크:2 " +
             "잭슨:2 우드:2 터너:2 마틴:2 파텔 쿠퍼 힐 워드 모리스 무어 리 킹 베이커 해리슨 모건 앨런 제임스 스콧 " +
@@ -270,7 +282,7 @@ object Nations {
     )
 
     val FR = Nation(
-        "FR", "프랑스", "프랑스", "🇫🇷", 4, NameOrder.GIVEN_SPACE_FAMILY,
+        "FR", "프랑스", "프랑스", "🇫🇷", population(68), NameOrder.GIVEN_SPACE_FAMILY,
         families = "마르탱:6 베르나르:4 토마:3 프티:3 로베르:3 리샤르:3 뒤랑:3 뒤부아:3 모로:3 로랑:3 시몽:2 미셸:2 " +
             "르페브르:2 르루아:2 루:2 다비드:2 베르트랑:2 모렐:2 푸르니에:2 지라르:2 보네:2 뒤퐁:2 랑베르:2 퐁텐:2 " +
             "루소:2 뱅상:2 페랭 모랭 마티외 클레망 고티에 뒤몽 슈발리에 블랑 게랭 부아예 가르니에 프랑수아 메르시에 " +
@@ -286,7 +298,7 @@ object Nations {
     )
 
     val DE = Nation(
-        "DE", "독일", "독일", "🇩🇪", 4, NameOrder.GIVEN_SPACE_FAMILY,
+        "DE", "독일", "독일", "🇩🇪", population(84), NameOrder.GIVEN_SPACE_FAMILY,
         families = "뮐러:8 슈미트:7 슈나이더:5 피셔:4 베버:4 마이어:4 바그너:3 베커:3 슐츠:3 호프만:3 셰퍼:3 코흐:2 " +
             "바우어:2 리히터:2 클라인:2 볼프:2 슈뢰더:2 노이만:2 슈바르츠:2 치머만:2 브라운:2 크뤼거:2 하르트만:2 랑게:2 " +
             "베르너:2 크라우제:2 레만 쾰러 헤르만 쾨니히 발터 후버 카이저 푹스 페터스 랑 숄츠 묄러 바이스 융 한 " +
@@ -315,7 +327,7 @@ object Nations {
         "아구스티나 파울라 플로렌시아 로시오 칸델라 미카엘라 안토넬라 로레나 실비나 루시아나 셀레스테 비비아나"
 
     val ES = Nation(
-        "ES", "스페인", "스페인", "🇪🇸", 4, NameOrder.GIVEN_SPACE_FAMILY,
+        "ES", "스페인", "스페인", "🇪🇸", population(48), NameOrder.GIVEN_SPACE_FAMILY,
         families = "가르시아:10 로드리게스:7 곤살레스:7 페르난데스:7 로페스:7 마르티네스:7 산체스:6 페레스:6 고메스:4 마르틴:4 " +
             "히메네스:3 루이스:3 에르난데스:3 디아스:3 모레노:3 무뇨스:3 알바레스:3 로메로:2 알론소:2 구티에레스:2 나바로:2 " +
             "토레스:2 도밍게스:2 바스케스:2 라모스:2 힐:2 라미레스:2 세라노:2 블랑코:2 몰리나:2 모랄레스:2 수아레스:2 " +
@@ -335,7 +347,7 @@ object Nations {
     )
 
     val BR = Nation(
-        "BR", "브라질", "브라질", "🇧🇷", 4, NameOrder.GIVEN_SPACE_FAMILY,
+        "BR", "브라질", "브라질", "🇧🇷", population(216), NameOrder.GIVEN_SPACE_FAMILY,
         families = "시우바:12 산투스:8 올리베이라:6 소자:5 호드리게스:4 페헤이라:4 아우베스:4 페레이라:4 리마:3 고메스:3 " +
             "히베이루:3 카르발류:3 아우메이다:3 로페스:2 소아레스:2 비에이라:2 바르보자:2 호샤:2 지아스:2 나시멘투:2 " +
             "아라우주:2 코스타:2 멘데스:2 카스트루 마르칭스 핀투 모레이라 프레이타스 몬테이루 카르도주 테이셰이라 " +
@@ -353,7 +365,7 @@ object Nations {
     )
 
     val IT = Nation(
-        "IT", "이탈리아", "이탈리아", "🇮🇹", 3, NameOrder.GIVEN_SPACE_FAMILY,
+        "IT", "이탈리아", "이탈리아", "🇮🇹", population(59), NameOrder.GIVEN_SPACE_FAMILY,
         families = "로시:8 루소:6 페라리:6 에스포지토:5 비안키:5 로마노:5 콜롬보:4 리치:4 마리노:4 그레코:4 브루노:4 갈로:4 " +
             "콘티:3 데루카:3 만치니:3 코스타:3 조르다노:3 리초:3 롬바르디:3 모레티:3 바르비에리:2 폰타나:2 산토로:2 " +
             "마리아니:2 리날디:2 카루소:2 페라라:2 갈리:2 마르티니:2 레오네:2 롱고:2 젠틸레:2 마르티넬리:2 비탈레:2 " +
@@ -371,7 +383,7 @@ object Nations {
     )
 
     val VN = Nation(
-        "VN", "베트남", "베트남", "🇻🇳", 3, NameOrder.FAMILY_GIVEN,
+        "VN", "베트남", "베트남", "🇻🇳", population(100), NameOrder.FAMILY_GIVEN,
         families = "응우옌:38 쩐:11 레:9 팜:7 호앙:4 후인:3 판:4 부:2 보:2 당:2 부이:2 도 호 응오 즈엉 리 딘 쯔엉 다오 " +
             "럼 마이 찐 르엉 하 까오 따",
         maleMiddle = "반:5 득:2 민:2 꽝:2 호앙:2 타인:2 쑤언 띠엔 꽁 흐우 주이 꾸옥 자 아인 응옥",
@@ -384,7 +396,7 @@ object Nations {
     )
 
     val AR = Nation(
-        "AR", "아르헨티나", "아르헨티나", "🇦🇷", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "AR", "아르헨티나", "아르헨티나", "🇦🇷", population(46), NameOrder.GIVEN_SPACE_FAMILY,
         families = "곤살레스:8 로드리게스:7 고메스:6 페르난데스:6 로페스:6 디아스:5 마르티네스:5 페레스:5 가르시아:4 산체스:4 " +
             "로메로:4 수아레스:3 알바레스:3 토레스:3 루이스:3 라미레스:3 플로레스:3 아코스타:3 베니테스:3 메디나:2 " +
             "에레라:2 아기레:2 페레이라:2 구티에레스:2 히메네스:2 몰리나:2 실바:2 카스트로:2 로하스:2 오헤다:2 모레노:2 " +
@@ -394,7 +406,7 @@ object Nations {
     )
 
     val MX = Nation(
-        "MX", "멕시코", "멕시코", "🇲🇽", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "MX", "멕시코", "멕시코", "🇲🇽", population(129), NameOrder.GIVEN_SPACE_FAMILY,
         families = "에르난데스:10 가르시아:9 마르티네스:8 로페스:7 곤살레스:7 페레스:5 로드리게스:5 산체스:5 라미레스:5 " +
             "크루스:4 플로레스:4 고메스:4 모랄레스:3 바스케스:3 레예스:3 히메네스:3 토레스:3 디아스:3 구티에레스:3 " +
             "루이스:3 멘도사:3 아길라르:3 오르티스:3 모레노:2 카스티요:2 로메로:2 알바레스:2 멘데스:2 차베스:2 리베라:2 " +
@@ -405,7 +417,7 @@ object Nations {
     )
 
     val CA = Nation(
-        "CA", "캐나다", "캐나다", "🇨🇦", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "CA", "캐나다", "캐나다", "🇨🇦", population(40), NameOrder.GIVEN_SPACE_FAMILY,
         families = "스미스:4 브라운:3 트랑블레:3 마틴:3 로이:2 리:2 윌슨:2 존슨:2 맥도널드:2 캠벨:2 앤더슨:2 테일러:2 " +
             "톰프슨:2 가뇽:2 화이트 왕 싱 르블랑 부샤르 펠티에 코테 라부아 포르탱 모리슨 스튜어트 로버트슨 영 클라크 " +
             "스콧 머리 매케이 웡 챈 고티에 벨랑제",
@@ -414,7 +426,7 @@ object Nations {
     )
 
     val AU = Nation(
-        "AU", "호주", "호주", "🇦🇺", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "AU", "호주", "호주", "🇦🇺", population(27), NameOrder.GIVEN_SPACE_FAMILY,
         families = "스미스:5 존스:3 윌리엄스:3 브라운:3 윌슨:3 테일러:3 존슨:2 화이트:2 마틴:2 앤더슨:2 톰프슨:2 토머스:2 " +
             "워커:2 해리스:2 라이언:2 켈리:2 응우옌 리 로빈슨 킹 데이비스 라이트 에번스 로버츠 그린 홀 우드 잭슨 " +
             "클라크 미첼 쿠퍼 맥도널드 머피 오브라이언 해밀턴 그레이엄 첸",
@@ -423,7 +435,7 @@ object Nations {
     )
 
     val IN = Nation(
-        "IN", "인도", "인도", "🇮🇳", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "IN", "인도", "인도", "🇮🇳", population(1440), NameOrder.GIVEN_SPACE_FAMILY,
         families = "싱:5 쿠마르:5 샤르마:4 파텔:4 굽타:3 칸:3 레디:2 다스:2 라오:2 메타:2 조시:2 샤:2 베르마:2 미슈라:2 " +
             "야다브:2 아이어 나이르 초프라 카푸르 말호트라 아가르왈 보스 바네르지 차터지 무커지 필라이 메논 데사이 " +
             "자인 바트 판데이 티와리 삭세나 타쿠르 차우한 나이두 쿨카르니 신하 두타 라나 세티",
@@ -438,7 +450,7 @@ object Nations {
     )
 
     val TR = Nation(
-        "TR", "튀르키예", "튀르키예", "🇹🇷", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "TR", "튀르키예", "튀르키예", "🇹🇷", population(85), NameOrder.GIVEN_SPACE_FAMILY,
         families = "일마즈:6 카야:4 데미르:4 샤힌:3 첼리크:3 일디즈:3 일드름:3 외즈튀르크:2 아이든:2 외즈데미르:2 아르슬란:2 " +
             "도안:2 클르치:2 체틴:2 카라:2 야부즈:2 쿠르트:2 외즈칸 심셰크 폴라트 에르도안 귀네시 악타시 바이락타르 " +
             "퀴취크 타시 알튼 카플란 귈 아크소이 외젠 코르크마즈 차크르 아이한 투나",
@@ -451,7 +463,7 @@ object Nations {
     )
 
     val NL = Nation(
-        "NL", "네덜란드", "네덜란드", "🇳🇱", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "NL", "네덜란드", "네덜란드", "🇳🇱", population(18), NameOrder.GIVEN_SPACE_FAMILY,
         families = "더용:5 얀선:4 더프리스:4 판덴베르흐:3 판데이크:3 바커르:3 피서르:3 스미트:3 메이어르:2 더부르:2 뮐더르:2 " +
             "더흐로트:2 보스:2 페르묄런:2 페이터르스:2 헨드릭스:2 데커르:2 브라우어르:2 더빗:2 데이크스트라:2 스미츠 더흐라프 " +
             "코크 야코프스 더한 페르메이르 하위스만 판레이우언 포스트마",
@@ -463,7 +475,7 @@ object Nations {
     )
 
     val SE = Nation(
-        "SE", "스웨덴", "스웨덴", "🇸🇪", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "SE", "스웨덴", "스웨덴", "🇸🇪", population(11), NameOrder.GIVEN_SPACE_FAMILY,
         families = "요한손:5 안데르손:5 칼손:4 닐손:4 에릭손:4 라르손:3 올손:3 페르손:3 스벤손:3 구스타브손:2 페테르손:2 " +
             "욘손:2 얀손:2 한손:2 벵트손 옌손 린드베리 린드스트룀 린드크비스트 린드그렌 악셀손 베리 베리스트룀 " +
             "룬드크비스트 룬드베리 룬드그렌 망누손 마트손 홀름 산드베리 포르스베리 셰베리 엥스트룀 에클룬드 달",
@@ -476,7 +488,7 @@ object Nations {
     )
 
     val TH = Nation(
-        "TH", "태국", "태국", "🇹🇭", 2, NameOrder.GIVEN_SPACE_FAMILY,
+        "TH", "태국", "태국", "🇹🇭", population(72), NameOrder.GIVEN_SPACE_FAMILY,
         families = "새땅 새림 시숙 텅디 깨우마니 숙짜이 웡사왓 랏따나꾼 분미 짜이디 짜른쑥 시웡 프롬마 콩깨우 분마탄 " +
             "사라찻 송끄라신 당다 펫람 부리랏 수완나랏 시리완 분낙 깨우사이 퐁사완 숙사왓 참쁘라섯",
         male = "솜차이 솜삭 솜밧 아피찻 나타폰 위차이 티라왓 차나팁 티라실 수파차이 수파촉 아누차 타나왓 폰차이 낏띠삭 " +
@@ -487,7 +499,7 @@ object Nations {
     )
 
     val NG = Nation(
-        "NG", "나이지리아", "나이지리아", "🇳🇬", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "NG", "나이지리아", "나이지리아", "🇳🇬", population(224), NameOrder.GIVEN_SPACE_FAMILY,
         families = "오카포르 오케케 아데예미 오콩코 에제 은워수 아부바카르 벨로 이브라힘 무함마드 아데바요 오군레예 발로군 " +
             "아폴라비 은완코 오비 오코예 추쿠 온예카 오그본나 아킨왈레 올라왈레 라왈 무사 유수프 알리유 단주마 우체 " +
             "에메니케 올라툰지 아델레케 아자이",
@@ -499,7 +511,7 @@ object Nations {
     )
 
     val PL = Nation(
-        "PL", "폴란드", "폴란드", "🇵🇱", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "PL", "폴란드", "폴란드", "🇵🇱", population(37), NameOrder.GIVEN_SPACE_FAMILY,
         families = "노바크:4 코발스키:3 비시니에프스키:2 부이치크:2 코발치크:2 카민스키:2 지엘린스키:2 시만스키:2 레반도프스키 " +
             "보즈니아크 동브로프스키 코즈워프스키 야브원스키 마예프스키 올셰프스키 야보르스키 바실레프스키 그라보프스키 " +
             "파블라크 미할스키 크룰 비에초레크 노바코프스키 피오트로프스키 마주르 크라프치크 카치마레크",
@@ -517,7 +529,7 @@ object Nations {
         "하디자 누르한 말락 히바 사나 아스마 라나 샤이마 와파 가다 루브나 아비르 하난 마나르"
 
     val CO = Nation(
-        "CO", "콜롬비아", "콜롬비아", "🇨🇴", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "CO", "콜롬비아", "콜롬비아", "🇨🇴", population(52), NameOrder.GIVEN_SPACE_FAMILY,
         families = "로드리게스:5 고메스:5 곤살레스:5 마르티네스:4 가르시아:4 로페스:4 에르난데스:3 산체스:3 라미레스:3 페레스:3 " +
             "디아스:3 토레스:2 로하스:2 바르가스:2 모레노:2 구티에레스:2 히메네스:2 무뇨스:2 카스트로:2 오르티스:2 " +
             "레스트레포 오소리오 산타마리아 아리스티사발 사파타 쿠아드라도 레온 바예호 사라비아 몬토야",
@@ -526,7 +538,7 @@ object Nations {
     )
 
     val EG = Nation(
-        "EG", "이집트", "이집트", "🇪🇬", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "EG", "이집트", "이집트", "🇪🇬", population(113), NameOrder.GIVEN_SPACE_FAMILY,
         families = "하산 압델라흐만 엘사예드 모스타파 파루크 가말 나세르 엘마스리 사이드 아델 함디 라가브 샤반 마흐무드 " +
             "엘바드리 조흐디 압델아지즈 엘샤페이 오스만 수브히 엘가브리 파흐미 타우피크 아슈르",
         male = ARABIC_MALE, female = ARABIC_FEMALE,
@@ -534,7 +546,7 @@ object Nations {
     )
 
     val MA = Nation(
-        "MA", "모로코", "모로코", "🇲🇦", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "MA", "모로코", "모로코", "🇲🇦", population(37), NameOrder.GIVEN_SPACE_FAMILY,
         families = "벤나니 알라위 엘파시 탄지 베라다 엘울라디 벤살라 부자이드 엘아미리 사이디 엘이드리시 벤잘룬 라흐마니 아마르 " +
             "엘카티비 지하니 벤자키 엘마그리비 부스타니 타하리 엘알라미 하다드 엘구자",
         male = ARABIC_MALE, female = ARABIC_FEMALE,
@@ -542,7 +554,7 @@ object Nations {
     )
 
     val SA = Nation(
-        "SA", "사우디아라비아", "사우디", "🇸🇦", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "SA", "사우디아라비아", "사우디", "🇸🇦", population(33), NameOrder.GIVEN_SPACE_FAMILY,
         families = "알도사리 알카흐타니 알오타이비 알샴리 알하르비 알마리 알가므디 알자흐라니 알무타이리 알시흐리 알말키 " +
             "알아나지 알하젬 알부카리 알루와일리 알수바이이 알자미 알라시디 알오마리 알바카르",
         male = ARABIC_MALE, female = ARABIC_FEMALE,
@@ -550,7 +562,7 @@ object Nations {
     )
 
     val SN = Nation(
-        "SN", "세네갈", "세네갈", "🇸🇳", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "SN", "세네갈", "세네갈", "🇸🇳", population(18), NameOrder.GIVEN_SPACE_FAMILY,
         families = "디오프:3 은디아예:3 디알로:2 파이:2 세크 시세 사르 니앙 바 팔 투레 카마라 은다오 시 음바이 은도예 소우 " +
             "디아뉴 티암 공디암 사네 바지 디아타",
         male = "마마두 이브라히마 셰이크 우스만 무사 바카리 우마르 압둘라예 이드리사 라민 바바카르 엘하지 말릭 세리뉴 모마르 " +
@@ -561,7 +573,7 @@ object Nations {
     )
 
     val ZA = Nation(
-        "ZA", "남아프리카공화국", "남아공", "🇿🇦", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        "ZA", "남아프리카공화국", "남아공", "🇿🇦", population(63), NameOrder.GIVEN_SPACE_FAMILY,
         families = "은코시 들라미니 응쿠베 마흘랑구 몰레페 은들로부 판데르메르베 보타 판와이크 스미트 모요 모코에나 마세코 " +
             "쿠말로 은들렐라 몰로이 프레토리우스 모체과 뒤플레시 스테인 판니케르크 마부자 시톨레",
         male = "시부시소 반딜레 음툰지 타보 시포 레보 테보고 카기소 시야봉가 만들라 피터 요한 데온 브랜던 루안 니코 탄도 템바 " +
