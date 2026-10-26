@@ -2056,7 +2056,8 @@ class LeagueController(
             abilities = id?.abilities?.toList(),
             change = if (alive != null && id != null) id.abilities.diff(id.lastAbl) else emptyList(),
             peak = id?.peakAbl?.toList(),
-            potential = id?.potential,
+            // The ceiling it grows toward: never shown below what it already is.
+            potential = id?.let { maxOf(it.potential, it.abilities.overall) },
             outlook = if (alive != null && id != null && age != null) yacht.engine.league.Profiles.outlook(id, age) else null,
             tendencies = gene?.let { yacht.engine.league.Tendencies.of(it.style()).toList() },
             style = gene?.label, styleNotes = notes, chips = chips,
@@ -2205,7 +2206,7 @@ class LeagueController(
                     if (age > PROSPECT_AGE) return@mapNotNull null
                     val nat = Nations.of(id.nation)
                     ProspectRow(
-                        p.key, nat?.let { "${it.flag} ${p.name}" } ?: p.name, age, id.abilities.overall, id.potential,
+                        p.key, nat?.let { "${it.flag} ${p.name}" } ?: p.name, age, id.abilities.overall, maxOf(id.potential, id.abilities.overall),
                         yacht.engine.league.Profiles.outlook(id, age), w.ladder.rating(p.key).takeIf { !it.isNaN() }?.roundToInt(),
                     )
                 }.sortedWith(compareByDescending<ProspectRow> { it.potential }.thenByDescending { it.overall }.thenBy { it.key }).take(60)

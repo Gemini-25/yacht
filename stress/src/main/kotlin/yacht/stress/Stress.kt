@@ -51,6 +51,15 @@ private val Main = mainExecutor.asCoroutineDispatcher()
 @Volatile
 private var peakHeap = 0L
 
+/** The most heap still in use right after a collection (what a phone must hold). */
+private var peakLive = 0L
+
+private fun liveHeap(): Long {
+    repeat(2) { System.gc() }
+    val r = Runtime.getRuntime()
+    return (r.totalMemory() - r.freeMemory()).also { peakLive = maxOf(peakLive, it) }
+}
+
 fun main(args: Array<String>) {
     val code = try {
         run(args)
@@ -135,7 +144,11 @@ private fun run(args: Array<String>): Int {
     // The league from the seed, at full speed, in the background of everything else.
     onMain { c.screen = Screen.LEAGUE }
     waitFor("league view", 60_000) { c.league.view != null }
-    if (players != null) onMain { c.league.changeConfig(c.league.config.copy(generated = players)) }
+    if (players != null) {
+        onMain { c.league.changeConfig(c.league.config.copy(generated = players)) }
+        // The rules file is written off the main thread: the league read below takes it.
+        Thread.sleep(1000)
+    }
     onMain { c.league.loadSeed() }
     waitFor("seed", 60_000) { (c.league.view?.matches ?: 0L) > 0L }
     onMain {
@@ -196,9 +209,10 @@ private fun run(args: Array<String>): Int {
         c.league.stopReason?.let { failures += "league stopped by itself: $it" }
         if (actions % 5 == 0) {
             val v = c.league.view
+            val live = if (actions % 10 == 0) " · live ${liveHeap() shr 20} MB" else ""
             println(
                 "  ${(deadline - System.currentTimeMillis()) / 1000}s left · $games games · league ${v?.matches} matches " +
-                    "(season ${v?.season?.number}: ${v?.season?.played}/${v?.season?.total}) · running ${c.league.running} ${c.league.preparing ?: ""} · heap peak ${peakHeap shr 20} MB",
+                    "(season ${v?.season?.number}: ${v?.season?.played}/${v?.season?.total}) · running ${c.league.running} ${c.league.preparing ?: ""} · heap peak ${peakHeap shr 20} MB$live",
             )
         }
     }
@@ -223,7 +237,8 @@ private fun run(args: Array<String>): Int {
         if (File(dir, "league/resume.txt").exists()) failures += "the player's stop left the resume mark"
     }
     onMain { again.shutdown() }
-    println("done: $actions actions, $games games, league ${c.league.view?.matches} matches, peak heap ${peakHeap shr 20} MB of ${Runtime.getRuntime().maxMemory() shr 20} MB")
+    liveHeap()
+    println("done: $actions actions, $games games, league ${c.league.view?.matches} matches, peak heap ${peakHeap shr 20} MB (live after GC at most ${peakLive shr 20} MB) of ${Runtime.getRuntime().maxMemory() shr 20} MB")
     println("lock held: ${c.league.timings}")
     if (offMain.isNotEmpty()) {
         println("state written off the main thread:")
