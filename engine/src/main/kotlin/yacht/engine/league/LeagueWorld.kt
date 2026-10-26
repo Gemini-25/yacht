@@ -68,7 +68,14 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     fun derbyTown(key: String): String = players[key]?.let { p -> (p.identity?.nation ?: Nations.KR.code) + "/" + p.hometown } ?: ("KR/" + Hometowns.of(key))
 
     /** Rating for seeding: the ladder's, or [START_RATING] before an AI's first game. */
-    fun rating(key: String): Double = ladder.rating(key).takeIf { !it.isNaN() } ?: START_RATING
+    fun rating(key: String): Double = ladder.rating(key).takeIf { !it.isNaN() } ?: prior(key)
+
+    /**
+     * A player off the ladder (a new league's, a newcomer's): [START_RATING] moved by its
+     * abilities, so a new league's first tiers and seeds go by them rather than by key.
+     */
+    private fun prior(key: String): Double =
+        players[key]?.identity?.abilities?.overall?.let { START_RATING + PRIOR_PER_POINT * (it - PRIOR_MID) } ?: START_RATING
 
     /** True once the season and its post-season are over: [closeSeason] is due. */
     val seasonOver: Boolean get() = plan?.finished == true
@@ -413,6 +420,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
         /** Seeding rating before an AI's first game (a solid amateur). */
         const val START_RATING = 1400.0
+
+        /** [prior]: rating points per point of overall ability from [PRIOR_MID]. */
+        const val PRIOR_PER_POINT = 5.0
+        const val PRIOR_MID = 50
 
         /**
          * Reads the saved league. [keys] are the ladder's keys (every AI and me); an unusable
