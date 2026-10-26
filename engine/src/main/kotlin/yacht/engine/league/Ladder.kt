@@ -90,6 +90,24 @@ class LadderEntry(val key: String) {
     val winRate: Double get() = if (games == 0) 0.0 else (wins + 0.5 * ties) / games
     val avgScore: Double get() = if (games == 0) 0.0 else scoreSum.toDouble() / games
 
+    internal fun copyFrom(o: LadderEntry) {
+        games = o.games
+        wins = o.wins
+        ties = o.ties
+        losses = o.losses
+        scoreSum = o.scoreSum
+        best = o.best
+        yachts = o.yachts
+        bonuses = o.bonuses
+        streak = o.streak
+        bestStreak = o.bestStreak
+        recent.clear()
+        recent.addAll(o.recent)
+        history.clear()
+        history.addAll(o.history)
+        peak = o.peak
+    }
+
     internal fun add(score: Int, other: Int, yacht: Boolean, bonus: Boolean) {
         games++
         scoreSum += score
@@ -164,9 +182,8 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     private val n = this.keys.size
     val entries: List<LadderEntry> = this.keys.map { LadderEntry(it) }
 
-    /** points[i][j]: games won by i against j (ties count half); played[i][j]: games between them. */
-    private val points = Array(n) { DoubleArray(n) }
-    private val played = Array(n) { IntArray(n) }
+    /** Results between the pairs that played (a league of thousands plays a small share of all pairs). */
+    private val pairs = Pairs(n)
     private val strength = DoubleArray(n) { 1.0 }
 
     /** PRIOR plus the points each AI won: the numerator of its minorisation step. */
@@ -196,12 +213,21 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     fun error(key: String): Double = index[key]?.let { errors[it] } ?: Double.NaN
     fun placed(key: String): Boolean = (entry(key)?.games ?: 0) >= placementOf(key)
 
-    /** Results between [a] and [b]: (a's points, games), ties counting half. */
+    /** Results between [a] and [b] over their careers: (a's points, games), ties counting half. */
     fun headToHead(a: String, b: String): Pair<Double, Int> {
         val i = index[a] ?: return 0.0 to 0
         val j = index[b] ?: return 0.0 to 0
-        return points[i][j] to played[i][j]
+        val s = pairs.slot(i, j)
+        if (s < 0) return 0.0 to 0
+        return pairs.points(s, i) to pairs.games[s]
     }
+
+    /** Pairs of AIs that have played each other. */
+    val pairCount: Int get() = pairs.size
+
+    /** The last season whose end faded the results ([decay]). */
+    var decayed = 0
+        private set
 
     /**
      * What ranks are by: the rating less [RANK_ERRORS] times the part of its standard error above
@@ -294,16 +320,14 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         val j = index.getValue(b)
         val before = mapOf(a to rating(a), b to rating(b))
         val tierBefore = mapOf(a to tier(a), b to tier(b))
+        val slot = pairs.slotOrAdd(i, j)
         for (g in results) {
             entries[i].add(g.a, g.b, g.aYacht, g.aBonus)
             entries[j].add(g.b, g.a, g.bYacht, g.bBonus)
             val s = if (g.a > g.b) 1.0 else if (g.a == g.b) 0.5 else 0.0
-            points[i][j] += s
-            points[j][i] += 1 - s
+            pairs.add(slot, i, s)
             winSum[i] += s
             winSum[j] += 1 - s
-            played[i][j]++
-            played[j][i]++
             games++
         }
         matches++
@@ -355,14 +379,15 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         return out
     }
 
-    /** One minorisation step of [i]'s strength against everyone it played (O(n)). */
+    /** One minorisation step of [i]'s strength against everyone it played (O(its opponents)). */
     private fun step(i: Int) {
         val p = strength[i]
-        val row = played[i]
+        val row = pairs.rows[i]
         var denom = 2 * PRIOR / (p + 1.0)
-        for (j in 0 until n) {
-            val g = row[j]
-            if (g > 0) denom += g / (p + strength[j])
+        for (k in 0 until row.size) {
+            val s = row[k]
+            val g = pairs.fitGames[s]
+            if (g > 0) denom += g / (p + strength[pairs.other(s, i)])
         }
         strength[i] = winSum[i] / denom
     }
@@ -386,15 +411,82 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     private fun errorOf(i: Int): Double {
         val p = strength[i]
         var info = 2 * PRIOR * p / ((p + 1.0) * (p + 1.0))
-        val row = played[i]
-        for (j in 0 until n) {
-            val g = row[j]
+        val row = pairs.rows[i]
+        for (k in 0 until row.size) {
+            val slot = row[k]
+            val g = pairs.fitGames[slot]
             if (g > 0) {
-                val s = p + strength[j]
-                info += g * p * strength[j] / (s * s)
+                val q = strength[pairs.other(slot, i)]
+                val s = p + q
+                info += g * p * q / (s * s)
             }
         }
         return 400 / ln(10.0) / sqrt(info)
+    }
+
+    /**
+     * Fades the fit's weight of every result of [changed] (players whose play changed: they grew
+     * or declined) by [factor], so ratings follow who they are now; their career records and
+     * head-to-heads stay. Refit afterwards ([fit] or [fitInput]).
+     */
+    fun decay(changed: Set<String>, factor: Double, season: Int = decayed + 1) {
+        // Once per season: a season end replayed after a kill fades nothing twice.
+        if (season <= decayed) return
+        decayed = season
+        val idx = changed.mapNotNull { index[it] }.toHashSet()
+        if (idx.isEmpty()) return
+        for (s in 0 until pairs.size) {
+            if (pairs.a[s] !in idx && pairs.b[s] !in idx) continue
+            pairs.fitPts[s] *= factor
+            pairs.fitGames[s] *= factor
+            // Faded out: no longer in the fit (the career record stays).
+            if (pairs.fitGames[s] < MIN_WEIGHT) {
+                pairs.fitPts[s] = 0.0
+                pairs.fitGames[s] = 0.0
+            }
+        }
+        recountWins()
+        for (i in idx) dirty[i] = true
+        version++
+    }
+
+    private fun recountWins() {
+        winSum.fill(PRIOR)
+        for (s in 0 until pairs.size) {
+            winSum[pairs.a[s]] += pairs.fitPts[s]
+            winSum[pairs.b[s]] += pairs.fitGames[s] - pairs.fitPts[s]
+        }
+    }
+
+    /**
+     * This ladder for [newKeys] (the roster changed): the records, results and ratings of the
+     * AIs in both, empty entries for the new ones; AIs gone take their results with them. A warm
+     * fit follows (O(results), no copy through text).
+     */
+    fun rekey(newKeys: List<String>): Ladder {
+        val l = Ladder(newKeys, anchor)
+        val map = IntArray(n) { i -> l.index[keys[i]] ?: -1 }
+        for (i in 0 until n) {
+            val t = map[i]
+            if (t < 0) continue
+            l.entries[t].copyFrom(entries[i])
+            l.strength[t] = strength[i]
+            l.ratings[t] = ratings[i]
+            l.errors[t] = errors[i]
+        }
+        for (s in 0 until pairs.size) {
+            val x = map[pairs.a[s]]
+            val y = map[pairs.b[s]]
+            if (x < 0 || y < 0) continue
+            l.pairs.copy(pairs, s, x, y)
+        }
+        l.recountWins()
+        l.matches = matches
+        l.games = games
+        l.decayed = decayed
+        for (m in feed) if (m.a in l.index && m.b in l.index) l.feed.addLast(m)
+        l.fit()
+        return l
     }
 
     /**
@@ -427,11 +519,17 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         version++
     }
 
-    /** The results the full fit needs, copied (under the caller's lock) so it can be solved elsewhere. */
+    /**
+     * The results the full fit needs, copied (under the caller's lock) so it can be solved
+     * elsewhere: the AIs with games ([active]) and the weighted results between them as edges
+     * (local indices, side A's points, games).
+     */
     class FitInput internal constructor(
         internal val active: IntArray,
-        internal val points: Array<DoubleArray>,
-        internal val played: Array<IntArray>,
+        internal val edgeA: IntArray,
+        internal val edgeB: IntArray,
+        internal val edgePoints: DoubleArray,
+        internal val edgeGames: DoubleArray,
         internal val strength: DoubleArray,
         internal val anchor: Int,
         internal val owner: Ladder,
@@ -445,15 +543,32 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         internal val errors: DoubleArray,
     )
 
-    /** Copies what the full fit needs (O(n²) copying, no solving): see [solve] and [applyFit]. */
+    /** Copies what the full fit needs (O(results) copying, no solving): see [solve] and [applyFit]. */
     fun fitInput(): FitInput {
         val active = (0 until n).filter { entries[it].games > 0 }.toIntArray()
-        val m = active.size
-        val pts = Array(m) { a -> DoubleArray(m) { b -> points[active[a]][active[b]] } }
-        val pl = Array(m) { a -> IntArray(m) { b -> played[active[a]][active[b]] } }
+        val local = IntArray(n) { -1 }
+        for ((a, i) in active.withIndex()) local[i] = a
+        var e = 0
+        for (s in 0 until pairs.size) if (pairs.fitGames[s] > 0 && local[pairs.a[s]] >= 0 && local[pairs.b[s]] >= 0) e++
+        val ea = IntArray(e)
+        val eb = IntArray(e)
+        val ep = DoubleArray(e)
+        val eg = DoubleArray(e)
+        var k = 0
+        for (s in 0 until pairs.size) {
+            if (pairs.fitGames[s] <= 0) continue
+            val x = local[pairs.a[s]]
+            val y = local[pairs.b[s]]
+            if (x < 0 || y < 0) continue
+            ea[k] = x
+            eb[k] = y
+            ep[k] = pairs.fitPts[s]
+            eg[k] = pairs.fitGames[s]
+            k++
+        }
         dirty.fill(false)
-        val anchorAt = anchorIndex()?.let { active.indexOf(it) } ?: -1
-        return FitInput(active, pts, pl, DoubleArray(m) { strength[active[it]] }, anchorAt, this)
+        val anchorAt = anchorIndex()?.let { local[it] } ?: -1
+        return FitInput(active, ea, eb, ep, eg, DoubleArray(active.size) { strength[active[it]] }, anchorAt, this)
     }
 
     /** Puts a solved fit in place; AIs that played since [fitInput] get their quick steps again. */
@@ -497,14 +612,22 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     fun encode(): String = buildString {
         append("ladder 1\n")
         append("totals $matches $games\n")
+        if (decayed > 0) append("decayed $decayed\n")
         for (e in entries) {
             if (e.games == 0) continue
             append("p ${e.key} ${e.games} ${e.wins} ${e.ties} ${e.losses} ${e.scoreSum} ${e.best} ${e.yachts} ${e.bonuses} ")
             append("${e.streak} ${e.bestStreak} ${e.recent.joinToString("").ifEmpty { "-" }} ")
-            append("${if (e.peak.isNaN()) "-" else "%.2f".format(java.util.Locale.ROOT, e.peak)} ${e.history.joinToString(",").ifEmpty { "-" }}\n")
+            append("${if (e.peak.isNaN()) "-" else "%.2f".format(java.util.Locale.ROOT, e.peak)} ${e.history.joinToString(",").ifEmpty { "-" }}")
+            // The fitted strength, so a league read back starts warm (older versions stop at the history).
+            append(' ').append(strength[index.getValue(e.key)]).append('\n')
         }
-        for (i in 0 until n) for (j in i + 1 until n) {
-            if (played[i][j] > 0) append("h ${keys[i]} ${keys[j]} ${points[i][j]} ${played[i][j]}\n")
+        for (s in 0 until pairs.size) {
+            val i = pairs.a[s]
+            val j = pairs.b[s]
+            append("h ${keys[i]} ${keys[j]} ${pairs.pts[s]} ${pairs.games[s]}")
+            // The fit's faded weights, when they differ from the career record.
+            if (pairs.fitGames[s] != pairs.games[s].toDouble() || pairs.fitPts[s] != pairs.pts[s]) append(" ${pairs.fitPts[s]} ${pairs.fitGames[s]}")
+            append('\n')
         }
         for (m in feed.reversed()) {
             val gs = m.games.joinToString(";") { g -> "${g.a},${g.b},${flag(g.aYacht)}${flag(g.bYacht)}${flag(g.aBonus)}${flag(g.bBonus)}" }
@@ -536,12 +659,20 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         const val RECORD_SCORE = 300
         private const val PRIOR = 0.1
 
+        /** Results faded below this weight leave the fit ([decay]). */
+        private const val MIN_WEIGHT = 1e-3
+
         /** Standard errors taken off the rating for the ranking (see [rankScore]). */
         const val RANK_ERRORS = 3.0
 
         /** An error up to this (about ±20 shown, a few hundred games) costs no ranking place. */
         const val RANK_FREE_ERROR = 10.0
         private const val MAX_ITER = 3000
+
+        /** Newton steps and conjugate-gradient passes per step at most; the largest log-strength step. */
+        private const val MAX_NEWTON = 50
+        private const val MAX_CG = 400
+        private const val MAX_STEP = 2.0
 
         /**
          * Bradley-Terry strengths by minorisation-maximisation, from the last strengths. Each AI
@@ -550,54 +681,127 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
          */
         fun solve(input: FitInput, maxSweeps: Int = MAX_ITER): FitResult {
             val m = input.active.size
-            val pi = input.strength.copyOf()
-            val wins = DoubleArray(m) { a -> PRIOR + input.points[a].sum() }
-            // Converged when no rating moves relative to the others: all strengths also drift
-            // together under the weak prior, which a plain change test kept chasing for thousands
-            // of sweeps (1e-6 here is 0.0002 rating points).
-            val delta = DoubleArray(m)
-            for (iter in 0 until maxSweeps) {
-                for (a in 0 until m) {
-                    val p = pi[a]
-                    val row = input.played[a]
-                    var denom = 2 * PRIOR / (p + 1.0)
-                    for (b in 0 until m) {
-                        val g = row[b]
-                        if (g > 0) denom += g / (p + pi[b])
-                    }
-                    val next = wins[a] / denom
-                    delta[a] = ln(next / p)
-                    pi[a] = next
-                }
-                var mean = 0.0
-                for (a in 0 until m) mean += delta[a]
-                mean /= maxOf(1, m)
-                var change = 0.0
-                for (a in 0 until m) change = maxOf(change, abs(delta[a] - mean))
-                if (change < 1e-6) break
+            // Each AI's opponents as one compact adjacency (both directions of every edge).
+            val deg = IntArray(m + 1)
+            for (k in input.edgeA.indices) {
+                deg[input.edgeA[k] + 1]++
+                deg[input.edgeB[k] + 1]++
             }
+            for (a in 0 until m) deg[a + 1] += deg[a]
+            val nbr = IntArray(deg[m])
+            val wt = DoubleArray(deg[m])
+            val fill = deg.copyOf(m)
+            val wins = DoubleArray(m) { PRIOR }
+            for (k in input.edgeA.indices) {
+                val x = input.edgeA[k]
+                val y = input.edgeB[k]
+                val g = input.edgeGames[k]
+                nbr[fill[x]] = y; wt[fill[x]++] = g
+                nbr[fill[y]] = x; wt[fill[y]++] = g
+                wins[x] += input.edgePoints[k]
+                wins[y] += g - input.edgePoints[k]
+            }
+            val theta = DoubleArray(m) { ln(input.strength[it]) }
+            newton(m, deg, nbr, wt, wins, theta, maxSweeps)
+            val pi = DoubleArray(m) { exp(theta[it]) }
             val base = if (input.anchor >= 0) log10(pi[input.anchor]) else (0 until m).sumOf { log10(pi[it]) } / maxOf(1, m)
             val ratings = DoubleArray(m) { 1500 + 400 * (log10(pi[it]) - base) }
             val errors = DoubleArray(m) { a ->
                 val p = pi[a]
                 var info = 2 * PRIOR * p / ((p + 1.0) * (p + 1.0))
-                val row = input.played[a]
-                for (b in 0 until m) {
-                    val g = row[b]
-                    if (g > 0) {
-                        val s = p + pi[b]
-                        info += g * p * pi[b] / (s * s)
-                    }
+                for (k in deg[a] until deg[a + 1]) {
+                    val q = pi[nbr[k]]
+                    val s = p + q
+                    info += wt[k] * p * q / (s * s)
                 }
                 400 / ln(10.0) / sqrt(info)
             }
             return FitResult(input, pi, ratings, errors)
         }
 
+        /**
+         * The maximum of the Bradley-Terry likelihood (with each AI's tenth of a win and of a loss
+         * against a virtual average player) by Newton steps on the log-strengths [theta], each
+         * solved by conjugate gradients with a diagonal preconditioner: a few steps from any start,
+         * where minorisation needs hundreds of sweeps across a league of thousands (its divisions
+         * are linked by a few games only). Stops when no log-strength moves by 1e-7 (0.00002
+         * rating points), or after [maxWork] passes over the results.
+         */
+        private fun newton(m: Int, deg: IntArray, nbr: IntArray, wt: DoubleArray, wins: DoubleArray, theta: DoubleArray, maxWork: Int) {
+            if (m == 0) return
+            val grad = DoubleArray(m)
+            val diag = DoubleArray(m)
+            val off = DoubleArray(nbr.size)
+            val x = DoubleArray(m)
+            val r = DoubleArray(m)
+            val z = DoubleArray(m)
+            val d = DoubleArray(m)
+            val q = DoubleArray(m)
+            var work = 0
+            repeat(MAX_NEWTON) {
+                // Gradient and (minus) Hessian at theta.
+                for (a in 0 until m) {
+                    val ea = exp(theta[a])
+                    val sp = ea / (ea + 1.0)
+                    var expected = 2 * PRIOR * sp
+                    var h = 2 * PRIOR * sp * (1 - sp)
+                    for (k in deg[a] until deg[a + 1]) {
+                        val p = 1.0 / (1.0 + exp(theta[nbr[k]] - theta[a]))
+                        expected += wt[k] * p
+                        val c = wt[k] * p * (1 - p)
+                        off[k] = c
+                        h += c
+                    }
+                    grad[a] = wins[a] - expected
+                    diag[a] = h
+                }
+                // Solve (-H) x = grad: -H is diag minus the off-diagonal weights.
+                fun apply(v: DoubleArray, out: DoubleArray) {
+                    for (a in 0 until m) {
+                        var t = diag[a] * v[a]
+                        for (k in deg[a] until deg[a + 1]) t -= off[k] * v[nbr[k]]
+                        out[a] = t
+                    }
+                }
+                x.fill(0.0)
+                for (a in 0 until m) {
+                    r[a] = grad[a]
+                    z[a] = r[a] / diag[a]
+                    d[a] = z[a]
+                }
+                var rz = (0 until m).sumOf { r[it] * z[it] }
+                val target = 1e-20 + 1e-18 * m
+                for (iter in 0 until MAX_CG) {
+                    if (rz <= target) break
+                    apply(d, q)
+                    work++
+                    val dq = (0 until m).sumOf { d[it] * q[it] }
+                    if (dq <= 0) break
+                    val alpha = rz / dq
+                    for (a in 0 until m) {
+                        x[a] += alpha * d[a]
+                        r[a] -= alpha * q[a]
+                        z[a] = r[a] / diag[a]
+                    }
+                    val next = (0 until m).sumOf { r[it] * z[it] }
+                    val beta = next / rz
+                    rz = next
+                    for (a in 0 until m) d[a] = z[a] + beta * d[a]
+                }
+                // A damped step (the likelihood is concave, a long step can overshoot from far away).
+                var step = 0.0
+                for (a in 0 until m) step = maxOf(step, abs(x[a]))
+                val scale = if (step > MAX_STEP) MAX_STEP / step else 1.0
+                for (a in 0 until m) theta[a] += scale * x[a]
+                if (step * scale < 1e-7 || work > maxWork) return
+            }
+        }
+
         /** Restores [text] onto a ladder for [keys]; unknown AIs (an older roster) are skipped. */
         /** One saved line into [l]; every field is read before anything is set (a cut line changes nothing). */
         private fun decodeLine(l: Ladder, f: List<String>) {
             when (f.firstOrNull()) {
+                "decayed" -> l.decayed = f[1].toInt()
                 "totals" -> {
                     val m = f[1].toLong()
                     val g = f[2].toLong()
@@ -622,20 +826,20 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
                     e.streak = nums[8]
                     e.bestStreak = nums[9]
                     recent.forEach { e.recent.addLast(it) }
+                    val strength = f.getOrNull(15)?.toDoubleOrNull()?.takeIf { it > 0 && it.isFinite() }
                     e.peak = peak
                     history.forEach { e.history.addLast(it) }
+                    strength?.let { l.strength[l.index.getValue(e.key)] = it }
                 }
                 "h" -> {
                     val i = l.index[f[1]] ?: return
                     val j = l.index[f[2]] ?: return
                     val pts = f[3].toDouble()
                     val n = f[4].toInt()
-                    l.winSum[i] += pts - l.points[i][j]
-                    l.winSum[j] += (n - pts) - l.points[j][i]
-                    l.points[i][j] = pts
-                    l.points[j][i] = n - pts
-                    l.played[i][j] = n
-                    l.played[j][i] = n
+                    val fitPts = f.getOrNull(5)?.toDoubleOrNull() ?: pts
+                    val fitGames = f.getOrNull(6)?.toDoubleOrNull() ?: n.toDouble()
+                    require(n >= 0 && pts in 0.0..n.toDouble() && fitGames >= 0 && fitPts in 0.0..fitGames)
+                    l.pairs.set(i, j, pts, n, fitPts, fitGames)
                 }
                 "m" -> {
                     if (l.index[f[1]] == null || l.index[f[2]] == null) return
@@ -663,11 +867,148 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
                 val f = line.split(' ')
                 runCatching { decodeLine(l, f) }
             }
-            // Entries of AIs no longer in the roster are gone: their games stay out of the fit.
+            l.recountWins()
+            // Entries of AIs no longer in the roster are gone: their games stay out of the fit
+            // (from the saved strengths it converges in a few sweeps).
             l.fit()
             return l
         }
     }
+}
+
+/** A map from non-negative longs to ints without boxing (open addressing); -1 for a missing key. */
+internal class LongIntMap {
+    private var keys = LongArray(64) { EMPTY }
+    private var values = IntArray(64)
+    private var count = 0
+
+    private fun at(k: Long, ks: LongArray): Int {
+        val mask = ks.size - 1
+        var h = ((k * -0x61c8864680b583ebL) ushr 32).toInt() and mask
+        while (ks[h] != EMPTY && ks[h] != k) h = (h + 1) and mask
+        return h
+    }
+
+    operator fun get(k: Long): Int {
+        val h = at(k, keys)
+        return if (keys[h] == k) values[h] else -1
+    }
+
+    operator fun set(k: Long, v: Int) {
+        if ((count + 1) * 10 > keys.size * 7) grow()
+        val h = at(k, keys)
+        if (keys[h] != k) {
+            keys[h] = k
+            count++
+        }
+        values[h] = v
+    }
+
+    private fun grow() {
+        val ok = keys
+        val ov = values
+        keys = LongArray(ok.size * 2) { EMPTY }
+        values = IntArray(ok.size * 2)
+        for (i in ok.indices) if (ok[i] != EMPTY) {
+            val h = at(ok[i], keys)
+            keys[h] = ok[i]
+            values[h] = ov[i]
+        }
+    }
+
+    private companion object {
+        const val EMPTY = Long.MIN_VALUE
+    }
+}
+
+/** A growable list of ints. */
+internal class IntList {
+    private var data = IntArray(4)
+    var size = 0
+        private set
+
+    operator fun get(i: Int): Int = data[i]
+
+    fun add(x: Int) {
+        if (size == data.size) data = data.copyOf(size * 2)
+        data[size++] = x
+    }
+}
+
+/**
+ * The results between pairs of AIs that played (slot per pair, a < b by index): career points
+ * and games for head-to-heads, and the fit's weights ([fitPts], [fitGames]), which [Ladder.decay]
+ * fades as players change. [rows] lists each AI's slots.
+ */
+internal class Pairs(n: Int) {
+    var size = 0
+        private set
+    var a = IntArray(16)
+        private set
+    var b = IntArray(16)
+        private set
+
+    /** Side a's points and the games (career). */
+    var pts = DoubleArray(16)
+        private set
+    var games = IntArray(16)
+        private set
+
+    /** The same as the fit weighs them. */
+    var fitPts = DoubleArray(16)
+        private set
+    var fitGames = DoubleArray(16)
+        private set
+    val rows: Array<IntList> = Array(n) { IntList() }
+    private val slots = LongIntMap()
+
+    private fun key(i: Int, j: Int): Long = if (i < j) (i.toLong() shl 32) or j.toLong() else (j.toLong() shl 32) or i.toLong()
+
+    fun slot(i: Int, j: Int): Int = slots[key(i, j)]
+
+    fun slotOrAdd(i: Int, j: Int): Int {
+        val k = key(i, j)
+        slots[k].let { if (it >= 0) return it }
+        if (size == a.size) {
+            val c = size * 2
+            a = a.copyOf(c); b = b.copyOf(c); pts = pts.copyOf(c); games = games.copyOf(c)
+            fitPts = fitPts.copyOf(c); fitGames = fitGames.copyOf(c)
+        }
+        val s = size++
+        a[s] = minOf(i, j)
+        b[s] = maxOf(i, j)
+        slots[k] = s
+        rows[i].add(s)
+        rows[j].add(s)
+        return s
+    }
+
+    fun other(s: Int, i: Int): Int = if (a[s] == i) b[s] else a[s]
+
+    /** [i]'s career points in slot [s]. */
+    fun points(s: Int, i: Int): Double = if (a[s] == i) pts[s] else games[s] - pts[s]
+
+    /** One game in slot [s]: [i] scored [x] (1 won, 0.5 drawn, 0 lost). */
+    fun add(s: Int, i: Int, x: Double) {
+        val forA = if (a[s] == i) x else 1 - x
+        pts[s] += forA
+        games[s]++
+        fitPts[s] += forA
+        fitGames[s] += 1.0
+    }
+
+    /** A saved pair: [i]'s points (career and fit) against [j]. */
+    fun set(i: Int, j: Int, points: Double, n: Int, fitPoints: Double, fitN: Double) {
+        val s = slotOrAdd(i, j)
+        val flip = a[s] != i
+        pts[s] = if (flip) n - points else points
+        games[s] = n
+        fitPts[s] = if (flip) fitN - fitPoints else fitPoints
+        fitGames[s] = fitN
+    }
+
+    /** Slot [s] of [from] as the pair ([x], [y]) here (x was from's a). */
+    fun copy(from: Pairs, s: Int, x: Int, y: Int) = set(x, y, from.pts[s], from.games[s], from.fitPts[s], from.fitGames[s])
 }
 
 /**

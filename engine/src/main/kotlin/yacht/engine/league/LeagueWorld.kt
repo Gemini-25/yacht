@@ -268,6 +268,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             accept = { s -> !config.onlyFlawed || s.flawed }, fashion = fashion, aging = config.aging,
         )
         out += r.events
+        // Everyone a year older plays a little differently: their old results count half from
+        // now on, so ratings follow who they are (careers and head-to-heads stay).
+        if (config.aging) runCatching {
+            ladder.decay(players.alive.filter { it.born <= p.number }.map { it.key }.toSet(), RATING_FADE, p.number)
+            ladder.fit()
+        }
         val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
         val closed = out.map { it.at(SeasonCalendar.CLOSING) }
         note(closed)
@@ -340,6 +346,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val NEWS = NewsBook.FILE
         const val LAB = LabBook.FILE
         const val NATIONS = NationBook.FILE
+
+        /** What the results of a player who aged still weigh in the ratings after a season. */
+        const val RATING_FADE = 0.5
 
         /** Files [encodeFiles] writes. */
         val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS)

@@ -249,4 +249,70 @@ class LadderTest {
         val ranked = l.ranking().filter { it != Ladder.ME }
         assertEquals(ranked.sortedByDescending { l.rating(it) }, ranked)
     }
+
+    @Test
+    fun ratingsFollowAPlayerWhoChangedAndTheRosterChangesInPlace() {
+        // b was weak for many games, then became as strong as ev: after a fade, its rating moves up much faster.
+        val keys = listOf("ev", "b", "c")
+        fun build() = Ladder(keys).also { l ->
+            repeat(400) { l.record("ev", "b", listOf(GameScore(200, 150), GameScore(200, 150))) }
+            repeat(400) { l.record("ev", "c", listOf(GameScore(200, 150), GameScore(150, 200))) }
+            l.fit()
+        }
+        val plain = build()
+        val faded = build().also { it.decay(setOf("b"), 0.5, 1); it.decay(setOf("b"), 0.5, 2); it.decay(setOf("b"), 0.5, 3); it.fit() }
+        // Fading again for the same season changes nothing.
+        val again = faded.encode()
+        faded.decay(setOf("b"), 0.5, 3)
+        assertEquals(again, faded.encode())
+        for (l in listOf(plain, faded)) {
+            repeat(30) { l.record("ev", "b", listOf(GameScore(200, 150), GameScore(150, 200))) }
+            l.fit()
+        }
+        assertTrue(faded.rating("b") > plain.rating("b") + 100, "${faded.rating("b")} vs ${plain.rating("b")}")
+        // The career record is untouched by the fade.
+        assertEquals(plain.headToHead("ev", "b"), faded.headToHead("ev", "b"))
+        assertEquals(plain.entry("b")!!.games, faded.entry("b")!!.games)
+        // Saved and read back with the faded weights and strengths: the same ratings.
+        val back = Ladder.decode(keys, faded.encode())
+        for (k in keys) assertEquals(faded.rating(k), back.rating(k), 0.01)
+        assertEquals(faded.decayed, back.decayed)
+        // Rekeyed in place: a player gone, one new; the rest keep everything.
+        val re = faded.rekey(listOf("ev", "b", "d"))
+        assertEquals(faded.rating("b"), re.rating("b"), 0.5)
+        assertEquals(faded.headToHead("ev", "b"), re.headToHead("ev", "b"))
+        assertEquals(0, re.entry("d")!!.games)
+        assertEquals(0 to 0, re.headToHead("ev", "c").let { it.first.toInt() to it.second })
+        assertEquals(Ladder.decode(listOf("ev", "b", "d"), faded.encode()).encode(), re.encode())
+    }
+
+    @Test
+    fun aLadderOfThousandsStaysSmallAndFitsQuickly() {
+        // 3000 AIs, each playing 40 others near it: 60k pairs.
+        val n = 3000
+        val keys = listOf("ev") + (1 until n).map { "g$it" }
+        val l = Ladder(keys)
+        val rng = Random(4)
+        val level = DoubleArray(n) { 1500 - it * 0.2 }
+        for (i in 0 until n) repeat(20) {
+            val j = ((i + 1 + rng.nextInt(80)) % n)
+            if (j == i) return@repeat
+            val pa = 1 / (1 + Math.pow(10.0, (level[j] - level[i]) / 400))
+            l.record(keys[i], keys[j], List(2) { if (rng.nextDouble() < pa) GameScore(200, 150) else GameScore(150, 200) })
+        }
+        val t0 = System.nanoTime()
+        l.fit()
+        val cold = (System.nanoTime() - t0) / 1e6
+        val t1 = System.nanoTime()
+        l.fit()
+        val warm = (System.nanoTime() - t1) / 1e6
+        println("pairs ${l.pairCount}, cold fit $cold ms, warm $warm ms")
+        assertTrue(l.pairCount in 40_000..70_000)
+        assertTrue(warm < 2_000, "warm fit $warm ms")
+        // Read back warm from the saved strengths.
+        val t2 = System.nanoTime()
+        val back = Ladder.decode(keys, l.encode())
+        println("decode ${(System.nanoTime() - t2) / 1e6} ms")
+        assertEquals(l.rating("g1500"), back.rating("g1500"), 0.5)
+    }
 }

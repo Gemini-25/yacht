@@ -724,7 +724,7 @@ class LeagueController(
             heavyKeys = all.filter { it.heavy }.map { it.key }.toSet()
             val keys = ladderKeys()
             world?.let { w ->
-                if (w.ladder.keys != keys) w.ladder = Ladder.decode(keys, w.ladder.encode())
+                if (w.ladder.keys != keys) w.ladder = w.ladder.rekey(keys)
                 configureWorld(w)
             }
         }
@@ -812,7 +812,7 @@ class LeagueController(
         synchronized(lock) {
             val w = world ?: return
             val keys = ladderKeys()
-            w.ladder = Ladder.decode(keys, Ladder.decode(keys - key, w.ladder.encode()).encode())
+            w.ladder = w.ladder.rekey(keys - key).rekey(keys)
         }
         scope.launch { save() }
     }
@@ -926,6 +926,12 @@ class LeagueController(
         if (newcomers.isNotEmpty() && rng.nextDouble() < share) {
             Matchmaker.pick(l, rng, busy + (heavyKeys - newcomers.toSet()), among = newcomers)?.let { return friendly(it, rng) }
         }
+        // 기준 경기: without the hand-made AIs in the league, the max-expectation AI (1500 by
+        // definition) plays one now and then against a member near 1500, so the scale stays put.
+        if (!w.config.baseAis && ANCHOR !in busy && rng.nextDouble() < CALIBRATION_SHARE) {
+            val near = members.filter { it !in busy && l.placed(it) }
+            Matchmaker.opponentFor(l, 1500.0, rng, among = near)?.let { return friendly(ANCHOR to it, rng, CALIBRATION_LABEL) }
+        }
         // AI 연구소: up to half the workers on the experiment, alongside the league; a single
         // worker plays the two by turns.
         val labCap = speed.threads(cores) / 2
@@ -984,7 +990,8 @@ class LeagueController(
         saveAsync()
     }
 
-    private fun friendly(pair: Pair<String, String>, rng: Random) = Fixture(Comp.FRIENDLY, -1, pair.first, pair.second, rng.nextLong())
+    private fun friendly(pair: Pair<String, String>, rng: Random, label: String = "") =
+        Fixture(Comp.FRIENDLY, -1, pair.first, pair.second, rng.nextLong(), label = label)
 
     /**
      * A job that failed twice (it would fail the same way every time: the deal is fixed): settled
@@ -1306,7 +1313,7 @@ class LeagueController(
         pendingPlayers = players
         rebuildRoster()
         val w = LeagueWorld(ladder ?: Ladder(ladderKeys()), config).also { it.players = players }
-        if (w.ladder.keys != ladderKeys()) w.ladder = Ladder.decode(ladderKeys(), w.ladder.encode())
+        if (w.ladder.keys != ladderKeys()) w.ladder = w.ladder.rekey(ladderKeys())
         world = w
         pendingPlayers = null
         configureWorld(w)
@@ -2076,6 +2083,11 @@ class LeagueController(
         private const val CLUB_MOVES = 60
         private const val NEWS = 120
         private const val FRIENDLY_SHARE = 0.2
+
+        /** The rating scale's anchor (1500) and the share of jobs it plays as 기준 경기. */
+        private const val ANCHOR = "ev"
+        private const val CALIBRATION_SHARE = 0.02
+        private const val CALIBRATION_LABEL = "기준 경기"
         private const val FRIENDLY_RUSH = 0.6
 
         /** Errors in a row after which the league stops and says why. */
