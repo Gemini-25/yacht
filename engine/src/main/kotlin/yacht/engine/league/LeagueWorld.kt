@@ -341,7 +341,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         // Everyone a year older plays a little differently: their old results count half from
         // now on, so ratings follow who they are (careers and head-to-heads stay).
         if (config.aging) runCatching {
-            ladder.decay(players.alive.filter { it.born <= p.number }.map { it.key }.toSet(), RATING_FADE, p.number)
+            // Not those forever in their prime: they play as they did.
+            ladder.decay(players.alive.filter { it.born <= p.number && !it.keep }.map { it.key }.toSet(), RATING_FADE, p.number)
             ladder.fit()
         }
         val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging

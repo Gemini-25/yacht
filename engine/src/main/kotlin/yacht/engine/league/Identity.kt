@@ -91,7 +91,8 @@ data class Tendencies(val bold: Int, val side: Int, val yacht: Int, val zero: In
  * the age at its debut ([debutAge]: age = debutAge + season - born), its [abilities] and
  * [potential] (the ceiling young players grow toward), the temper a low 멘탈 brings
  * ([temperKind], never NONE) and whether its mistakes are by feel ([feel]); [peakAbl] are the
- * abilities of its best season, [lastAbl] those at the start of this season (the ▲▼ arrows).
+ * abilities of its best season, [lastAbl] those at the start of this season (the ▲▼ arrows);
+ * [fixedAge] holds the age of a player forever in its prime (영원히 현역) whatever the season.
  * Saved as `name=value` tokens on its roster line, which older versions ignore.
  */
 data class Identity(
@@ -104,8 +105,12 @@ data class Identity(
     val feel: Boolean,
     val peakAbl: Abilities? = null,
     val lastAbl: Abilities? = null,
+    val fixedAge: Int? = null,
 ) {
-    fun age(season: Int, born: Int): Int = debutAge + (season - born)
+    fun age(season: Int, born: Int): Int = fixedAge ?: (debutAge + (season - born))
+
+    /** The debut age that gives age [age] in [season] as seasons go by (no fixed age). */
+    fun aging(age: Int, season: Int, born: Int): Identity = copy(debutAge = age - (season - born), fixedAge = null)
 
     fun tokens(): String = buildString {
         append("nat=").append(nation).append(" sex=").append(gender.code).append(" da=").append(debutAge)
@@ -113,6 +118,7 @@ data class Identity(
         append(" tk=").append(temperKind.name).append(" mk=").append(if (feel) 'F' else 'S')
         peakAbl?.let { append(" pka=").append(it.encode()) }
         lastAbl?.let { append(" pab=").append(it.encode()) }
+        fixedAge?.let { append(" fa=").append(it) }
     }
 
     companion object {
@@ -133,6 +139,7 @@ data class Identity(
                 t["mk"] == "F",
                 t["pka"]?.let { Abilities.decode(it) },
                 t["pab"]?.let { Abilities.decode(it) },
+                t["fa"]?.toIntOrNull(),
             )
         }.getOrNull()
     }

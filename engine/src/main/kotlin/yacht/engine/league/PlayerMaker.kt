@@ -33,10 +33,17 @@ data class PlayerDraft(
 /** Making and remaking players from drafts. */
 object PlayerMaker {
     const val MIN_AGE = 16
+
+    /** The oldest a player may be made: 45 forever in its prime, else under [Profiles.MAX_AGE] (when all retire). */
     const val MAX_AGE = 45
     const val NAME_LENGTH = 20
-    const val MIN_K = 0.7
-    const val MAX_K = 1.7
+
+    /** Intensity range, as wide as the league's own (a learned rule leaves 0.6, reform up to 1.8). */
+    const val MIN_K = 0.6
+    const val MAX_K = 1.8
+
+    /** The oldest age a player that ages may have: it would retire at the first season's end from [Profiles.MAX_AGE]. */
+    fun maxAge(keep: Boolean): Int = if (keep) MAX_AGE else Profiles.MAX_AGE - 1
 
     /** A chameleon's styles of the day when it was made without any. */
     val MOODS = listOf("hunter", "purist", "straight")
@@ -71,6 +78,7 @@ object PlayerMaker {
             name.length > NAME_LENGTH -> "이름은 ${NAME_LENGTH}자까지예요."
             name in taken -> "같은 이름의 선수가 이미 있어요."
             Nations.of(draft.nation) == null -> "국적을 골라 주세요."
+            draft.age > maxAge(draft.keep) -> "${Profiles.MAX_AGE}세가 넘으면 바로 은퇴해요. 더 많은 나이는 ‘영원히 현역’을 켜야 정할 수 있어요."
             PlayStyles.recipe(draft.play.primary) == null -> "주 유형을 골라 주세요."
             else -> null
         }
@@ -78,35 +86,49 @@ object PlayerMaker {
 
     /**
      * The record of [draft] under [key], debuting in [season] (or, remade from [old], keeping its
-     * debut, parents, peak and best abilities): its identity with the age now, the style with its
+     * debut, parents, peak and best abilities, and what of its style the draft did not change):
+     * its identity with the age now (fixed when it is kept in its prime), the style with its
      * abilities applied ([Profiles.apply]).
      */
     fun build(draft: PlayerDraft, key: String, season: Int, old: PlayerRecord?): PlayerRecord {
         val born = old?.born ?: season
-        val age = draft.age.coerceIn(MIN_AGE, MAX_AGE)
+        val age = draft.age.coerceIn(MIN_AGE, maxAge(draft.keep))
         val abilities = Abilities.of(draft.abilities.toList().map { it.coerceIn(1, 99) })
         val nation = Nations.of(draft.nation)?.code ?: Nations.KR.code
+        val was = old?.identity
+        // New abilities start this season's ▲▼ from themselves (an edit is no growth).
+        val last = if (was == null || was.abilities == abilities) was?.lastAbl else abilities
         val id = Identity(
             nation, draft.gender, age - (season - born), abilities, draft.potential.coerceIn(1, 99),
             draft.temper.takeIf { it != Temper.NONE } ?: Temper.TILT, draft.feel,
-            old?.identity?.peakAbl, old?.identity?.lastAbl,
+            was?.peakAbl, last, if (draft.keep) age else null,
         )
         val g = draft.play
+        val before = old?.spec?.play
         val recipe = PlayStyles.recipe(g.primary) ?: PlayStyles.recipe("ev")!!
+        // An intensity left as it was stays exactly (a learned rule's 0.6, say); a changed one is held to the range.
+        val k = when {
+            !recipe.scales -> 1.0
+            before != null && before.primary == recipe.key && g.k == before.k -> g.k
+            else -> PlayerGenerator.round(g.k.coerceIn(MIN_K, MAX_K), 2)
+        }
         val gene = g.copy(
             primary = recipe.key,
-            k = if (recipe.scales) PlayerGenerator.round(g.k.coerceIn(MIN_K, MAX_K), 2) else 1.0,
+            k = k,
             secondary = g.secondary?.takeIf { it != recipe.key && PlayStyles.recipe(it) != null },
             overlay = g.overlay?.takeIf { PlayStyles.overlay(it) != null },
             moods = if (g.overlay == "chameleon") g.moods.ifEmpty { MOODS } else emptyList(),
-            v = PlayGene.V2,
+            // A remade player keeps its genes' version (the same style plays the same); a new one is v2.
+            v = before?.v ?: PlayGene.V2,
         )
         val name = draft.name.trim().take(NAME_LENGTH)
-        val spec = Profiles.apply((old?.spec ?: CustomAiSpec(key, name)).copy(id = key, name = name, play = gene), id)
+        // A player from before styles (no genes) starts from a plain spec, not its old rules.
+        val base = old?.spec?.takeIf { before != null } ?: CustomAiSpec(key, name)
+        val spec = Profiles.apply(base.copy(id = key, name = name, play = gene), id)
         val origin = old?.origin ?: Origin.CREATED
         return PlayerRecord(
             key, name, draft.hometown.trim().ifEmpty { Nations.of(nation)?.cities?.names?.firstOrNull() ?: "" }, origin, born,
-            old?.parentA, old?.parentB, spec, old?.peak ?: Double.NaN, id, draft.keep,
+            old?.parentA, old?.parentB, spec, old?.peak ?: Double.NaN, id, draft.keep, old?.leaving ?: false,
         )
     }
 

@@ -917,18 +917,19 @@ class LeagueController(
 
     /**
      * Next season's AIs: everyone but me, or only the AIs with mistakes (대혼돈), or the best
-     * rated (강자만); my own AIs always play.
+     * rated (강자만); my own AIs and the players I made always play.
      */
     private fun members(w: LeagueWorld, c: LeagueConfig): List<String> {
+        val made = { k: String -> w.players[k]?.origin == Origin.CREATED }
         var keys = roster.filter { ai ->
             val player = w.players[ai.key]
             // No generated players asked for: the book's players sit out (they stay on the ladder).
             // The hand-made AIs play only when asked (they stay for ranked games and the lab).
-            (player == null || c.generated > 0) && (c.baseAis || Origin.of(ai.key) != Origin.BASE) &&
+            made(ai.key) || (player == null || c.generated > 0) && (c.baseAis || Origin.of(ai.key) != Origin.BASE) &&
                 (!c.onlyFlawed || ai.family == Family.MINE || ai.family in LeagueWorld.FLAWED || player?.spec?.flawed == true)
         }.map { it.key }
         if (c.onlyTop > 0) {
-            val mine = keys.filter { byKey[it]?.family == Family.MINE }
+            val mine = keys.filter { byKey[it]?.family == Family.MINE || made(it) }
             keys = (keys.filter { it !in mine }.sortedByDescending { w.rating(it) }.take(c.onlyTop) + mine)
         }
         return keys
@@ -1008,11 +1009,23 @@ class LeagueController(
         PlayerMaker.of(p, seasonNow(w))
     }
 
+    /** [draftOf] off the main thread (the lock may be held by a season's close for a while). */
+    suspend fun loadDraft(key: String): PlayerDraft? = withContext(Dispatchers.Default) { draftOf(key) }
+
+    /** True when made player [key] retires at this season's end (은퇴시키기). */
+    fun isLeaving(key: String): Boolean = synchronized(lock) { world?.players?.get(key)?.leaving == true }
+
     /** A drawn player to start from (🎲 무작위), named apart from everyone. */
     fun randomDraft(): PlayerDraft {
         val taken = synchronized(lock) { world?.players?.names().orEmpty() }
         return PlayerMaker.random(java.util.Random(), taken)
     }
+
+    /** [randomDraft] off the main thread. */
+    suspend fun drawDraft(): PlayerDraft = withContext(Dispatchers.Default) { randomDraft() }
+
+    /** [savePlayer] off the main thread. */
+    suspend fun storePlayer(key: String?, draft: PlayerDraft): String? = withContext(Dispatchers.Default) { savePlayer(key, draft) }
 
     /**
      * Saves [draft]: a new league player ([key] null), or [key] remade (its records stay). It
@@ -1032,12 +1045,18 @@ class LeagueController(
         return null
     }
 
-    /** Takes a player I made out of the league for good (its past results stay under its key). */
-    fun deletePlayer(key: String) {
-        val removed = synchronized(lock) { world?.players?.remove(key) == true }
-        if (!removed) return
-        rosterChanged()
-        scope.launch { save() }
+    /**
+     * Lets made player [key] go ([on], 은퇴시키기) or keeps it after all: it plays the season out
+     * (its national team and club keep it) and retires at its end, its records kept. Off the
+     * main thread; false when it is not a made player in the league.
+     */
+    suspend fun retirePlayer(key: String, on: Boolean = true): Boolean = withContext(Dispatchers.Default) {
+        val done = synchronized(lock) { world?.players?.leave(key, on) == true }
+        if (done) {
+            save()
+            publish(force = true)
+        }
+        done
     }
 
     private fun persistCustoms() {
@@ -1655,8 +1674,12 @@ class LeagueController(
         runJob = scope.launch {
             previous?.join()
             withContext(rosterWork) {
-                // Fresh generated players too (the evolved ones go).
-                val players = PlayerBook(baseRoster.map { it.name }).apply { ensureGenerated(config.generated) }
+                // Fresh generated players too (the evolved ones go); the players I made stay, as new.
+                val made = synchronized(lock) { world?.let { w -> Triple(w.players.alive.filter { it.origin == Origin.CREATED }, seasonNow(w), w.players.madeNext) } }
+                val players = PlayerBook(baseRoster.map { it.name }).apply {
+                    made?.let { (list, season, next) -> adopt(list, season, next) }
+                    ensureGenerated(config.generated)
+                }
                 synchronized(lock) { renew(players) }
             }
             withContext(fileWrites) {
@@ -2236,7 +2259,8 @@ class LeagueController(
         val members = w.members.toSet()
         return IdentityView(
             nat.flag, code, nat.name, (id?.gender ?: past?.gender)?.label ?: "", age, age?.let { yacht.engine.league.Profiles.stage(it) }.takeIf { alive != null },
-            id?.debutAge ?: past?.debutAge?.takeIf { it > 0 },
+            // A fixed age (영원히 현역) leaves no meaningful debut age.
+            id?.takeIf { it.fixedAge == null }?.debutAge ?: past?.debutAge?.takeIf { it > 0 },
             nickname = record?.let { yacht.engine.league.Nicknames.of(it, honours, season) },
             abilities = id?.abilities?.toList(),
             change = if (alive != null && id != null) id.abilities.diff(id.lastAbl) else emptyList(),

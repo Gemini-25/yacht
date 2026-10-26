@@ -85,8 +85,92 @@ class PlayerMakerTest {
         assertEquals(39, still.age(7))
         assertEquals(old.identity!!.abilities, still.identity!!.abilities)
         assertTrue(still.keep)
+        // Its age is fixed (the debut age does not drift) and nothing changed since the season began.
+        assertEquals(39, still.identity!!.fixedAge)
+        assertEquals(old.identity!!.debutAge, still.identity!!.debutAge)
+        assertEquals(still.identity!!.abilities, still.identity!!.lastAbl)
         // Without it, 39 is near the end (retired by 41 at the latest).
         assertNull(book[aging.key])
+        // Read back: the same; a 영원히 현역 line from before fixed ages gets its age now.
+        val back = PlayerBook.decode(book.encode())
+        assertEquals(still, back[old.key])
+        // (Then its debut age moved back a year each season: six here.)
+        val legacy = book.encode().lines().joinToString("\n") { l ->
+            if (!l.startsWith("ai ${old.key} ")) l else l.replace(Regex(" fa=\\d+"), "").replace(Regex(" da=(\\d+)")) { m -> " da=${m.groupValues[1].toInt() - 6}" }
+        }
+        assertEquals(39, PlayerBook.decode(legacy)[old.key]!!.age(7))
+    }
+
+    @Test
+    fun fortyAndOverOnlyForeverInItsPrime() {
+        assertEquals(39, PlayerMaker.maxAge(false))
+        assertEquals(PlayerMaker.MAX_AGE, PlayerMaker.maxAge(true))
+        assertNotNull(PlayerMaker.problem(draft().copy(age = 40), emptySet()))
+        assertNull(PlayerMaker.problem(draft().copy(age = 45, keep = true), emptySet()))
+        // A made 39-year-old plays its season: it is not let go before it began.
+        assertEquals(39, PlayerMaker.build(draft().copy(age = 44), "u9", 2, null).age(2))
+    }
+
+    @Test
+    fun aPlayerLetGoRetiresAtTheSeasonsEndAndKeepsItsRecord() {
+        val book = PlayerBook().apply { ensureGenerated(60) }
+        val made = book.make(draft().copy(keep = true), 2)
+        assertTrue(book.leave(made.key))
+        assertTrue(PlayerBook.decode(book.encode())[made.key]!!.leaving)
+        // Only made players can be let go; it plays on until the close.
+        assertFalse(book.leave(book.alive.first { it.origin == Origin.GENERATED }.key))
+        assertNotNull(book[made.key])
+        Evolution.run(book, 2, { 1500.0 }, { 0 }, 7L, 60)
+        assertNull(book[made.key])
+        val r = book.retired.single { it.key == made.key }
+        assertEquals(2, r.retired)
+        assertEquals(24, r.retiredAge)
+        // Changed its mind: it stays.
+        val other = book.make(draft().copy(name = "다른 선수"), 3)
+        assertTrue(book.leave(other.key) && book.leave(other.key, on = false))
+        Evolution.run(book, 3, { 1500.0 }, { 0 }, 8L, 60)
+        assertNotNull(book[other.key])
+    }
+
+    @Test
+    fun remakingKeepsTheGenesItDoesNotChange() {
+        val book = PlayerBook().apply { ensureGenerated(10) }
+        val p = book.alive.first()
+        // An older player: genes v1, a learned rule's intensity 0.6.
+        val oldGene = p.spec.play!!.copy(primary = "hunter", k = 0.6, v = 1)
+        book.update(p.copy(spec = p.spec.copy(play = oldGene)))
+        val e = assertNotNull(book.edit(p.key, PlayerMaker.of(book[p.key]!!, 3).copy(name = "새 이름"), 3))
+        assertEquals(1, e.spec.play!!.v)
+        assertEquals(0.6, e.spec.play!!.k, 1e-9)
+        // A changed intensity is held to the league's range.
+        val f = assertNotNull(book.edit(p.key, PlayerMaker.of(e, 3).let { it.copy(play = it.play.copy(k = 2.5)) }, 3))
+        assertEquals(PlayerMaker.MAX_K, f.spec.play!!.k, 1e-9)
+        // New abilities start this season's ▲▼ from themselves.
+        val g = assertNotNull(book.edit(p.key, PlayerMaker.of(f, 3).copy(abilities = Abilities(90, 90, 90, 90)), 3))
+        assertEquals(Abilities(90, 90, 90, 90), g.identity!!.lastAbl)
+    }
+
+    @Test
+    fun madePlayersComeAlongToANewLeagueAndReadBackAsMade() {
+        val book = PlayerBook().apply { ensureGenerated(20) }
+        val a = book.make(draft(), 4)
+        val b = book.make(draft().copy(name = "영원한 선수", keep = true, age = 42), 4)
+        book.leave(b.key)
+        // Written as generated for older versions, read back as made by its key.
+        assertTrue(book.encode().lines().first { it.startsWith("ai ${a.key} ") }.contains(" GENERATED "))
+        assertEquals(Origin.CREATED, PlayerBook.decode(book.encode())[a.key]!!.origin)
+        val fresh = PlayerBook().apply {
+            adopt(book.alive.filter { it.origin == Origin.CREATED }, 6, book.madeNext)
+            ensureGenerated(20)
+        }
+        val a2 = assertNotNull(fresh[a.key])
+        assertEquals(1, a2.born)
+        assertEquals(a.age(6), a2.age(1))
+        assertEquals(a.identity!!.abilities, a2.identity!!.abilities)
+        assertEquals(42, fresh[b.key]!!.age(1))
+        assertFalse(fresh[b.key]!!.leaving)
+        assertEquals(20, fresh.alive.size)
+        assertEquals("u3", fresh.make(draft().copy(name = "셋째"), 1).key)
     }
 
     @Test

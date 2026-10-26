@@ -30,9 +30,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +55,7 @@ import yacht.engine.league.PlayerMaker
 import yacht.engine.league.Profiles
 import yacht.engine.league.Temper
 import yacht.engine.league.Tendencies
+import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -66,13 +69,40 @@ fun PlayerMakerScreen(c: AppController) {
     val lg = c.league
     val key = c.editingPlayer
     // A new player starts drawn (every field already sensible); an edited one from what it is.
-    var d by remember(key) { mutableStateOf(key?.let { lg.draftOf(it) } ?: lg.randomDraft()) }
+    // Both come off the main thread: the league's lock may be held by a season's close.
+    var loaded by remember(key) { mutableStateOf<PlayerDraft?>(null) }
+    var gone by remember(key) { mutableStateOf(false) }
+    var leaving by remember(key) { mutableStateOf(false) }
+    var busy by remember(key) { mutableStateOf(false) }
     var problem by remember(key) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(key) {
+        if (key == null) loaded = lg.drawDraft()
+        else {
+            val x = lg.loadDraft(key)
+            if (x == null) gone = true else loaded = x
+            leaving = x != null && kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { lg.isLeaving(key) }
+        }
+    }
     val made = key != null && Origin.of(key) == Origin.CREATED
     val cs = MaterialTheme.colorScheme
     fun close() {
         c.editingPlayer = null
         c.screen = Screen.LEAGUE
+    }
+    val draft = loaded
+    if (draft == null) {
+        Scaffold(containerColor = cs.background) { pad ->
+            Column(Modifier.padding(pad).fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(if (gone) "이 선수는 이제 리그에 없어요." else "불러오는 중…", style = MaterialTheme.typography.bodyLarge)
+                if (gone) OutlinedButton(onClick = { close() }) { Text("리그로") }
+            }
+        }
+        return
+    }
+    val d = draft
+    fun set(x: PlayerDraft) {
+        loaded = x
     }
     Scaffold(
         containerColor = cs.background,
@@ -91,60 +121,66 @@ fun PlayerMakerScreen(c: AppController) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = d.name,
-                    onValueChange = { d = d.copy(name = it.take(PlayerMaker.NAME_LENGTH)) },
+                    onValueChange = { set(d.copy(name = it.take(PlayerMaker.NAME_LENGTH))) },
                     label = { Text("이름") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                 )
-                if (key == null) TextButton(onClick = { d = lg.randomDraft() }) { Text("🎲 무작위") }
+                if (key == null) TextButton(onClick = { scope.launch { set(lg.drawDraft()) } }) { Text("🎲 무작위") }
             }
-            Pick(Gender.entries.map { it to it.label }, d.gender) { d = d.copy(gender = it) }
+            Pick(Gender.entries.map { it to it.label }, d.gender) { set(d.copy(gender = it)) }
 
             Title("국적")
             for (confed in Confed.entries) {
                 val nations = Nations.ALL.filter { it.confed == confed }
                 Pick(nations.map { it.code to "${it.flag} ${it.short}" }, d.nation) { code ->
                     val n = Nations.of(code)
-                    // Its hometown follows the nation unless written by hand.
-                    val town = if (n != null && Nations.of(d.nation)?.cities?.names?.contains(d.hometown) != false) n.cities.names.first() else d.hometown
-                    d = d.copy(nation = code, hometown = town)
+                    // Its hometown follows the nation unless written by hand (the same nation again changes nothing).
+                    if (code != d.nation) {
+                        val town = if (n != null && Nations.of(d.nation)?.cities?.names?.contains(d.hometown) != false) n.cities.names.first() else d.hometown
+                        set(d.copy(nation = code, hometown = town))
+                    }
                 }
             }
             Title("고향")
             val cities = Nations.of(d.nation)?.cities?.names.orEmpty().take(CITIES)
-            Pick(cities.map { it to it }, d.hometown) { d = d.copy(hometown = it) }
+            Pick(cities.map { it to it }, d.hometown) { set(d.copy(hometown = it)) }
             OutlinedTextField(
                 value = d.hometown,
-                onValueChange = { d = d.copy(hometown = it.take(PlayerMaker.NAME_LENGTH)) },
+                onValueChange = { set(d.copy(hometown = it.take(PlayerMaker.NAME_LENGTH))) },
                 label = { Text("고향 (직접 적기)") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
 
             Title("나이")
-            Stepped("나이", d.age, PlayerMaker.MIN_AGE..PlayerMaker.MAX_AGE, { "${it}세 · ${Profiles.stage(it)}" }) { d = d.copy(age = it) }
-            Row(Modifier.fillMaxWidth().clickable { d = d.copy(keep = !d.keep) }, verticalAlignment = Alignment.CenterVertically) {
+            // 40 and up only forever in its prime: an aging player that old retires at once.
+            Stepped("나이", d.age, PlayerMaker.MIN_AGE..PlayerMaker.maxAge(d.keep), { "${it}세 · ${Profiles.stage(it)}" }) { set(d.copy(age = it)) }
+            fun keep(on: Boolean) = set(d.copy(keep = on, age = d.age.coerceAtMost(PlayerMaker.maxAge(on))))
+            Row(Modifier.fillMaxWidth().clickable { keep(!d.keep) }, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("영원히 현역", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        if (d.keep) "나이와 능력치가 그대로이고 은퇴하지 않아요." else "다른 선수처럼 해마다 나이를 먹고, 자라다가 기량이 떨어지면 은퇴해요.",
+                        if (d.keep) "나이와 능력치가 그대로이고 은퇴하지 않아요. ${PlayerMaker.MAX_AGE}세까지 정할 수 있어요."
+                        else "다른 선수처럼 해마다 나이를 먹고, 자라다가 기량이 떨어지면 은퇴해요. ${PlayerMaker.maxAge(false)}세까지 정할 수 있어요.",
                         style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                     )
                 }
-                Switch(checked = d.keep, onCheckedChange = { d = d.copy(keep = it) })
+                Switch(checked = d.keep, onCheckedChange = { keep(it) })
             }
 
             val abl = d.abilities.toList()
             Title("능력치 (1~99) · 종합 ${d.abilities.overall} ${abilityGrade(d.abilities.overall)}")
             for (i in abl.indices) {
                 Stepped(Abilities.LABELS[i], abl[i], 1..99, { "$it ${abilityGrade(it)}" }) { v ->
-                    d = d.copy(abilities = Abilities.of(abl.toMutableList().also { it[i] = v }))
+                    set(d.copy(abilities = Abilities.of(abl.toMutableList().also { it[i] = v })))
                 }
                 Text(Abilities.HELP[i], style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             }
-            Stepped("잠재력", d.potential, 1..99, { "$it ${abilityGrade(it)}" }) { d = d.copy(potential = it) }
+            Stepped("잠재력", d.potential, 1..99, { "$it ${abilityGrade(it)}" }) { set(d.copy(potential = it)) }
             Text(
-                "25세까지 이 값을 향해 자라요." + if (d.potential < d.abilities.overall) " 지금 종합보다 낮으면 더 자라지 않아요." else "",
+                if (d.keep) "영원히 현역이라 능력치가 그대로예요. 잠재력은 끄면 자라는 목표가 돼요."
+                else "25세까지 이 값을 향해 자라요." + if (d.potential < d.abilities.overall) " 지금 종합보다 낮으면 더 자라지 않아요." else "",
                 style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
             )
 
@@ -153,10 +189,10 @@ fun PlayerMakerScreen(c: AppController) {
             if (loss <= 0.0) {
                 Text("판단력이 ${Profiles.PERFECT} 이상이라 실수하지 않아요.", style = MaterialTheme.typography.bodySmall, color = gameColors.good)
             } else {
-                Pick(listOf(true to "🎲 감으로 두는 편", false to "🎯 가끔 실수"), d.feel) { d = d.copy(feel = it) }
+                Pick(listOf(true to "🎲 감으로 두는 편", false to "🎯 가끔 실수"), d.feel) { set(d.copy(feel = it)) }
                 Text(
                     (if (d.feel) "비슷한 수 사이에서 헷갈려요. " else "판단할 때마다 가끔 차선을 둬요. ") +
-                        "실수로 판마다 평균 ${String.format(Locale.ROOT, "%.0f", loss)}점쯤 잃어요.",
+                        "실수로 판마다 평균 ${String.format(Locale.ROOT, if (loss < 1) "%.1f" else "%.0f", loss)}점쯤 잃어요.",
                     style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
                 )
             }
@@ -164,25 +200,36 @@ fun PlayerMakerScreen(c: AppController) {
             if (d.abilities.mental >= Profiles.CALM) {
                 Text("멘탈이 ${Profiles.CALM} 이상이라 기질이 드러나지 않아요. 멘탈을 낮추면 아래 기질이 나와요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             }
-            Pick(Temper.entries.filter { it != Temper.NONE }.map { it to it.label }, d.temper) { d = d.copy(temper = it) }
+            Pick(Temper.entries.filter { it != Temper.NONE }.map { it to it.label }, d.temper) { set(d.copy(temper = it)) }
             Text(d.temper.desc + ".", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
 
-            StylePart(d) { d = it }
+            StylePart(d) { set(it) }
 
-            Preview(d)
+            Preview(d, editing = key != null)
 
             problem?.let { Text("⚠ $it", color = cs.error, style = MaterialTheme.typography.bodyMedium) }
+            if (made && leaving) {
+                Text("이번 시즌을 마치면 은퇴해요. 기록은 그대로 남아요.", style = MaterialTheme.typography.bodySmall, color = cs.error)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
-                Button(onClick = {
-                    problem = lg.savePlayer(key, d)
-                    if (problem == null) close()
+                Button(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        problem = lg.storePlayer(key, d)
+                        busy = false
+                        if (problem == null) close()
+                    }
                 }) { Text("저장") }
                 OutlinedButton(onClick = { close() }) { Text("취소") }
                 if (made) {
-                    OutlinedButton(onClick = {
-                        lg.deletePlayer(key!!)
-                        close()
-                    }) { Text("지우기") }
+                    // Let go at the season's end (its national team and club keep it until then).
+                    OutlinedButton(enabled = !busy, onClick = {
+                        busy = true
+                        scope.launch {
+                            if (lg.retirePlayer(key!!, !leaving)) leaving = !leaving else problem = "이 선수는 이제 리그에 없어요."
+                            busy = false
+                        }
+                    }) { Text(if (leaving) "은퇴 취소" else "은퇴시키기") }
                 }
             }
         }
@@ -240,14 +287,14 @@ private fun StylePart(d: PlayerDraft, onChange: (PlayerDraft) -> Unit) {
         Text("이 선수만의 습관", style = MaterialTheme.typography.bodyMedium)
         for (n in notes) Text("· $n", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         TextButton(onClick = {
-            onChange(d.copy(play = g.copy(taste = yacht.engine.league.Taste.NONE, margin = 0, ahead = null, behind = null, lateFrom = 0, late = null)))
+            onChange(d.copy(play = g.copy(taste = yacht.engine.league.Taste.NONE, margin = 0, ahead = null, behind = null, lateFrom = 0, late = null, far = false)))
         }) { Text("습관 지우기") }
     }
 }
 
-/** What the draft makes of the player: its tendencies, style and how it starts in the league. */
+/** What the draft makes of the player: its tendencies, style and how it starts in the league ([editing]: what stays). */
 @Composable
-private fun Preview(d: PlayerDraft) {
+private fun Preview(d: PlayerDraft, editing: Boolean) {
     val cs = MaterialTheme.colorScheme
     Card(colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -260,7 +307,8 @@ private fun Preview(d: PlayerDraft) {
             Text("🎨 ${d.play.label}", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
             TendencyBars(Tendencies.of(d.play.style()).toList())
             Text(
-                "저장하면 리그에 들어와요. 이번 시즌에는 친선전으로 레이팅을 쌓고, 다음 시즌 가장 낮은 부에서 시작해 승격으로 올라가요.",
+                if (editing) "저장해도 기록과 레이팅, 지금 부는 그대로예요. 다음 경기부터 바뀐 능력치와 스타일로 둬요."
+                else "저장하면 리그에 들어와요. 이번 시즌에는 친선전으로 레이팅을 쌓고, 다음 시즌 가장 낮은 부에서 시작해 승격으로 올라가요.",
                 style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer,
             )
         }

@@ -92,15 +92,24 @@ object Evolution {
         val pool = ranked.take((ranked.size + 1) / 2).mapNotNull { book[it.key] }
         val retired = ArrayList<String>()
         val learned = ArrayList<LeagueEvent>()
-        if (!aging) {
-            // Ages stand still while nobody ages (the debut age moves along with the seasons).
-            for (p in playing) p.identity?.let { id -> book[p.key]?.let { book.update(it.copy(identity = id.copy(debutAge = id.debutAge - 1))) } }
+        // Made players let go (은퇴시키기) retire now, whatever the rules: records stay, a legend when it won something.
+        for (p in book.alive.filter { it.leaving }) {
+            val t = titles(p.key)
+            val legend = t > 0 || hasHonour(p.key)
+            book.retire(p.key, season, t, rating(p.key), if (legend) summary(honours(p.key)) else null) ?: continue
+            retired += p.key
         }
-        // Players forever in their prime: their age stands still and they never retire.
-        if (aging) for (p in playing) if (p.keep) p.identity?.let { id -> book[p.key]?.let { book.update(it.copy(identity = id.copy(debutAge = id.debutAge - 1))) } }
+        if (!aging) {
+            // Ages stand still while nobody ages (the debut age moves along with the seasons; a
+            // fixed age stands still anyway). The record read now: earlier steps may have changed it.
+            for (p0 in playing) book[p0.key]?.let { r -> r.identity?.takeIf { it.fixedAge == null }?.let { id -> book.update(r.copy(identity = id.copy(debutAge = id.debutAge - 1))) } }
+        }
+        // Players forever in their prime keep their age (fixed) and abilities: nothing changed
+        // since the season began (no ▲▼, no growth news), and they never retire.
+        if (aging) for (p0 in playing) if (p0.keep) book[p0.key]?.let { r -> r.identity?.let { id -> if (id.lastAbl != id.abilities) book.update(r.copy(identity = id.copy(lastAbl = id.abilities))) } }
         if (aging) {
             for (p in playing) {
-                if (p.keep) continue
+                if (p.keep || p.key in retired) continue
                 val id = p.identity ?: continue
                 val age = id.age(season, p.born)
                 val r = Random(DiceStream.mix(seed, RETIRE_SALT, season.toLong(), p.key.hashCode().toLong()))

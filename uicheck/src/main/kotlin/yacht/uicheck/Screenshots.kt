@@ -293,13 +293,13 @@ private fun run(args: Array<String>) {
     // Making a league player, then editing it (its page and the maker on it).
     c.editingPlayer = null
     c.screen = Screen.MAKER
-    shot(c, out, "27_player_maker", heightDp = 3600)
+    shot(c, out, "27_player_maker", heightDp = 3600, settleMs = 1500)
     val draft = c.league.randomDraft().copy(name = "스크린샷 선수", nation = "SE", hometown = "스톡홀름", age = 22, keep = true)
     check(c.league.savePlayer(null, draft) == null) { "the made player was not saved" }
     waitFor("made player") { c.league.view?.rows?.any { it.name == "스크린샷 선수" } == true }
     val made = c.league.view!!.rows.first { it.name == "스크린샷 선수" }.key
     c.editingPlayer = made
-    shot(c, out, "28_player_maker_edit", heightDp = 1300)
+    shot(c, out, "28_player_maker_edit", heightDp = 1300, settleMs = 1500)
     c.editingPlayer = null
 
     c.screen = Screen.VERIFY
@@ -334,13 +334,19 @@ private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean)
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
-private fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850) {
+/** [settleMs]: real time for a screen that loads its data off the main thread before the picture. */
+private fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850, settleMs: Long = 0) {
     Thread.sleep(200)
     val density = 2f
     val scene = ImageComposeScene(width = (392 * density).toInt(), height = (heightDp * density).toInt(), density = Density(density)) {
         YachtTheme(dark = dark) { AppRoot(c) }
     }
     scene.render(0)
+    if (settleMs > 0) {
+        Thread.sleep(settleMs)
+        scene.render(1_000_000_000L)
+        Thread.sleep(100)
+    }
     val image = scene.render(2_000_000_000L)
     File(out, "$name.png").writeBytes(image.encodeToData(EncodedImageFormat.PNG)!!.bytes)
     val jpeg = image.encodeToData(EncodedImageFormat.JPEG, 72)!!.bytes
