@@ -369,4 +369,45 @@ class LeagueWorldTest {
         back.openSeason()
         assertEquals(clubsAfter, back.clubs!!.encode())
     }
+
+    @Test
+    fun aReplayWithChangedRulesKeepsClubsInTheLeague() {
+        // (rules at the first close, rules at the replay, the replay's members)
+        // 14 clubs of 5: every AI (40 base, 30 generated) is in a squad, retirees included.
+        val start = LeagueConfig(divisions = 3, generated = 30, evolution = 0, clubs = 14, squad = 5)
+        val scenarios = listOf<Triple<LeagueConfig, LeagueConfig, (LeagueWorld) -> List<String>>>(
+            Triple(start, start.copy(evolution = 3), { w -> base + w.players.alive.map { it.key } }),
+            Triple(start.copy(evolution = 4), start.copy(evolution = 4, generated = 0), { _ -> base }),
+        )
+        for ((i, sc) in scenarios.withIndex()) {
+            val (firstRules, replayRules, membersOf) = sc
+            val w = world(firstRules)
+            w.openFirstSeason(41L + i)
+            season(w)
+            rollover(w)
+            season(w)
+            w.ladder.fit()
+            val before = w.encodeFiles()
+            rollover(w)
+            val after = w.encodeFiles()
+            val order = after.keys.toList()
+            for (k in 0 until order.size - 1) {
+                val mixed = before + order.take(k).associateWith { after.getValue(it) }
+                val players = yacht.engine.league.PlayerBook.decode(mixed.getValue(LeagueWorld.ROSTER), emptyList())
+                val keys = base + players.alive.map { it.key } + Ladder.ME
+                val back = LeagueWorld.decode(mixed, keys, emptyList())
+                back.config = replayRules
+                back.family = w.family
+                back.members = membersOf(back)
+                back.present = { it in keys }
+                back.ladder.fit()
+                back.closeSeason()
+                back.members = membersOf(back)
+                back.ladder = Ladder.decode(base + back.players.alive.map { it.key } + Ladder.ME, back.ladder.encode())
+                back.openSeason()
+                val inLeague = back.members.toSet()
+                for (c in back.clubs!!.clubs) assertTrue(inLeague.containsAll(c.squad), "scenario $i, k $k: ${c.id} ${c.squad - inLeague}")
+            }
+        }
+    }
 }

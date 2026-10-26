@@ -228,7 +228,7 @@ class ClubBook private constructor(
         squad: Int,
         seed: Long,
     ): List<LeagueEvent> {
-        if (season == this.season && (lastSeed == null || lastSeed == seed)) return replay(season)
+        if (season == this.season && (lastSeed == null || lastSeed == seed)) return again(season, table, rating, alive, clubs, squad)
         if (season <= this.season) moves.removeAll { it.season >= season }
         val final = table.distinct()
         for ((i, id) in final.withIndex()) entry(id)?.let { it.budget += prize(i + 1) }
@@ -266,6 +266,32 @@ class ClubBook private constructor(
         val table = (plan.competition(Comp.CLUB) as? ClubLeague)?.order().orEmpty()
         val honours = (plan.comps + plan.post).flatMap { c -> runCatching { c.honours() }.getOrDefault(emptyList()) }
         return offseason(plan.number, table, honours, rating, alive, config.clubs, config.squad, plan.seed)
+    }
+
+    /**
+     * An off-season already applied, asked for again (a close replayed after the app was
+     * killed): its news from the history. Members no longer in the league ([alive]: the rules
+     * changed before the replay) leave, and the draft fills their places, so squads hold only
+     * AIs of the league; with the same members nothing changes.
+     */
+    private fun again(season: Int, table: List<String>, rating: (String) -> Double, alive: Set<String>, clubs: Int, squad: Int): List<LeagueEvent> {
+        val events = replay(season).toMutableList()
+        var left = false
+        for (e in entries) {
+            val gone = e.squad.filter { it !in alive }
+            if (gone.isEmpty()) continue
+            left = true
+            e.squad.removeAll(gone.toSet())
+            for (k in gone) log(ClubMove(season, ClubMoveKind.RETIRED, k, e.id, null))
+        }
+        if (!left) return events
+        reindex()
+        if (clubs > 0) {
+            val place = table.distinct().withIndex().associate { it.value to it.index }
+            draft(season, place, ratingOrder(rating), alive, squad, events)
+        }
+        trim()
+        return events
     }
 
     /** The news of an off-season already applied, from the history (as far as it reaches back). */

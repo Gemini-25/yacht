@@ -241,9 +241,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             // A book below the configured size (generated players switched on again, nobody to
             // breed from): the next generated players come in.
             if (players.size < config.generated && players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) changed = true
-        } else if (players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) {
+        } else {
+            // No evolution this season, and none on a replay of this close either (the rules
+            // may change before a replay after a kill).
+            players.evolvedSeason = maxOf(players.evolvedSeason, p.number)
             // Without evolution, a raised setting brings in the next generated players.
-            changed = true
+            if (players.ensureGenerated(config.generated, p.number + 1).isNotEmpty()) changed = true
         }
         note(out)
         return Closing(p.number, h + end?.awards.orEmpty(), out, changed)
