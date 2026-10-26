@@ -20,6 +20,9 @@ object Evolution {
     /** Chance of each part of a pupil's style changing a little. */
     const val MUTATION = 0.15
 
+    /** At most this share of a season's pupils take up the same main style; the rest draw their own. */
+    const val PUPIL_CAP = 0.1
+
     /** Draws of a pupil before [run] gives up on one its `accept` refuses. */
     const val TRIES = 20
 
@@ -125,6 +128,11 @@ object Evolution {
             val pupils = if (pool.isEmpty()) 0 else Math.round(wanted * childShare.coerceIn(0.0, 1.0)).toInt()
             val taken = book.names().toMutableSet()
             val counts = book.nationCounts().toMutableMap()
+            val genes = book.geneSet()
+            // A main style may not take more than its share of the season's pupils (drift would narrow the league).
+            val styles = HashMap<String, Int>()
+            val cap = maxOf(2, Math.ceil(PUPIL_CAP * pupils).toInt())
+            val capped = { primary: String -> (styles[primary] ?: 0) >= cap }
             var n = 0
             repeat(pupils) {
                 var child: PlayerRecord? = null
@@ -137,7 +145,7 @@ object Evolution {
                         compatriots.size >= 2 && rng.nextBoolean() -> tournament(compatriots, rng)
                         else -> tournament(others, rng)
                     }
-                    val c = pupil("e${season}_${n + 1}", season, a, b, rng, taken, counts, book.size + n, meta)
+                    val c = pupil("e${season}_${n + 1}", season, a, b, rng, taken, counts, book.size + n, meta, genes, capped)
                     if (accept(c.spec)) {
                         child = c
                         break
@@ -148,6 +156,10 @@ object Evolution {
                     n++
                     taken += c.name
                     counts.merge(c.identity!!.nation, 1, Int::plus)
+                    c.spec.play?.let { g ->
+                        genes += g.encode()
+                        styles.merge(g.primary, 1, Int::plus)
+                    }
                 }
             }
             book.ensureGenerated(population, season + 1, meta = meta, founding = false, accept = accept)
@@ -235,7 +247,8 @@ object Evolution {
      * A pupil of [a] (its main mentor) and [b]: a nation from A (55%), B (35%) or the league's
      * least represented ones, a city, a name of that nation, a potential halfway from the
      * league's usual toward its mentors', and
-     * a style from A (50%), B (30%) or of its own ([crossPlay]).
+     * a style from A (50%), B (30%) or of its own ([crossPlay]; [capped] main styles are not
+     * taken up), never equal to an [alive] player's genes (its tastes change again).
      */
     fun pupil(
         key: String,
@@ -247,6 +260,8 @@ object Evolution {
         counts: Map<String, Int>,
         total: Int,
         meta: Map<String, Double> = emptyMap(),
+        alive: Set<String> = emptySet(),
+        capped: (String) -> Boolean = { false },
     ): PlayerRecord {
         val ia = a.identity ?: Profiles.legacy(a, season)
         val ib = b.identity ?: Profiles.legacy(b, season)
@@ -268,39 +283,96 @@ object Evolution {
             nation.code, gender, age, Profiles.drawAbilities(rng, key, age, potential, school.bias), potential,
             if (rng.nextBoolean()) ia.temperKind else ib.temperKind, if (rng.nextBoolean()) ia.feel else ib.feel,
         )
-        val gene = crossPlay(a.spec.play, b.spec.play, rng, potential, school, meta)
-        val spec = Profiles.apply(CustomAiSpec(key, name, play = gene), id)
+        var spec = Profiles.apply(CustomAiSpec(key, name, play = crossPlay(a.spec.play, b.spec.play, rng, potential, school, meta, capped)), id)
+        var redraws = 0
+        while (spec.play!!.encode() in alive && redraws++ < PlayerGenerator.REDRAWS) {
+            val g = spec.play!!
+            spec = spec.copy(play = g.copy(taste = mutate(g.taste, PlayerGenerator.taste(rng, PlayerGenerator.Tier.of(potential)), rng)))
+        }
         return PlayerRecord(key, name, town, Origin.EVOLVED, season + 1, a.key, b.key, spec, identity = id)
     }
 
     /**
-     * A pupil's style: [a]'s (50%), [b]'s (30%) or one of its own (20%, as a rookie of
-     * [potential] from [school] would draw it); 30% of the time the other mentor's main style
-     * comes along as its second one, half the time the other's overlay; then each of intensity,
-     * second style and overlay changes with chance [MUTATION].
+     * A pupil's style ([PlayGene.V2]): [a]'s main style and intensity exactly (50%), [b]'s (30%)
+     * or one of its own (20%, as a rookie of [potential] from [school] would draw it; also when the
+     * mentor's main style is [capped] this season); 30% of the time the other mentor's main style
+     * comes along as its second one, half the time the other's overlay; then the second style and
+     * the overlay change with chance [MUTATION] each. Its tastes, score reading, late phase and
+     * far sight are its style mentor's (its own when that mentor's genes are older), and its
+     * tastes always change a little ([mutate]).
      */
-    fun crossPlay(a: PlayGene?, b: PlayGene?, rng: Random, potential: Int, school: School, meta: Map<String, Double> = emptyMap()): PlayGene {
+    fun crossPlay(
+        a: PlayGene?,
+        b: PlayGene?,
+        rng: Random,
+        potential: Int,
+        school: School,
+        meta: Map<String, Double> = emptyMap(),
+        capped: (String) -> Boolean = { false },
+    ): PlayGene {
         val ga = a ?: PlayGene("ev")
         val gb = b ?: ga
         val own = PlayerGenerator.style(rng, potential, school, meta)
         val u = rng.nextDouble()
-        val base = when {
+        var base = when {
             u < 0.5 -> ga
             u < 0.8 -> gb
             else -> own
         }
+        if (base !== own && capped(base.primary)) base = own
         val other = if (base === ga) gb else ga
-        var g = base.copy(future = 1.0, sense = 0.0)
+        // A mentor of an older generation passes on its style, not its (absent) newer genes.
+        val heir = if (base.v >= PlayGene.V2) base else own
+        var g = base.copy(
+            future = 1.0, sense = 0.0, v = PlayGene.V2, far = heir.far,
+            margin = heir.margin, ahead = heir.ahead, behind = heir.behind, lateFrom = heir.lateFrom, late = heir.late,
+        )
         if (rng.nextDouble() < 0.3 && other.primary != g.primary && PlayStyles.recipe(other.primary)?.scales == true && other.primary != "ev") {
             g = g.copy(secondary = other.primary)
         }
         if (rng.nextDouble() < 0.5) g = g.copy(overlay = other.overlay, moods = other.moods)
-        if (rng.nextDouble() < MUTATION && PlayStyles.recipe(g.primary)?.scales == true) {
-            g = g.copy(k = PlayerGenerator.round((g.k * Math.exp(PlayerGenerator.uniform(rng, -0.25, 0.25))).coerceIn(0.5, 2.0), 2))
-        }
         if (rng.nextDouble() < MUTATION) g = g.copy(secondary = if (g.secondary == null) own.secondary else null)
         if (rng.nextDouble() < MUTATION) g = if (g.overlay == null) g.copy(overlay = own.overlay, moods = own.moods) else g.copy(overlay = null, moods = emptyList())
-        return g
+        val taste = if (base === own) own.taste else mutate(heir.taste, own.taste, rng)
+        return g.copy(taste = if (g.plain) PlayerGenerator.strengthen(rng, taste, PlayerGenerator.Tier.of(potential)) else taste)
+    }
+
+    /**
+     * [t] changed a little, never left as it was: every taste by up to a quarter either way (to
+     * its step), and one of them replaced by [fresh]'s (taken up, changed or dropped) 30% of the
+     * time, or whenever the first change left it the same.
+     */
+    fun mutate(t: Taste, fresh: Taste, rng: Random): Taste {
+        fun j(x: Double, step: Double): Double {
+            if (x == 0.0) return 0.0
+            val y = PlayerGenerator.round(Math.round(x * Math.exp(PlayerGenerator.uniform(rng, -0.25, 0.25)) / step) * step, 2)
+            return if (y == 0.0) x else y
+        }
+        val m = t.copy(
+            fullHouse = j(t.fullHouse, 1.0), fourKind = j(t.fourKind, 1.0), choice = j(t.choice, 1.0), snob = j(t.snob, 0.5),
+            faceBias = j(t.faceBias, 1.0), yacht = j(t.yacht, 1.0), straight = j(t.straight, 1.0), bonus = j(t.bonus, 0.05),
+            zero = j(t.zero, 1.0), fillBias = j(t.fillBias, 0.5), scrapBias = j(t.scrapBias, 1.0), cost = j(t.cost, 0.5),
+        )
+        fun take(i: Int): Taste = when (i) {
+            0 -> m.copy(fullHouse = fresh.fullHouse)
+            1 -> m.copy(fourKind = fresh.fourKind)
+            2 -> m.copy(choice = fresh.choice)
+            3 -> m.copy(snob = fresh.snob)
+            4 -> m.copy(face = fresh.face, faceBias = fresh.faceBias)
+            5 -> m.copy(yacht = fresh.yacht)
+            6 -> m.copy(straight = fresh.straight)
+            7 -> m.copy(bonus = fresh.bonus)
+            8 -> m.copy(zero = fresh.zero)
+            9 -> m.copy(fill = fresh.fill, fillBias = fresh.fillBias)
+            10 -> m.copy(scrap = fresh.scrap, scrapBias = fresh.scrapBias)
+            else -> m.copy(cost = fresh.cost)
+        }
+        val swap = rng.nextDouble() < 0.3
+        if (!swap && m != t) return m
+        val options = (0 until 12).filter { take(it).let { x -> x != m && x != t } }
+        if (options.isNotEmpty()) return take(options[rng.nextInt(options.size)])
+        // [fresh] is this very taste: a Choice point more is still a change.
+        return if (m != t) m else m.copy(choice = m.choice + 1)
     }
 
     /** The best of up to [TOURNAMENT] distinct random entrants of [pool] (sorted best first). */

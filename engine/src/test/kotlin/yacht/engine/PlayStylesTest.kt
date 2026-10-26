@@ -1,12 +1,18 @@
 package yacht.engine
 
+import yacht.engine.league.Abilities
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.CustomAis
 import yacht.engine.league.CustomBase
 import yacht.engine.league.CustomMistake
+import yacht.engine.league.Gender
+import yacht.engine.league.Identity
+import yacht.engine.league.Lean
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.PlayGene
 import yacht.engine.league.PlayStyles
+import yacht.engine.league.Profiles
+import yacht.engine.league.Taste
 import yacht.engine.league.Temper
 import java.util.Random
 import kotlin.test.Test
@@ -110,6 +116,18 @@ class PlayStylesTest {
         }
         // A spec without a style keeps its old line.
         assertEquals(12, spec(null).encode().split('|').size)
+        // Genes of v2: tastes, a score reading, a late phase and far sight as tag:value parts.
+        val v2 = PlayGene(
+            "hunter", 1.21, "timid", "chameleon", listOf("purist", "straight"), 1.07, 0.42, PlayGene.V2, true,
+            Taste(fullHouse = -4.0, fourKind = 6.0, choice = 3.0, snob = 1.5, face = 5, faceBias = 4.0, yacht = -16.0, straight = 3.0, bonus = 0.15, zero = 5.0, fill = 3, fillBias = 2.5, scrap = 11, scrapBias = 3.0, cost = -1.5),
+            12, Lean.SAFE, Lean.BOLD, 4, Lean.NEAR,
+        )
+        assertEquals("hunter:1.21/s:timid/o:chameleon/m:purist.straight/f:1.07/c:0.42/v:2/fs:1/fh:-4/fk:6/ch:3/sn:1.5/fv:5x4/y:-16/st:3/b:0.15/z:5/fo:3x2.5/sx:11x3/tc:-1.5/rd:12SB/lt:4N", v2.encode())
+        assertEquals(v2, PlayGene.decode(v2.encode()))
+        assertEquals(v2.copy(behind = null), PlayGene.decode(v2.copy(behind = null).encode()))
+        assertTrue(v2.notes().size >= 15, "${v2.notes()}")
+        // A part of a newer version is skipped; the rest of the gene still reads.
+        assertEquals(PlayGene("hunter", 1.2, v = PlayGene.V2, taste = Taste(choice = 3.0)), PlayGene.decode("hunter:1.2/v:2/zz:9/ch:3"))
         // The same seed plays the same game.
         val ai = CustomAis.build(spec(PlayGene("streaky-host", 1.0, overlay = "streaky"), CustomMistake.SLIP, 0.05), tables, extra)
         fun game(seed: Long) = Match.play(tables.rules, ai.make(Random(seed)), PlanPlayer("ev", shapedPlanner(tables.ev)), Random(seed + 1)).toList()
@@ -119,13 +137,60 @@ class PlayStylesTest {
     @Test
     fun everyRecipeAndOverlayPlaysWholeGames() {
         val rng = Random(2)
+        val taste = Taste(fullHouse = 5.0, choice = -3.0, snob = 2.0, face = 6, faceBias = 5.0, straight = -3.0, zero = 4.0, fill = 1, fillBias = 2.0, scrap = 0, scrapBias = 4.0, cost = -2.0)
         for (r in PlayStyles.RECIPES) {
             for (o in listOf(null) + PlayStyles.OVERLAYS.map { it.key }) {
                 val gene = PlayGene(r.key, 1.2, overlay = o, moods = if (o == "chameleon") listOf("hunter", "timid") else emptyList())
-                val ai = CustomAis.build(spec(gene, CustomMistake.FEEL, 0.5).copy(temper = Temper.MOODY), tables, extra)
-                val s = Match.play(tables.rules, ai.make(Random(rng.nextLong())), PlanPlayer("ev", shapedPlanner(tables.ev)), rng)
-                assertTrue(s[0] in 0..400, "${r.key} $o ${s[0]}")
+                for (g in listOf(gene, gene.copy(v = PlayGene.V2, far = true, taste = taste, margin = 8, ahead = Lean.FAR, behind = Lean.BOLD, lateFrom = 5, late = Lean.SAFE))) {
+                    val ai = CustomAis.build(spec(g, CustomMistake.FEEL, 0.5).copy(temper = Temper.MOODY), tables, extra)
+                    val s = Match.play(tables.rules, ai.make(Random(rng.nextLong())), PlanPlayer("ev", shapedPlanner(tables.ev)), rng)
+                    assertTrue(s[0] in 0..400, "${g.encode()} ${s[0]}")
+                }
             }
         }
+    }
+
+    @Test
+    fun genesBeforeV2PlayAsTheyDid() {
+        // Players saved before 생성 다양화 v2 keep their genes: they read, save and play exactly as
+        // before (12 games against max expectation each, the totals measured before v2 was added).
+        val before = mapOf(
+            "hunter:1.32/f:0.85/c:0.4" to 2128,
+            "purist:0.9/s:timid/o:gambler/f:0.8" to 1978,
+            "ev:1.0/o:chameleon/m:hunter.straight.purist/f:0.9" to 2128,
+            "noscratch:1.2/o:locker/f:0.95/c:0.2" to 2191,
+            "hoarder:0.8/f:0.9" to 1964,
+            "reroller:1.4/s:hunter/o:streaky" to 2240,
+            "bigchoice:1.5/o:panic/f:0.75/c:0.5" to 2171,
+        )
+        for ((text, total) in before) {
+            val g = PlayGene.decode(text)!!
+            assertEquals(1, g.v)
+            assertEquals(text, g.encode())
+            val ai = CustomAis.build(spec(g, CustomMistake.FEEL, 0.5).copy(temper = Temper.TILT), tables, extra)
+            val sum = (0 until 12).sumOf { s -> Match.play(tables.rules, ai.make(Random(1000L + s)), PlanPlayer("ev", shapedPlanner(tables.ev)), Random(5000L + s))[0] }
+            assertEquals(total, sum, text)
+        }
+        // Their 예측력 keeps its steps of 0.05; a v2 gene's goes to the hundredth, on the far side for some.
+        val id = Identity("KR", Gender.MALE, 22, Abilities(70, 47, 60, 60), 70, Temper.TILT, true)
+        assertEquals(Profiles.future(47), Profiles.apply(spec(PlayGene("hunter", 1.1)), id).play!!.future)
+        assertEquals(0.85, Profiles.future(47))
+        assertEquals(0.86, Profiles.apply(spec(PlayGene("hunter", 1.1, v = PlayGene.V2)), id).play!!.future)
+        assertEquals(1.07, Profiles.apply(spec(PlayGene("hunter", 1.1, v = PlayGene.V2, far = true)), id).play!!.future)
+        assertEquals(1.0, Profiles.future2(99, true))
+        assertEquals(0.7, Profiles.future2(1, false))
+        assertEquals(1.15, Profiles.future2(1, true))
+    }
+
+    @Test
+    fun v2IntensitiesKeepTheStyleAtOne() {
+        // The rescaled intensities are the measured style at k = 1 (zero terms aside) and differ at the ends.
+        for (r in PlayStyles.RECIPES.filter { it.scales }) {
+            val one = r.style(1.0, PlayGene.V2)
+            assertEquals(r.style(1.0), one.copy(like = one.like.filterValues { it != 0.0 }), r.key)
+            assertTrue(r.style(0.7, PlayGene.V2) != r.style(1.7, PlayGene.V2), r.key)
+        }
+        assertEquals(PlayStyles.recipe("hunter")!!.style(1.5), PlayGene("hunter", 1.5).style())
+        assertTrue(PlayStyles.recipe("hunter")!!.style(1.5).rerollCost == 0.0 && PlayGene("hunter", 1.5, v = PlayGene.V2).style().rerollCost < 0)
     }
 }

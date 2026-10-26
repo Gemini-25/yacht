@@ -131,9 +131,24 @@ class PlayersTest {
         }
         val feel = ps.count { it.identity!!.feel } / n
         assertEquals(PlayerGenerator.FEEL_SHARE, feel, 0.04)
-        assertEquals(0.2, ps.count { it.spec.play!!.secondary != null } / n, 0.03)
+        assertEquals(PlayerGenerator.BLEND, ps.count { it.spec.play!!.secondary != null } / n, 0.03)
         assertEquals(0.25, ps.count { it.spec.play!!.overlay != null } / n, 0.05)
         assertTrue(ps.map { it.spec.play!!.primary }.toSet().size == PlayStyles.RECIPES.size)
+        // Genes of v2: foresight to the hundredth (some on the far side), tastes and situations for most, nobody's twice.
+        assertTrue(ps.all { it.spec.play!!.v == PlayGene.V2 })
+        assertEquals(PlayerGenerator.FAR_SHARE, ps.count { it.spec.play!!.far } / n, 0.03)
+        assertTrue(ps.all { p -> p.spec.play!!.future.let { it in 0.7..1.15 && it == PlayerGenerator.round(it, 2) } })
+        assertTrue(ps.map { it.spec.play!!.future }.toSet().size > 30)
+        assertTrue(ps.count { it.spec.play!!.taste.isEmpty } < n * 0.08, "${ps.count { it.spec.play!!.taste.isEmpty }}")
+        assertEquals(0.35, ps.count { it.spec.play!!.margin > 0 } / n, 0.03)
+        assertEquals(0.3, ps.count { it.spec.play!!.lateFrom > 0 } / n, 0.03)
+        assertEquals(ps.size, ps.map { it.spec.play!!.encode() }.toSet().size)
+        for (p in ps) {
+            val g = p.spec.play!!
+            val tier = PlayerGenerator.Tier.of(p.identity!!.potential)
+            g.secondary?.let { assertTrue(PlayerGenerator.secondaryFor(PlayStyles.recipe(it)!!, tier), "$tier ${g.encode()}") }
+            if (g.plain) assertTrue(PlayerGenerator.strong(g.taste), g.encode())
+        }
         // A school tilts its nation: Americans hunt Yachts and gamble more, Germans are sharper.
         fun share(code: String, f: (yacht.engine.league.PlayerRecord) -> Boolean) = ps.filter { it.identity!!.nation == code }.let { xs -> xs.count(f).toDouble() / xs.size }
         val hunter = { p: yacht.engine.league.PlayerRecord -> p.spec.play!!.primary == "hunter" }
@@ -290,6 +305,37 @@ class PlayersTest {
         }
         val empty = Evolution.run(PlayerBook(), 1, ::rating, { 0 }, 1L, 0)
         assertTrue(empty.retired.isEmpty() && empty.born.isEmpty())
+    }
+
+    @Test
+    fun pupilsTakeAfterTheirMentorsButAreNeverCopies() {
+        val mentors = PlayerBook().apply { ensureGenerated(60) }.alive.map { it.spec.play!! }
+        val rng = Random(4)
+        var exact = 0
+        val n = 2000
+        repeat(n) { i ->
+            val a = mentors[i % mentors.size]
+            val b = mentors[(i * 7 + 3) % mentors.size]
+            val g = Evolution.crossPlay(a, b, rng, 60, Schools.of("KR"))
+            assertEquals(PlayGene.V2, g.v)
+            val like = listOf(a, b).filter { it.primary == g.primary && it.k == g.k }
+            if (like.isNotEmpty()) exact++
+            // A pupil's tastes always move a little away from its mentor's.
+            for (m in like) if (!m.taste.isEmpty) assertTrue(g.taste != m.taste, "${m.encode()} -> ${g.encode()}")
+            assertEquals(g, PlayGene.decode(g.encode()))
+        }
+        // Four in five take up a mentor's main style and intensity exactly.
+        assertEquals(0.8, exact.toDouble() / n, 0.05)
+        // A main style capped this season is not taken from a mentor (only now and then drawn anew).
+        val again = (0 until 200).count { i ->
+            val a = mentors[i % mentors.size]
+            Evolution.crossPlay(a, a, rng, 60, Schools.of("KR"), capped = { it == a.primary }).primary == a.primary
+        }
+        assertTrue(again < 40, "$again")
+        // A mentor saved before v2 passes on its style; the rest is the pupil's own.
+        val old = PlayGene("hunter", 1.4, overlay = "gambler", future = 0.85)
+        val g = Evolution.crossPlay(old, old, Random(1), 60, Schools.of("KR"))
+        assertEquals(PlayGene.V2, g.v)
     }
 
     @Test

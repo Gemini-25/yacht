@@ -1,5 +1,6 @@
 package yacht.engine.league
 
+import yacht.engine.Category
 import yacht.engine.DiceStream
 import yacht.engine.Tables
 import java.util.Locale
@@ -113,11 +114,17 @@ data class Legend(val record: RetiredRecord, val spec: CustomAiSpec, val honours
  * a city of its nation and a name of its nation.
  *
  * Profile: a potential ~ N(64, 13) (25..97), abilities for its age with its nation's [School]
- * bias, mistakes by feel 60% (else slips), a temper kind for a low 멘탈. Style: a recipe by
- * [Tier] (the potential decides which styles it can take up: the best never the misread rules
- * or the rule-bound beginners' styles), its nation's favourite styles [Schools.FAVOUR] times as
- * often, at an intensity k (log-uniform 0.7..1.7); a second style at half strength 20%; a
- * situation overlay 25% (gambler 7, locker 7, panic 4, streaky 4, chameleon 3).
+ * bias, mistakes by feel 60% (else slips), a temper kind for a low 멘탈. Style ([PlayGene.V2]):
+ * a recipe by [Tier] (the potential decides which styles it can take up: the best never the
+ * misread rules or the rule-bound beginners' styles), its nation's favourite styles
+ * [Schools.FAVOUR] times as often, at an intensity k (log-uniform 0.7..1.7); a second style at
+ * half strength 40% (one the tier could take up at that strength); a situation overlay 25%
+ * (gambler 7, locker 7, panic 4, streaky 4, chameleon 3); its own [taste]s, a score reading and a
+ * late phase ([situations]); and 예측력 erring on the far side [FAR_SHARE] of the time.
+ *
+ * A player is never born a copy: genes equal to an alive player's (as saved, so after rounding)
+ * draw their tastes again ([recruit]'s `alive`), and a plain max-expectation player always has a
+ * taste that changes at least 3% of its decisions ([Taste] ranges measured in the 생성 다양화 study).
  */
 object PlayerGenerator {
     const val GEN_SEED = 0x67656E5EED01L
@@ -134,7 +141,13 @@ object PlayerGenerator {
     const val FEEL_SHARE = 0.6
 
     /** Share with a second style mixed in. */
-    const val BLEND = 0.2
+    const val BLEND = 0.4
+
+    /** Share whose 예측력 errs on the far side ([PlayGene.far]). */
+    const val FAR_SHARE = 0.3
+
+    /** Draws of the tastes before a player born equal to an alive one is kept as it is. */
+    const val REDRAWS = 10
 
     /** Situation overlays and their shares (25% in all). */
     val OVERLAY_SHARES: List<Pair<String, Double>> = listOf("gambler" to 0.07, "locker" to 0.07, "panic" to 0.04, "streaky" to 0.04, "chameleon" to 0.03)
@@ -195,6 +208,18 @@ object PlayerGenerator {
         else -> 1.0
     }
 
+    /**
+     * Whether [r] may be a second style in [tier]: a style with an intensity whose half strength
+     * the tier could take up; the most promising never take one that brings its rule along
+     * (두 가지 눈, 0점 거부) or scores below the tier's floor at full strength.
+     */
+    fun secondaryFor(r: PlayRecipe, tier: Tier): Boolean {
+        if (!r.scales || r.key == "ev" || avgAt(r, 0.5) < tier.minAvg) return false
+        if (tier != Tier.TOP) return true
+        val half = r.style(0.5)
+        return r.avg > tier.minAvg && half.keep == KeepRule.ANY && half.box == BoxRule.ANY
+    }
+
     /** A recipe's average score at intensity [k] (the more of a style, the further from max expectation). */
     fun avgAt(r: PlayRecipe, k: Double): Double = if (r.scales) PlayStyles.EV_AVG - (PlayStyles.EV_AVG - r.avg) * k else r.avg
 
@@ -210,6 +235,7 @@ object PlayerGenerator {
         taken: Set<String>,
         boost: (Nation) -> Double = { 1.0 },
         meta: Map<String, Double> = emptyMap(),
+        alive: Set<String> = emptySet(),
     ): PlayerRecord {
         val key = key(i)
         val idRng = Random(DiceStream.mix(GEN_SEED, IDENTITY_SALT, i.toLong()))
@@ -225,8 +251,12 @@ object PlayerGenerator {
             nation.code, gender, age, Profiles.drawAbilities(rng, key, age, potential, school.bias), potential,
             TEMPERS[rng.nextInt(TEMPERS.size)], rng.nextDouble() < FEEL_SHARE,
         )
-        val gene = style(rng, potential, school, meta)
-        val spec = Profiles.apply(CustomAiSpec(key, name, play = gene), id)
+        var spec = Profiles.apply(CustomAiSpec(key, name, play = style(rng, potential, school, meta)), id)
+        var redraws = 0
+        while (spec.play!!.encode() in alive && redraws++ < REDRAWS) {
+            val g = spec.play!!
+            spec = spec.copy(play = g.copy(taste = taste(rng, Tier.of(potential), plain = g.plain)))
+        }
         return PlayerRecord(key, name, town, Origin.GENERATED, season, null, null, spec, identity = id)
     }
 
@@ -241,12 +271,107 @@ object PlayerGenerator {
         val primary = pick(rng, eligible.ifEmpty { PlayStyles.RECIPES.take(1) }.map { it to weight(it.key, tier) * favour(it.key) })
         val k = if (primary.scales) k0 else 1.0
         val secondary = if (rng.nextDouble() < BLEND) {
-            pick(rng, PlayStyles.RECIPES.filter { it.scales && it.key != primary.key && it.key != "ev" }.map { it to favour(it.key) }).key
+            pick(rng, PlayStyles.RECIPES.filter { it.key != primary.key && secondaryFor(it, tier) }.map { it to favour(it.key) }).key
         } else null
         val overlay = overlay(rng, school)
         val moods = if (overlay == "chameleon") List(3) { pick(rng, PlayStyles.RECIPES.filter { it.scales }.map { it to favour(it.key) }).key } else emptyList()
-        return PlayGene(primary.key, k, secondary, overlay, moods)
+        val far = rng.nextDouble() < FAR_SHARE
+        val g = situations(rng, PlayGene(primary.key, k, secondary, overlay, moods, v = PlayGene.V2, far = far))
+        return g.copy(taste = taste(rng, tier, plain = g.plain))
     }
+
+    /**
+     * Its own tastes ([Taste]), each present about a third of the time, in ranges that change a
+     * few percent of the decisions for a point or two each (measured on [StylePlan]); the most
+     * promising ([Tier.TOP]) take the cheaper ones a quarter of the time each, so the best stay as
+     * strong as before. A [plain] max-expectation player gets at least one that changes 3% or more ([strong]).
+     */
+    fun taste(rng: Random, tier: Tier, plain: Boolean = false): Taste {
+        val top = tier == Tier.TOP
+        val p = if (top) 0.25 else 0.35
+        fun has() = rng.nextDouble() < p
+        fun u(lo: Double, hi: Double, step: Double) = round(Math.round(uniform(rng, lo, hi) / step) * step, 2)
+        fun signed(pos: Double, lo: Double, hi: Double, negLo: Double, negHi: Double, step: Double = 1.0) =
+            if (rng.nextDouble() < pos) u(lo, hi, step) else -u(negLo, negHi, step)
+        var t = if (top) Taste(
+            fullHouse = if (has()) signed(0.75, 3.0, 7.0, 3.0, 4.0) else 0.0,
+            fourKind = if (has()) signed(0.5, 3.0, 7.0, 3.0, 7.0) else 0.0,
+            choice = if (has()) u(3.0, 5.0, 1.0) else 0.0,
+            snob = if (has()) u(1.0, 2.0, 0.5) else 0.0,
+            yacht = if (has()) signed(0.4, 10.0, 15.0, 10.0, 18.0) else 0.0,
+            straight = if (has()) signed(0.5, 3.0, 8.0, 2.0, 5.0) else 0.0,
+            bonus = if (has()) u(0.1, 0.15, 0.05) else 0.0,
+            zero = if (has()) u(3.0, 5.0, 1.0) else 0.0,
+            cost = if (has()) -u(1.0, 3.0, 0.5) else 0.0,
+        ) else Taste(
+            fullHouse = if (has()) signed(0.5, 3.0, 7.0, 3.0, 7.0) else 0.0,
+            fourKind = if (has()) signed(0.5, 3.0, 7.0, 3.0, 7.0) else 0.0,
+            choice = if (has()) signed(0.6, 2.0, 6.0, 2.0, 4.0) else 0.0,
+            snob = if (has()) u(1.0, 3.0, 0.5) else 0.0,
+            yacht = if (has()) signed(0.6, 10.0, 40.0, 10.0, 25.0) else 0.0,
+            straight = if (has()) signed(0.5, 3.0, 8.0, 2.0, 5.0) else 0.0,
+            bonus = if (has()) u(0.1, 0.3, 0.05) else 0.0,
+            zero = if (has()) u(3.0, 8.0, 1.0) else 0.0,
+            cost = if (has()) signed(0.4, 0.5, 1.5, 1.0, 3.0, 0.5) else 0.0,
+        )
+        if (has()) t = t.copy(face = 1 + rng.nextInt(6), faceBias = if (top) u(3.0, 4.0, 1.0) else u(3.0, 6.0, 1.0))
+        if (has()) {
+            t = if (top) t.copy(fill = if (rng.nextBoolean()) 1 else 3, fillBias = u(1.5, 2.0, 0.5))
+            else t.copy(fill = rng.nextInt(Style.FILL_ORDERS.size), fillBias = u(1.5, 3.0, 0.5))
+        }
+        if (has()) {
+            val boxes = if (top) SCRAP_BOXES_TOP else SCRAP_BOXES
+            t = t.copy(scrap = boxes[rng.nextInt(boxes.size)].ordinal, scrapBias = if (top) u(3.0, 4.0, 1.0) else u(3.0, 6.0, 1.0))
+        }
+        return if (plain) strengthen(rng, t, tier) else t
+    }
+
+    /** [t] with one taste that changes 3% or more of the decisions when it has none ([strong]): a plain player's. */
+    fun strengthen(rng: Random, t: Taste, tier: Tier): Taste {
+        if (strong(t)) return t
+        fun u(lo: Double, hi: Double, step: Double) = round(Math.round(uniform(rng, lo, hi) / step) * step, 2)
+        return if (tier == Tier.TOP) when (rng.nextInt(3)) {
+            0 -> t.copy(choice = u(3.0, 5.0, 1.0))
+            1 -> t.copy(straight = -u(4.0, 5.0, 1.0))
+            else -> t.copy(zero = 5.0)
+        } else when (rng.nextInt(6)) {
+            0 -> t.copy(choice = u(3.0, 6.0, 1.0))
+            1 -> t.copy(bonus = u(0.2, 0.3, 0.05))
+            2 -> t.copy(snob = 3.0)
+            3 -> t.copy(face = 1 + rng.nextInt(6), faceBias = u(5.0, 6.0, 1.0))
+            4 -> t.copy(zero = u(5.0, 8.0, 1.0))
+            else -> t.copy(fill = rng.nextInt(Style.FILL_ORDERS.size), fillBias = u(2.0, 3.0, 0.5))
+        }
+    }
+
+    /** Boxes a taste may make its sacrifice box (the most promising: the cheaper ones). */
+    private val SCRAP_BOXES = listOf(Category.ACES, Category.DEUCES, Category.FOUR_OF_A_KIND, Category.LARGE_STRAIGHT, Category.YACHT)
+    private val SCRAP_BOXES_TOP = listOf(Category.ACES, Category.FOUR_OF_A_KIND, Category.LARGE_STRAIGHT)
+
+    /** Whether [t] has a taste that changes 3% or more of a plain player's decisions on its own. */
+    fun strong(t: Taste): Boolean =
+        t.choice >= 3 || t.choice <= -4 || t.snob >= 3 || t.faceBias >= 5 || t.yacht <= -20 || t.bonus >= 0.2 || t.zero >= 5 ||
+            t.fillBias >= 2 || t.straight <= -4 || (t.scrapBias >= 4 && (t.scrap == Category.FOUR_OF_A_KIND.ordinal || t.scrap == Category.YACHT.ordinal))
+
+    /**
+     * The light situational genes of [g]: a score reading 35% of the time (from 8..20 points ahead
+     * and/or behind it leans: [Lean]), a late phase 30% (from 3..6 boxes left).
+     */
+    fun situations(rng: Random, g: PlayGene): PlayGene {
+        var out = g
+        if (rng.nextDouble() < 0.35) {
+            val margin = 8 + rng.nextInt(13)
+            var ahead = if (rng.nextDouble() < 0.6) AHEAD[rng.nextInt(AHEAD.size)] else null
+            val behind = if (rng.nextDouble() < 0.6) BEHIND[rng.nextInt(BEHIND.size)] else null
+            if (ahead == null && behind == null) ahead = AHEAD[rng.nextInt(AHEAD.size)]
+            out = out.copy(margin = margin, ahead = ahead, behind = behind)
+        }
+        if (rng.nextDouble() < 0.3) out = out.copy(lateFrom = 3 + rng.nextInt(4), late = Lean.entries[rng.nextInt(Lean.entries.size)])
+        return out
+    }
+
+    private val AHEAD = listOf(Lean.SAFE, Lean.NEAR, Lean.FAR, Lean.BOLD)
+    private val BEHIND = listOf(Lean.SAFE, Lean.NEAR, Lean.BOLD)
 
     private fun overlay(rng: Random, school: School): String? {
         val shares = OVERLAY_SHARES.map { (o, p) -> o to if (o == school.overlay) p * Schools.FAVOUR else p }
@@ -400,12 +525,13 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         val added = ArrayList<PlayerRecord>()
         val taken = names().toMutableSet()
         val nations = nationCounts().toMutableMap()
+        val genes = geneSet()
         var total = byKey.size
         var refused = 0
         while (added.size < count && refused < count * Evolution.TRIES) {
             val i = next++
             val boost = if (old) { _: Nation -> 1.0 } else Nations.rebalance(nations, total)
-            val r = PlayerGenerator.recruit(i, season, old, taken, boost, meta)
+            val r = PlayerGenerator.recruit(i, season, old, taken, boost, meta, genes)
             // A player the league's filter refuses (the chaos preset's only flawed players) is never generated.
             if (!accept(r.spec)) {
                 refused++
@@ -413,12 +539,16 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             }
             taken += r.name
             nations.merge(r.identity!!.nation, 1, Int::plus)
+            r.spec.play?.let { genes += it.encode() }
             total++
             byKey[r.key] = r
             added += r
         }
         return added
     }
+
+    /** The style genes of the alive players as saved (a newcomer is never born equal to one). */
+    fun geneSet(): MutableSet<String> = byKey.values.mapNotNullTo(HashSet()) { it.spec.play?.encode() }
 
     /**
      * Styles in fashion (a world champion's): extra weight for rookies and pupils taking them
