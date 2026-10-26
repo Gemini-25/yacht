@@ -125,7 +125,7 @@ fun BuilderScreen(c: AppController) {
                     Text("요약", style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer)
                     Text(spec.describe(), fontWeight = FontWeight.SemiBold, color = cs.onSecondaryContainer)
                     Text(
-                        "저장하면 리그에 들어가고, 다음 시즌부터 가장 낮은 부(${c.league.config.divisions}부)에서 시작해요. 그 전까지는 친선전으로 레이팅을 쌓아요.",
+                        "저장하면 리그에 들어가고, 다음 시즌부터 가장 낮은 부에서 시작해요. 그 전까지는 친선전으로 레이팅을 쌓아요.",
                         style = MaterialTheme.typography.bodySmall,
                         color = cs.onSecondaryContainer,
                     )

@@ -68,7 +68,17 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 }
                 HorizontalDivider()
                 Text("리그", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                Stepper("부 개수", cfg.divisions, 1..6, { "${it}부" }) { cfg = cfg.copy(divisions = it) }
+                Text(structureLine(cfg), style = MaterialTheme.typography.labelMedium, color = cs.secondary)
+                Toggle("지역 리그 피라미드 (선수가 많을 때)", cfg.pyramid) { cfg = cfg.copy(pyramid = it) }
+                Text(
+                    "조가 ${yacht.engine.league.Pyramid.MAX_LINEAR}개를 넘게 되면 1부 1개 조, 2부 2개 조, 3부 4개 조…로 나눠요. 몇 명이든 한 시즌이 ‘조 인원 − 1’주라 금방 끝나요. 조는 시즌마다 지역별로 다시 짜요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
+                if (cfg.pyramid) {
+                    Stepper("조 인원", cfg.groupSize, LeagueConfig.MIN_GROUP..LeagueConfig.MAX_GROUP, { "${it}명" }, step = 5) { cfg = cfg.copy(groupSize = it) }
+                    Stepper("조마다 자동 승격", cfg.groupSwap, 1..8, { "${it}명" }) { cfg = cfg.copy(groupSwap = it) }
+                }
+                Stepper("부 개수 (피라미드가 아닐 때)", cfg.divisions, 1..6, { "${it}부" }) { cfg = cfg.copy(divisions = it) }
                 Toggle("홈·원정 두 번씩 (더블 라운드 로빈)", cfg.doubleRoundRobin) { cfg = cfg.copy(doubleRoundRobin = it) }
                 Text("경기 방식", style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -82,6 +92,15 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 HorizontalDivider()
                 Text("선수", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 Stepper("선수 수", cfg.generated, 0..LeagueConfig.MAX_PLAYERS, { "${it}명" }, step = 50) { cfg = cfg.copy(generated = it) }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (n in PLAYER_PRESETS) FilterChip(selected = cfg.generated == n, onClick = { cfg = cfg.copy(generated = n) }, label = { Text("${n}명", fontSize = 12.sp) })
+                }
+                if (cfg.generated >= 2000) {
+                    Text(
+                        "선수가 많으면 휴대폰이 바빠져요. 한 시즌에 경기가 많아 시간이 오래 걸리고 저장 파일도 커져요.",
+                        style = MaterialTheme.typography.labelSmall, color = cs.error,
+                    )
+                }
                 Toggle("나이와 은퇴", cfg.aging) { cfg = cfg.copy(aging = it) }
                 Text(
                     "선수들이 시즌마다 나이를 한 살씩 먹어요. 어린 선수는 성장하고 노장은 기량이 떨어지다 은퇴해요. 빈자리는 신인과 상위 선수의 제자가 채워요.",
@@ -122,6 +141,28 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
         },
     )
 }
+
+/** Quick choices for the number of players. */
+private val PLAYER_PRESETS = listOf(200, 500, 1000, 2000, 3000)
+
+/** What the rules make of the league: "1부 1 · 2부 2개 조 · …, 조당 약 50명, 시즌 49주, 약 26,000경기". */
+private fun structureLine(cfg: LeagueConfig): String {
+    val n = cfg.generated + if (cfg.baseAis) BASE_AIS else 0
+    if (n < 2) return "선수가 없어요."
+    val shape = yacht.engine.league.Pyramid.shape(n, cfg)
+    val sizes = if (shape != null) yacht.engine.league.Pyramid.sizes(n, shape) else {
+        val d = cfg.divisions.coerceIn(1, maxOf(1, n / 2))
+        List(d) { n / d + if (it < n % d) 1 else 0 }
+    }
+    val rounds = if (cfg.doubleRoundRobin) 2 else 1
+    val matches = sizes.sumOf { it * (it - 1) / 2 } * rounds
+    val weeks = (sizes.max() - 1 + sizes.max() % 2) * rounds
+    val shapeText = shape?.withIndex()?.joinToString(" · ") { (t, g) -> "${t + 1}부" + if (g > 1) " ${g}개 조" else "" } ?: "${sizes.size}개 부"
+    return "$shapeText · ${if (shape != null) "조" else "부"}당 약 ${sizes.max()}명 · 시즌 ${weeks}주 · 리그 약 ${"%,d".format(matches)}경기"
+}
+
+/** The hand-made AIs that can join the league. */
+private const val BASE_AIS = 103
 
 @Composable
 private fun Toggle(label: String, value: Boolean, onChange: (Boolean) -> Unit) {

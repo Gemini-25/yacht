@@ -139,6 +139,8 @@ data class LadderRow(
     val nation: String = "",
     val flag: String = "",
     val age: Int? = null,
+    /** Its division as shown ("3부", "3부 B조"), null when not in this season. */
+    val divisionLabel: String? = null,
 ) {
     /** The name with its flag, as lists show it ("🇧🇷 루카스 시우바"). */
     val shown: String get() = if (flag.isEmpty()) name else "$flag $name"
@@ -262,6 +264,11 @@ data class SeasonHistoryItem(
     val relegated: List<String>,
     /** The season's titles and awards besides the division champions: (kind, winner's name). */
     val titles: List<Pair<String, String>> = emptyList(),
+    /** Each of [champions]' tier (0 = 1부; a pyramid has a champion per group). */
+    val championTiers: List<Int> = emptyList(),
+    /** All the moves, of which [promoted] and [relegated] name some in a pyramid. */
+    val promotedCount: Int = promoted.size,
+    val relegatedCount: Int = relegated.size,
 )
 
 data class SeasonView(
@@ -279,6 +286,9 @@ data class SeasonView(
     val order: List<List<String>> = emptyList(),
     val matchdays: Int = 0,
     val currentMatchday: Int = 0,
+    /** Which tier each division is in (a regional pyramid's groups), and how many go up from each lower group. */
+    val tiers: yacht.engine.league.Tiers = yacht.engine.league.Tiers.linear(divisions.size),
+    val swap: Int = 0,
 )
 
 /** One fixture in the calendar (일정표): its games once played, or whether it is being played. */
@@ -1821,6 +1831,7 @@ class LeagueController(
                 lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.league?.divisionOf(k),
                 Origin.of(k), world?.hometown(k) ?: "",
                 ids[k]?.nation ?: "", ids[k]?.let { Nations.of(it.nation)?.flag } ?: "", ids[k]?.let { id -> world?.players?.get(k)?.let { p -> id.age(season, p.born) } },
+                divisionLabel = s?.league?.let { league -> league.divisionOf(k)?.let { league.tiers.label(it) } },
             )
         }
         val curves = world?.live
@@ -1879,22 +1890,25 @@ class LeagueController(
 
     private fun seasonView(p: SeasonPlan): SeasonView {
         val s = p.league
-        val swap = p.config.autoSwap
+        // The zones as the off-season will read them, on today's tables.
+        val zone = HashMap<String, Int>()
+        var swap = 0
+        for (t in 0 until s.tiers.count - 1) {
+            val c = yacht.engine.league.Pyramid.crossing(s, p.config, t)
+            if (t == 0) swap = c.swap
+            for (k in c.up) zone[k] = 1
+            for (k in c.down) zone[k] = -1
+            for ((u, l) in c.ties) {
+                zone.putIfAbsent(u, -2)
+                zone.putIfAbsent(l, 2)
+            }
+        }
         val divisions = s.divisions.indices.map { d ->
             val table = s.table(d)
-            val up = if (d > 0) minOf(swap, table.size / 3) else 0
-            val down = if (d < s.divisions.size - 1) minOf(swap, table.size / 3) else 0
-            val playoff = p.config.promotionPlayoff
             table.mapIndexed { i, st ->
                 SeasonRow(
                     st.key, name(st.key), st.played, st.wins, st.draws, st.losses, st.points, st.diff, st.avgScore, st.yachts,
-                    when {
-                        i < up -> 1
-                        i >= table.size - down -> -1
-                        playoff && d > 0 && i == up -> 2
-                        playoff && d < s.divisions.size - 1 && i == table.size - down - 1 -> -2
-                        else -> 0
-                    },
+                    zone[st.key] ?: 0,
                     st.aggPoints,
                     oddsNow?.takeIf { it.season == s.number }?.get(st.key),
                 )
@@ -1905,7 +1919,7 @@ class LeagueController(
             // Next season's newcomers: members not in this season (the rules keep the rest out).
             s.number, s.fixturesPlayed, s.fixturesTotal, divisions, world?.members.orEmpty().filter { it !in inLeague }.map { name(it) },
             honours.seasons.reversed().map { historyItem(it, honours.of(it)) }.let { h -> if (h == lastHistory) lastHistory else h.also { lastHistory = it } },
-            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday,
+            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap,
         )
     }
 
@@ -2379,12 +2393,18 @@ class LeagueController(
 
     /** A past season for the hall of fame, from its honours. */
     private fun historyItem(season: Int, h: List<Honour>): SeasonHistoryItem {
-        val champions = h.filter { DIVISION.matches(it.kind) }.sortedBy { it.kind }.map { name(it.key) }
+        val titles = h.filter { DIVISION.matches(it.kind) }.sortedBy { it.kind.drop(1).toIntOrNull() ?: 0 }
+        // A pyramid's dozens of moves: those into 1부 and 2부 by name, the rest counted.
+        val up = h.filter { it.kind.startsWith("UP") }
+        val down = h.filter { it.kind.startsWith("DOWN") }
+        fun named(list: List<Honour>, upper: Int) =
+            if (list.size <= MOVES_LISTED) list else list.filter { (it.kind.dropWhile { c -> !c.isDigit() }.toIntOrNull() ?: 0) <= upper }
         return SeasonHistoryItem(
-            season, champions, h.firstOrNull { it.kind == "SCORER" }?.let { name(it.key) }, 0.0,
+            season, titles.map { name(it.key) }, h.firstOrNull { it.kind == "SCORER" }?.let { name(it.key) }, 0.0,
             h.firstOrNull { it.kind == "YACHT" }?.let { name(it.key) }, 0,
-            h.filter { it.kind.startsWith("UP") }.map { name(it.key) }, h.filter { it.kind.startsWith("DOWN") }.map { name(it.key) },
+            named(up, 1).map { name(it.key) }, named(down, 2).map { name(it.key) },
             h.filter { it.kind in SHOWN_TITLES }.sortedBy { SHOWN_TITLES.indexOf(it.kind) }.map { it.kind to teamOrName(it.kind, it.key) },
+            titles.map { it.kind.drop(1).toIntOrNull() ?: 0 }, up.size, down.size,
         )
     }
 
@@ -2413,6 +2433,9 @@ class LeagueController(
 
         /** League files a backup restores (when this phone's league has no games yet). */
         val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")
+
+        /** Moves a season's history names (more: only those into 1부 and 2부). */
+        const val MOVES_LISTED = 16
 
         /** Oldest age listed among the 유망주. */
         const val PROSPECT_AGE = 22

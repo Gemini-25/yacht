@@ -101,7 +101,7 @@ data class LeagueConfig(
         private fun flag(b: Boolean) = if (b) "1" else "0"
 
         /** Players in a new league, and the most a league can have. */
-        const val DEFAULT_PLAYERS = 200
+        const val DEFAULT_PLAYERS = 1000
         const val MAX_PLAYERS = 3000
 
         /** Smallest and largest groups of the pyramid. */
@@ -154,7 +154,7 @@ data class LeagueConfig(
 /** Ready-made rule sets (리그 프리셋). */
 enum class LeaguePreset(val label: String, val desc: String, val config: LeagueConfig) {
     REAL(
-        "현실 축구형", "4부 리그, 같은 주사위 두 판, 승강 플레이오프와 우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
+        "현실 축구형", "선수 1000명의 지역 리그 피라미드(조당 50명), 같은 주사위 두 판, 승강·우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
         LeagueConfig(),
     ),
     FAST(

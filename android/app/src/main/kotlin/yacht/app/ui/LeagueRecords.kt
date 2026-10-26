@@ -328,14 +328,22 @@ private fun HallOfFame(history: List<SeasonHistoryItem>, members: List<yacht.eng
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("시즌 ${h.number}", fontWeight = FontWeight.Bold)
-                    Text(h.champions.mapIndexed { i, n -> "${if (i == 0) "👑" else "🥇"} ${i + 1}부 $n" }.joinToString("  "), style = MaterialTheme.typography.bodySmall)
+                    // A pyramid's champion per group: 1부 to 3부 by name, the rest counted.
+                    val tierOf = h.championTiers.takeIf { it.size == h.champions.size } ?: h.champions.indices.toList()
+                    val shown = h.champions.indices.filter { tierOf[it] <= 2 || h.champions.size <= 8 }
+                    Text(
+                        shown.joinToString("  ") { i -> "${if (tierOf[i] == 0) "👑" else "🥇"} ${tierOf[i] + 1}부 ${h.champions[i]}" } +
+                            if (shown.size < h.champions.size) "  외 ${h.champions.size - shown.size}개 조" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     for ((kind, who) in h.titles) {
                         Text("${trophy(kind) ?: "·"} ${honourLabel(kind)} $who", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                     }
                     val awards = listOfNotNull(h.topScorer?.let { "⚽ 득점왕 $it" }, h.yachtKing?.let { "🎲 최다 요트 $it" })
                     if (awards.isNotEmpty()) Text(awards.joinToString("  "), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                    if (h.promoted.isNotEmpty()) Text("⬆ 승격: ${h.promoted.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = gameColors.good)
-                    if (h.relegated.isNotEmpty()) Text("⬇ 강등: ${h.relegated.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = cs.error)
+                    fun more(n: Int, shown: Int) = if (n > shown) " 외 ${n - shown}명" else ""
+                    if (h.promoted.isNotEmpty()) Text("⬆ 승격: ${h.promoted.joinToString(", ")}${more(h.promotedCount, h.promoted.size)}", style = MaterialTheme.typography.labelSmall, color = gameColors.good)
+                    if (h.relegated.isNotEmpty()) Text("⬇ 강등: ${h.relegated.joinToString(", ")}${more(h.relegatedCount, h.relegated.size)}", style = MaterialTheme.typography.labelSmall, color = cs.error)
                 }
             }
         }
