@@ -140,6 +140,10 @@ data class MatchRecord(
     val time: Long,
     /** Short news for the feed: promotions, streaks, upsets. */
     val notes: List<String> = emptyList(),
+    /** Where it was played: the competition (null for matches saved before), its stage or board label, the week. */
+    val comp: Comp? = null,
+    val label: String = "",
+    val week: Int = SeasonCalendar.NONE,
 )
 
 /**
@@ -274,7 +278,15 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     }
 
     /** Records a match of [a] against [b] and refits the ratings. */
-    fun record(a: String, b: String, results: List<GameScore>, time: Long = System.currentTimeMillis()): MatchRecord {
+    fun record(
+        a: String,
+        b: String,
+        results: List<GameScore>,
+        time: Long = System.currentTimeMillis(),
+        comp: Comp? = null,
+        label: String = "",
+        week: Int = SeasonCalendar.NONE,
+    ): MatchRecord {
         val i = index.getValue(a)
         val j = index.getValue(b)
         val before = mapOf(a to rating(a), b to rating(b))
@@ -306,7 +318,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             }
         }
         fun delta(k: String) = (rating(k) - before.getValue(k)).takeIf { !it.isNaN() }?.roundToInt() ?: 0
-        val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore))
+        val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore), comp, label, week)
         feed.addFirst(rec)
         while (feed.size > FEED) feed.removeLast()
         return rec
@@ -493,7 +505,10 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         }
         for (m in feed.reversed()) {
             val gs = m.games.joinToString(";") { g -> "${g.a},${g.b},${flag(g.aYacht)}${flag(g.bYacht)}${flag(g.aBonus)}${flag(g.bBonus)}" }
-            append("m ${m.a} ${m.b} $gs ${m.deltaA} ${m.deltaB} ${m.time} ${m.notes.joinToString("\u001f").ifEmpty { "-" }.replace(' ', ' ')}\n")
+            append("m ${m.a} ${m.b} $gs ${m.deltaA} ${m.deltaB} ${m.time} ${m.notes.joinToString("\u001f").ifEmpty { "-" }.replace(' ', ' ')}")
+            // Where it was played, a field older versions do not read.
+            m.comp?.let { c -> append(" ${c.code}:${m.week}:${MediaText.esc(m.label)}") }
+            append('\n')
         }
     }
 
@@ -627,7 +642,11 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
                         GameScore(p[0].toInt(), p[1].toInt(), fl[0] == '1', fl[1] == '1', fl[2] == '1', fl[3] == '1')
                     }
                     val notes = f[7].replace('\u00a0', ' ').takeIf { it != "-" }?.split('\u001f') ?: emptyList()
-                    l.feed.addFirst(MatchRecord(f[1], f[2], games, f[4].toInt(), f[5].toInt(), f[6].toLong(), notes))
+                    val where = f.getOrNull(8)?.split(':', limit = 3)?.takeIf { it.size == 3 }
+                    val comp = where?.get(0)?.singleOrNull()?.let { Comp.of(it) }
+                    val week = where?.get(1)?.toIntOrNull() ?: SeasonCalendar.NONE
+                    val label = if (comp == null) "" else MediaText.unesc(where!![2])
+                    l.feed.addFirst(MatchRecord(f[1], f[2], games, f[4].toInt(), f[5].toInt(), f[6].toLong(), notes, comp, label, if (comp == null) SeasonCalendar.NONE else week))
                 }
             }
         }

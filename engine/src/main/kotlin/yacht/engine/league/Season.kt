@@ -65,7 +65,19 @@ class Season private constructor(
     val progress: Double get() = if (fixturesTotal == 0) 1.0 else fixturesPlayed.toDouble() / fixturesTotal
 
     /** Matchdays of the longest division. */
-    val matchdays: Int get() = (fixtures.maxOfOrNull { it.matchday } ?: -1) + 1
+    val matchdays: Int
+        get() {
+            // Fixtures are only ever added (when the season is built or read): counted once per size.
+            if (matchdaysFor != fixtures.size) {
+                matchdayCount = (fixtures.maxOfOrNull { it.matchday } ?: -1) + 1
+                matchdaysFor = fixtures.size
+            }
+            return matchdayCount
+        }
+    private var matchdayCount = 0
+    private var matchdaysFor = -1
+    private var matchdayTotals = IntArray(0)
+    private var totalsFor = -1
 
     /** The lowest matchday with a fixture still to play. */
     val currentMatchday: Int get() = (remaining.firstOrNull()?.let { fixtures[it].matchday } ?: matchdays).let { md ->
@@ -80,7 +92,32 @@ class Season private constructor(
 
     /** The fixture as a job ([comp] LEAGUE, its own deal). */
     fun job(f: LeagueFixture): Fixture =
-        Fixture(Comp.LEAGUE, f.id, f.a, f.b, DiceStream.mix(seed, Comp.LEAGUE.code.code.toLong(), f.id.toLong()), label = "${f.matchday + 1}라운드")
+        Fixture(Comp.LEAGUE, f.id, f.a, f.b, DiceStream.mix(seed, Comp.LEAGUE.code.code.toLong(), f.id.toLong()), label = "${f.matchday + 1}라운드", week = f.matchday + 1)
+
+    /** Played and total fixtures of each matchday, of division [division] or of all (for the season calendar). */
+    fun matchdayCounts(division: Int? = null): List<StageCount> {
+        val n = matchdays
+        if (division == null) {
+            // From the per-division counts of fixtures left (no scan: the screen asks often).
+            if (totalsFor != fixtures.size) {
+                matchdayTotals = IntArray(n).also { t -> for (f in fixtures) t[f.matchday]++ }
+                totalsFor = fixtures.size
+            }
+            return List(n) { k ->
+                var left = 0
+                for (d in divisions.indices) left += matchdayLeft[d to k] ?: 0
+                StageCount((matchdayTotals[k] - left).coerceAtLeast(0), matchdayTotals[k])
+            }
+        }
+        val played = IntArray(n)
+        val total = IntArray(n)
+        for (f in fixtures) {
+            if (division != null && f.division != division) continue
+            total[f.matchday]++
+            if (isPlayed(f.id)) played[f.matchday]++
+        }
+        return List(n) { StageCount(played[it], total[it]) }
+    }
 
     /** Upcoming and played fixtures of a matchday (for the calendar). */
     fun matchday(k: Int): List<LeagueFixture> = fixtures.filter { it.matchday == k }

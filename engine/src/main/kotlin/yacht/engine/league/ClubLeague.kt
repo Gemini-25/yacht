@@ -99,6 +99,23 @@ class ClubLeague private constructor(
         taken.remove(f.id)
     }
 
+    override fun stages(): List<Stage> = List(rounds) { k ->
+        Stage("${k + 1}라운드", k.toDouble() / rounds * OPEN_SPAN, if (rounds <= 1) FIRST_TARGET else FIRST_TARGET + (LAST_TARGET - FIRST_TARGET) * k / (rounds - 1))
+    }
+
+    override fun stageOf(f: Fixture): Int = byId[f.id]?.round ?: -1
+
+    override fun stageCounts(): List<StageCount> {
+        val played = IntArray(rounds)
+        val total = IntArray(rounds)
+        for (f in fixtures) {
+            if (f.round !in 0 until rounds) continue
+            total[f.round]++
+            if (f.id in results) played[f.round]++
+        }
+        return List(rounds) { StageCount(played[it], total[it]) }
+    }
+
     override fun record(r: JobResult): List<LeagueEvent> {
         val f = byId[r.fixture.id] ?: return emptyList()
         if (f.id in results || r.fixture.a != f.a || r.fixture.b != f.b) return emptyList()
@@ -193,6 +210,10 @@ class ClubLeague private constructor(
 
         /** The last round opens at this share of the league (spread over the season). */
         const val OPEN_SPAN = 0.95
+
+        // Calendar targets: from 2% to 92% of the season, a round every few weeks.
+        private const val FIRST_TARGET = 0.02
+        private const val LAST_TARGET = 0.92
 
         /** The best rated of [squad], strongest first, at most [ClubBook.BOARDS]. */
         fun lineup(squad: List<String>, rating: (String) -> Double): List<String> =

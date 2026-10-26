@@ -62,8 +62,8 @@ Ground rules for all code:
   (shape, two colours, initial) from the club id.
 - Team match: board i is a mirrored 2-game match between the two lineups' i-th AIs; boards won
   (a level board is half) decide; equal → total points over all boards; equal → draw.
-- Single round robin (15 rounds) opening with league progress; 3/1/0; table with board
-  difference.
+- Single round robin (15 rounds), a round every few weeks of the season calendar (2.4); 3/1/0;
+  table with board difference.
 - Money: every AI has a value `v = max(1, (rating - 1100) / 10)`; clubs have a budget
   (start 100, prize money by final position `40 - 2*pos`, cup/CL money by round).
 - Transfer window at season start: in club order (worst budget first) each club may buy up to
@@ -76,28 +76,56 @@ Ground rules for all code:
 All knockout ties use `TieRule.knockout`: games won (draw = half) → total points → up to 3
 single decider games on new deals (seats alternating) → higher seed.
 - **요트컵** (cup): every AI except me. Bracket of the next power of two with byes for the best
-  seeds (by rating), rounds open at league progress 0.05, 0.15, ... (one per ~0.1), final last.
+  seeds (by rating), rounds spread over the season calendar from 4% to 88% of the regular
+  season (2.4), final last.
 - **챔피언스 리그**: 16 AIs — previous season's 1st division top 12, 2nd division top 2, cup
   winner and runner-up (taken places pass down the 1st division). Season 1: top 16 by rating.
   4 groups of 4 (pots by entry order, seeded draw), double round robin (6 matchdays, 48
   matches), top 2 to a fixed bracket: QF (A1-B2, B1-A2, C1-D2, D1-C2) and SF over two legs,
-  final one match. Matchdays open with league progress.
+  final one match. Matchdays from 8% of the season about every four weeks, QF at 60%, SF at
+  72%, final at 94% (2.4).
 - **슈퍼컵** (from season 2): previous champion vs previous cup winner (runner-up if the same AI)
   at the season start, one knockout tie.
-- **올스타전** (at league progress 0.5): "1부 올스타" (top 5 of division 1 by average match
+- **올스타전** (mid-season, 50%): "1부 올스타" (top 5 of division 1 by average match
   rating) vs "도전자 올스타" (top 5 of the other divisions); a team match. Counted as friendly.
 - **계열 대항전** (every 3rd season, from season 2): each family except MINE fields its 5 best
   (rating) as a national team ("계열 대표 자동 선발": also announced as news with who was
   dropped/called up versus last time). 9 teams: 3 groups of 3 (single round robin of team
   matches), the 3 group winners and the best runner-up to semis, then a final (team matches).
-- **Friendlies**: newcomer placement (20%, 60% while newcomers are >10% of the roster) and light
-  fillers when nothing else is free.
+- **Friendlies**: newcomer placement (20%, 60% while newcomers are >10% of the roster) only;
+  no fillers when nothing else is free (the worker waits: fillers went to the light AIs only).
 
-### 2.4 Scheduling
-`SeasonPlan.next(busy, threads)` returns the next fixture. Progress `p` = league fixtures played
-/ league total. Order: (1) open knockout or group fixtures (CL first) while fewer than
-`max(1, T-1)` non-league jobs are in flight; (2) league fixtures of open matchdays; (3) club
-board fixtures of open rounds; (4) friendlies. Heavy fixtures (estimated cost over 50 ms per game
+### 2.4 Scheduling and the season calendar (주차)
+**Weeks.** One league round is one week: week k is matchday k (`SeasonCalendar`). When the
+season is set up every stage of the other competitions (a cup round, a group matchday, a club
+round, the super cup, the all-star game) gets a week from its target share of the regular
+season (`Stage.target`): `1 + round(target * (R - 1))`, then the first week from there, after
+the competition's previous stage, that is still free. Cups, the champions league, the family
+cup and the events share one lane (one stage a week while they fit, more only in very short
+seasons; ties go to 슈퍼컵, 챔스, 요트컵, 계열 대항전, 올스타전 in that order), the club league
+has its own lane. The post-season takes the weeks after the league: playoff stage s is week
+R + 1 + s (title semis and the promotion playoffs, then the title final). The calendar is a
+pure function of the plan (the league's rounds and the competitions' stages): rebuilt, never
+saved. Default season (49 rounds): 슈퍼컵 1, 요트컵 3·10·14·20·26·32·37·43, 챔스 groups
+5·9·13·16·21·24, QF 30, SF 36, final 46, 올스타전 25, 계열 대항전 7·17·28, SF 39, final 44,
+playoffs 50 and 51.
+
+**Clock.** The week in play is the lowest league round with a fixture left, + 1; after the
+league, the first post-season week with a playoff tie left. A stage opens once the clock
+reaches its week: `SeasonCalendar.progress` turns the week into the league progress the
+competition's own `next(p)` opens exactly those stages at (`Stage.opensAt`). When nothing else
+is free, next week's stages may start (so no worker waits); once the league is over everything
+left opens. Stages that run past their week (slow AIs) keep their week: 일정 lists them as late.
+
+`SeasonPlan.next(busy, threads)` returns the next fixture. Order: (1) open knockout or group
+fixtures (CL first) while fewer than `max(1, T-1)` non-league jobs are in flight; (2) one team
+fixture at a time; (3) league fixtures of the current and next matchday; (4) club board
+fixtures of open rounds; (5) open cup fixtures uncapped; (6) next week's stages; (7) the
+post-season once the league is over. Every fixture it hands out carries its week
+(`Fixture.week`, metadata only: never in the deal); so do the events it makes (`LeagueEvent.week`;
+0 = 개막 전 for the draws, 10000 = 시즌 마감 for the close), the news articles (an optional 9th
+field on news.txt `a` lines) and the ladder feed (an optional 9th field `code:week:label` on
+`m` lines). Older lines read as "no week". Heavy fixtures (estimated cost over 50 ms per game
 from a per-AI cost meter) are limited to `max(1, T-1)` in flight. The season ends when every
 competition is finished; then playoffs; then rollover (section 5). `SeasonPlan` encodes
 everything into `league/season.txt` (`season 3`, decoding `season 1` files as a migration that
@@ -219,16 +247,25 @@ Changing structure applies at the next season start.
 
 ## 8. Screens (Korean labels)
 
-LeagueScreen tabs: **순위표** · **리그** · **대회** · **클럽** · **기록** · **소식**.
+LeagueScreen tabs: **순위표** · **일정** · **리그** · **대회** · **클럽** · **소식** · **기록**.
+The control card shows the season clock on every tab: "📅 시즌 3 · 12주차 / 49주", what this week
+holds besides the league ("이번 주: 🏆 요트컵 64강 · 🛡 클럽 4라운드") or what comes next, and a bar
+of the weeks (played, in play, later; dots for finals). A tap opens 일정.
 - 순위표: today's ladder + search + origin chip (기본/생성/진화/내 AI) + 응원 ★.
+- 일정: 이번 주 (any week with ◀ ▶: every stage with played/total, live matches, a tap opens its
+  table or bracket; late stages of earlier weeks; the week's top news; next week; the finals
+  ahead) and 시즌 전체 (a row per week, ✓ played, ● in play, the post-season apart).
 - 리그: division tables (with 운 보정 toggle and odds columns), 일정표 (matchday list with
   results and upcoming fixtures, 프리뷰 on tap), 순위 변동 그래프, 플레이오프.
 - 대회: 요트컵 bracket, 챔스 groups + bracket, 슈퍼컵, 올스타전, 계열 대항전 (and 대표 명단).
+  Chips say where each stands ("64강", "13주", "끝"); a card lists every stage with its week
+  (✓, ●) and what is on now; bracket round chips carry their week.
 - 클럽: club table, club card (emblem, squad, budget, honours, transfers), 이적·드래프트 소식.
 - 기록: 기록실 (records, dynasties), 시상식·명예의 전당, 시즌 아카이브, 메타 리포트,
   칸별 리그 메타, 상대 전적 매트릭스, 계보도, 레전드 보관소, 성장 곡선 (from a profile).
-- 소식: feed (competition badges) + 하이라이트 + 뉴스 기사 + 마일스톤 + 라이브 스코어보드 +
-  응원 AI filter.
+- 소식: feed (where each match was played: "🏆 요트컵 64강 · 14주차", filters 리그/대회/친선) +
+  하이라이트 + 뉴스 기사 by week under week headings + 마일스톤 + 라이브 스코어보드 (with the
+  week) + 응원 AI filter.
 - Extra entries: AI 연구소 (from the league top bar), 백과사전 (search over AIs, retired,
   legends, clubs, competitions), 규칙·프리셋 (settings), 시즌 결산 (shown once at rollover),
   스카우팅 (ranked start dialog), 프로필 (any AI name opens it: card with honours, stats,

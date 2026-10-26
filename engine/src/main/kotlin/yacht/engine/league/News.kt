@@ -15,6 +15,8 @@ data class Article(
     val comp: Comp?,
     /** 1 (a line in the feed) to 5 (the front page). */
     val importance: Int,
+    /** The week of the season it happened in ([SeasonCalendar]); [SeasonCalendar.NONE] for older news. */
+    val week: Int = SeasonCalendar.NONE,
 )
 
 /**
@@ -152,7 +154,7 @@ object News {
         val (list, importance) = templates(e, v, arg, club, team, rating, upsetGap)
         val chosen = pick(list, v, e)
         val t = chosen ?: T(PLAIN_HEADLINE, "[[{seeds}의 ]]새 소식이 들어왔어요. 자세한 내용은 피드에서 볼 수 있어요.")
-        return Article(e.season, e.kind, fill(t.headline, v), fill(t.body, v), e.keys, e.comp, (if (chosen == null) 1 else importance).coerceIn(1, 5))
+        return Article(e.season, e.kind, fill(t.headline, v), fill(t.body, v), e.keys, e.comp, (if (chosen == null) 1 else importance).coerceIn(1, 5), e.week)
     }
 
     /**
@@ -709,7 +711,10 @@ class NewsBook {
         for (a in list.reversed()) {
             append("a ").append(a.season).append(' ').append(MediaText.esc(a.kind)).append(' ').append(a.comp?.code ?: '-').append(' ')
             append(MediaText.list(a.keys)).append(' ').append(MediaText.esc(a.headline)).append(' ').append(MediaText.esc(a.body)).append(' ')
-            append(a.importance).append('\n')
+            append(a.importance)
+            // The week, a field older versions do not read.
+            if (a.week != SeasonCalendar.NONE) append(' ').append(a.week)
+            append('\n')
         }
     }
 
@@ -731,7 +736,8 @@ class NewsBook {
                     val importance = f[7].toInt()
                     require(importance in 1..5)
                     val comp = if (f[3] == "-") null else Comp.of(f[3].single())
-                    val a = Article(f[1].toInt(), MediaText.unesc(f[2]), MediaText.unesc(f[5]), MediaText.unesc(f[6]), MediaText.unlist(f[4]), comp, importance)
+                    val week = f.getOrNull(8)?.toIntOrNull() ?: SeasonCalendar.NONE
+                    val a = Article(f[1].toInt(), MediaText.unesc(f[2]), MediaText.unesc(f[5]), MediaText.unesc(f[6]), MediaText.unlist(f[4]), comp, importance, week)
                     book.list.addFirst(a)
                     while (book.list.size > MAX) book.list.removeLast()
                 }

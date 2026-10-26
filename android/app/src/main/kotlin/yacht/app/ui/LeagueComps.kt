@@ -36,16 +36,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import yacht.app.core.ClockView
 import yacht.app.core.LeagueController
 import yacht.engine.league.BracketRound
 import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
 import yacht.engine.league.GroupTable
+import yacht.engine.league.WeekStage
 
 /** 대회: this season's cups, champions league, super cup, all-star game, family cup and playoffs. */
 @Composable
-fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onOpen: (String) -> Unit) {
+fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clock: ClockView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (comps.isEmpty()) {
         CenterText(
@@ -54,8 +56,10 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onO
         )
         return
     }
-    var picked by remember { mutableStateOf<Comp?>(null) }
-    val shown = comps.firstOrNull { it.first == picked } ?: comps.first()
+    val shown = comps.firstOrNull { it.first == lg.compFocus } ?: comps.first()
+    // Each competition's stages on the calendar, in order.
+    val stages = remember(clock?.weeks) { clock?.weeks.orEmpty().flatMap { it.stages }.filter { it.comp != Comp.LEAGUE }.groupBy { it.comp }.mapValues { (_, l) -> l.sortedBy { it.stage } } }
+    val mine = stages[shown.first].orEmpty()
     // The same two functions for every snapshot (they read the newest squads), so rows whose
     // tie did not change skip recomposing.
     val squads by rememberUpdatedState(shown.second.squads)
@@ -67,15 +71,20 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onO
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for ((c, v) in comps) {
-                    FilterChip(selected = c == shown.first, onClick = { picked = c }, label = { Text(compIcon(c) + " " + v.title, fontSize = 12.sp) })
+                    val status = clock?.let { compStatus(stages[c].orEmpty(), it) }
+                    FilterChip(
+                        selected = c == shown.first, onClick = { lg.compFocus = c },
+                        label = { Text(compIcon(c) + " " + v.title + (status?.let { " · $it" } ?: ""), fontSize = 12.sp) },
+                    )
                 }
             }
         }
+        if (clock != null && mine.isNotEmpty()) item { StageStrip(mine, clock) }
         when (val v = shown.second) {
-            is CompetitionView.Bracket -> item { BracketCard(v, label, open) }
+            is CompetitionView.Bracket -> item { BracketCard(v, label, open, roundWeeks(shown.first, mine, v.rounds.size, clock?.leagueWeeks ?: Int.MAX_VALUE)) }
             is CompetitionView.Groups -> {
                 items(v.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, open) }
-                v.knockout?.let { k -> item { BracketCard(k, label, open) } }
+                v.knockout?.let { k -> item { BracketCard(k, label, open, roundWeeks(shown.first, mine, k.rounds.size, clock?.leagueWeeks ?: Int.MAX_VALUE)) } }
             }
         }
         val squads = shown.second.squads
@@ -97,6 +106,60 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, onO
     }
 }
 
+/** A chip's state: the stage in play ("64강"), the week of the next one ("13주"), or "끝". */
+private fun compStatus(stages: List<WeekStage>, c: ClockView): String? {
+    if (stages.isEmpty()) return null
+    val cur = stages.firstOrNull { !it.done } ?: return "끝"
+    return when {
+        cur.week > c.week -> "${cur.week}주"
+        cur.label == cur.comp.label -> "진행 중"
+        else -> cur.label
+    }
+}
+
+/** The weeks of a bracket's rounds ("14주", "PO 1주"): the competition's last stages (one stage for the promotion playoffs). */
+private fun roundWeeks(comp: Comp, stages: List<WeekStage>, rounds: Int, leagueWeeks: Int): List<String> {
+    if (stages.isEmpty()) return emptyList()
+    fun name(w: Int) = if (w > leagueWeeks) "PO ${w - leagueWeeks}주" else "${w}주"
+    if (comp == Comp.PROMOTION_PLAYOFF) return List(rounds) { name(stages.first().week) }
+    val offset = stages.size - rounds
+    return if (offset < 0) emptyList() else List(rounds) { name(stages[offset + it].week) }
+}
+
+/** Where the competition stands, and every stage with its week (✓ played, ● now). */
+@Composable
+private fun StageStrip(stages: List<WeekStage>, c: ClockView) {
+    val cs = MaterialTheme.colorScheme
+    val cur = stages.firstOrNull { !it.done }
+    val weeks = c.leagueWeeks
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                when {
+                    cur == null -> "모든 경기가 끝났어요"
+                    cur.week > c.week -> "${cur.label} · ${weekName(cur.week, weeks)}에 열려요 (${cur.week - c.week}주 뒤)"
+                    !cur.set || cur.total == 0 -> "${cur.label} · ${weekName(cur.week, weeks)} · 앞 단계가 끝나면 대진이 정해져요"
+                    else -> "${cur.label} · ${weekName(cur.week, weeks)} · ${cur.total}경기 중 ${cur.played}경기 끝났어요"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                stages.joinToString("  ·  ") { s ->
+                    val mark = when {
+                        s.done -> " ✓"
+                        s.week <= c.week -> " ●"
+                        else -> ""
+                    }
+                    "${s.label} ${if (s.week > weeks) "PO ${s.week - weeks}주" else "${s.week}주"}$mark"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 fun compIcon(c: Comp): String = when (c) {
     Comp.CUP -> "🏆"
     Comp.CHAMPIONS -> "⭐"
@@ -114,7 +177,7 @@ fun compIcon(c: Comp): String = when (c) {
 
 /** A bracket, one round at a time (a 256-team cup has 128 ties in its first round). */
 @Composable
-private fun BracketCard(b: CompetitionView.Bracket, label: (String) -> String, onOpen: (String) -> Unit) {
+private fun BracketCard(b: CompetitionView.Bracket, label: (String) -> String, onOpen: (String) -> Unit, weeks: List<String> = emptyList()) {
     val cs = MaterialTheme.colorScheme
     // The round being played (the first with an unplayed known tie), else the last.
     val current = b.rounds.indexOfFirst { r -> r.ties.any { !it.played && it.winner == null && it.a != null && it.b != null } }
@@ -129,7 +192,8 @@ private fun BracketCard(b: CompetitionView.Bracket, label: (String) -> String, o
             } else {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     for ((i, br) in b.rounds.withIndex()) {
-                        FilterChip(selected = i == r, onClick = { round = i }, label = { Text(br.label, fontSize = 11.sp) })
+                        val wk = weeks.getOrNull(i)?.let { " · $it" } ?: ""
+                        FilterChip(selected = i == r, onClick = { round = i }, label = { Text(br.label + wk, fontSize = 11.sp) })
                     }
                 }
                 RoundTies(b.rounds[r], label, onOpen)

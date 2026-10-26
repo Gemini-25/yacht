@@ -104,7 +104,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         stats.retain(members + ladder.keys + players.retired.filter { it.retired >= p.number - 1 }.map { it.key })
         stats.startSeason(p.number, members.associateWith { ladder.rating(it) })
         highlights.startSeason(p.number)
-        val out = p.comps.flatMap { c -> runCatching { c.opening() }.getOrDefault(emptyList()) }
+        val out = p.comps.flatMap { c -> runCatching { c.opening() }.getOrDefault(emptyList()) }.map { it.at(SeasonCalendar.PRESEASON) }
         note(out)
         return out
     }
@@ -137,14 +137,18 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         }
         val out = ArrayList<LeagueEvent>()
         val season = plan?.number ?: 0
-        val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::hometown)) }.getOrDefault(emptyList())
+        val f = r.fixture
+        // Friendlies and exhibitions have no week of their own: their news goes in the week in play.
+        val week = if (f.week != SeasonCalendar.NONE) f.week else plan?.let { p -> runCatching { p.week }.getOrNull() } ?: SeasonCalendar.NONE
+        val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::hometown)) }.getOrDefault(emptyList()).map { it.at(week) }
         note(counted)
         out += counted
         val matches = ArrayList<MatchRecord>()
-        if (r.fixture.rated) {
-            for (b in r.boards) {
+        if (f.rated) {
+            for ((i, b) in r.boards.withIndex()) {
                 if (b.games.isEmpty() || ladder.entry(b.a) == null || ladder.entry(b.b) == null) continue
-                matches += ladder.record(b.a, b.b, b.games)
+                val label = if (f.kind == JobKind.TEAM) "${f.label} · ${i + 1}번 보드".removePrefix(" · ") else f.label
+                matches += ladder.record(b.a, b.b, b.games, comp = f.comp, label = label, week = f.week)
             }
         }
         if (r.fixture.comp != Comp.FRIENDLY) {
@@ -153,7 +157,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 runCatching {
                     highlights.offer(r, p.number, ::rating, ::hometown, version, Drama.titleRace(p.league, r.fixture))
                 }
-                if (r.fixture.comp == Comp.LEAGUE) titleRace.check(p.league)?.let { e ->
+                if (r.fixture.comp == Comp.LEAGUE) titleRace.check(p.league)?.at(week)?.let { e ->
                     note(listOf(e))
                     out += e
                 }
@@ -165,7 +169,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     /** Records a finished season fixture in the season alone; returns its news. */
     fun record(r: JobResult): List<LeagueEvent> {
-        val out = plan?.record(r).orEmpty()
+        val out = plan?.record(r).orEmpty().map { it.at(r.fixture.week) }
         note(out)
         return out
     }
@@ -248,8 +252,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             // Without evolution, a raised setting brings in the next generated players.
             if (players.size < config.generated && players.ensureGenerated(config.generated, p.number + 1, config.generated - players.size).isNotEmpty()) changed = true
         }
-        note(out)
-        return Closing(p.number, h + end?.awards.orEmpty(), out, changed)
+        val closed = out.map { it.at(SeasonCalendar.CLOSING) }
+        note(closed)
+        return Closing(p.number, h + end?.awards.orEmpty(), closed, changed)
     }
 
     /**
@@ -259,7 +264,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      */
     fun openSeason(): List<LeagueEvent> {
         val p = plan ?: error("no season")
-        val market = clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty()
+        val market = clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty().map { it.at(SeasonCalendar.CLOSING) }
         note(market)
         val hadClubs = clubs != null
         val (next, _) = Offseason.next(p, context(p.number))

@@ -72,6 +72,7 @@ import yacht.app.core.SeasonHistoryItem
 import yacht.app.core.SeasonRow
 import yacht.app.core.SeasonView
 import yacht.engine.explain.Ko
+import yacht.engine.league.Comp
 import yacht.engine.league.Family
 import yacht.engine.league.Ladder
 import yacht.engine.league.Tier
@@ -79,6 +80,7 @@ import yacht.engine.league.TierName
 
 private enum class LeagueTab(val label: String) {
     LADDER("순위표"),
+    SCHEDULE("일정"),
     SEASON("리그"),
     COMPS("대회"),
     CLUBS("클럽"),
@@ -130,7 +132,10 @@ fun LeagueScreen(c: AppController) {
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            ControlCard(c, v)
+            ControlCard(c, v) {
+                lg.scheduleWeek = null
+                lg.tab = LeagueTab.SCHEDULE.ordinal
+            }
             Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -145,10 +150,13 @@ fun LeagueScreen(c: AppController) {
             lg.seasonNews?.let { SeasonNews(it) { lg.seasonNews = null } }
             val tabs = LeagueTab.entries
             val current = tabs.getOrElse(tab) { LeagueTab.LADDER }
-            // Six short tabs fit a phone's width side by side (a scrolling row hid the last two).
+            // Seven short tabs fit a phone's width side by side (a scrolling row hid the last ones):
+            // without the default 16 dp padding on each side of a tab's text.
             TabRow(selectedTabIndex = current.ordinal, containerColor = cs.background) {
                 for (t in tabs) {
-                    Tab(selected = current == t, onClick = { lg.tab = t.ordinal }, text = { Text(t.label, maxLines = 1, fontSize = 13.sp, softWrap = false) })
+                    Tab(selected = current == t, onClick = { lg.tab = t.ordinal }) {
+                        Text(t.label, maxLines = 1, fontSize = 13.sp, softWrap = false, modifier = Modifier.padding(vertical = 12.dp))
+                    }
                 }
             }
             if (v == null) {
@@ -156,8 +164,20 @@ fun LeagueScreen(c: AppController) {
             } else {
                 when (current) {
                     LeagueTab.LADDER -> LadderList(lg, v) { lg.detail = it }
+                    LeagueTab.SCHEDULE -> ScheduleTab(
+                        lg, v,
+                        onLeague = { lg.tab = LeagueTab.SEASON.ordinal },
+                        onComp = { comp ->
+                            if (comp == Comp.CLUB) {
+                                lg.tab = LeagueTab.CLUBS.ordinal
+                            } else {
+                                lg.compFocus = comp
+                                lg.tab = LeagueTab.COMPS.ordinal
+                            }
+                        },
+                    )
                     LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
-                    LeagueTab.COMPS -> CompsTab(lg, v.comps) { lg.detail = it }
+                    LeagueTab.COMPS -> CompsTab(lg, v.comps, v.clock) { lg.detail = it }
                     LeagueTab.CLUBS -> ClubsTab(lg, v.clubs) { lg.detail = it }
                     LeagueTab.NEWS -> NewsTab(c, v) { FeedList(lg, v) }
                     LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
@@ -186,7 +206,7 @@ fun LeagueScreen(c: AppController) {
 }
 
 @Composable
-private fun ControlCard(c: AppController, v: LeagueView?) {
+private fun ControlCard(c: AppController, v: LeagueView?, onSchedule: () -> Unit) {
     val lg = c.league
     val cs = MaterialTheme.colorScheme
     Card(
@@ -228,6 +248,7 @@ private fun ControlCard(c: AppController, v: LeagueView?) {
             lg.stopReason?.let { reason ->
                 Text(reason, style = MaterialTheme.typography.bodySmall, color = cs.error)
             }
+            v?.clock?.let { ClockLine(it, onSchedule) }
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in LeagueSpeed.entries) {
                     FilterChip(selected = lg.speed == s, onClick = { lg.changeSpeed(s) }, label = { Text(s.label, fontSize = 12.sp) })
@@ -526,31 +547,69 @@ private fun StreakText(streak: Int) {
 @Composable
 private fun FeedList(lg: LeagueController, v: LeagueView) {
     val cs = MaterialTheme.colorScheme
+    var kind by remember { mutableStateOf(FeedKind.ALL) }
+    val shown = remember(v.feed, kind) { v.feed.filter { kind.matches(it.comp) } }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (k in FeedKind.entries) FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(k.label, fontSize = 12.sp) })
+            }
+        }
         if (v.live.isNotEmpty()) {
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("⚔️ 지금 경기 중", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer, style = MaterialTheme.typography.labelLarge)
-                        for ((a, b) in v.live) {
-                            Text("${lg.name(a)}  vs  ${lg.name(b)}", style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer)
+                        for (m in v.live) {
+                            val team = m.comp == Comp.ALL_STAR || m.comp == Comp.FAMILY
+                            fun side(k: String) = if (team) yacht.engine.league.Competitions.teamLabel(k) else lg.name(k)
+                            Text(
+                                "${stageName(m.comp, m.label, short = true)}  ${side(m.a)}  vs  ${side(m.b)}",
+                                style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
             }
         }
         if (v.feed.isEmpty()) item { Text("아직 끝난 경기가 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
-        items(v.feed, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it) }
+        else if (shown.isEmpty()) item { Text("고른 종류의 경기 결과가 아직 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+        val weeks = v.clock?.leagueWeeks
+        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it, weeks) }
     }
 }
 
+/** Which results the feed shows. */
+private enum class FeedKind(val label: String) {
+    ALL("전체"),
+    LEAGUE("📋 리그"),
+    COMPS("🏆 대회"),
+    FRIENDLY("🤝 친선");
+
+    fun matches(c: Comp?): Boolean = when (this) {
+        ALL -> true
+        LEAGUE -> c == Comp.LEAGUE
+        COMPS -> c != null && c != Comp.LEAGUE && c != Comp.FRIENDLY && c != Comp.LEGEND && c != Comp.LAB
+        FRIENDLY -> c == Comp.FRIENDLY || c == Comp.LEGEND
+    }
+}
+
+/** Where a result was played: "🏆 요트컵 64강 · 14주차", "📋 리그 12라운드"; null for results saved before. */
+private fun whereLine(m: FeedItem, leagueWeeks: Int?): String? {
+    val c = m.comp ?: return null
+    if (c == Comp.FRIENDLY) return "🤝 친선 경기"
+    val week = if (c == Comp.LEAGUE || m.week <= 0) "" else weekName(m.week, leagueWeeks).let { if (it.isEmpty()) "" else " · $it" }
+    return stageName(c, m.label) + week
+}
+
 @Composable
-private fun FeedCard(lg: LeagueController, m: FeedItem) {
+private fun FeedCard(lg: LeagueController, m: FeedItem, leagueWeeks: Int?) {
     val cs = MaterialTheme.colorScheme
     val aPts: Int = m.games.map { if (it.a > it.b) 2 else if (it.a == it.b) 1 else 0 }.sum()
     val bPts = m.games.size * 2 - aPts
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            whereLine(m, leagueWeeks)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FeedSide(m.aName, m.deltaA, aPts > bPts, Modifier.weight(1f), TextAlign.Start)
                 Text(
@@ -612,7 +671,10 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("시즌 ${season.number}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text(
+                            "시즌 ${season.number}" + if (season.matchdays > 0) " · ${minOf(season.currentMatchday + 1, season.matchdays)}주차 / ${season.matchdays}주" else "",
+                            fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),
+                        )
                         Text("${season.played}/${season.total}경기", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
                     }
                     LinearProgressIndicator(

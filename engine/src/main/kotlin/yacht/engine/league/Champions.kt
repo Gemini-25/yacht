@@ -43,6 +43,18 @@ class ChampionsLeague private constructor(
         if (f.id in stage) stage.release(f.id) else bracket?.release(f.id)
     }
 
+    override fun stages(): List<Stage> =
+        List(stage.rounds) { k -> Stage("조별 ${k + 1}차전", GROUP_OPENS + GROUP_STEP * k, GROUP_TARGET + GROUP_TARGET_STEP * k) } +
+            KO_LABELS.indices.map { r -> Stage(KO_LABELS[r], KO_OPENS[r], KO_TARGETS[r]) }
+
+    override fun stageOf(f: Fixture): Int {
+        if (f.id in stage) return stage.roundOf(f.id)
+        val r = bracket?.roundOf(f.id) ?: -1
+        return if (r < 0) -1 else stage.rounds + r
+    }
+
+    override fun stageCounts(): List<StageCount> = stage.counts() + (bracket?.counts() ?: KO_SIZES.map { StageCount(0, it) })
+
     override fun record(r: JobResult): List<LeagueEvent> =
         if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
 
@@ -124,6 +136,13 @@ class ChampionsLeague private constructor(
         private const val KO_TIES = 7
         private val KO_LABELS = listOf("8강", "4강", "결승")
         private val KO_OPENS = listOf(0.7, 0.8, 0.9)
+        private val KO_SIZES = listOf(4, 2, 1)
+
+        // Calendar targets: matchdays from 8% of the season, a stage about every four weeks;
+        // the final close to the end.
+        private const val GROUP_TARGET = 0.08
+        private const val GROUP_TARGET_STEP = 0.08
+        private val KO_TARGETS = listOf(0.60, 0.72, 0.94)
 
         /** The 16 entrants in entry order (see the class comment). */
         fun entrants(start: SeasonStart): List<String> {

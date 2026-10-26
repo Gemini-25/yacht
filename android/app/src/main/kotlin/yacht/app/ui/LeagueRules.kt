@@ -87,6 +87,11 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Stepper("레이팅 상위만", cfg.onlyTop, 0..200, { if (it == 0) "모두" else "${it}명" }, step = 8) { cfg = cfg.copy(onlyTop = it) }
                 HorizontalDivider()
                 Text("대회", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "시즌은 주 단위로 흘러가요. 리그 한 라운드가 한 주예요. 요트컵과 챔피언스 리그는 시즌이 시작될 때 정해진 주에 하나씩 열리고, " +
+                        "클럽 리그는 몇 주마다 한 라운드씩 치러요. 리그가 끝나면 포스트시즌에 플레이오프를 치르고 시즌을 마감해요. 일정은 ‘일정’ 탭에서 볼 수 있어요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
                 Toggle("요트컵", cfg.cup) { cfg = cfg.copy(cup = it) }
                 Toggle("챔피언스 리그", cfg.champions) { cfg = cfg.copy(champions = it) }
                 Toggle("슈퍼컵", cfg.superCup) { cfg = cfg.copy(superCup = it) }

@@ -20,6 +20,9 @@ class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>)
     private fun opensAt(r: Int): Double =
         if (roundCount <= 10) 0.05 + 0.1 * r else 0.05 + 0.9 * r / (roundCount - 1)
 
+    /** On the calendar the rounds spread from 4% to 88% of the season, the final some weeks before the end. */
+    override fun target(round: Int): Double = if (roundCount <= 1) FIRST_TARGET else FIRST_TARGET + (LAST_TARGET - FIRST_TARGET) * round / (roundCount - 1)
+
     override fun news(t: KnockoutTie): List<LeagueEvent> {
         val w = t.winner!!
         val l = t.loser!!
@@ -55,6 +58,8 @@ class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>)
 
         /** The cup needs at least this many AIs. */
         const val MIN_AIS = 4
+        private const val FIRST_TARGET = 0.04
+        private const val LAST_TARGET = 0.88
 
         /** "결승", "4강", "8강", ... for round [r] of a bracket of [size]. */
         fun label(size: Int, r: Int): String {

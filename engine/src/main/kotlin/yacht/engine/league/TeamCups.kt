@@ -32,6 +32,12 @@ class AllStar private constructor(
 
     override fun release(f: Fixture) = bracket.release(f.id)
 
+    override fun stages(): List<Stage> = bracket.stages()
+
+    override fun stageOf(f: Fixture): Int = bracket.roundOf(f.id)
+
+    override fun stageCounts(): List<StageCount> = bracket.counts()
+
     override fun record(r: JobResult): List<LeagueEvent> {
         if (!Knockout.current(seed, comp, r)) return emptyList()
         val t = bracket.record(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) ?: return emptyList()
@@ -151,6 +157,20 @@ class FamilyCup private constructor(
         if (f.id in stage) stage.release(f.id) else bracket?.release(f.id)
     }
 
+    override fun stages(): List<Stage> =
+        List(stage.rounds) { k ->
+            val t = if (stage.rounds <= 1) GROUP_TARGET else GROUP_TARGET + (GROUP_TARGET_LAST - GROUP_TARGET) * k / (stage.rounds - 1)
+            Stage("조별 ${k + 1}차전", groupOpens(k), t)
+        } + KO_LABELS.indices.map { r -> Stage(KO_LABELS[r], KO_OPENS[r], KO_TARGETS[r]) }
+
+    override fun stageOf(f: Fixture): Int {
+        if (f.id in stage) return stage.roundOf(f.id)
+        val r = bracket?.roundOf(f.id) ?: -1
+        return if (r < 0) -1 else stage.rounds + r
+    }
+
+    override fun stageCounts(): List<StageCount> = stage.counts() + (bracket?.counts() ?: listOf(StageCount(0, 2), StageCount(0, 1)))
+
     override fun record(r: JobResult): List<LeagueEvent> =
         if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
 
@@ -232,6 +252,9 @@ class FamilyCup private constructor(
         private const val KO_TIES = 3
         private val KO_LABELS = listOf("4강", "결승")
         private val KO_OPENS = listOf(0.75, 0.9)
+        private const val GROUP_TARGET = 0.12
+        private const val GROUP_TARGET_LAST = 0.56
+        private val KO_TARGETS = listOf(0.80, 0.90)
 
         /** True for the seasons that hold a family cup: 2, 5, 8, ... */
         fun due(season: Int): Boolean = season >= 2 && (season - 2) % 3 == 0

@@ -36,6 +36,8 @@ import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
 import yacht.engine.league.SeasonPlan
+import yacht.engine.league.SeasonCalendar
+import yacht.engine.league.WeekStage
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
@@ -144,7 +146,44 @@ data class FeedItem(
     val notes: List<String>,
     /** [a]'s P(win) after each half-turn of the first game, percent (when the live board still has it). */
     val curve: IntArray? = null,
+    /** Where it was played: the competition (null for matches saved before), its stage or board, the week. */
+    val comp: Comp? = null,
+    val label: String = "",
+    val week: Int = SeasonCalendar.NONE,
 )
+
+/** A match being played: its two sides (team ids for team matches) and where. */
+data class LiveMatch(val a: String, val b: String, val comp: Comp, val label: String, val week: Int)
+
+/** One week of the season (일정): its stages, the league round first. */
+data class WeekRow(val week: Int, val stages: List<WeekStage>) {
+    val done: Boolean get() = stages.all { it.done }
+}
+
+/**
+ * The season's clock and calendar (일정). [week] is the week in play: 1..[leagueWeeks] are the
+ * league rounds, the weeks after them the post-season; [weeks] holds every week from 1 to
+ * [lastWeek] with its stages and what has been played.
+ */
+data class ClockView(
+    val season: Int,
+    val week: Int,
+    val leagueWeeks: Int,
+    val lastWeek: Int,
+    /** Everything is played: the season is closing. */
+    val over: Boolean,
+    val weeks: List<WeekRow>,
+    /** Matches being played per (competition, week). */
+    val live: Map<Pair<Comp, Int>, Int> = emptyMap(),
+) {
+    fun row(w: Int): WeekRow? = weeks.getOrNull(w - 1)
+
+    /** Stages of the weeks before [week] that still have matches to play. */
+    val late: List<WeekStage> get() = weeks.take((week - 1).coerceIn(0, weeks.size)).flatMap { r -> r.stages.filter { !it.done && it.set } }
+
+    /** The next weeks' stages that are not league rounds, from week [from] on. */
+    fun upcoming(from: Int): List<WeekStage> = weeks.drop((from - 1).coerceAtLeast(0)).flatMap { r -> r.stages.filter { it.comp != Comp.LEAGUE } }
+}
 
 data class LeagueView(
     val rows: List<LadderRow>,
@@ -152,7 +191,7 @@ data class LeagueView(
     val matches: Long,
     val games: Long,
     /** Matches being played right now. */
-    val live: List<Pair<String, String>>,
+    val live: List<LiveMatch>,
     val season: SeasonView? = null,
     /** This season's competitions as the 대회 tab draws them (post-season last). */
     val comps: List<Pair<Comp, CompetitionView>> = emptyList(),
@@ -162,6 +201,8 @@ data class LeagueView(
     /** This season's most dramatic games and the all-time best, best first. */
     val highlights: List<Highlight> = emptyList(),
     val allTime: List<Highlight> = emptyList(),
+    /** The season's weeks (null before the first season). */
+    val clock: ClockView? = null,
 )
 
 /** The 클럽 tab: this season's club table, every club and the latest transfers and draft picks. */
@@ -435,6 +476,10 @@ class LeagueController(
     var tab by mutableStateOf(0)
     var detail by mutableStateOf<String?>(null)
 
+    /** The competition the 대회 tab shows (null: the first), and the week the 일정 tab shows (null: the week in play). */
+    var compFocus by mutableStateOf<Comp?>(null)
+    var scheduleWeek by mutableStateOf<Int?>(null)
+
     /** The player's own AIs (saved) and clone profile. */
     var customs by mutableStateOf<List<CustomAiSpec>>(emptyList())
         private set
@@ -500,7 +545,8 @@ class LeagueController(
     private val lock = Any()
     private val throttle = Any()
     private val busy = HashSet<String>()
-    private val live = LinkedHashSet<Pair<String, String>>()
+    /** Jobs being played, by their two sides. */
+    private val live = LinkedHashMap<Pair<String, String>, Fixture>()
     private val lastDelta = HashMap<String, Int>()
     private var startRanks: Map<String, Int> = emptyMap()
     private var stop = AtomicBoolean(true)
@@ -1001,7 +1047,7 @@ class LeagueController(
                     if (!recorded && job.comp != Comp.FRIENDLY) world?.release(job)
                     if (job.comp == Comp.LAB) labInFlight-- else {
                         busy -= job.players.toSet()
-                        live -= job.a to job.b
+                        live.remove(job.a to job.b)
                     }
                     if (isCup(job.comp)) cupsInFlight--
                     if (job.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight = maxOf(0, w.teamsInFlight - 1) }
@@ -1020,7 +1066,7 @@ class LeagueController(
             // Lab games may run while their AIs play league games: they take no one's slot.
             if (it.comp == Comp.LAB) labInFlight++ else {
                 busy += it.players
-                live += it.a to it.b
+                live[it.a to it.b] = it
             }
             if (isCup(it.comp)) cupsInFlight++
             if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
@@ -1617,6 +1663,7 @@ class LeagueController(
             FeedItem(
                 m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes,
                 curves?.curves(m.a, m.b)?.firstOrNull()?.let { c -> if (c.a == m.a) c.curveA() else IntArray(c.curveA().size) { 100 - c.curveA()[it] } },
+                m.comp, m.label, m.week,
             )
         }
         // A view equal to the last one is handed over as the same object, so the screen skips it.
@@ -1633,10 +1680,27 @@ class LeagueController(
         val w = world
         w?.lab?.let { b -> val v = b.current?.results to b.history; scope.launch { lab = v } }
         return LeagueView(
-            rows, feed, l.matches, l.games, live.toList(), s?.let { seasonView(it) }, comps, clubs,
+            rows, feed, l.matches, l.games, live.values.map { LiveMatch(it.a, it.b, it.comp, it.label, it.week) }, s?.let { seasonView(it) }, comps, clubs,
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
+            s?.let { runCatching { clockView(it) }.getOrNull() },
         )
     }
+
+    /** The season's weeks; rows equal to the last snapshot's are handed over as the same objects. */
+    private fun clockView(p: SeasonPlan): ClockView {
+        val cal = p.calendar
+        val byWeek = p.schedule().groupBy { it.week }
+        val rows = (1..cal.lastWeek).map { w ->
+            val r = WeekRow(w, byWeek[w].orEmpty())
+            lastWeeks.getOrNull(w - 1)?.takeIf { it == r } ?: r
+        }
+        lastWeeks = rows
+        val playing = HashMap<Pair<Comp, Int>, Int>()
+        for (f in live.values) if (f.week != SeasonCalendar.NONE) playing.merge(f.comp to f.week, 1, Int::plus)
+        return ClockView(p.number, p.week, cal.leagueWeeks, cal.lastWeek, p.finished, rows, playing)
+    }
+
+    private var lastWeeks: List<WeekRow> = emptyList()
 
     /** The last snapshot's views (reused when equal: see [snapshot]); under the lock. */
     private var lastComps: List<Pair<Comp, CompetitionView>> = emptyList()
@@ -1907,7 +1971,7 @@ class LeagueController(
                 val d = division.coerceIn(0, s.divisions.size - 1)
                 val md = (matchday ?: s.currentMatchday).coerceIn(0, maxOf(0, s.matchdays - 1))
                 val items = s.matchday(md).filter { it.division == d }.map { f ->
-                    CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), s.result(f.id), !s.isPlayed(f.id) && (f.a to f.b) in live)
+                    CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), s.result(f.id), !s.isPlayed(f.id) && live.containsKey(f.a to f.b))
                 }
                 CalendarView(d, md, s.matchdays, s.currentMatchday, items, s.number)
             }

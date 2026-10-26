@@ -1,6 +1,24 @@
 package yacht.engine.league
 
 /**
+ * A stage of the season on its week, for the screen: [played] of [total] fixtures (0 of 0 for a
+ * playoff not [set] up yet); [final] for the last stage of a cup, the champions league, an event
+ * or the title playoff.
+ */
+data class WeekStage(
+    val comp: Comp,
+    val stage: Int,
+    val label: String,
+    val week: Int,
+    val played: Int,
+    val total: Int,
+    val final: Boolean,
+    val set: Boolean = true,
+) {
+    val done: Boolean get() = set && played >= total
+}
+
+/**
  * Everything a season plays: the league stage ([league]) and the other competitions ([comps]),
  * then the post-season ones ([post], e.g. playoffs) once the league is over. Hands the workers
  * their next fixture and takes the results. See docs/LEAGUE_SPEC.md section 2.4.
@@ -43,26 +61,123 @@ class SeasonPlan(
 
     fun competition(comp: Comp): Competition? = comps.firstOrNull { it.comp == comp } ?: post.firstOrNull { it.comp == comp }
 
+    // ---- the calendar ---------------------------------------------------------------------------
+
+    /** Weeks of the regular season: the league's rounds. */
+    val leagueWeeks: Int by lazy(LazyThreadSafetyMode.NONE) { maxOf(1, league.matchdays) }
+
+    private var built: SeasonCalendar? = null
+    private var builtFor = -1
+
+    /**
+     * The season's weeks ([SeasonCalendar]) for the competitions set up so far; the post-season's
+     * from the rules until it is set up. Rebuilt when a competition is added.
+     */
+    val calendar: SeasonCalendar
+        get() {
+            val key = comps.size * 10_000 + post.size * 10 + (if (postStarted) 1 else 0)
+            built?.let { if (builtFor == key) return it }
+            val post = if (postStarted) post.map { it.comp to runCatching { it.stages() }.getOrDefault(emptyList()) } else expectedPost()
+            return SeasonCalendar.build(leagueWeeks, comps, post).also {
+                built = it
+                builtFor = key
+                openWeek = Int.MIN_VALUE
+            }
+        }
+
+    /** The playoffs the rules call for, before the league is over (the calendar shows them ahead). */
+    private fun expectedPost(): List<Pair<Comp, List<Stage>>> {
+        val out = ArrayList<Pair<Comp, List<Stage>>>()
+        if (config.titlePlayoff && league.divisions.firstOrNull().orEmpty().size >= 4) out += Comp.TITLE_PLAYOFF to listOf(Stage("4강", 0.0), Stage("결승", 0.0))
+        if (config.promotionPlayoff && league.divisions.size >= 2) out += Comp.PROMOTION_PLAYOFF to listOf(Stage(PromotionPlayoff.STAGE, 0.0))
+        return out
+    }
+
+    /**
+     * The week the season is in: the league round in play (the lowest with a fixture left), then
+     * the first post-season week with a playoff tie left; the last week once all is played.
+     */
+    val week: Int
+        get() {
+            if (!league.finished) return league.currentMatchday + 1
+            val cal = calendar
+            if (!postStarted) return minOf(cal.lastWeek, leagueWeeks + 1)
+            var w = Int.MAX_VALUE
+            for (c in post) for ((s, n) in c.stageCounts().withIndex()) if (!n.done) w = minOf(w, cal.week(c.comp, s))
+            return if (w == Int.MAX_VALUE || w == SeasonCalendar.NONE) cal.lastWeek else w
+        }
+
+    private var openWeek = Int.MIN_VALUE
+    private var opens = DoubleArray(0)
+
+    /** The league progress each competition of [comps] opens its stages by in week [w]. */
+    private fun opens(w: Int): DoubleArray {
+        val cal = calendar
+        if (w == openWeek && opens.size == comps.size) return opens
+        opens = DoubleArray(comps.size) { i -> cal.progress(comps[i].comp, w) }
+        openWeek = w
+        return opens
+    }
+
+    /** What competition [i] of [comps] is open to from [o] (a competition off the calendar goes by league progress). */
+    private fun open(o: DoubleArray, i: Int): Double = if (league.finished) 1.0 else o[i].let { if (it.isNaN()) progress else it }
+
+    /** [f] with the week of its stage. */
+    private fun stamp(c: Competition, f: Fixture): Fixture {
+        val w = calendar.week(c.comp, runCatching { c.stageOf(f) }.getOrDefault(-1))
+        return if (w == SeasonCalendar.NONE || w == f.week) f else f.copy(week = w)
+    }
+
     /**
      * The next fixture: knockout and group fixtures first while fewer than [cupCap] such jobs
      * are in flight ([cupsInFlight]), then the league, then team competitions, then the
-     * post-season. [cost] estimates a league fixture's ms per game (heaviest first late in the
+     * post-season. A competition's stage opens in its calendar week (the week of the league
+     * round in play, [week]); when nothing else is free the next week's stages may start, so no
+     * worker waits. [cost] estimates a league fixture's ms per game (heaviest first late in the
      * season).
      */
     fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null, teamsInFlight: Int = Int.MAX_VALUE): Fixture? {
-        val p = progress
+        val o = opens(if (league.finished) leagueWeeks else league.currentMatchday + 1)
         if (cupsInFlight < cupCap) {
-            for (c in comps) if (!isTeam(c.comp)) c.next(p, busy)?.let { return it }
+            for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
         }
         // One team fixture at a time ahead of the league, so the club league and the family cup
         // play their rounds as they open instead of all after the league.
-        if (teamsInFlight < 1) for (c in comps) if (isTeam(c.comp)) c.next(p, busy)?.let { return it }
+        if (teamsInFlight < 1) for ((i, c) in comps.withIndex()) if (isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
         league.next(busy, cost)?.let { return league.job(it) }
-        for (c in comps) if (isTeam(c.comp)) c.next(p, busy)?.let { return it }
+        for ((i, c) in comps.withIndex()) if (isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
         // Cup fixtures are not capped when nothing else is left to do.
-        for (c in comps) if (!isTeam(c.comp)) c.next(p, busy)?.let { return it }
-        if (league.finished) for (c in post) c.next(1.0, busy)?.let { return it }
+        for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
+        if (!league.finished) {
+            // Nothing else is free: next week's stages start early rather than a worker waiting.
+            val cal = calendar
+            val w = league.currentMatchday + 2
+            for (c in comps) c.next(cal.progress(c.comp, w).let { if (it.isNaN()) progress else it }, busy)?.let { return stamp(c, it) }
+        }
+        if (league.finished) for (c in post) c.next(1.0, busy)?.let { return stamp(c, it) }
         return null
+    }
+
+    /**
+     * Every stage of the season on its week, league rounds first in each week (comp LEAGUE, stage
+     * = matchday), with what has been played; playoffs not set up yet have no fixtures counted.
+     * Scans the season: for the screen, not per job.
+     */
+    fun schedule(): List<WeekStage> {
+        val cal = calendar
+        val out = ArrayList<WeekStage>()
+        for ((k, n) in league.matchdayCounts().withIndex()) out += WeekStage(Comp.LEAGUE, k, "${k + 1}라운드", k + 1, n.played, n.total, false)
+        for (e in cal.entries) {
+            val c = competition(e.comp)
+            val counts = c?.let { runCatching { it.stageCounts() }.getOrNull() }.orEmpty()
+            val big = e.comp != Comp.CLUB && e.comp != Comp.PROMOTION_PLAYOFF
+            for ((s, st) in e.stages.withIndex()) {
+                val n = counts.getOrNull(s)
+                out += WeekStage(e.comp, s, st.label, e.week(s), n?.played ?: 0, n?.total ?: 0, big && s == e.stages.lastIndex, set = c != null)
+            }
+        }
+        out.sortWith(compareBy<WeekStage> { it.week }.thenBy { if (it.comp == Comp.LEAGUE) 0 else 1 })
+        return out
     }
 
     fun release(f: Fixture) {

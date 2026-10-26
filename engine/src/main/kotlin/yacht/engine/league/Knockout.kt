@@ -121,7 +121,8 @@ class Knockout(
     first: List<Pair<DrawEntry?, DrawEntry?>>,
     legsOf: (round: Int) -> Int,
     private val labelOf: (round: Int) -> String,
-    private val opensAt: (round: Int) -> Double,
+    /** League progress at which each round opens. */
+    val opensAt: (round: Int) -> Double,
     idBase: Int = 0,
 ) {
     val rounds: List<List<KnockoutTie>>
@@ -159,6 +160,15 @@ class Knockout(
     fun label(round: Int): String = labelOf(round)
 
     fun tie(id: Int): KnockoutTie? = byId[id]
+
+    /** The round of tie [id]; -1 when it is not this bracket's. */
+    fun roundOf(id: Int): Int = byId[id]?.round ?: -1
+
+    /** Played and total ties (byes left out) of each round. */
+    fun counts(): List<StageCount> = rounds.map { r -> StageCount(r.count { !it.bye && it.result != null }, r.count { !it.bye }) }
+
+    /** Stages for the calendar: each round with its label, opening threshold and [target]. */
+    fun stages(target: (round: Int) -> Double = opensAt): List<Stage> = rounds.indices.map { r -> Stage(labelOf(r), opensAt(r), target(r)) }
 
     /** True when [id] is one of this bracket's ties. */
     operator fun contains(id: Int): Boolean = id in byId
@@ -390,6 +400,20 @@ class GroupStage(
 
     fun matchLabel(m: Match): String = "${groupLabel(m.group)} ${m.round + 1}차전"
 
+    /** The round of match [id]; -1 when it is not this stage's. */
+    fun roundOf(id: Int): Int = byId[id]?.round ?: -1
+
+    /** Played and total matches of each round. */
+    fun counts(): List<StageCount> {
+        val played = IntArray(rounds)
+        val total = IntArray(rounds)
+        for (m in matches) {
+            total[m.round]++
+            if (m.result != null) played[m.round]++
+        }
+        return List(rounds) { StageCount(played[it], total[it]) }
+    }
+
     fun entry(key: String): DrawEntry? = groups.firstNotNullOfOrNull { g -> g.firstOrNull { it.key == key } }
 
     /** The first open match (earliest round first) whose fixture keeps no AI of [busy] waiting. */
@@ -526,6 +550,15 @@ abstract class BracketCompetition(
         Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = bracket.label(t.round))
 
     override fun next(p: Double, busy: Set<String>): Fixture? = bracket.next(p, busy, ::fixture)
+
+    /** The share of the regular season round [round] would like to be played at (its threshold by default). */
+    protected open fun target(round: Int): Double = bracket.opensAt(round)
+
+    override fun stages(): List<Stage> = bracket.stages(::target)
+
+    override fun stageOf(f: Fixture): Int = bracket.roundOf(f.id)
+
+    override fun stageCounts(): List<StageCount> = bracket.counts()
 
     override fun release(f: Fixture) = bracket.release(f.id)
 

@@ -77,6 +77,14 @@ class PromotionPlayoff private constructor(
         brackets.firstOrNull { f.id in it }?.release(f.id)
     }
 
+    /** One stage: every boundary's tie at once. */
+    override fun stages(): List<Stage> = listOf(Stage(STAGE, 0.0))
+
+    override fun stageOf(f: Fixture): Int = if (brackets.any { f.id in it }) 0 else -1
+
+    override fun stageCounts(): List<StageCount> =
+        listOf(brackets.map { it.counts().single() }.fold(StageCount(0, 0)) { x, y -> StageCount(x.played + y.played, x.total + y.total) })
+
     override fun record(r: JobResult): List<LeagueEvent> {
         val f = r.fixture
         val i = brackets.indexOfFirst { f.id in it }
@@ -116,6 +124,7 @@ class PromotionPlayoff private constructor(
 
     companion object {
         const val HEADER = "promopo 1"
+        const val STAGE = "승강전"
 
         /** "1·2부 승강전" for the boundary below division [d] (0 = top). */
         fun label(d: Int): String = "${d + 1}·${d + 2}부 승강전"

@@ -44,6 +44,8 @@ data class Fixture(
     val rated: Boolean = true,
     /** Short label for the screen ("16강", "B조 3차전", "3라운드"). */
     val label: String = "",
+    /** The week of the season it belongs to ([SeasonCalendar]); metadata only, never in the deal. */
+    val week: Int = SeasonCalendar.NONE,
 ) {
     /** Every AI this job keeps busy. */
     val players: List<String> get() = if (kind == JobKind.TEAM) lineupA + lineupB else listOf(a, b)

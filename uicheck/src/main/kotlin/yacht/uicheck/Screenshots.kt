@@ -183,14 +183,16 @@ private fun run(args: Array<String>) {
     }
     shot(c, out, "16_league_ladder", heightDp = 1500)
     c.league.tab = 1
-    shot(c, out, "16b_league_season", heightDp = 1500)
+    shot(c, out, "16e_league_schedule", heightDp = 1500)
     c.league.tab = 2
-    shot(c, out, "16c_league_comps", heightDp = 1500)
+    shot(c, out, "16b_league_season", heightDp = 1500)
     c.league.tab = 3
-    shot(c, out, "16d_league_clubs", heightDp = 1500)
+    shot(c, out, "16c_league_comps", heightDp = 1500)
     c.league.tab = 4
-    shot(c, out, "17_league_feed", heightDp = 1100)
+    shot(c, out, "16d_league_clubs", heightDp = 1500)
     c.league.tab = 5
+    shot(c, out, "17_league_feed", heightDp = 1100)
+    c.league.tab = 6
     shot(c, out, "18_league_records", heightDp = 1500)
     c.league.tab = 0
     c.league.detail = "win"
