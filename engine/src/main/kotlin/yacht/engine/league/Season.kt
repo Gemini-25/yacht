@@ -45,6 +45,8 @@ class Season private constructor(
     val seed: Long,
     val divisions: List<List<String>>,
     val double: Boolean,
+    /** Which tier each division is in: a regional pyramid's groups, else one division a tier. */
+    val tiers: Tiers = Tiers.linear(divisions.size),
 ) {
     val standings = HashMap<String, Standing>()
     private val fixtures = ArrayList<LeagueFixture>()
@@ -294,6 +296,8 @@ class Season private constructor(
         append("season 3\n")
         append("number $number $seed ${if (double) 1 else 0}\n")
         for ((i, d) in divisions.withIndex()) append("division $i ${d.joinToString(",")}\n")
+        // A linear league's file stays as before (an older version reads it as it always did).
+        if (!tiers.linear) append(tiers.encode()).append('\n')
         for (f in fixtures) {
             append("fx ${f.id} ${f.division} ${f.matchday} ${f.a} ${f.b} ${if (isPlayed(f.id)) 1 else 0}")
             results[f.id]?.let { gs -> append(' ').append(gs.joinToString(";") { encodeGame(it) }) }
@@ -318,12 +322,27 @@ class Season private constructor(
             return GameScore(p[0].toInt(), p[1].toInt(), flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, flags and 8 != 0)
         }
 
-        /** A new season of the league stage with these [divisions] (best division first). */
-        fun start(number: Int, seed: Long, divisions: List<List<String>>, double: Boolean = false): Season {
-            val s = Season(number, seed, divisions.filter { it.isNotEmpty() }, double)
+        /**
+         * A new season of the league stage with these [divisions] (best division first), in
+         * [tiers] (null: one division a tier). Empty divisions are left out (and their tiers'
+         * groups with them).
+         */
+        fun start(number: Int, seed: Long, divisions: List<List<String>>, double: Boolean = false, tiers: Tiers? = null): Season {
+            val kept = divisions.indices.filter { divisions[it].isNotEmpty() }
+            val t = tiers?.takeIf { it.size == divisions.size && kept.size == divisions.size }
+                ?: tiers?.takeIf { it.size == divisions.size }?.let { all -> keptTiers(all, kept) }
+            val s = Season(number, seed, kept.map { divisions[it] }, double, t ?: Tiers.linear(kept.size))
             s.build(Random(DiceStream.mix(seed, 0x5EA5)))
             return s
         }
+
+        /** [all] without the divisions not in [kept]; null when a tier would be left empty (then linear). */
+        private fun keptTiers(all: Tiers, kept: List<Int>): Tiers? = runCatching {
+            val of = kept.map { all.tier(it) }
+            // Tiers renumbered without gaps.
+            val renumber = of.distinct().withIndex().associate { (i, t) -> t to i }
+            Tiers(of.map { renumber.getValue(it) }.toIntArray(), kept.map { all.names[it] })
+        }.getOrNull()
 
         /** Balanced divisions of [ranking] (best first). */
         fun split(ranking: List<String>, count: Int): List<List<String>> {
@@ -351,6 +370,7 @@ class Season private constructor(
             var seed = 0L
             var double = false
             val divisions = ArrayList<MutableList<String>>()
+            var tierLine: List<String>? = null
             for (l in lines) {
                 val f = l.split(' ')
                 when (f[0]) {
@@ -360,11 +380,13 @@ class Season private constructor(
                         double = f.getOrNull(3) == "1"
                     }
                     "division" -> divisions += f.getOrElse(2) { "" }.split(',').filter { it.isNotEmpty() }.toMutableList()
+                    "tiers" -> tierLine = f.drop(1)
                 }
             }
             require(divisions.any { it.isNotEmpty() }) { "no divisions in the saved season" }
             val known = keys.toSet()
-            val s = Season(number, seed, divisions, double)
+            val tiers = tierLine?.let { Tiers.decode(it, divisions.size) } ?: Tiers.linear(divisions.size)
+            val s = Season(number, seed, divisions, double, tiers)
             for (d in divisions) for (k in d) s.standings[k] = Standing(k)
             // Standings from before games were counted: counted again from the saved results.
             val noGames = HashSet<String>()

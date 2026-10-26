@@ -26,6 +26,15 @@ data class LeagueConfig(
     val promotionPlayoff: Boolean = true,
     /** The top 4 of the 1st division play semis and a final for the title. */
     val titlePlayoff: Boolean = true,
+    /**
+     * A league of more than [Pyramid.MAX_LINEAR] groups of [groupSize] plays as a regional
+     * pyramid (지역 리그 피라미드) instead of [divisions] divisions; off, always [divisions].
+     */
+    val pyramid: Boolean = true,
+    /** Players per group of the pyramid (조 인원). */
+    val groupSize: Int = 50,
+    /** Players moving automatically from each lower group of the pyramid. */
+    val groupSwap: Int = 3,
     /** Generated and evolved players in the league (the book is kept at this size). */
     val generated: Int = DEFAULT_PLAYERS,
     /** Players age, grow, decline and retire, and new ones come in (나이와 은퇴); off, nobody changes. */
@@ -52,6 +61,8 @@ data class LeagueConfig(
     init {
         require(divisions in 1..6) { "divisions $divisions" }
         require(autoSwap in 0..5)
+        require(groupSize in MIN_GROUP..MAX_GROUP) { "groupSize $groupSize" }
+        require(groupSwap in 1..8)
         require(generated in 0..MAX_PLAYERS)
         require(childShare in 0..100)
         require(clubs == 0 || clubs in 4..24)
@@ -67,6 +78,9 @@ data class LeagueConfig(
         append("autoSwap $autoSwap\n")
         append("promotionPlayoff ${flag(promotionPlayoff)}\n")
         append("titlePlayoff ${flag(titlePlayoff)}\n")
+        append("pyramid ${flag(pyramid)}\n")
+        append("groupSize $groupSize\n")
+        append("groupSwap $groupSwap\n")
         append("generated $generated\n")
         append("aging ${flag(aging)}\n")
         append("childShare $childShare\n")
@@ -90,6 +104,10 @@ data class LeagueConfig(
         const val DEFAULT_PLAYERS = 200
         const val MAX_PLAYERS = 3000
 
+        /** Smallest and largest groups of the pyramid. */
+        const val MIN_GROUP = 30
+        const val MAX_GROUP = 80
+
         /** Reads a saved config; missing or bad values keep the defaults. */
         fun decode(text: String): LeagueConfig {
             var c = LeagueConfig()
@@ -105,6 +123,9 @@ data class LeagueConfig(
                         "autoSwap" -> c.copy(autoSwap = v.toInt())
                         "promotionPlayoff" -> c.copy(promotionPlayoff = v == "1")
                         "titlePlayoff" -> c.copy(titlePlayoff = v == "1")
+                        "pyramid" -> c.copy(pyramid = v == "1")
+                        "groupSize" -> c.copy(groupSize = v.toInt())
+                        "groupSwap" -> c.copy(groupSwap = v.toInt())
                         "generated" -> c.copy(generated = v.toInt())
                         // Before ages: the number replaced each season, 0 = no evolution.
                         "evolution" -> c.copy(aging = v != "0")

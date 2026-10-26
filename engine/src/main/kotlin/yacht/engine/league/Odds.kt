@@ -91,8 +91,10 @@ class OddsInput internal constructor(
     internal val fb: IntArray,
     internal val win: DoubleArray,
     internal val notLose: DoubleArray,
-    /** Automatic moves across the boundary below each division, and whether it has a playoff. */
+    /** Each division's tier, and per boundary below tier t ([Pyramid.crossing]): s up from each lower group, places down from the upper groups, and whether it has playoff ties. */
+    internal val tierOf: IntArray,
     internal val swapBelow: IntArray,
+    internal val downBelow: IntArray,
     internal val playoffBelow: BooleanArray,
     internal val clPlaces: IntArray,
     internal val titlePlayoff: Boolean,
@@ -123,13 +125,16 @@ class OddsInput internal constructor(
  * - The score difference moves by [WIN_DIFF] per decided match (draws: none); the score itself
  *   is not simulated, so a tie on points and difference goes to today's score, then to the
  *   division's order.
+ * - A pyramid's boundaries ([Pyramid.crossing]) compare places across groups by points and
+ *   score difference (the off-season: per match).
  * - Knockout ties (the title playoff, the promotion playoff) are won with the Bradley-Terry
  *   share of the two AIs, legs and deciders ignored. Rather than half the playoff place, the
  *   promotion and relegation odds add that share of it; and a tie's outcome is added as an
  *   expectation in each run instead of being drawn, which costs nothing and lowers the noise.
  *   A playoff counts as decided only once the whole competition is over ([input] of a plan).
  * - Champions league places: while the cup is still on, division 1's top 12 and division 2's
- *   top 2 (one division: its top 14), the cup finalists' places not counted. Once the cup's
+ *   top 2 (one division: its top 14; a pyramid's 2부 groups: their winners), the cup finalists'
+ *   places not counted. Once the cup's
  *   finalists are known, or without a cup, each run applies [ChampionsLeague.entrants]' rule:
  *   those places, the finalists, then the 1st division's next places until 16, then by rating.
  *
@@ -263,22 +268,32 @@ object Odds {
             notLose[m] = p + d / 2
             m++
         }
-        // Places of each division, as Offseason.moves, PromotionPlayoff and ChampionsLeague have them.
+        // Places of each boundary, as Pyramid.crossing (Offseason.moves, PromotionPlayoff) and
+        // ChampionsLeague have them.
         val size = IntArray(nd) { divs[it].size }
-        val swapBelow = IntArray(nd)
-        val playoffBelow = BooleanArray(nd)
-        for (d in 0 until nd - 1) {
-            val swap = minOf(config.autoSwap, size[d] / 3, size[d + 1] / 3)
-            swapBelow[d] = swap
-            playoffBelow[d] = config.promotionPlayoff && size[d] - swap - 1 >= 0 && swap < size[d + 1]
+        val tiers = season.tiers
+        val nt = tiers.count
+        val tierOf = IntArray(nd) { tiers.tier(it) }
+        val swapBelow = IntArray(maxOf(0, nt))
+        val downBelow = IntArray(maxOf(0, nt))
+        val playoffBelow = BooleanArray(maxOf(0, nt))
+        for (t in 0 until nt - 1) {
+            val upper = tiers.groups(t)
+            val lower = tiers.groups(t + 1)
+            val u = upper.count()
+            val l = lower.count()
+            val swap = minOf(if (tiers.linear) config.autoSwap else config.groupSwap, lower.minOf { size[it] } / 3, upper.minOf { size[it] } * u / (3 * l))
+            swapBelow[t] = swap
+            downBelow[t] = swap * l
+            playoffBelow[t] = config.promotionPlayoff && upper.sumOf { size[it] } > swap * l && lower.any { size[it] > swap }
         }
         val clOn = config.champions && n >= ChampionsLeague.SIZE
         val exact = finalists?.takeIf { clOn }?.map { index[it] ?: -1 }?.toIntArray()
         val clPlaces = IntArray(nd) { d ->
             if (!clOn || exact != null) 0
-            else when (d) {
-                0 -> if (nd == 1) CL_FIRST + CL_SECOND else CL_FIRST
-                1 -> CL_SECOND
+            else when (tierOf[d]) {
+                0 -> if (nt == 1) CL_FIRST + CL_SECOND else CL_FIRST
+                1 -> ChampionsLeague.secondPlaces(tiers.groupCount(1))
                 else -> 0
             }.coerceAtMost(size[d])
         }
@@ -286,7 +301,7 @@ object Odds {
         val byRating = (0 until n).sortedByDescending { strength[it] }.toIntArray()
         return OddsInput(
             season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, strength,
-            fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), swapBelow, playoffBelow, clPlaces,
+            fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), tierOf, swapBelow, downBelow, playoffBelow, clPlaces,
             config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating,
         )
     }
@@ -313,7 +328,15 @@ object Odds {
         val win = input.win
         val notLose = input.notLose
         val strength = input.strength
+        val tierOf = input.tierOf
+        val nt = if (nd == 0) 0 else tierOf[nd - 1] + 1
         val swapBelow = input.swapBelow
+        val downBelow = input.downBelow
+        // Divisions of each tier, and the automatic drops every upper group gives for sure
+        // (the rest of a boundary's drops go to the worst of the next places across its groups).
+        val tierStart = IntArray(nt + 1).also { ts -> for (t in 0..nt) ts[t] = (0 until nd).firstOrNull { tierOf[it] >= t } ?: nd }
+        val groupsIn = IntArray(nt) { tierStart[it + 1] - tierStart[it] }
+        val baseDown = IntArray(nt) { t -> if (t < nt - 1) downBelow[t] / groupsIn[t] else 0 }
         val clPlaces = input.clPlaces
         val titlePlayoff = input.titlePlayoff
         val m = fa.size
@@ -380,8 +403,9 @@ object Odds {
                 }
                 // Ascending keys: the table's order, best first.
                 java.util.Arrays.sort(sorted, s, s + k)
-                val upTo = if (d > 0) swapBelow[d - 1] else 0
-                val downFrom = if (d < nd - 1) k - swapBelow[d] else k
+                val t = tierOf[d]
+                val upTo = if (t > 0) swapBelow[t - 1] else 0
+                val downFrom = if (t < nt - 1) k - baseDown[t] else k
                 for (pos in 0 until k) {
                     val g = s + (sorted[s + pos] and rankMask).toInt()
                     positionSum[g] += pos.toLong()
@@ -392,7 +416,33 @@ object Odds {
                     if (d == 0 && titlePlayoff && pos < TITLE_PLAYOFF) top[g]++
                 }
             }
-            if (finalists != null && nd > 0) entrants(sorted, rankMask, start, size, finalists, input.byRating, entered!!, runNo + 1, cl)
+            // Pyramid boundaries whose drops do not share out evenly: the rest from the worst of
+            // the next places up across the upper groups, and the playoff ties after them.
+            for (t in 0 until nt - 1) {
+                val rest = downBelow[t] - baseDown[t] * groupsIn[t]
+                val ties = if (input.playoffBelow[t] && groupsIn[t] * groupsIn[t + 1] > 1) groupsIn[t + 1] else 0
+                if (rest == 0 && ties == 0) continue
+                val order = nextUp(sorted, start, size, tierStart[t], tierStart[t + 1], baseDown[t], rest + ties, rankMask)
+                for (i in 0 until minOf(rest, order.size)) down[order[i]]++
+                if (ties > 0) {
+                    // Each lower group's next place, best first.
+                    val lowers = (tierStart[t + 1] until tierStart[t + 2]).filter { size[it] > swapBelow[t] }
+                        .map { d -> sorted[start[d] + swapBelow[t]] to d }.sortedBy { it.first }
+                        .map { (key, d) -> start[d] + (key and rankMask).toInt() }
+                    for ((i, lo) in lowers.withIndex()) {
+                        val hi = order.getOrNull(rest + i) ?: break
+                        val s = e(lo, hi)
+                        upSpot[lo]++
+                        downSpot[hi]++
+                        upShare[lo] += s
+                        downShare[hi] += s
+                    }
+                }
+            }
+            if (finalists != null && nd > 0) {
+                val second = if (nt > 1) tierStart[1] until tierStart[2] else IntRange.EMPTY
+                entrants(sorted, rankMask, start, size, second, finalists, input.byRating, entered!!, runNo + 1, cl)
+            }
             if (titlePlayoff) {
                 // Semi-finals 1v4 and 2v3, then the final (division 1 starts at index 0).
                 val t1 = (sorted[0] and rankMask).toInt()
@@ -406,10 +456,13 @@ object Odds {
                 title[t2] += s2 * (s1 * e(t2, t1) + (1 - s1) * e(t2, t4))
                 title[t3] += (1 - s2) * (s1 * e(t3, t1) + (1 - s1) * e(t3, t4))
             }
-            for (d in 0 until nd - 1) {
-                if (!input.playoffBelow[d]) continue
-                val hi = start[d] + (sorted[start[d] + size[d] - swapBelow[d] - 1] and rankMask).toInt()
-                val lo = start[d + 1] + (sorted[start[d + 1] + swapBelow[d]] and rankMask).toInt()
+            // A linear league's ties: the next place on each side.
+            for (t in 0 until nt - 1) {
+                if (!input.playoffBelow[t] || groupsIn[t] * groupsIn[t + 1] > 1) continue
+                val d = tierStart[t]
+                if (size[d] - swapBelow[t] - 1 < 0 || swapBelow[t] >= size[d + 1]) continue
+                val hi = start[d] + (sorted[start[d] + size[d] - swapBelow[t] - 1] and rankMask).toInt()
+                val lo = start[d + 1] + (sorted[start[d + 1] + swapBelow[t]] and rankMask).toInt()
                 val s = e(lo, hi)
                 upSpot[lo]++
                 downSpot[hi]++
@@ -444,6 +497,28 @@ object Odds {
     }
 
     /**
+     * The upper groups' players from place [from] up (from the bottom: 0 is each group's last),
+     * worst first within a place, [count] of them (global indices); one run's sorted tables.
+     */
+    private fun nextUp(sorted: LongArray, start: IntArray, size: IntArray, firstDiv: Int, endDiv: Int, from: Int, count: Int, rankMask: Long): IntArray {
+        val out = IntArray(count)
+        var got = 0
+        var p = from
+        val most = (firstDiv until endDiv).maxOf { size[it] }
+        while (got < count && p < most) {
+            // The p-th from the bottom of each group, worst (largest key) first.
+            val level = (firstDiv until endDiv).filter { size[it] > p }.map { d -> sorted[start[d] + size[d] - 1 - p] to d }
+                .sortedByDescending { it.first }
+            for ((key, d) in level) {
+                if (got >= count) break
+                out[got++] = start[d] + (key and rankMask).toInt()
+            }
+            p++
+        }
+        return out.copyOf(got)
+    }
+
+    /**
      * One run's champions league entrants by [ChampionsLeague.entrants]' rule, counted in [cl]:
      * the 1st division's top 12 and the 2nd division's top 2, the cup [finalists], then the 1st
      * division's next places (a place taken twice passes down), then by rating, until 16.
@@ -454,6 +529,7 @@ object Odds {
         rankMask: Long,
         start: IntArray,
         size: IntArray,
+        second: IntRange,
         finalists: IntArray,
         byRating: IntArray,
         entered: IntArray,
@@ -470,9 +546,8 @@ object Odds {
         var count = 0
         // Division 1 starts at index 0, so its sorted entries hold global indices.
         for (pos in 0 until minOf(CL_FIRST, first)) count += enter((sorted[pos] and rankMask).toInt())
-        if (size.size > 1) {
-            for (pos in 0 until minOf(CL_SECOND, size[1])) count += enter(start[1] + (sorted[start[1] + pos] and rankMask).toInt())
-        }
+        val each = ChampionsLeague.secondPlaces(second.count())
+        for (d in second) for (pos in 0 until minOf(each, size[d])) count += enter(start[d] + (sorted[start[d] + pos] and rankMask).toInt())
         for (g in finalists) count += enter(g)
         var pos = CL_FIRST
         while (count < ChampionsLeague.SIZE && pos < first) count += enter((sorted[pos++] and rankMask).toInt())

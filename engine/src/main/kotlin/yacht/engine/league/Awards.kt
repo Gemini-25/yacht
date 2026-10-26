@@ -139,7 +139,7 @@ object Awards {
         }
         for (d in league.divisions.indices) {
             for (s in league.table(d)) {
-                if (s.played >= UNBEATEN_MIN && s.losses == 0) out += Dynasty(s.key, UNBEATEN, "L$d", nth(s.key, UNBEATEN), n, n)
+                if (s.played >= UNBEATEN_MIN && s.losses == 0) out += Dynasty(s.key, UNBEATEN, "L${league.tiers.tier(d)}", nth(s.key, UNBEATEN), n, n)
             }
         }
         return out

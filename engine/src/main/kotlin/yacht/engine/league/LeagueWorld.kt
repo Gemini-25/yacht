@@ -188,7 +188,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     private var pickedDay = -1
     private var pickedSeason = 0
 
-    /** 이 주의 선수 when [r] finished its matchday: `player_of_week` [player, opponent] (week, average, best, division). */
+    /** 이 주의 선수 when [r] finished its matchday: `player_of_week` [player, opponent] (week, average, best, tier). */
     private fun weekPick(r: JobResult): LeagueEvent? {
         val p = plan ?: return null
         if (r.fixture.comp != Comp.LEAGUE) return null
@@ -203,7 +203,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val pick = league.playersOfWeek(day..day, closingGone + league.standings.keys.filter { !present(it) })[day] ?: return null
         return LeagueEvent(
             "player_of_week", p.number, listOf(pick.key, pick.opponent),
-            listOf((day + 1).toString(), String.format(java.util.Locale.ROOT, "%.1f", pick.average), pick.best.toString(), pick.division.toString()),
+            listOf((day + 1).toString(), String.format(java.util.Locale.ROOT, "%.1f", pick.average), pick.best.toString(), league.tiers.tier(pick.division).toString()),
             Comp.LEAGUE, day + 1,
         )
     }
@@ -257,6 +257,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             "promoted" -> key in promoUp
             else -> promo?.spots?.any { it.upper == key && it.lower in promoUp } == true
         }
+        // A pyramid's lower tiers (4부 down, and the moves below 3부) in one article: dozens of
+        // group titles and hundreds of moves would flood the news.
+        val grouped = !p.league.tiers.linear
+        val lowerChampions = ArrayList<String>()
+        var lowerUp = 0
         for (x in h) {
             val e = when {
                 DIVISION.matches(x.kind) -> LeagueEvent("title", p.number, listOf(x.key), listOf(x.kind.removePrefix("L")), Comp.LEAGUE)
@@ -264,7 +269,22 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 x.kind.startsWith("DOWN") -> LeagueEvent("relegated", p.number, listOf(x.key), listOf(x.kind.removePrefix("DOWN")))
                 else -> null
             } ?: continue
+            if (grouped) {
+                val t = e.args.single().toIntOrNull() ?: 0
+                when {
+                    e.kind == "title" && t > NEWS_TIERS -> { lowerChampions += x.key; continue }
+                    e.kind == "promoted" && t > PromotionPlayoff.NEWS_BOUNDARIES -> { lowerUp++; continue }
+                    e.kind == "relegated" && t - 1 > PromotionPlayoff.NEWS_BOUNDARIES -> continue
+                }
+            }
             if (!announced(e.kind, x.key)) out += e
+        }
+        if (lowerChampions.isNotEmpty()) {
+            val named = lowerChampions.sortedWith(compareByDescending<String> { ladder.rating(it).takeIf { r -> !r.isNaN() } ?: 0.0 }.thenBy { it }).take(3)
+            out += LeagueEvent(
+                "lower_tiers", p.number, named,
+                listOf(lowerChampions.size.toString(), lowerUp.toString(), (NEWS_TIERS + 1).toString(), (p.league.tiers.count - 1).toString()), Comp.LEAGUE,
+            )
         }
         // The season's national cups go into the records, and a world champion's favourite style
         // comes into fashion (newcomers take it up more often for a few seasons).
@@ -365,6 +385,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     }
 
     companion object {
+        /** A pyramid's tiers whose group titles make news of their own (0-based: 1부 to 3부). */
+        const val NEWS_TIERS = 2
+
         const val LADDER = "ladder.txt"
         const val SEASON = "season.txt"
         const val HONOURS = "honours.txt"

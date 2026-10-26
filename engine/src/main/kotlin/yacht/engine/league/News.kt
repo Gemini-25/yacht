@@ -85,7 +85,7 @@ object News {
     val KINDS: List<String> = listOf(
         "upset", "comeback", "record", "milestone", "title", "promoted", "relegated", "cup_round", "eliminated",
         "qualified", "final", "transfer", "draft", "born", "retired", "award", "callup", "dropped", "title_race",
-        "retirements", "rookies", "debut", "breakout", "decline", "learned_rule", "league_reform", "founders_farewell",
+        "retirements", "rookies", "debut", "breakout", "decline", "learned_rule", "league_reform", "founders_farewell", "lower_tiers",
         "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend", "draw_legend", "player_of_week",
         "hall_of_fame", "dynasty", "legend_match", "draw_cup", "draw_cl", "draw_super", "draw_allstar",
         "draw_family", "season_review",
@@ -512,6 +512,17 @@ object News {
                 T("창립 멤버 {count}명, 리그와 작별", "기본 AI {count}명이 시즌 {season|을} 끝으로 리그를 떠나요. {seeds}의 우승 기록과 통산 성적은 그대로 남아요. 다음 시즌부터는 생성 선수들만의 리그예요."),
                 T("고마웠어요, 창립 멤버", "{seeds} 등 리그의 첫 시즌부터 함께한 기본 AI {count}명이 유니폼을 벗었어요. 이제 랭크 게임과 AI 연구소에서 다시 만날 수 있어요."),
             ) to 5
+        }
+        "lower_tiers" -> {
+            // A pyramid's lower tiers in one article: (group champions, players promoted, first tier, last tier).
+            arg(0)?.let { v["count"] = it }
+            arg(1)?.let { v["up"] = it }
+            arg(2)?.toIntOrNull()?.let { v["from"] = "${it + 1}부" }
+            arg(3)?.toIntOrNull()?.let { v["to"] = "${it + 1}부" }
+            listOf(
+                T("지역 리그 결산: {from}~{to}", "{from}부터 {to}까지 지역 리그 {count}개 조의 우승자가 가려졌어요. {seeds|이} 조 1위에 올랐고, 모두 {up}명이 한 단계 위로 올라가요."),
+                T("{seeds}, 지역 리그 정상", "시즌 {season} 지역 리그({from}~{to})에서 {count}명이 조 우승을 차지했어요. 다음 시즌에는 {up}명이 윗 리그에서 새 도전을 시작해요."),
+            ) to 2
         }
         "award" -> {
             val kind = arg(0)

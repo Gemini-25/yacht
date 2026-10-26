@@ -30,18 +30,20 @@ object Offseason {
     /** Seed of season [number] from the league's own seed. */
     fun seasonSeed(leagueSeed: Long, number: Int): Long = DiceStream.mix(leagueSeed, 0x5EA50, number.toLong())
 
-    /** The first season (numbered [number]: after any history kept): divisions by rating. */
+    /** The first season (numbered [number]: after any history kept): divisions (or the pyramid's tiers) by rating. */
     fun first(leagueSeed: Long, ctx: Context, number: Int = 1): SeasonPlan {
         val ranking = ctx.keys.sortedByDescending { ctx.rating(it) }
-        val divisions = Season.split(ranking, ctx.config.divisions)
-        return start(number, seasonSeed(leagueSeed, number), divisions, emptyList(), emptyList(), ctx)
+        val shape = Pyramid.shape(ranking.size, ctx.config)
+        val (divisions, tiers) = if (shape == null) Season.split(ranking, ctx.config.divisions) to null else Pyramid.first(ranking, ctx, shape)
+        return start(number, seasonSeed(leagueSeed, number), divisions, tiers, emptyList(), null, emptyList(), ctx)
     }
 
     /**
      * Titles of a finished season: division champions (the title playoff's winner in division 1
      * when there was one), the regular-season leader, promotions and relegations, and every
      * competition's own honours. AIs in [gone] (deleted during the season) get none: the next
-     * in the table takes their place.
+     * in the table takes their place. Division honours are by tier: "L2" is a 3부 title, one
+     * per group in a pyramid, and moves are into a tier.
      */
     fun honours(plan: SeasonPlan, moves: List<Move>, gone: Set<String> = emptySet()): List<Honour> {
         val n = plan.number
@@ -55,7 +57,7 @@ object Offseason {
                 val playoff = plan.competition(Comp.TITLE_PLAYOFF)?.honours()?.firstOrNull { it.kind == "L0" && it.key !in gone }
                 out += playoff ?: Honour(n, "L0", table.first().key)
             } else {
-                out += Honour(n, "L$d", table.first().key)
+                out += Honour(n, "L${league.tiers.tier(d)}", table.first().key)
             }
         }
         for (m in moves) out += Honour(n, if (m.to < m.from) "UP${m.to}" else "DOWN${m.to}", m.key)
@@ -77,14 +79,15 @@ object Offseason {
         return out
     }
 
-    /** An AI moving between divisions ([from] and [to], 0 = top). */
+    /** An AI moving between tiers ([from] and [to], 0 = top; a linear league's divisions). */
     data class Move(val key: String, val from: Int, val to: Int)
 
     /**
-     * Promotion and relegation: per boundary the bottom [LeagueConfig.autoSwap] go down and the
-     * top as many come up; the promotion playoff's winners (honours "UP<d>" from the
-     * PROMOTION_PLAYOFF competition, keyed by the AI) take the next place. AIs in [gone]
-     * (deleted during the season) do not move; their places stay empty.
+     * Promotion and relegation: per boundary the places of [Pyramid.crossing] (a linear
+     * league: the bottom [LeagueConfig.autoSwap] go down and the top as many come up); the
+     * promotion playoff's winners (honours "UP<t>" from the PROMOTION_PLAYOFF competition, keyed
+     * by the AI) take the next place. AIs in [gone] (deleted during the season) do not move;
+     * their places stay empty.
      */
     fun moves(plan: SeasonPlan, gone: Set<String> = emptySet()): List<Move> {
         val league = plan.league
@@ -92,25 +95,44 @@ object Offseason {
         val out = ArrayList<Move>()
         val promo = plan.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff
         val playoffWinners = promo?.honours().orEmpty().filter { it.kind.startsWith("UP") }
-        for (d in 0 until league.divisions.size - 1) {
+        // Table places, for the order of the moves (each division's own order, as tables run).
+        val place = HashMap<String, Int>()
+        for (d in league.divisions.indices) for ((i, s) in league.table(d).withIndex()) place[s.key] = d * 100_000 + i
+        for (t in 0 until league.tiers.count - 1) {
             // The places as the playoff drew them, from the full tables: a deleted AI's place
             // is left empty rather than passed on (the next one plays the 승강전).
-            val upper = league.table(d).map { it.key }
-            val lower = league.table(d + 1).map { it.key }
-            val swap = minOf(cfg.autoSwap, upper.size / 3, lower.size / 3)
-            for (k in upper.takeLast(swap)) if (k !in gone) out += Move(k, d, d + 1)
-            for (k in lower.take(swap)) if (k !in gone) out += Move(k, d + 1, d)
-            // Playoff: the tie played at this boundary; the lower side won, so the two swap.
-            val spot = promo?.spots?.firstOrNull { it.division == d } ?: continue
-            if (!cfg.promotionPlayoff || playoffWinners.none { it.key == spot.lower && it.kind == "UP$d" }) continue
-            if (spot.lower !in gone) out += Move(spot.lower, d + 1, d)
-            if (spot.upper !in gone) out += Move(spot.upper, d, d + 1)
+            val c = Pyramid.crossing(league, cfg, t)
+            for (k in c.down.sortedBy { place[it] }) if (k !in gone) out += Move(k, t, t + 1)
+            for (k in c.up) if (k !in gone) out += Move(k, t + 1, t)
+            // Playoff: the ties played at this boundary; where the lower side won, the two swap.
+            if (!cfg.promotionPlayoff) continue
+            for (spot in promo?.spots.orEmpty().filter { it.division == t }) {
+                if (playoffWinners.none { it.key == spot.lower && it.kind == "UP$t" }) continue
+                if (spot.lower !in gone) out += Move(spot.lower, t + 1, t)
+                if (spot.upper !in gone) out += Move(spot.upper, t, t + 1)
+            }
         }
         return out
     }
 
-    /** Next season's divisions: moves applied, departed AIs removed, newcomers at the bottom, re-split if the count changed. */
-    fun nextDivisions(plan: SeasonPlan, moves: List<Move>, ctx: Context): List<List<String>> {
+    /**
+     * Next season's divisions and their tiers: a pyramid's ([Pyramid.next]) when the league
+     * is big enough for one ([Pyramid.shape]), else divisions with the moves applied, departed
+     * AIs removed, newcomers at the bottom, re-split if the count changed.
+     */
+    fun nextDivisions(plan: SeasonPlan, moves: List<Move>, ctx: Context): Pair<List<List<String>>, Tiers?> {
+        val league = plan.league
+        val shape = Pyramid.shape(ctx.keys.size, ctx.config)
+        if (shape != null) return Pyramid.next(league, moves, ctx, shape)
+        if (!league.tiers.linear) {
+            // From a pyramid back to divisions: its tiers in order, then split.
+            val (lists, _) = Pyramid.next(league, moves, ctx, listOf(1))
+            return Season.split(lists.flatten(), ctx.config.divisions) to null
+        }
+        return linearDivisions(plan, moves, ctx) to null
+    }
+
+    private fun linearDivisions(plan: SeasonPlan, moves: List<Move>, ctx: Context): List<List<String>> {
         val keys = ctx.keys.toSet()
         val league = plan.league
         val count = league.divisions.size
@@ -135,24 +157,29 @@ object Offseason {
     fun next(plan: SeasonPlan, ctx: Context): Pair<SeasonPlan, List<Honour>> {
         val moves = moves(plan, ctx.gone)
         val honours = honours(plan, moves, ctx.gone)
-        val divisions = nextDivisions(plan, moves, ctx)
+        val (divisions, tiers) = nextDivisions(plan, moves, ctx)
         val lastTables = plan.league.divisions.indices.map { d -> plan.league.table(d).map { it.key }.filter { it !in ctx.gone } }
         val leagueSeed = plan.seed
         val n = plan.number + 1
-        return start(n, DiceStream.mix(leagueSeed, 0x5EA51, n.toLong()), divisions, lastTables, honours, ctx) to honours
+        return start(n, DiceStream.mix(leagueSeed, 0x5EA51, n.toLong()), divisions, tiers, lastTables, plan.league.tiers, honours, ctx) to honours
     }
 
     private fun start(
         number: Int,
         seed: Long,
         divisions: List<List<String>>,
+        tiers: Tiers?,
         lastTables: List<List<String>>,
+        lastTiers: Tiers?,
         lastHonours: List<Honour>,
         ctx: Context,
     ): SeasonPlan {
-        val league = Season.start(number, seed, divisions, ctx.config.doubleRoundRobin)
+        val league = Season.start(number, seed, divisions, ctx.config.doubleRoundRobin, tiers)
         val ranking = ctx.keys.sortedByDescending { ctx.rating(it) }
-        val start = SeasonStart(number, seed, ctx.config, ranking, ctx.rating, divisions, lastTables, lastHonours, ctx.family, ctx.hometown, ctx.history + lastHonours, ctx.nation)
+        val start = SeasonStart(
+            number, seed, ctx.config, ranking, ctx.rating, league.divisions, lastTables, lastHonours, ctx.family, ctx.hometown, ctx.history + lastHonours, ctx.nation,
+            league.tiers, lastTiers ?: Tiers.linear(lastTables.size),
+        )
         val comps = ctx.factories.mapNotNull { f -> runCatching { f(start) }.getOrNull() }.toMutableList()
         return SeasonPlan(league, ctx.config, comps)
     }

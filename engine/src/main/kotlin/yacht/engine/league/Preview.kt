@@ -261,7 +261,7 @@ object Preview {
                 val sa = season.standings.getValue(a)
                 val sb = season.standings.getValue(b)
                 if (sa.played + sb.played > 0) {
-                    out += "${da + 1}부 순위는 $na ${pa}위(승점 ${sa.points}), $nb ${Ko.ieyo("${pb}위(승점 ${sb.points})")}."
+                    out += "${season.tiers.label(da)} 순위는 $na ${pa}위(승점 ${sa.points}), $nb ${Ko.ieyo("${pb}위(승점 ${sb.points})")}."
                 }
             }
         }
@@ -269,7 +269,7 @@ object Preview {
         val current = odds?.takeIf { season == null || it.season == season.number }
         val oa = current?.get(a)
         val ob = current?.get(b)
-        if (oa != null || ob != null) out += races(na, nb, oa, ob)
+        if (oa != null || ob != null) out += races(na, nb, oa, ob, season?.tiers)
         return out
     }
 
@@ -300,7 +300,7 @@ object Preview {
     }
 
     /** Title, playoff, champions league, promotion and relegation races still open for either side. */
-    private fun races(na: String, nb: String, oa: AiOdds?, ob: AiOdds?): List<String> {
+    private fun races(na: String, nb: String, oa: AiOdds?, ob: AiOdds?, tiers: Tiers?): List<String> {
         val out = ArrayList<String>()
         fun pct(p: Double) = Ko.pct(p)
         fun both(label: String, intro: String, f: (AiOdds) -> Double): Boolean {
@@ -317,7 +317,7 @@ object Preview {
             if (open(x)) out += "${n}의 $label 확률은 ${Ko.ieyo(pct(x))}."
         }
         // Each side's own division title (a cup tie may bring two divisions together).
-        fun titleLabel(o: AiOdds?) = o?.division?.takeIf { it > 0 }?.let { "${it + 1}부 우승" } ?: "우승"
+        fun titleLabel(o: AiOdds?) = o?.division?.takeIf { it > 0 }?.let { d -> (tiers?.takeIf { d < it.size }?.label(d) ?: "${d + 1}부") + " 우승" } ?: "우승"
         if (!both(titleLabel(oa ?: ob), "우승을 다투는 맞대결이에요.") { it.title }) {
             single(oa, na, titleLabel(oa)) { it.title }
             single(ob, nb, titleLabel(ob)) { it.title }

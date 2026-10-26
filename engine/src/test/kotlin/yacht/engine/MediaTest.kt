@@ -277,6 +277,7 @@ class MediaTest {
             e("breakout", listOf("ai1"), listOf("21", "0", "55", "63")), e("decline", listOf("ai2"), listOf("35", "3", "70", "62")),
             e("learned_rule", listOf("ai1"), listOf("ss3")), e("league_reform", emptyList()),
             e("founders_farewell", listOf("ai1", "ai2", "ai3"), listOf("103")),
+            e("lower_tiers", listOf("ai1", "ai2", "ai3"), listOf("13", "45", "3", "4")),
             e("wc_open", listOf("KR"), listOf("24"), Comp.WORLD_CUP), e("cc_open", emptyList(), listOf("아시아컵·유럽컵"), Comp.CONTINENTAL),
             e("draw_wc", listOf("KR", "BR", "NG", "SE"), listOf("A조", "16강", "KR"), Comp.WORLD_CUP),
             e("draw_cc", listOf("JP", "CN", "VN"), listOf("A조", "@아시아컵"), Comp.CONTINENTAL),

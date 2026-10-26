@@ -28,8 +28,9 @@ data class LeagueEvent(
 }
 
 /**
- * A title or award of a season. [kind]: "L<d>" division champion (after playoffs), "REG"
- * regular-season leader of division 1, "UP<d>"/"DOWN<d>" moved into division d, "CUP"/"CUP2"
+ * A title or award of a season. [kind]: "L<t>" division champion (after playoffs) of tier t
+ * (a pyramid: of a group of it), "REG" regular-season leader of division 1, "UP<t>"/"DOWN<t>"
+ * moved into tier t, "CUP"/"CUP2"
  * winner/runner-up, "CL"/"CL2", "SUPER", "ALLSTAR" (a team label in [key]), "FAMILY" (a family
  * name), "CLUB" (a club id), "MVP", "ROOKIE", "MIP", "YACHT", "SCORER". See docs/LEAGUE_SPEC.md.
  */
@@ -62,6 +63,9 @@ class SeasonStart(
     val history: List<Honour> = emptyList(),
     /** Each AI's nation code (generated and evolved players; null for the others). */
     val nation: (String) -> String? = { null },
+    /** This season's tiers ([divisions]' pyramid groups), and last season's ([lastTables]'). */
+    val tiers: Tiers = Tiers.linear(divisions.size),
+    val lastTiers: Tiers = Tiers.linear(lastTables.size),
 )
 
 /**

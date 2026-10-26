@@ -2,7 +2,7 @@ package yacht.engine.league
 
 import kotlin.math.roundToInt
 
-/** One AI's league season (성장 곡선): its division (0 = top) and place, record, final rating and average match rating. */
+/** One AI's league season (성장 곡선): its division (0 = top; a pyramid's tier) and place, record, final rating and average match rating. */
 data class SeasonLine(
     val season: Int,
     val division: Int,

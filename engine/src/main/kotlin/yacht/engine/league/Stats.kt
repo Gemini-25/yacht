@@ -826,7 +826,8 @@ class StatsBook(
                 val st = seasonStats[s.key]
                 // No rating now (off the ladder): the line's rating as kept, else none.
                 val r = rating(s.key).takeIf { !it.isNaN() } ?: archive.lines(s.key).firstOrNull { it.season == n }?.rating ?: Double.NaN
-                archive.addLine(s.key, SeasonLine(n, d, pos + 1, s.wins, s.draws, s.losses, r, st?.avgRating ?: Double.NaN))
+                // By tier: a pyramid's group is not kept (a season line packs its tier in one digit).
+                archive.addLine(s.key, SeasonLine(n, league.tiers.tier(d), pos + 1, s.wins, s.draws, s.losses, r, st?.avgRating ?: Double.NaN))
                 careerStats.getOrPut(s.key) { AiStats() }.seasons++
             }
         }

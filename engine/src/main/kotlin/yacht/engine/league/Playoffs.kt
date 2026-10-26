@@ -43,30 +43,33 @@ class TitlePlayoff private constructor(season: Int, seed: Long, entries: List<Dr
 }
 
 /**
- * 승강 플레이오프 (docs/LEAGUE_SPEC.md 2.1), after the league stage: per boundary d/d+1 the upper
- * division's next place above the automatic drop plays the lower division's next place below the
- * automatic rise, one tie over two legs; the upper side is side A (it stays up when still level).
- * The places are exactly the ones [Offseason.moves] reads: honour "UP<d>" keyed by the lower
- * side when it wins (it goes up, the other down) and "STAY<d>" keyed by the upper side when it
- * holds.
+ * 승강 플레이오프 (docs/LEAGUE_SPEC.md 2.1), after the league stage: per boundary t/t+1 the upper
+ * tier's next place above the automatic drop plays the lower tier's next place below the
+ * automatic rise, one tie over two legs ([Pyramid.crossing]: one tie per lower group in a
+ * pyramid); the upper side is side A (it stays up when still level). The places are exactly the
+ * ones [Offseason.moves] reads: honour "UP<t>" keyed by the lower side when it wins (it goes up,
+ * the other down) and "STAY<t>" keyed by the upper side when it holds.
  *
  * News: `cup_round` [winner, loser] (boundary label, score) per tie, and `promoted` [ai] (from, to)
- * and `relegated` [ai] (from, to) with 0-based division indices when the lower side wins.
+ * and `relegated` [ai] (from, to) with 0-based tiers when the lower side wins; in a pyramid
+ * ([grouped]) only for the boundaries of 1부 to 3부 (the rest would flood the news).
  */
 class PromotionPlayoff private constructor(
     val season: Int,
     private val seed: Long,
-    /** Per boundary d: the upper side's AI and the lower side's. */
+    /** The ties: per boundary t the upper side's AI and the lower side's. */
     val spots: List<Spot>,
+    /** The league is a pyramid (several ties a boundary). */
+    val grouped: Boolean = false,
 ) : ViewableCompetition {
-    /** The tie of boundary [division]/[division]+1. */
-    data class Spot(val division: Int, val upper: String, val lower: String)
+    /** A tie of boundary [division]/[division]+1 (tiers), its bracket ids from [slot] (a linear league's: the boundary). */
+    data class Spot(val division: Int, val upper: String, val lower: String, val slot: Int = division)
 
     override val comp: Comp get() = Comp.PROMOTION_PLAYOFF
 
-    // One single-tie bracket per boundary, its id the upper division's index.
+    // One single-tie bracket per tie, its ids from the tie's slot.
     private val brackets = spots.map { s ->
-        Knockout(listOf(DrawEntry(s.upper, 1, Double.NaN) to DrawEntry(s.lower, 2, Double.NaN)), { 2 }, { label(s.division) }, { 0.0 }, idBase = s.division)
+        Knockout(listOf(DrawEntry(s.upper, 1, Double.NaN) to DrawEntry(s.lower, 2, Double.NaN)), { 2 }, { label(s.division) }, { 0.0 }, idBase = s.slot)
     }
 
     override fun next(p: Double, busy: Set<String>): Fixture? = brackets.firstNotNullOfOrNull { k ->
@@ -91,6 +94,7 @@ class PromotionPlayoff private constructor(
         if (i < 0 || !Knockout.current(seed, comp, r)) return emptyList()
         val t = brackets[i].record(f.id, f.a, f.b, TieScore.of(r)) ?: return emptyList()
         val s = spots[i]
+        if (grouped && s.division > NEWS_BOUNDARIES) return emptyList()
         val out = arrayListOf(KnockoutNews.round(season, comp, t, label(s.division)))
         if (t.winner?.key == s.lower) {
             out += LeagueEvent("promoted", season, listOf(s.lower), listOf("${s.division + 1}", "${s.division}"), comp)
@@ -116,7 +120,8 @@ class PromotionPlayoff private constructor(
 
     override fun encode(out: StringBuilder) {
         out.append(HEADER).append('\n')
-        for (s in spots) out.append("t ${s.division} ${s.upper} ${s.lower}\n")
+        if (grouped) out.append("grouped\n")
+        for (s in spots) out.append("t ${s.division} ${s.upper} ${s.lower}").append(if (s.slot != s.division) " ${s.slot}" else "").append('\n')
         for (k in brackets) k.encode(out)
     }
 
@@ -126,42 +131,48 @@ class PromotionPlayoff private constructor(
         const val HEADER = "promopo 1"
         const val STAGE = "승강전"
 
-        /** "1·2부 승강전" for the boundary below division [d] (0 = top). */
+        /** In a pyramid, the boundaries below 1부 to 3부 make news (0-based). */
+        const val NEWS_BOUNDARIES = 1
+
+        /** Bracket ids a tie takes (a single tie: one). */
+        private const val SLOT_IDS = 1
+
+        /** "1·2부 승강전" for the boundary below tier [d] (0 = top). */
         fun label(d: Int): String = "${d + 1}·${d + 2}부 승강전"
 
         /**
          * The ties of a finished league stage, the places computed as [Offseason.moves] does (a
-         * boundary whose upper place already plays the boundary above has no tie); null when the
+         * tie whose upper side already plays at the boundary above has none); null when the
          * playoff is off or no boundary has both places.
          */
         fun create(plan: SeasonPlan): PromotionPlayoff? {
             val cfg = plan.config
             if (!cfg.promotionPlayoff) return null
             val league = plan.league
+            val grouped = !league.tiers.linear
             val spots = ArrayList<Spot>()
-            for (d in 0 until league.divisions.size - 1) {
-                val upper = league.table(d).map { it.key }
-                val lower = league.table(d + 1).map { it.key }
-                val swap = minOf(cfg.autoSwap, upper.size / 3, lower.size / 3)
-                val upperSpot = upper.getOrNull(upper.size - swap - 1) ?: continue
-                val lowerSpot = lower.getOrNull(swap) ?: continue
-                // In a middle division of 3 the same AI is the lower side above and the upper side
-                // here: it plays only for promotion, or Offseason.moves could send it up and down
-                // at once (into two divisions). Without this tie both places stay.
-                if (spots.any { it.lower == upperSpot }) continue
-                spots += Spot(d, upperSpot, lowerSpot)
+            for (t in 0 until league.tiers.count - 1) {
+                for ((upperSpot, lowerSpot) in Pyramid.crossing(league, cfg, t).ties) {
+                    // In a middle division of 3 the same AI is the lower side above and the upper
+                    // side here: it plays only for promotion, or Offseason.moves could send it up
+                    // and down at once (into two divisions). Without this tie both places stay.
+                    if (spots.any { it.lower == upperSpot }) continue
+                    spots += if (grouped) Spot(t, upperSpot, lowerSpot, spots.size * SLOT_IDS) else Spot(t, upperSpot, lowerSpot)
+                }
             }
             if (spots.isEmpty()) return null
-            return PromotionPlayoff(plan.number, plan.seed, spots)
+            return PromotionPlayoff(plan.number, plan.seed, spots, grouped)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
             require(lines.firstOrNull()?.trim() == HEADER) { "not a promotion playoff section" }
             val spots = lines.mapNotNull { l ->
-                runCatching { l.trim().split(' ').takeIf { it[0] == "t" }?.let { Spot(it[1].toInt(), it[2], it[3]) } }.getOrNull()
-            }.distinctBy { it.division }.sortedBy { it.division }
+                runCatching {
+                    l.trim().split(' ').takeIf { it[0] == "t" }?.let { f -> Spot(f[1].toInt(), f[2], f[3], f.getOrNull(4)?.toInt() ?: f[1].toInt()) }
+                }.getOrNull()
+            }.distinctBy { it.slot }.sortedBy { it.slot }
             require(spots.isNotEmpty()) { "no ties in the promotion playoff section" }
-            PromotionPlayoff(season, seed, spots).also { p ->
+            PromotionPlayoff(season, seed, spots, lines.any { it.trim() == "grouped" }).also { p ->
                 for (r in TieScore.Saved.parse(lines)) p.brackets.firstOrNull { r.id in it }?.record(r.id, r.a, r.b, r.score)
             }
         }

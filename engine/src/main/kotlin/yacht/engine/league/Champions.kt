@@ -10,7 +10,7 @@ import java.util.Random
  * points 3/1/0, then score difference. Honours CL and CL2.
  *
  * Entrants: the first season takes the top 16 by rating; later ones last season's 1st division
- * top 12, the 2nd division's top 2 and the cup winner and runner-up, a place already taken (or an
+ * top 12, the 2nd division's top 2 (a pyramid's 2부: each group's winner) and the cup winner and runner-up, a place already taken (or an
  * AI that left) passing down the 1st division, then to the best rated.
  *
  * News: `draw_cl` [group members] (group) at the start; `upset` in any match; `qualified` [ai]
@@ -144,15 +144,21 @@ class ChampionsLeague private constructor(
         private const val GROUP_TARGET_STEP = 0.08
         private val KO_TARGETS = listOf(0.60, 0.72, 0.94)
 
+        /** Places for 2부's best: its top 2, or each group's top 2 / [groups] (at least its winner) in a pyramid. */
+        fun secondPlaces(groups: Int): Int = if (groups <= 0) 0 else maxOf(1, SECOND / groups)
+
+        private const val SECOND = 2
+
         /** The 16 entrants in entry order (see the class comment). */
         fun entrants(start: SeasonStart): List<String> {
             if (start.lastTables.isEmpty()) return start.ranking.take(SIZE)
             val inLeague = start.ranking.toSet()
             val first = start.lastTables[0].filter { it in inLeague }
-            val second = start.lastTables.getOrNull(1).orEmpty().filter { it in inLeague }
+            val tiers = start.lastTiers.takeIf { it.size == start.lastTables.size } ?: Tiers.linear(start.lastTables.size)
+            val seconds = if (tiers.count > 1) tiers.groups(1).map { d -> start.lastTables[d].filter { it in inLeague } } else emptyList()
             val out = LinkedHashSet<String>()
             out += first.take(12)
-            out += second.take(2)
+            for (second in seconds) out += second.take(secondPlaces(seconds.size))
             for (kind in listOf("CUP", "CUP2")) start.lastHonours.firstOrNull { it.kind == kind }?.key?.takeIf { it in inLeague }?.let { out += it }
             // Places taken twice (or left empty) pass down the 1st division, then go by rating.
             for (k in first.drop(12)) {
