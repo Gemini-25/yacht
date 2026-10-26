@@ -289,7 +289,14 @@ class SeasonCalendarTest {
         assertTrue(feed.all { it.label.isNotEmpty() && it.week != SeasonCalendar.NONE }, feed.take(3).toString())
         val read = Ladder.decode(w.members + Ladder.ME, w.ladder.encode()).feed.toList()
         assertEquals(feed.map { Triple(it.comp, it.label, it.week) }, read.map { Triple(it.comp, it.label, it.week) })
-        val stripped = w.ladder.encode().lines().joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 9) l.substringBeforeLast(' ') else l }
+        // Each result knows its season (week names depend on the season's length).
+        assertTrue(feed.all { it.season == w.plan!!.number })
+        assertEquals(feed.map { it.season }, read.map { it.season })
+        // A line saved before the season was kept (9 fields) reads as season unknown.
+        val noSeason = w.ladder.encode().lines().joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 10) l.substringBeforeLast(' ') else l }
+        val older = Ladder.decode(w.members + Ladder.ME, noSeason).feed.toList()
+        assertTrue(older.all { it.season == 0 && it.comp != null })
+        val stripped = w.ladder.encode().lines().joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 10) l.split(' ').take(8).joinToString(" ") else l }
         val oldFeed = Ladder.decode(w.members + Ladder.ME, stripped).feed.toList()
         assertEquals(feed.size, oldFeed.size)
         assertTrue(oldFeed.all { it.comp == null && it.week == SeasonCalendar.NONE && it.label == "" })

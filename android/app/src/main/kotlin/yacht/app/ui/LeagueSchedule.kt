@@ -82,6 +82,19 @@ fun weekName(w: Int, leagueWeeks: Int?): String = when {
     else -> "${w}주차"
 }
 
+/**
+ * The week of something from [season] ([comp] when known): named with this season's length when
+ * it is the clock's season; otherwise "N주차", or "포스트시즌" for the playoffs (that season's
+ * length is not known here).
+ */
+fun weekLabel(week: Int, season: Int, clock: ClockView?, comp: Comp? = null): String = when {
+    week < 0 -> ""
+    clock != null && season == clock.season -> weekName(week, clock.leagueWeeks)
+    week == SeasonCalendar.PRESEASON || week >= SeasonCalendar.CLOSING -> weekName(week, null)
+    comp == Comp.TITLE_PLAYOFF || comp == Comp.PROMOTION_PLAYOFF -> "포스트시즌"
+    else -> "${week}주차"
+}
+
 /** The clock's title: "12주차 / 49주", "포스트시즌 1주차", or that the season is closing. */
 fun clockTitle(c: ClockView): String = when {
     c.over -> "시즌을 마감하고 있어요"
@@ -185,7 +198,8 @@ private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (W
                     Text(weekName(w, c.leagueWeeks), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
                     Text(
                         when {
-                            c.over || w < c.week -> "끝났어요"
+                            c.over -> "끝났어요"
+                            w < c.week -> if (row?.done != false) "끝났어요" else "남은 경기가 있어요"
                             w == c.week -> "진행 중"
                             w == c.week + 1 -> "다음 주"
                             else -> "${w - c.week}주 뒤"
@@ -246,8 +260,9 @@ private fun WeekCard(c: ClockView, row: WeekRow, open: (WeekStage) -> Unit) {
 @Composable
 private fun StageLine(c: ClockView, s: WeekStage, open: (WeekStage) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val live = c.live[s.comp to s.week] ?: 0
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { open(s) }.padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    val live = c.live[s.comp to s.stage] ?: 0
+    // A playoff not set up yet has nothing to open.
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable(enabled = s.set) { open(s) }.padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stageName(s), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
@@ -260,7 +275,7 @@ private fun StageLine(c: ClockView, s: WeekStage, open: (WeekStage) -> Unit) {
                 color = if (s.done) cs.primary else cs.onSurfaceVariant,
                 fontWeight = if (s.done) FontWeight.Bold else FontWeight.Normal,
             )
-            Text(" ›", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+            if (s.set) Text(" ›", style = MaterialTheme.typography.labelMedium, color = cs.primary)
         }
         if (s.set && s.total > 0 && !s.done && (s.played > 0 || live > 0)) {
             LinearProgressIndicator(progress = { s.played.toFloat() / s.total }, modifier = Modifier.fillMaxWidth())

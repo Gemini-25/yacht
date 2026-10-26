@@ -43,6 +43,7 @@ import yacht.app.core.ClockView
 import yacht.app.core.LeagueView
 import yacht.app.core.Screen
 import yacht.engine.league.Article
+import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
 import yacht.engine.league.Highlight
 import yacht.engine.league.JobKind
@@ -103,11 +104,15 @@ private fun Articles(all: List<Article>, favourites: Boolean, clock: ClockView?,
             if (n == 1) base else "$base-$n"
         }
     }
+    // Weeks of another season with playoff news are its post-season (that season's length is not kept).
+    val playoffWeeks = remember(news) {
+        news.filter { it.comp == Comp.TITLE_PLAYOFF || it.comp == Comp.PROMOTION_PLAYOFF }.map { it.season to it.week }.toSet()
+    }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         itemsIndexed(news, key = { i, _ -> keys[i] }) { i, a ->
             val prev = news.getOrNull(i - 1)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (prev == null || prev.season != a.season || prev.week != a.week) WeekHeading(a, clock)
+                if (prev == null || prev.season != a.season || prev.week != a.week) WeekHeading(a, clock, (a.season to a.week) in playoffWeeks)
                 ArticleCard(a, clock, onOpen)
             }
         }
@@ -118,10 +123,10 @@ private fun Articles(all: List<Article>, favourites: Boolean, clock: ClockView?,
 private fun weekOrder(w: Int): Int = if (w == SeasonCalendar.NONE) -1 else w
 
 @Composable
-private fun WeekHeading(a: Article, clock: ClockView?) {
+private fun WeekHeading(a: Article, clock: ClockView?, playoffs: Boolean) {
     val cs = MaterialTheme.colorScheme
     val current = clock != null && a.season == clock.season
-    val week = weekName(a.week, if (current) clock?.leagueWeeks else null)
+    val week = weekLabel(a.week, a.season, clock, if (playoffs) Comp.TITLE_PLAYOFF else null)
     val text = when {
         a.week == SeasonCalendar.NONE -> "시즌 ${a.season} · 주차 기록 없음"
         current && a.week == clock!!.week && !clock.over -> "$week · 이번 주"
@@ -238,8 +243,9 @@ private fun LiveCard(c: AppController, f: LiveFrame) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
+                    // The board may still hold last season's matches: their week is named without this season's length.
                     compIcon(fx.comp) + " " + listOf(fx.comp.label, fx.label).filter { it.isNotBlank() }.distinct().joinToString(" ") +
-                        (if (fx.week > 0 && fx.comp != yacht.engine.league.Comp.LEAGUE) " · " + weekName(fx.week, lg.view?.clock?.leagueWeeks) else ""),
+                        (if (fx.week > 0 && fx.comp != Comp.LEAGUE) " · " + weekLabel(fx.week, -1, null, fx.comp) else ""),
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f),
                 )
                 Text(if (f.finished) "종료" else "🔴 LIVE", style = MaterialTheme.typography.labelSmall, color = if (f.finished) cs.onSurfaceVariant else cs.error, fontWeight = FontWeight.Bold)

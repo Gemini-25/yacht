@@ -148,7 +148,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             for ((i, b) in r.boards.withIndex()) {
                 if (b.games.isEmpty() || ladder.entry(b.a) == null || ladder.entry(b.b) == null) continue
                 val label = if (f.kind == JobKind.TEAM) "${f.label} · ${i + 1}번 보드".removePrefix(" · ") else f.label
-                matches += ladder.record(b.a, b.b, b.games, comp = f.comp, label = label, week = f.week)
+                matches += ladder.record(b.a, b.b, b.games, comp = f.comp, label = label, week = f.week, season = season)
             }
         }
         if (r.fixture.comp != Comp.FRIENDLY) {

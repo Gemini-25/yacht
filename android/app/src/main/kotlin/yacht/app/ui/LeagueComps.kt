@@ -111,7 +111,7 @@ private fun compStatus(stages: List<WeekStage>, c: ClockView): String? {
     if (stages.isEmpty()) return null
     val cur = stages.firstOrNull { !it.done } ?: return "끝"
     return when {
-        cur.week > c.week -> "${cur.week}주"
+        cur.week > c.week -> if (cur.week > c.leagueWeeks) "PO ${cur.week - c.leagueWeeks}주" else "${cur.week}주"
         cur.label == cur.comp.label -> "진행 중"
         else -> cur.label
     }
@@ -132,12 +132,15 @@ private fun StageStrip(stages: List<WeekStage>, c: ClockView) {
     val cs = MaterialTheme.colorScheme
     val cur = stages.firstOrNull { !it.done }
     val weeks = c.leagueWeeks
+    // A later week's stage may start early when nothing else is free.
+    val started = cur != null && (cur.played > 0 || (c.live[cur.comp to cur.stage] ?: 0) > 0)
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 when {
                     cur == null -> "모든 경기가 끝났어요"
-                    cur.week > c.week -> "${cur.label} · ${weekName(cur.week, weeks)}에 열려요 (${cur.week - c.week}주 뒤)"
+                    cur.week > c.week && !started -> "${cur.label} · ${weekName(cur.week, weeks)}에 열려요 (${cur.week - c.week}주 뒤)"
+                    cur.week > c.week -> "${cur.label} · ${weekName(cur.week, weeks)} 경기를 먼저 치르고 있어요 · ${cur.total}경기 중 ${cur.played}경기 끝났어요"
                     !cur.set || cur.total == 0 -> "${cur.label} · ${weekName(cur.week, weeks)} · 앞 단계가 끝나면 대진이 정해져요"
                     else -> "${cur.label} · ${weekName(cur.week, weeks)} · ${cur.total}경기 중 ${cur.played}경기 끝났어요"
                 },

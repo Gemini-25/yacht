@@ -144,6 +144,8 @@ data class MatchRecord(
     val comp: Comp? = null,
     val label: String = "",
     val week: Int = SeasonCalendar.NONE,
+    /** The season it was played in (0 when unknown): week names depend on the season's length. */
+    val season: Int = 0,
 )
 
 /**
@@ -286,6 +288,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         comp: Comp? = null,
         label: String = "",
         week: Int = SeasonCalendar.NONE,
+        season: Int = 0,
     ): MatchRecord {
         val i = index.getValue(a)
         val j = index.getValue(b)
@@ -318,7 +321,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             }
         }
         fun delta(k: String) = (rating(k) - before.getValue(k)).takeIf { !it.isNaN() }?.roundToInt() ?: 0
-        val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore), comp, label, week)
+        val rec = MatchRecord(a, b, results, delta(a), delta(b), time, notes(a, b, results, before, tierBefore), comp, label, week, season)
         feed.addFirst(rec)
         while (feed.size > FEED) feed.removeLast()
         return rec
@@ -507,7 +510,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             val gs = m.games.joinToString(";") { g -> "${g.a},${g.b},${flag(g.aYacht)}${flag(g.bYacht)}${flag(g.aBonus)}${flag(g.bBonus)}" }
             append("m ${m.a} ${m.b} $gs ${m.deltaA} ${m.deltaB} ${m.time} ${m.notes.joinToString("\u001f").ifEmpty { "-" }.replace(' ', ' ')}")
             // Where it was played, a field older versions do not read.
-            m.comp?.let { c -> append(" ${c.code}:${m.week}:${MediaText.esc(m.label)}") }
+            m.comp?.let { c -> append(" ${c.code}:${m.week}:${MediaText.esc(m.label)}").append(if (m.season > 0) " ${m.season}" else "") }
             append('\n')
         }
     }
@@ -646,7 +649,8 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
                     val comp = where?.get(0)?.singleOrNull()?.let { Comp.of(it) }
                     val week = where?.get(1)?.toIntOrNull() ?: SeasonCalendar.NONE
                     val label = if (comp == null) "" else MediaText.unesc(where!![2])
-                    l.feed.addFirst(MatchRecord(f[1], f[2], games, f[4].toInt(), f[5].toInt(), f[6].toLong(), notes, comp, label, if (comp == null) SeasonCalendar.NONE else week))
+                    val season = if (comp == null) 0 else f.getOrNull(9)?.toIntOrNull() ?: 0
+                    l.feed.addFirst(MatchRecord(f[1], f[2], games, f[4].toInt(), f[5].toInt(), f[6].toLong(), notes, comp, label, if (comp == null) SeasonCalendar.NONE else week, season))
                 }
             }
         }

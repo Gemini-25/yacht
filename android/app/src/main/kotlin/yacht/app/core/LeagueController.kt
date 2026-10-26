@@ -150,6 +150,8 @@ data class FeedItem(
     val comp: Comp? = null,
     val label: String = "",
     val week: Int = SeasonCalendar.NONE,
+    /** The season it was played in (0 when unknown). */
+    val season: Int = 0,
 )
 
 /** A match being played: its two sides (team ids for team matches) and where. */
@@ -173,7 +175,7 @@ data class ClockView(
     /** Everything is played: the season is closing. */
     val over: Boolean,
     val weeks: List<WeekRow>,
-    /** Matches being played per (competition, week). */
+    /** Matches being played per (competition, stage); a league round's stage is its matchday. */
     val live: Map<Pair<Comp, Int>, Int> = emptyMap(),
 ) {
     fun row(w: Int): WeekRow? = weeks.getOrNull(w - 1)
@@ -1401,6 +1403,7 @@ class LeagueController(
             l.record(
                 Ladder.ME, ai,
                 listOf(GameScore(me.total, opp.total, (me[Category.YACHT] ?: 0) > 0, (opp[Category.YACHT] ?: 0) > 0, me.bonus > 0, opp.bonus > 0)),
+                comp = Comp.FRIENDLY, label = RANKED_LABEL, season = plan?.number ?: 0,
             )
             l.fit()
             val e = l.entry(Ladder.ME)!!
@@ -1457,6 +1460,7 @@ class LeagueController(
                         l.record(
                             first, second,
                             listOf(GameScore(last.first.total, last.second.total, (last.first[Category.YACHT] ?: 0) > 0, (last.second[Category.YACHT] ?: 0) > 0, last.first.bonus > 0, last.second.bonus > 0)),
+                            comp = Comp.FRIENDLY, label = WATCH_LABEL, season = plan?.number ?: 0,
                         )
                     }
                 }
@@ -1663,7 +1667,7 @@ class LeagueController(
             FeedItem(
                 m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes,
                 curves?.curves(m.a, m.b)?.firstOrNull()?.let { c -> if (c.a == m.a) c.curveA() else IntArray(c.curveA().size) { 100 - c.curveA()[it] } },
-                m.comp, m.label, m.week,
+                m.comp, m.label, m.week, m.season,
             )
         }
         // A view equal to the last one is handed over as the same object, so the screen skips it.
@@ -1695,8 +1699,13 @@ class LeagueController(
             lastWeeks.getOrNull(w - 1)?.takeIf { it == r } ?: r
         }
         lastWeeks = rows
+        // By stage: a short season can hold two stages of one competition in a week.
         val playing = HashMap<Pair<Comp, Int>, Int>()
-        for (f in live.values) if (f.week != SeasonCalendar.NONE) playing.merge(f.comp to f.week, 1, Int::plus)
+        for (f in live.values) {
+            if (f.week == SeasonCalendar.NONE) continue
+            val stage = if (f.comp == Comp.LEAGUE) f.week - 1 else p.competition(f.comp)?.let { c -> runCatching { c.stageOf(f) }.getOrNull() } ?: -1
+            if (stage >= 0) playing.merge(f.comp to stage, 1, Int::plus)
+        }
         return ClockView(p.number, p.week, cal.leagueWeeks, cal.lastWeek, p.finished, rows, playing)
     }
 
@@ -2031,6 +2040,10 @@ class LeagueController(
         /** Errors in a row after which the league stops and says why. */
         private const val MAX_FAILURES = 12
         private const val ERROR_PAUSE_MS = 500L
+
+        /** Feed labels of the player's ranked games and of watched games (friendlies on the ladder). */
+        const val RANKED_LABEL = "랭크전"
+        const val WATCH_LABEL = "관전 경기"
 
         /** My assumed rating before my first ranked game (a solid amateur). */
         const val START_RATING = 1400.0

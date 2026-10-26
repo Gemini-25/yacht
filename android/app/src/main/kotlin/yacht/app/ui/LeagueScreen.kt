@@ -574,8 +574,8 @@ private fun FeedList(lg: LeagueController, v: LeagueView) {
         }
         if (v.feed.isEmpty()) item { Text("아직 끝난 경기가 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
         else if (shown.isEmpty()) item { Text("고른 종류의 경기 결과가 아직 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
-        val weeks = v.clock?.leagueWeeks
-        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it, weeks) }
+        val clock = v.clock
+        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it, clock) }
     }
 }
 
@@ -595,21 +595,27 @@ private enum class FeedKind(val label: String) {
 }
 
 /** Where a result was played: "🏆 요트컵 64강 · 14주차", "📋 리그 12라운드"; null for results saved before. */
-private fun whereLine(m: FeedItem, leagueWeeks: Int?): String? {
+private fun whereLine(m: FeedItem, clock: yacht.app.core.ClockView?): String? {
     val c = m.comp ?: return null
-    if (c == Comp.FRIENDLY) return "🤝 친선 경기"
-    val week = if (c == Comp.LEAGUE || m.week <= 0) "" else weekName(m.week, leagueWeeks).let { if (it.isEmpty()) "" else " · $it" }
+    if (c == Comp.FRIENDLY) {
+        return when (m.label) {
+            "" -> "🤝 친선 경기"
+            LeagueController.RANKED_LABEL -> "🎮 ${m.label}"
+            else -> "🤝 ${m.label}"
+        }
+    }
+    val week = if (c == Comp.LEAGUE || m.week <= 0) "" else weekLabel(m.week, m.season, clock, c).let { if (it.isEmpty()) "" else " · $it" }
     return stageName(c, m.label) + week
 }
 
 @Composable
-private fun FeedCard(lg: LeagueController, m: FeedItem, leagueWeeks: Int?) {
+private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?) {
     val cs = MaterialTheme.colorScheme
     val aPts: Int = m.games.map { if (it.a > it.b) 2 else if (it.a == it.b) 1 else 0 }.sum()
     val bPts = m.games.size * 2 - aPts
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            whereLine(m, leagueWeeks)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            whereLine(m, clock)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FeedSide(m.aName, m.deltaA, aPts > bPts, Modifier.weight(1f), TextAlign.Start)
                 Text(
