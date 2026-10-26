@@ -41,6 +41,7 @@ import yacht.engine.league.WeekStage
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
+import yacht.engine.league.NationBook
 import yacht.engine.league.Nations
 import yacht.engine.league.diff
 import yacht.engine.league.Origin
@@ -383,6 +384,66 @@ data class RecordsView(
     /** Best average match rating this season (the MVP race), with its matches. */
     val mvpRace: List<Pair<String, AiStats>>,
 )
+
+/** A nation in the 국가 랭킹: its national team's record and its players' strength. */
+data class NationRow(
+    val code: String,
+    val flag: String,
+    val name: String,
+    val confed: String,
+    /** Its players in the league now. */
+    val players: Int,
+    /** Average rating of its five best (its national team's strength), null without five rated. */
+    val strength: Int?,
+    val best: String?,
+    val worldTitles: Int,
+    val continentalTitles: Int,
+    val worldBest: Int,
+    val continentalBest: Int,
+    val editions: Int,
+    val won: Int,
+    val drawn: Int,
+    val lost: Int,
+)
+
+/** One nation's sheet: its school, squad, capped players, cups and 국적별 기록. */
+data class NationSheet(
+    val row: NationRow,
+    val motto: String,
+    /** Its best players now: (key, name, rating, age). */
+    val squad: List<NationPlayer>,
+    val capped: List<NationPlayer>,
+    /** "시즌 7 요트 월드컵 우승", newest first. */
+    val cups: List<String>,
+    /** Honours its players won, by kind: (kind, count), most first. */
+    val honours: List<Pair<String, Int>>,
+    val legends: List<NationPlayer>,
+    /** Players by age band: (label, count). */
+    val ages: List<Pair<String, Int>>,
+    val women: Int,
+)
+
+/** A player in a nation's sheet; [note] says what it is listed for. */
+data class NationPlayer(val key: String, val name: String, val note: String)
+
+/** A young player worth watching (유망주). */
+data class ProspectRow(val key: String, val shown: String, val age: Int, val overall: Int, val potential: Int, val outlook: String?, val rating: Int?)
+
+/** Two players side by side (선수 비교). */
+data class CompareView(
+    val a: String,
+    val b: String,
+    val nameA: String,
+    val nameB: String,
+    val idA: IdentityView?,
+    val idB: IdentityView?,
+    /** Rating, rank, games, win rate, average score, titles, MVPs: (label, a, b, which is better: 1 a, -1 b, 0 neither). */
+    val lines: List<CompareLine>,
+    /** a's points share against b and their games, null when they never met. */
+    val h2h: Pair<Double, Int>?,
+)
+
+data class CompareLine(val label: String, val a: String, val b: String, val better: Int)
 
 /** A retired player or legend for the 레전드 보관소. */
 data class PastPlayer(
@@ -1905,6 +1966,7 @@ class LeagueController(
                 null -> {}
             }
             spec?.temper?.takeIf { it != yacht.engine.league.Temper.NONE }?.let { add("🌀 ${it.label}") }
+            spec?.belief?.let { add("🤔 " + (yacht.engine.league.CustomAiSpec.BELIEFS[it] ?: "규칙 착각")) }
         }
         val notes = buildList {
             gene?.let { g ->
@@ -1965,6 +2027,172 @@ class LeagueController(
         scope.launch(Dispatchers.Default) {
             synchronized(lock) { world?.archive?.reviewShown() }
             save()
+        }
+    }
+
+    /** The 국가 랭킹, read on request. */
+    var nations by mutableStateOf<List<NationRow>>(emptyList())
+        private set
+
+    /** The nation sheet opened last. */
+    var nationSheet by mutableStateOf<NationSheet?>(null)
+        private set
+
+    fun closeNation() {
+        nationSheet = null
+    }
+
+    /** Ratings of every player, keyed (under the lock). */
+    private fun ratingsOf(w: LeagueWorld): Map<String, Double> =
+        w.members.associateWith { w.ladder.rating(it) }.filterValues { !it.isNaN() }
+
+    private fun nationRows(w: LeagueWorld, ratings: Map<String, Double>): List<NationRow> {
+        val book = w.nations
+        val byNation = w.players.alive.groupBy { it.identity?.nation ?: Nations.KR.code }
+        return Nations.ALL.map { n ->
+            val ps = byNation[n.code].orEmpty().filter { it.key in ratings }.sortedByDescending { ratings[it.key] }
+            val r = book[n.code]
+            NationRow(
+                n.code, n.flag, n.name, n.confed.label, byNation[n.code]?.size ?: 0,
+                ps.take(5).takeIf { it.size == 5 }?.map { ratings.getValue(it.key) }?.average()?.roundToInt(),
+                ps.firstOrNull()?.name,
+                r?.worldTitles ?: 0, r?.continentalTitles ?: 0, r?.worldBest ?: NationBook.NONE, r?.continentalBest ?: NationBook.NONE,
+                r?.editions ?: 0, r?.won ?: 0, r?.drawn ?: 0, r?.lost ?: 0,
+            )
+        }
+    }
+
+    fun loadNations() {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                nationRows(w, ratingsOf(w))
+            } ?: return@launch
+            scope.launch { nations = v }
+        }
+    }
+
+    fun loadNation(code: String) {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                val ratings = ratingsOf(w)
+                val row = nationRows(w, ratings).firstOrNull { it.code == code } ?: return@synchronized null
+                val b = w.players
+                val season = w.plan?.number ?: (b.evolvedSeason + 1)
+                val mine = b.alive.filter { (it.identity?.nation ?: Nations.KR.code) == code }
+                val squad = mine.filter { it.key in ratings }.sortedByDescending { ratings[it.key] }.take(8).map {
+                    NationPlayer(it.key, it.name, "레이팅 ${ratings.getValue(it.key).roundToInt()} · ${it.age(season)}세")
+                }
+                val capped = w.nations.mostCapped(5, code).map { c ->
+                    NationPlayer(c.key, name(c.key), "${c.caps}회 선발" + (if (c.titles > 0) " · 우승 ${c.titles}회" else "") + " · ${NationBook.record(c.won, c.drawn, c.lost)}")
+                }
+                val cups = w.nations.editions.reversed().mapNotNull { e ->
+                    val cup = if (e.world) "요트 월드컵" else (e.podiums.firstOrNull { p -> p.winner == code || p.runnerUp == code || code in p.semis }?.confed?.cup ?: "대륙컵")
+                    val place = e.podiums.firstNotNullOfOrNull { p ->
+                        when (code) {
+                            p.winner -> "우승"
+                            p.runnerUp -> "준우승"
+                            in p.semis -> "4강"
+                            else -> null
+                        }
+                    }
+                    place?.let { "시즌 ${e.season} $cup $it" + if (e.host == code) " (개최)" else "" }
+                }.take(12)
+                // 국적별 기록실: who is of this nation, alive, retired or a legend.
+                val nationOf = HashMap<String, String>()
+                for (r in b.retired) nationOf[r.key] = r.nation
+                for (l in b.legends) nationOf[l.key] = l.identity?.nation ?: l.record.nation
+                for (p in b.alive) nationOf[p.key] = p.identity?.nation ?: Nations.KR.code
+                val honours = w.honours.all.filter { nationOf[it.key] == code && it.kind in NATION_HONOURS }
+                    .groupingBy { it.kind }.eachCount().entries.sortedByDescending { it.value }.map { it.key to it.value }
+                val legends = b.legends.filter { nationOf[it.key] == code }.reversed().take(10).map { l ->
+                    NationPlayer(l.key, l.name, "시즌 ${l.record.born}–${l.record.retired}" + if (l.record.titles > 0) " · 우승 ${l.record.titles}회" else "")
+                }
+                val ages = mine.map { it.age(season) }
+                val bands = listOf("~21세" to (0..21), "22~25세" to (22..25), "26~31세" to (26..31), "32~35세" to (32..35), "36세~" to (36..99))
+                NationSheet(
+                    row, yacht.engine.league.Schools.of(code).motto, squad, capped, cups, honours, legends,
+                    bands.map { (l, r) -> l to ages.count { it in r } }, mine.count { it.identity?.gender == yacht.engine.league.Gender.FEMALE },
+                )
+            } ?: return@launch
+            scope.launch { nationSheet = v }
+        }
+    }
+
+    /** 유망주: young players by potential. */
+    var prospects by mutableStateOf<List<ProspectRow>>(emptyList())
+        private set
+
+    fun loadProspects() {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                val season = w.plan?.number ?: (w.players.evolvedSeason + 1)
+                w.players.alive.mapNotNull { p ->
+                    val id = p.identity ?: return@mapNotNull null
+                    val age = id.age(season, p.born)
+                    if (age > PROSPECT_AGE) return@mapNotNull null
+                    val nat = Nations.of(id.nation)
+                    ProspectRow(
+                        p.key, nat?.let { "${it.flag} ${p.name}" } ?: p.name, age, id.abilities.overall, id.potential,
+                        yacht.engine.league.Profiles.outlook(id, age), w.ladder.rating(p.key).takeIf { !it.isNaN() }?.roundToInt(),
+                    )
+                }.sortedWith(compareByDescending<ProspectRow> { it.potential }.thenByDescending { it.overall }.thenBy { it.key }).take(60)
+            } ?: return@launch
+            scope.launch { prospects = v }
+        }
+    }
+
+    /** 선수 비교: the pair opened last. */
+    var compare by mutableStateOf<CompareView?>(null)
+        private set
+
+    fun closeCompare() {
+        compare = null
+    }
+
+    fun loadCompare(a: String, b: String) {
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val w = world ?: return@synchronized null
+                val l = w.ladder
+                val st = w.stats
+                fun num(x: Double, f: String) = if (x.isNaN()) "–" else f.format(x)
+                fun better(x: Double, y: Double, high: Boolean = true) = when {
+                    x.isNaN() || y.isNaN() || x == y -> 0
+                    (x > y) == high -> 1
+                    else -> -1
+                }
+                val ra = l.rating(a)
+                val rb = l.rating(b)
+                val ca = st.career(a)
+                val cb = st.career(b)
+                val rows = (view?.rows).orEmpty()
+                val rowA = rows.firstOrNull { it.key == a }
+                val rowB = rows.firstOrNull { it.key == b }
+                val ta = w.honours.titles(a).toDouble()
+                val tb = w.honours.titles(b).toDouble()
+                val ma = w.honours.of(a).count { it.kind == "MVP" }.toDouble()
+                val mb = w.honours.of(b).count { it.kind == "MVP" }.toDouble()
+                val lines = listOf(
+                    CompareLine("레이팅", num(ra, "%.0f"), num(rb, "%.0f"), better(ra, rb)),
+                    CompareLine("순위", rowA?.rank?.let { "${it}위" } ?: "–", rowB?.rank?.let { "${it}위" } ?: "–", better((rowA?.rank ?: 0).toDouble().takeIf { it > 0 } ?: Double.NaN, (rowB?.rank ?: 0).toDouble().takeIf { it > 0 } ?: Double.NaN, high = false)),
+                    CompareLine("판 수", "${rowA?.games ?: 0}", "${rowB?.games ?: 0}", 0),
+                    CompareLine("승률", rowA?.let { "%.1f%%".format(100 * it.winRate) } ?: "–", rowB?.let { "%.1f%%".format(100 * it.winRate) } ?: "–", better(rowA?.winRate ?: Double.NaN, rowB?.winRate ?: Double.NaN)),
+                    CompareLine("평균 점수", rowA?.let { "%.1f".format(it.avgScore) } ?: "–", rowB?.let { "%.1f".format(it.avgScore) } ?: "–", better(rowA?.avgScore ?: Double.NaN, rowB?.avgScore ?: Double.NaN)),
+                    CompareLine("평균 평점", num(ca?.avgRating ?: Double.NaN, "%.2f"), num(cb?.avgRating ?: Double.NaN, "%.2f"), better(ca?.avgRating ?: Double.NaN, cb?.avgRating ?: Double.NaN)),
+                    CompareLine("우승", "${ta.toInt()}회", "${tb.toInt()}회", better(ta, tb)),
+                    CompareLine("MVP", "${ma.toInt()}회", "${mb.toInt()}회", better(ma, mb)),
+                )
+                val met = l.opponents(a).firstOrNull { it.first == b }?.let { (_, p, g) -> p / g to g }
+                CompareView(
+                    a, b, name(a), name(b),
+                    runCatching { identityView(w, a) }.getOrNull(), runCatching { identityView(w, b) }.getOrNull(),
+                    lines, met,
+                )
+            } ?: return@launch
+            scope.launch { compare = v }
         }
     }
 
@@ -2185,6 +2413,12 @@ class LeagueController(
 
         /** League files a backup restores (when this phone's league has no games yet). */
         val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")
+
+        /** Oldest age listed among the 유망주. */
+        const val PROSPECT_AGE = 22
+
+        /** The honours counted in a nation's records (titles and awards its players won). */
+        val NATION_HONOURS = setOf("L0", "CUP", "CL", "SUPER", "MVP", "ROOKIE", "MIP", "YACHT", "SCORER", "WCMVP", "WCTOP", "POTW")
         private const val FIT_MS = 2_000L
         private const val CHECKPOINT_MS = 30_000L
         private const val PUBLISH_MS = 300L

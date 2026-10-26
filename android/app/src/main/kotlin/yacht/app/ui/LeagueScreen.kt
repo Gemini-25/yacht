@@ -186,9 +186,12 @@ fun LeagueScreen(c: AppController) {
             }
         }
     }
+    lg.nationSheet?.let { NationSheetDialog(lg, it) { k -> lg.detail = k } }
+    var compareFrom by remember { mutableStateOf<String?>(null) }
+    compareFrom?.let { k -> CompareDialog(lg, k, v?.rows.orEmpty()) { compareFrom = null } }
     val key = lg.detail
     val row = v?.rows?.firstOrNull { it.key == key }
-    if (row != null) AiDetail(c, row) { lg.detail = null }
+    if (row != null) AiDetail(c, row, onCompare = { compareFrom = row.key; lg.detail = null }) { lg.detail = null }
     else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
     if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }
@@ -349,22 +352,23 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         }
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원 ${favs.size}", fontSize = 12.sp) })
+                FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원 ${favs.count { !it.startsWith(NATION_PREFIX) }}", fontSize = 12.sp) })
                 for (o in yacht.engine.league.Origin.entries) {
                     val n = v.rows.count { it.origin == o }
                     if (n > 0) FilterChip(selected = origin == o, onClick = { origin = if (origin == o) null else o }, label = { Text("${o.label} $n", fontSize = 12.sp) })
                 }
             }
         }
-        // Nations of the league, most players first.
-        val nations = v.rows.filter { it.nation.isNotEmpty() }.groupingBy { it.nation }.eachCount().entries.sortedByDescending { it.value }
+        // Nations of the league: followed nations first, then most players first.
+        val nations = v.rows.filter { it.nation.isNotEmpty() }.groupingBy { it.nation }.eachCount().entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { nationFavourite(it.key) in favs }.thenByDescending { it.value })
         if (nations.size > 1) {
             item {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(selected = nation == null, onClick = { nation = null }, label = { Text("🌐 전체 국적", fontSize = 12.sp) })
                     for ((code, n) in nations) {
                         val nat = yacht.engine.league.Nations.of(code) ?: continue
-                        FilterChip(selected = nation == code, onClick = { nation = if (nation == code) null else code }, label = { Text("${nat.flag} ${nat.short} $n", fontSize = 12.sp) })
+                        FilterChip(selected = nation == code, onClick = { nation = if (nation == code) null else code }, label = { Text((if (nationFavourite(code) in favs) "★" else "") + "${nat.flag} ${nat.short} $n", fontSize = 12.sp) })
                     }
                 }
             }
@@ -1083,7 +1087,7 @@ private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
 // ---- one AI ------------------------------------------------------------------------------------
 
 @Composable
-private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
+private fun AiDetail(c: AppController, r: LadderRow, onCompare: () -> Unit, onDismiss: () -> Unit) {
     val lg = c.league
     val cs = MaterialTheme.colorScheme
     // Read with the profile, off the main thread (the ladder's lock is busy while the league runs).
@@ -1126,6 +1130,7 @@ private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         val fav = r.key in lg.favourites
                         AssistChip(onClick = { lg.toggleFavourite(r.key) }, label = { Text(if (fav) "★ 응원 중" else "☆ 응원하기") })
+                        AssistChip(onClick = onCompare, label = { Text("⚖ 비교") })
                         AssistChip(onClick = { onDismiss(); c.newRankedGame(r.key) }, label = { Text("🎮 이 AI와 랭크전") })
                         AssistChip(
                             onClick = {

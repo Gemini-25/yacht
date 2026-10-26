@@ -68,13 +68,14 @@ fun NewsTab(c: AppController, v: LeagueView, results: @Composable () -> Unit) {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (m in NewsMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
             if (mode == NewsMode.NEWS) {
-                FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원 AI만", fontSize = 12.sp) })
+                FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원만", fontSize = 12.sp) })
             }
         }
         when (mode) {
             NewsMode.NEWS -> {
                 val favs = lg.favourites
-                val shown = if (onlyFavourites) v.news.filter { a -> a.keys.any { it in favs } } else v.news
+                // A followed nation's news: its national team's (its code among the keys).
+                val shown = if (onlyFavourites) v.news.filter { a -> a.keys.any { it in favs || nationFavourite(it) in favs } } else v.news
                 Articles(shown, onlyFavourites, v.clock) { if (lg.isAi(it)) lg.detail = it }
             }
             NewsMode.LIVE -> LiveBoardView(c)
@@ -88,7 +89,7 @@ fun NewsTab(c: AppController, v: LeagueView, results: @Composable () -> Unit) {
 private fun Articles(all: List<Article>, favourites: Boolean, clock: ClockView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (all.isEmpty()) {
-        CenterText(if (favourites) "응원하는 AI의 소식이 아직 없어요. 순위표에서 AI를 눌러 ‘☆ 응원하기’를 골라 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
+        CenterText(if (favourites) "응원하는 AI나 국가의 소식이 아직 없어요. 순위표에서 AI를 눌러 ‘☆ 응원하기’를, 기록 › 국가 랭킹에서 나라를 눌러 ‘☆ 응원 국가로’를 골라 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
         return
     }
     // By the week they happened in (newest season and week first, newest first within a week),

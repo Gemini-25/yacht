@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -167,12 +170,326 @@ private fun StyleCard(id: IdentityView) {
         id.style?.let { Text("🎨 스타일: $it", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
         for (n in id.styleNotes) Text(n, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         if (id.chips.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (c in id.chips) {
                     Text(c, style = MaterialTheme.typography.labelSmall, modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(cs.surface).padding(horizontal = 8.dp, vertical = 2.dp))
                 }
             }
         }
         id.school?.let { Text("${id.flag} ${id.nation} 스타일: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
+    }
+}
+
+/** A national team's best finish: 우승, 준우승, 4강, 8강, 본선, or null when it never played. */
+fun finishLabel(place: Int): String? = when (place) {
+    0 -> "우승"
+    1 -> "준우승"
+    2 -> "4강"
+    3 -> "8강"
+    yacht.engine.league.NationBook.NONE -> null
+    else -> "본선"
+}
+
+/** The key a nation is followed by in the favourites. */
+fun nationFavourite(code: String) = NATION_PREFIX + code
+
+const val NATION_PREFIX = "nation:"
+
+private enum class NationSort(val label: String) {
+    CUPS("대회 성적"),
+    STRENGTH("전력 (상위 5명)"),
+    PLAYERS("선수 수"),
+}
+
+/** 국가 랭킹: every nation by its national team's titles, its players' strength or its numbers. */
+@Composable
+fun NationRanking(lg: yacht.app.core.LeagueController) {
+    val cs = MaterialTheme.colorScheme
+    androidx.compose.runtime.LaunchedEffect(Unit) { lg.loadNations() }
+    var sort by remember { mutableStateOf(NationSort.CUPS) }
+    val all = lg.nations
+    if (all.isEmpty()) {
+        CenterText("국가 기록을 불러오는 중…")
+        return
+    }
+    val favs = lg.favourites
+    val sorted = when (sort) {
+        NationSort.CUPS -> all.sortedWith(
+            compareByDescending<yacht.app.core.NationRow> { it.worldTitles }.thenByDescending { it.continentalTitles }
+                .thenBy { it.worldBest }.thenBy { it.continentalBest }.thenByDescending { it.won }.thenByDescending { it.strength ?: 0 },
+        )
+        NationSort.STRENGTH -> all.sortedByDescending { it.strength ?: 0 }
+        NationSort.PLAYERS -> all.sortedByDescending { it.players }
+    }
+    androidx.compose.foundation.lazy.LazyColumn(
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (s in NationSort.entries) {
+                    androidx.compose.material3.FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.label, fontSize = 12.sp) })
+                }
+            }
+        }
+        val mine = sorted.filter { nationFavourite(it.code) in favs }
+        if (mine.isNotEmpty()) {
+            item { Text("★ 응원 국가", fontWeight = FontWeight.Bold) }
+            items(mine.size) { i -> NationItem(sorted.indexOf(mine[i]) + 1, mine[i], true) { lg.loadNation(mine[i].code) } }
+            item { Text("전체", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
+        }
+        items(sorted.size) { i -> NationItem(i + 1, sorted[i], nationFavourite(sorted[i].code) in favs) { lg.loadNation(sorted[i].code) } }
+        item {
+            Text(
+                "월드컵은 4시즌마다 (시즌 3, 7, 11…), 대륙컵은 그 사이 (시즌 5, 9, 13…) 열려요. 각 나라 레이팅 상위 5명이 대표로 뽑혀요.",
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NationItem(rank: Int, n: yacht.app.core.NationRow, favourite: Boolean, onOpen: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    androidx.compose.material3.Card(
+        Modifier.fillMaxWidth().clickable(onClick = onOpen),
+        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = if (favourite) cs.secondaryContainer else cs.surface),
+    ) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("$rank", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
+            Text(n.flag, fontSize = 22.sp, modifier = Modifier.padding(end = 8.dp))
+            Column(Modifier.weight(1f)) {
+                Text((if (favourite) "★ " else "") + n.name, fontWeight = FontWeight.Bold)
+                Text(
+                    listOfNotNull(
+                        n.confed,
+                        "선수 ${n.players}명",
+                        n.strength?.let { "전력 $it" },
+                        n.best?.let { "에이스 $it" },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                val trophies = buildString {
+                    if (n.worldTitles > 0) append("🌍×${n.worldTitles} ")
+                    if (n.continentalTitles > 0) append("🗺×${n.continentalTitles}")
+                }.trim()
+                if (trophies.isNotEmpty()) Text(trophies, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                val best = finishLabel(n.worldBest)?.let { "월드컵 $it" } ?: finishLabel(n.continentalBest)?.let { "대륙컵 $it" }
+                Text(best ?: if (n.editions == 0) "출전 전" else "본선", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** A nation's sheet: school, squad, most capped, cups, records by nation and legends. */
+@Composable
+fun NationSheetDialog(lg: yacht.app.core.LeagueController, s: yacht.app.core.NationSheet, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val n = s.row
+    val fav = nationFavourite(n.code) in lg.favourites
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { lg.closeNation() },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { lg.closeNation() }) { Text("닫기") } },
+        title = { Text("${n.flag} ${n.name}", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("${n.confed} · 선수 ${n.players}명 (여자 ${s.women}명)" + (n.strength?.let { " · 전력 $it" } ?: ""), style = MaterialTheme.typography.labelMedium, color = cs.secondary)
+                if (s.motto.isNotEmpty()) Text("🎨 ${s.motto}", style = MaterialTheme.typography.bodySmall)
+                androidx.compose.material3.AssistChip(onClick = { lg.toggleFavourite(nationFavourite(n.code)) }, label = { Text(if (fav) "★ 응원 중" else "☆ 응원 국가로") })
+                Heading("🏆 국가대항전")
+                Small(
+                    if (n.editions == 0) "아직 국가대항전에 나간 적이 없어요."
+                    else "${n.editions}회 출전 · ${yacht.engine.league.NationBook.record(n.won, n.drawn, n.lost)} · 월드컵 우승 ${n.worldTitles}회 · 대륙컵 우승 ${n.continentalTitles}회",
+                )
+                for (c in s.cups) Small(c)
+                if (s.squad.isNotEmpty()) {
+                    Heading("🎽 지금의 주축 (레이팅 상위 5명이 대표)")
+                    for ((i, p) in s.squad.withIndex()) {
+                        val mark = when {
+                            i == 0 -> "ⓒ"
+                            i < 5 -> "•"
+                            else -> "◦"
+                        }
+                        PlayerLine("$mark ${p.name}", p.note) { onOpen(p.key) }
+                    }
+                }
+                if (s.capped.isNotEmpty()) {
+                    Heading("🧢 최다 출전")
+                    for (p in s.capped) PlayerLine(p.name, p.note) { onOpen(p.key) }
+                }
+                if (s.honours.isNotEmpty()) {
+                    Heading("📜 국적별 기록")
+                    Small(s.honours.joinToString(" · ") { (k, c) -> "${honourLabel(k)} $c" })
+                }
+                if (s.ages.any { it.second > 0 }) {
+                    Heading("👥 나이 분포")
+                    val top = s.ages.maxOf { it.second }.coerceAtLeast(1)
+                    for ((label, c) in s.ages) BarRow(label, c.toDouble(), top.toDouble(), "$c")
+                }
+                if (s.legends.isNotEmpty()) {
+                    Heading("🏛 레전드")
+                    for (p in s.legends) PlayerLine(p.name, p.note) { onOpen(p.key) }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun Heading(text: String) = Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+
+@Composable
+private fun Small(text: String) = Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+@Composable
+private fun PlayerLine(name: String, note: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** 유망주: players of 22 or younger by potential. */
+@Composable
+fun Prospects(lg: yacht.app.core.LeagueController, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    androidx.compose.runtime.LaunchedEffect(Unit) { lg.loadProspects() }
+    val ps = lg.prospects
+    if (ps.isEmpty()) {
+        CenterText("22세 이하 선수가 리그에 들어오면 잠재력 순으로 여기에 보여요.")
+        return
+    }
+    androidx.compose.foundation.lazy.LazyColumn(
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        item {
+            Text(
+                "잠재력은 선수가 자랄 수 있는 한계예요. 22세 이하 선수를 잠재력 순으로 보여 줘요. 보통 28~30세에 전성기를 맞아요.",
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+            )
+        }
+        items(ps.size) { i ->
+            val p = ps[i]
+            androidx.compose.material3.Card(Modifier.fillMaxWidth().clickable { onOpen(p.key) }, colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = cs.surface)) {
+                Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(p.shown, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOfNotNull("${p.age}세", p.rating?.let { "레이팅 $it" }, p.outlook).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = cs.onSurfaceVariant,
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("잠재력 ${p.potential} ${abilityGrade(p.potential)}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = gameColors.good)
+                        Text("지금 ${p.overall} ${abilityGrade(p.overall)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 선수 비교: pick the second player, then the two side by side. */
+@Composable
+fun CompareDialog(lg: yacht.app.core.LeagueController, first: String, rows: List<yacht.app.core.LadderRow>, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var query by remember { mutableStateOf("") }
+    val shown = lg.compare?.takeIf { it.a == first }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { lg.closeCompare(); onDismiss() },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { lg.closeCompare(); onDismiss() }) { Text("닫기") }
+        },
+        dismissButton = {
+            if (shown != null) androidx.compose.material3.TextButton(onClick = { lg.closeCompare() }) { Text("다른 선수") }
+        },
+        title = { Text(if (shown == null) "⚖ ${lg.name(first)}와 비교할 선수" else "⚖ 선수 비교", fontWeight = FontWeight.Bold) },
+        text = {
+            if (shown == null) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = query, onValueChange = { query = it }, singleLine = true,
+                        placeholder = { Text("선수 이름이나 나라 검색") }, modifier = Modifier.fillMaxWidth(),
+                    )
+                    val q = query.trim()
+                    val nations = yacht.engine.league.Nations.ALL.filter { q.isNotEmpty() && q in it.name }.map { it.code }.toSet()
+                    val picks = rows.filter { it.key != first && !it.isMe && (q.isEmpty() || q in it.name || it.nation in nations) }.take(40)
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.height(320.dp)) {
+                        items(picks.size) { i ->
+                            val r = picks[i]
+                            Row(Modifier.fillMaxWidth().clickable { lg.loadCompare(first, r.key) }.padding(vertical = 6.dp)) {
+                                Text(r.shown, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text((r.rank?.let { "${it}위 · " } ?: "") + (r.rating?.let { "$it" } ?: "–"), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) { CompareBody(shown) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun CompareBody(c: yacht.app.core.CompareView) {
+    val cs = MaterialTheme.colorScheme
+    val good = gameColors.good
+    @Composable
+    fun header(name: String, id: IdentityView?, end: Boolean, mod: Modifier) = Column(mod, horizontalAlignment = if (end) Alignment.End else Alignment.Start) {
+        Text((id?.flag?.let { "$it " } ?: "") + name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(listOfNotNull(id?.age?.let { "${it}세" }, id?.stage, id?.style).joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 2)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        header(c.nameA, c.idA, false, Modifier.weight(1f))
+        Text("vs", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp))
+        header(c.nameB, c.idB, true, Modifier.weight(1f))
+    }
+    c.h2h?.let { (p, g) ->
+        Text("맞대결 ${g}판 · 승점 ${"%.0f".format(100 * p)}% : ${"%.0f".format(100 * (1 - p))}%", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+        Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(cs.error.copy(alpha = 0.6f))) {
+            Box(Modifier.fillMaxWidth(p.toFloat().coerceIn(0f, 1f)).height(8.dp).clip(CircleShape).background(gameColors.me))
+        }
+    } ?: Text("아직 맞대결이 없어요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+    @Composable
+    fun line(label: String, a: String, b: String, better: Int) = Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(a, style = MaterialTheme.typography.bodySmall, fontWeight = if (better > 0) FontWeight.Bold else FontWeight.Normal, color = if (better > 0) good else cs.onSurface, modifier = Modifier.weight(1f))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
+        Text(b, style = MaterialTheme.typography.bodySmall, fontWeight = if (better < 0) FontWeight.Bold else FontWeight.Normal, color = if (better < 0) good else cs.onSurface, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+    }
+    Heading("📈 기록")
+    for (l in c.lines) line(l.label, l.a, l.b, l.better)
+    val aa = c.idA?.abilities
+    val ab = c.idB?.abilities
+    if (aa != null && ab != null) {
+        Heading("📊 능력치")
+        val oa = Abilities.of(aa).overall
+        val ob = Abilities.of(ab).overall
+        line("종합", "$oa ${abilityGrade(oa)}", "$ob ${abilityGrade(ob)}", oa.compareTo(ob))
+        for (i in aa.indices) line(Abilities.LABELS[i], "${aa[i]}", "${ab[i]}", aa[i].compareTo(ab[i]))
+        if (c.idA.potential != null && c.idB.potential != null) line("잠재력", "${c.idA.potential}", "${c.idB.potential}", c.idA.potential.compareTo(c.idB.potential))
+    }
+    val ta = c.idA?.tendencies
+    val tb = c.idB?.tendencies
+    if (ta != null && tb != null) {
+        Heading("🧭 성향")
+        for ((i, b) in Tendencies.BARS.withIndex()) {
+            fun word(v: Int) = when {
+                v <= -15 -> b.second
+                v >= 15 -> b.third
+                else -> "중간"
+            }
+            line(b.first, word(ta[i]), word(tb[i]), 0)
+        }
     }
 }

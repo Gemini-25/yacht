@@ -258,6 +258,8 @@ private fun Genealogy(p: ProfileView) {
 
 private enum class RecordsMode(val label: String) {
     ROOM("기록실"),
+    NATIONS("국가 랭킹"),
+    PROSPECTS("유망주"),
     HALL("명예의 전당"),
     ARCHIVE("시즌 아카이브"),
     META("메타 리포트"),
@@ -265,11 +267,14 @@ private enum class RecordsMode(val label: String) {
     FAMILIES("계열별"),
 }
 
+/** The modes that show the records room's data. */
+private val RECORDS_MODES = setOf(RecordsMode.ROOM, RecordsMode.HALL, RecordsMode.ARCHIVE, RecordsMode.META)
+
 /** 기록: the hall of fame by season, the legends and retired players, and the families. */
 @Composable
 fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, families: @Composable () -> Unit) {
     var mode by remember { mutableStateOf(RecordsMode.ROOM) }
-    LaunchedEffect(mode) { if (mode != RecordsMode.LEGENDS && mode != RecordsMode.FAMILIES) lg.loadRecords() }
+    LaunchedEffect(mode) { if (mode in RECORDS_MODES) lg.loadRecords() }
     Column {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
@@ -281,6 +286,8 @@ fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, fa
             RecordsMode.META -> MetaReportView(r)
             RecordsMode.HALL -> HallOfFame(v.season?.history.orEmpty(), r?.hallOfFame.orEmpty(), onOpen)
             RecordsMode.LEGENDS -> Legends(lg, onOpen)
+            RecordsMode.NATIONS -> NationRanking(lg)
+            RecordsMode.PROSPECTS -> Prospects(lg, onOpen)
             RecordsMode.FAMILIES -> families()
         }
     }
