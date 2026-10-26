@@ -62,14 +62,16 @@ class Archive {
     /** Every summary kept, oldest first. */
     val summaries: List<SeasonSummary> get() = summaryMap.values.toList()
 
+    // The views are copies: a snapshot built under the lock stays as it was after a rollover.
+
     /** [key]'s season lines, oldest first. */
-    fun lines(key: String): List<SeasonLine> = lineMap[key].orEmpty()
+    fun lines(key: String): List<SeasonLine> = lineMap[key]?.toList().orEmpty()
 
     /** AIs with season lines. */
-    val lineKeys: Set<String> get() = lineMap.keys
+    val lineKeys: Set<String> get() = lineMap.keys.toSet()
 
-    val dynasties: List<Dynasty> get() = dynastyList
-    val hallOfFame: List<HallOfFameEntry> get() = hof
+    val dynasties: List<Dynasty> get() = dynastyList.toList()
+    val hallOfFame: List<HallOfFameEntry> get() = hof.toList()
 
     fun inHallOfFame(key: String): Boolean = hof.any { it.key == key }
 
@@ -119,10 +121,19 @@ class Archive {
         }
     }
 
-    internal fun induct(e: HallOfFameEntry) {
-        if (inHallOfFame(e.key)) return
+    /**
+     * Inducts [e]; a full hall first lets its oldest member for which [evictable] says yes go.
+     * False when [e] is a member already or no member may go (then it stays out).
+     */
+    internal fun induct(e: HallOfFameEntry, evictable: (String) -> Boolean = { true }): Boolean {
+        if (inHallOfFame(e.key)) return false
+        if (hof.size >= MAX_HALL_OF_FAME) {
+            val i = hof.indexOfFirst { evictable(it.key) }
+            if (i < 0) return false
+            hof.removeAt(i)
+        }
         hof += e
-        while (hof.size > MAX_HALL_OF_FAME) hof.removeAt(0)
+        return true
     }
 
     internal fun putReview(r: SeasonReview) {
@@ -230,8 +241,10 @@ class Archive {
 
         /** Reads archive.txt; throws when it is not an archive at all (the caller starts fresh). */
         fun decode(text: String): Archive {
-            val lines = text.lines()
-            require(lines.firstOrNull()?.trim() == "archive 1") { "not an archive file" }
+            val all = text.lines()
+            require(all.firstOrNull()?.trim() == "archive 1") { "not an archive file" }
+            // Every line ends in a newline: a last one without it was cut (a torn write).
+            val lines = if (text.endsWith('\n')) all else all.dropLast(1)
             val a = Archive()
             val review = ArrayList<String>()
             for (line in lines) {
@@ -269,6 +282,8 @@ class Archive {
             }
             while (a.summaryMap.size > MAX_SEASONS) a.summaryMap.pollFirstEntry()
             while (a.highlightMap.size > MAX_SEASONS) a.highlightMap.pollFirstEntry()
+            while (a.hof.size > MAX_HALL_OF_FAME) a.hof.removeAt(0)
+            while (a.dynastyList.size > MAX_DYNASTIES) a.dynastyList.removeAt(0)
             return a
         }
     }
