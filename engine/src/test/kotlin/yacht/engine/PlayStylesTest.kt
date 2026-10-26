@@ -75,6 +75,29 @@ class PlayStylesTest {
         assertTrue(Math.abs(ev.avg - 188.5) < 12, "${ev.avg}")
     }
 
+    /** Win share of [gene] against plain max expectation over [deals] mirrored deals (both seats on the same dice). */
+    private fun winShare(gene: PlayGene, deals: Int): Double {
+        val ai = CustomAis.build(spec(gene), tables, extra)
+        val ev = yacht.engine.league.LeagueAi("ev", "ev", yacht.engine.league.Family.EV, "") { PlanPlayer("ev", shapedPlanner(tables.ev)) }
+        var wins = 0.0
+        for (g in 0 until deals) for (seat in 0..1) {
+            val deal = yacht.engine.league.GameDeal(g * 7919L + 1, g * 7919L + 2, g * 31L + 3, g * 31L + 4, seat == 0)
+            val s = yacht.engine.league.LeagueMatch.playGame(tables.rules, deal, ai, ev).score
+            wins += if (s.a > s.b) 1.0 else if (s.a == s.b) 0.5 else 0.0
+        }
+        return wins / (2 * deals)
+    }
+
+    @Test
+    fun senseWinsMoreGames() {
+        // 승부 감각 picks the box by the chance of winning among near-best ones: it wins more
+        // (measured over 1500 deals: 50.0% -> 51.1% for plain play, 48.1% -> 50.5% for a hunter).
+        val plain = winShare(PlayGene("ev"), 500)
+        val sharp = winShare(PlayGene("ev", sense = 1.0), 500)
+        println("sense: $plain -> $sharp")
+        assertTrue(sharp > plain + 0.004, "$plain -> $sharp")
+    }
+
     @Test
     fun genesSaveAndReplay() {
         for (g in listOf(

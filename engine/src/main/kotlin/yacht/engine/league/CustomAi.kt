@@ -237,10 +237,11 @@ object CustomAis {
      */
     private fun styled(spec: CustomAiSpec, gene: PlayGene, t: Tables, key: String, name: String, family: Family, desc: String): LeagueAi {
         val ev = t.ev
+        val win = if (gene.sense > 0.0 && t.dist != null) WinEstimate(t) else null
         val slip = if (spec.mistake == CustomMistake.SLIP) spec.amount else 0.0
         val tau = if (spec.mistake == CustomMistake.FEEL) spec.amount else 0.0
         return LeagueAi(key, name, family, desc) { r ->
-            StylePlayer(key, ev, r, gene.picker(ev, r, spec.temper, spec.temperStrength, slip, tau), t.bonus)
+            StylePlayer(key, ev, r, gene.picker(ev, r, spec.temper, spec.temperStrength, slip, tau), t.bonus, gene.sense, win)
         }
     }
 

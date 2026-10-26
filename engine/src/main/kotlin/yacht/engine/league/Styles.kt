@@ -318,6 +318,9 @@ class StylePlan(val me: Board, opp: Board, val style: Style, ev: EvTable, bonusT
 
     fun categoryValue(r: Int, c: Int): Double = catValue[r * Category.COUNT + c]
 
+    /** Points roll [r] really scores in box [c]. */
+    fun points(r: Int, c: Int): Int = scores[r, c]
+
     /** What a misreading player believes roll [r] scores in box [c] when it really scores 0. */
     private fun misreadPoints(misread: String, r: Int, c: Int): Int {
         val k = Dice.rollCounts[r]
@@ -339,6 +342,12 @@ class StylePlan(val me: Board, opp: Board, val style: Style, ev: EvTable, bonusT
     }
     fun bestCategory(r: Int): Category = Category.of(bestCat[r])
 }
+
+/** 승부 감각 applies from this many boxes written. */
+const val SENSE_FROM = 4
+
+/** Points below the style's best within which 승부 감각 may pick a box by its chance of winning. */
+const val SENSE_WINDOW = 12.0
 
 /** The style and mistake level for one turn. */
 data class TurnMode(val style: Style, val slip: Double = 0.0, val tau: Double = 0.0)
@@ -392,14 +401,22 @@ class StylePlayer(
     private val rng: Random,
     private val picker: ModePicker,
     private val bonusTable: BonusTable? = null,
+    /**
+     * 승부 감각 0..1: from the [SENSE_FROM]th box on, the box is chosen among those within
+     * [SENSE_WINDOW] × [sense] points of the style's best by the chance of winning ([win]).
+     */
+    private val sense: Double = 0.0,
+    private val win: WinEstimate? = null,
 ) : Player {
     private val memory = GameMemory(ev)
     private lateinit var plan: StylePlan
     private lateinit var mode: TurnMode
     private lateinit var me: Board
+    private lateinit var opp: Board
 
     override fun startTurn(me: Board, opp: Board) {
         this.me = me
+        this.opp = opp
         memory.update(me)
         mode = picker.pick(me, opp, memory).let { if (it.slip == 0.0 && it.tau == 0.0) it.copy(slip = it.style.slip, tau = it.style.tau) else it }
         plan = StylePlan(me, opp, mode.style, ev, bonusTable)
@@ -414,10 +431,30 @@ class StylePlayer(
     }
 
     override fun chooseCategory(r: Int): Category {
-        val best = plan.bestCategory(r)
+        val best = senseBest(r) ?: plan.bestCategory(r)
         if (mode.slip <= 0 && mode.tau <= 0) return best
         val open = me.openCategories.filter { plan.categoryValue(r, it.ordinal) > Double.NEGATIVE_INFINITY }
         return choose(best, open) { plan.categoryValue(r, it.ordinal) }
+    }
+
+    /** The box 승부 감각 picks: the likeliest win among the near-best boxes (null when it does not apply). */
+    private fun senseBest(r: Int): Category? {
+        val w = win ?: return null
+        if (sense <= 0.0 || me.filledCount < SENSE_FROM) return null
+        val top = plan.categoryValue(r, plan.bestCategory(r).ordinal)
+        val window = SENSE_WINDOW * sense
+        var best: Category? = null
+        var bestP = -1.0
+        for (c in me.openCategories) {
+            val v = plan.categoryValue(r, c.ordinal)
+            if (v == Double.NEGATIVE_INFINITY || v < top - window) continue
+            val p = w.pWin(me.with(c, plan.points(r, c.ordinal)), opp)
+            if (p > bestP + 1e-9) {
+                bestP = p
+                best = c
+            }
+        }
+        return best
     }
 
     private fun <T> choose(best: T, options: List<T>, value: (T) -> Double): T {

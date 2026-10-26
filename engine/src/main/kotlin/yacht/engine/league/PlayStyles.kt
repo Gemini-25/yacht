@@ -98,6 +98,7 @@ object PlayStyles {
 
     /** Minimum slip of a panicking player in its last turns. */
     const val PANIC_SLIP = 0.2
+
 }
 
 /**
@@ -113,6 +114,8 @@ data class PlayGene(
     val overlay: String? = null,
     val moods: List<String> = emptyList(),
     val future: Double = 1.0,
+    /** 승부 감각, 0..1: the box is chosen by the chance of winning among near-best ones ([StylePlayer]). */
+    val sense: Double = 0.0,
 ) {
     /** "강한 요트 사냥꾼 · +소심한 굴림 · 뒤지면 승부수". */
     val label: String
@@ -131,6 +134,7 @@ data class PlayGene(
         overlay?.let { append("/o:").append(it) }
         if (moods.isNotEmpty()) append("/m:").append(moods.joinToString("."))
         if (future != 1.0) append("/f:").append(future)
+        if (sense != 0.0) append("/c:").append(sense)
     }
 
     /** The primary style with the secondary's numeric tastes added at half strength (rules stay the primary's), and the foresight. */
@@ -198,6 +202,7 @@ data class PlayGene(
                     "o" -> g.copy(overlay = v)
                     "m" -> g.copy(moods = v.split('.').filter { it.isNotEmpty() })
                     "f" -> g.copy(future = v.toDouble())
+                    "c" -> g.copy(sense = v.toDouble().coerceIn(0.0, 1.0))
                     else -> g
                 }
             }
