@@ -41,7 +41,7 @@ import kotlin.system.exitProcess
  * AIs, backups, going to the background) on a single "main" thread like Android's, under a
  * phone-sized heap. Reports every uncaught exception (each would close the app on a phone),
  * state written off the main thread, the peak heap, and stuck states.
- * Usage: stress <tables dir> <minutes> [seed]
+ * Usage: stress <tables dir> <minutes> [seed] [players]
  */
 private val failures = ConcurrentLinkedQueue<String>()
 private val offMain = ConcurrentHashMap<String, Int>()
@@ -72,6 +72,8 @@ private fun run(args: Array<String>): Int {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
     val minutes = args.getOrElse(1) { "5" }.toDouble()
     val seed = args.getOrElse(2) { "1" }.toLong()
+    // Players in the league (the default rules' when not given).
+    val players = args.getOrNull(3)?.toInt()
     Thread.setDefaultUncaughtExceptionHandler { t, e -> record("thread ${t.name}", e) }
     mainExecutor.submit {}.get()
     StateWrites.observer = {
@@ -133,6 +135,7 @@ private fun run(args: Array<String>): Int {
     // The league from the seed, at full speed, in the background of everything else.
     onMain { c.screen = Screen.LEAGUE }
     waitFor("league view", 60_000) { c.league.view != null }
+    if (players != null) onMain { c.league.changeConfig(c.league.config.copy(generated = players)) }
     onMain { c.league.loadSeed() }
     waitFor("seed", 60_000) { (c.league.view?.matches ?: 0L) > 0L }
     onMain {
