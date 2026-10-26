@@ -53,14 +53,21 @@ object Tempers {
      * the real scoreboard, whatever rules it believes); a moody AI draws its level from [rng],
      * the game's own random source, so the game stays a pure function of its seed.
      */
-    fun mood(temper: Temper, ev: EvTable, rng: Random): Mood = when (temper) {
-        Temper.NONE -> Mood { _, _ -> 1.0 }
-        Temper.TILT -> TiltMood(ev)
-        Temper.TIRED -> Mood { me, _ -> if (Category.COUNT - me.filledCount <= PHASE_TURNS) PHASE_LEVEL else 1.0 }
-        Temper.WARMUP -> Mood { me, _ -> if (me.filledCount < PHASE_TURNS) PHASE_LEVEL else 1.0 }
-        Temper.MOODY -> {
-            val level = MOODY_MIN * Math.pow(MOODY_MAX / MOODY_MIN, rng.nextDouble())
-            Mood { _, _ -> level }
+    fun mood(temper: Temper, ev: EvTable, rng: Random, strength: Double = 1.0): Mood {
+        // Strength t scales how far a temper moves the level: 1 + (level - 1)·t, and a moody
+        // range of [MIN^t, MAX^t]; t = 1 is each temper as it always was.
+        val phase = 1 + (PHASE_LEVEL - 1) * strength
+        return when (temper) {
+            Temper.NONE -> Mood { _, _ -> 1.0 }
+            Temper.TILT -> TiltMood(ev, 1 + (TILT_LEVEL - 1) * strength)
+            Temper.TIRED -> Mood { me, _ -> if (Category.COUNT - me.filledCount <= PHASE_TURNS) phase else 1.0 }
+            Temper.WARMUP -> Mood { me, _ -> if (me.filledCount < PHASE_TURNS) phase else 1.0 }
+            Temper.MOODY -> {
+                val lo = Math.pow(MOODY_MIN, strength)
+                val hi = Math.pow(MOODY_MAX, strength)
+                val level = lo * Math.pow(hi / lo, rng.nextDouble())
+                Mood { _, _ -> level }
+            }
         }
     }
 
@@ -77,7 +84,7 @@ object Tempers {
  * Tilts for the rest of the game once a turn goes badly: a 0 written, or the expected final
  * score (points plus max-expectation of the rest) down by [Tempers.BIG_MISS] over one turn.
  */
-private class TiltMood(private val ev: EvTable) : Mood {
+private class TiltMood(private val ev: EvTable, private val tiltLevel: Double = Tempers.TILT_LEVEL) : Mood {
     private var last: Board? = null
     private var lastExpected = 0.0
     private var tilted = false
@@ -93,7 +100,7 @@ private class TiltMood(private val ev: EvTable) : Mood {
         }
         last = me
         lastExpected = expected
-        return if (tilted) Tempers.TILT_LEVEL else 1.0
+        return if (tilted) tiltLevel else 1.0
     }
 }
 

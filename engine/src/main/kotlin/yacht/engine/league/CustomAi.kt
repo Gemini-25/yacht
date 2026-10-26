@@ -62,6 +62,10 @@ data class CustomAiSpec(
      * max-expectation base it plays for that game instead of the real one. Null = the real rules.
      */
     val belief: String? = null,
+    /** A style of play (generated players with a style, PlayStyles.kt): it then plays a [StylePlayer]; null = the plans above. */
+    val play: PlayGene? = null,
+    /** How strongly the temper bites (1 = the tempers as they always were; 멘탈). */
+    val temperStrength: Double = 1.0,
 ) {
     val key: String get() = "custom-$id"
 
@@ -108,7 +112,9 @@ data class CustomAiSpec(
         val fields = mutableListOf<Any>(
             id, name.replace('|', ' ').replace('\n', ' '), base.name, theta, mistake.name, amount, yacht, straight, bonus, zero, saveChoice, future,
         )
-        if (temper != Temper.NONE || belief != null) fields.addAll(listOf(temper.name, belief ?: "-"))
+        val styled = play != null || temperStrength != 1.0
+        if (temper != Temper.NONE || belief != null || styled) fields.addAll(listOf(temper.name, belief ?: "-"))
+        if (styled) fields.addAll(listOf(play?.encode() ?: "-", temperStrength))
         return fields.joinToString("|")
     }
 
@@ -147,6 +153,7 @@ data class CustomAiSpec(
                 f[0], f[1], CustomBase.valueOf(f[2]), f[3].toDouble(), CustomMistake.valueOf(f[4]), f[5].toDouble(),
                 f[6].toDouble(), f[7].toDouble(), f[8].toDouble(), f[9].toDouble(), f[10].toBoolean(), f[11].toDouble(),
                 temperOf(f.getOrNull(12)), beliefOf(f.getOrNull(13)),
+                f.getOrNull(14)?.takeIf { it != "-" }?.let { PlayGene.decode(it) }, f.getOrNull(15)?.toDoubleOrNull() ?: 1.0,
             )
         }.getOrNull()
 
@@ -185,6 +192,7 @@ object CustomAis {
     ): LeagueAi {
         val t = tables.withoutRisk()
         val ev = t.ev
+        spec.play?.let { gene -> return styled(spec, gene, t, key, name, family, desc) }
         val planner: (Board, Board) -> TurnPlan = when (spec.base) {
             CustomBase.WIN -> winPlanner(Advisor(t), budget, LeagueRoster.EXACT_AT)
             CustomBase.RISK -> { me, opp -> riskPlanner(extra.risk(spec.theta), spec.theta)(me, opp) }
@@ -219,6 +227,20 @@ object CustomAis {
         val temper = spec.temper
         return LeagueAi(key, name, family, desc, heavy = spec.base == CustomBase.WIN) { r ->
             if (temper == Temper.NONE) player(r, 1.0) else TemperPlayer(key, Tempers.mood(temper, ev, r)) { player(r, it) }
+        }
+    }
+
+    /**
+     * A player with a style ([PlayGene]): each turn solved for its style ([StylePlan], in points,
+     * no table of its own), the overlay's style for the situation, mistakes (slips, or feel τ in
+     * points on any base) at the temper's level.
+     */
+    private fun styled(spec: CustomAiSpec, gene: PlayGene, t: Tables, key: String, name: String, family: Family, desc: String): LeagueAi {
+        val ev = t.ev
+        val slip = if (spec.mistake == CustomMistake.SLIP) spec.amount else 0.0
+        val tau = if (spec.mistake == CustomMistake.FEEL) spec.amount else 0.0
+        return LeagueAi(key, name, family, desc) { r ->
+            StylePlayer(key, ev, r, gene.picker(ev, r, spec.temper, spec.temperStrength, slip, tau), t.bonus)
         }
     }
 
