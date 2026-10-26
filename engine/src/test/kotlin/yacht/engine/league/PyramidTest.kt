@@ -233,6 +233,59 @@ class PyramidTest {
         assertTrue(text.length * 2 < old.length, "${text.length} vs ${old.length}")
     }
 
+    /** Plays [plan] to the end and checks next season's divisions against [keys]: sizes as the shape has them, movers in their tier. */
+    private fun grow(plan: SeasonPlan, keys: List<String>, rng: Random): SeasonPlan {
+        drive(plan, rng)
+        val ctx = Offseason.Context(keys, ::rating, { null }, { "도시" }, LeagueConfig(), nation = ::nation)
+        val moves = Offseason.moves(plan)
+        val next = Offseason.next(plan, ctx).first
+        val shape = assertNotNull(Pyramid.shape(keys.size, LeagueConfig()))
+        assertEquals(Pyramid.sizes(keys.size, shape), next.league.divisions.map { it.size }, "group sizes")
+        assertEquals(keys.toSet(), next.league.divisions.flatten().toSet())
+        val tierOf = HashMap<String, Int>()
+        for (d in next.league.divisions.indices) for (k in next.league.divisions[d]) tierOf[k] = next.league.tiers.tier(d)
+        // A player announced as promoted plays in the tier it was promoted to.
+        // (Never lower; a league that grows a lot can lift it further.)
+        for (m in moves) if (m.to < m.from && m.key in tierOf) assertTrue(tierOf.getValue(m.key) <= m.to, "${m.key} promoted to ${m.to}, plays in ${tierOf[m.key]}")
+        return next
+    }
+
+    @Test
+    fun aLinearLeagueOfManyDivisionsGrowsIntoAWellShapedPyramid() {
+        for ((n, divisions) in listOf(200 to 6, 200 to 5, 230 to 4, 300 to 6)) {
+            val cfg = LeagueConfig(divisions = divisions)
+            val plan = Offseason.first(n.toLong(), context(n, cfg))
+            assertTrue(plan.league.tiers.linear)
+            grow(plan, (1..1000).map(::key), Random(n.toLong()))
+        }
+    }
+
+    @Test
+    fun aPyramidThatShrinksKeepsItsPromotedPlayersUp() {
+        val plan = Offseason.first(8L, context(1013))
+        grow(plan, (1..990).map(::key), Random(2))
+    }
+
+    @Test
+    fun oddsAtTheEndAgreeWithTheMovesWhenGroupsDifferInSize() {
+        // 1013 players: groups of 51 and 50 in a tier.
+        val plan = Offseason.first(13L, context(1013))
+        val rng = Random(5)
+        while (!plan.league.finished) {
+            val f = plan.next(emptySet(), 0, 1) ?: break
+            plan.record(play(f, rng))
+        }
+        val odds = Odds.compute(plan, ::rating, runs = 1, seed = 1L)
+        val cfg = plan.config
+        for (t in 0 until plan.league.tiers.count - 1) {
+            val c = Pyramid.crossing(plan.league, cfg, t)
+            val down = plan.league.tiers.groups(t).flatMap { d -> odds.division(d) }.filter { it.relegation >= 1.0 - 1e-9 && it.relegationPlayoff == 0.0 }.map { it.key }.toSet()
+            assertEquals(c.down.toSet(), down, "boundary $t: automatic drops")
+            val upperTies = plan.league.tiers.groups(t).flatMap { d -> odds.division(d) }.filter { it.relegationPlayoff > 0.0 }.map { it.key }.toSet()
+            assertEquals(c.ties.map { it.first }.toSet(), upperTies, "boundary $t: playoff upper sides")
+        }
+    }
+
     @Test
     fun groupsAreCutByRegion() {
         val ctx = context(1000)

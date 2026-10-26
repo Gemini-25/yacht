@@ -71,7 +71,7 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Text(structureLine(cfg), style = MaterialTheme.typography.labelMedium, color = cs.secondary)
                 Toggle("지역 리그 피라미드 (선수가 많을 때)", cfg.pyramid) { cfg = cfg.copy(pyramid = it) }
                 Text(
-                    "조가 ${yacht.engine.league.Pyramid.MAX_LINEAR}개를 넘게 되면 1부 1개 조, 2부 2개 조, 3부 4개 조…로 나눠요. 몇 명이든 한 시즌이 ‘조 인원 − 1’주라 금방 끝나요. 조는 시즌마다 지역별로 다시 짜요.",
+                    "조가 ${yacht.engine.league.Pyramid.MAX_LINEAR}개를 넘게 되면 1부 1개 조, 2부 2개 조, 3부 4개 조…로 나눠요. 몇 명이든 한 시즌이 조 인원과 비슷한 주 수라 금방 끝나요. 조는 시즌마다 지역별로 다시 짜요.",
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
                 if (cfg.pyramid) {
@@ -147,7 +147,7 @@ private val PLAYER_PRESETS = listOf(200, 500, 1000, 2000, 3000)
 
 /** What the rules make of the league: "1부 1 · 2부 2개 조 · …, 조당 약 50명, 시즌 49주, 약 26,000경기". */
 private fun structureLine(cfg: LeagueConfig): String {
-    val n = cfg.generated + if (cfg.baseAis) BASE_AIS else 0
+    val n = (cfg.generated + if (cfg.baseAis) BASE_AIS else 0).let { if (cfg.onlyTop > 0) minOf(it, cfg.onlyTop) else it }
     if (n < 2) return "선수가 없어요."
     val shape = yacht.engine.league.Pyramid.shape(n, cfg)
     val sizes = if (shape != null) yacht.engine.league.Pyramid.sizes(n, shape) else {

@@ -84,6 +84,8 @@ class OddsInput internal constructor(
     internal val start: IntArray,
     internal val basePoints: IntArray,
     internal val baseDiff: IntArray,
+    /** Today's total score (not simulated): a tie-break across groups after points and difference. */
+    internal val baseScored: IntArray,
     /** Bradley-Terry strength, 10^((rating - 1500) / 400). */
     internal val strength: DoubleArray,
     /** Fixtures to play: the sides, and the chances of A winning and of A not losing. */
@@ -93,6 +95,8 @@ class OddsInput internal constructor(
     internal val notLose: DoubleArray,
     /** Each division's tier, and per boundary below tier t ([Pyramid.crossing]): s up from each lower group, places down from the upper groups, and whether it has playoff ties. */
     internal val tierOf: IntArray,
+    /** Each pair of a division meets this many times (2: double round robin). */
+    internal val rounds: Int,
     internal val swapBelow: IntArray,
     internal val downBelow: IntArray,
     internal val playoffBelow: BooleanArray,
@@ -233,6 +237,7 @@ object Odds {
         val keys = Array(n) { "" }
         val basePoints = IntArray(n)
         val baseDiff = IntArray(n)
+        val baseScored = IntArray(n)
         val index = HashMap<String, Int>(n * 2)
         for (d in 0 until nd) {
             val order = divs[d].map { season.standings.getValue(it) }.sortedByDescending { it.scored }
@@ -241,6 +246,7 @@ object Odds {
                 keys[g] = s.key
                 basePoints[g] = s.points
                 baseDiff[g] = s.diff
+                baseScored[g] = s.scored
                 index[s.key] = g
             }
         }
@@ -300,8 +306,8 @@ object Odds {
         val table = (0 until nd).map { d -> season.table(d).map { index.getValue(it.key) }.toIntArray() }
         val byRating = (0 until n).sortedByDescending { strength[it] }.toIntArray()
         return OddsInput(
-            season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, strength,
-            fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), tierOf, swapBelow, downBelow, playoffBelow, clPlaces,
+            season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, baseScored, strength,
+            fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), tierOf, if (season.double) 2 else 1, swapBelow, downBelow, playoffBelow, clPlaces,
             config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating,
         )
     }
@@ -337,6 +343,9 @@ object Odds {
         val tierStart = IntArray(nt + 1).also { ts -> for (t in 0..nt) ts[t] = (0 until nd).firstOrNull { tierOf[it] >= t } ?: nd }
         val groupsIn = IntArray(nt) { tierStart[it + 1] - tierStart[it] }
         val baseDown = IntArray(nt) { t -> if (t < nt - 1) downBelow[t] / groupsIn[t] else 0 }
+        // Places compared across groups go by points (then difference) per match, as
+        // Pyramid.worse has them: a tier's groups can differ in size by one.
+        val perMatch = DoubleArray(nd) { d -> 1.0 / maxOf(1, (start[d + 1] - start[d] - 1) * input.rounds) }
         val clPlaces = input.clPlaces
         val titlePlayoff = input.titlePlayoff
         val m = fa.size
@@ -349,6 +358,9 @@ object Odds {
 
         val points = IntArray(n)
         val diff = IntArray(n)
+        // Worse first across groups: points, difference and score per match, then by key (as Pyramid.worse).
+        val worseFirst = compareBy<Pair<Int, Int>> { (g, d) -> points[g] * perMatch[d] }.thenBy { (g, d) -> diff[g] * perMatch[d] }
+            .thenBy { (g, d) -> input.baseScored[g] * perMatch[d] }.thenByDescending { (g, _) -> input.keys[g] }
         val sorted = LongArray(n)
         val positionSum = LongArray(n)
         val leader = IntArray(n)
@@ -422,13 +434,14 @@ object Odds {
                 val rest = downBelow[t] - baseDown[t] * groupsIn[t]
                 val ties = if (input.playoffBelow[t] && groupsIn[t] * groupsIn[t + 1] > 1) groupsIn[t + 1] else 0
                 if (rest == 0 && ties == 0) continue
-                val order = nextUp(sorted, start, size, tierStart[t], tierStart[t + 1], baseDown[t], rest + ties, rankMask)
+                val order = nextUp(sorted, start, size, tierStart[t], tierStart[t + 1], baseDown[t], rest + ties, rankMask, worseFirst)
                 for (i in 0 until minOf(rest, order.size)) down[order[i]]++
                 if (ties > 0) {
-                    // Each lower group's next place, best first.
+                    // Each lower group's next place, best first (per match).
                     val lowers = (tierStart[t + 1] until tierStart[t + 2]).filter { size[it] > swapBelow[t] }
-                        .map { d -> sorted[start[d] + swapBelow[t]] to d }.sortedBy { it.first }
-                        .map { (key, d) -> start[d] + (key and rankMask).toInt() }
+                        .map { d -> start[d] + (sorted[start[d] + swapBelow[t]] and rankMask).toInt() to d }
+                        .sortedWith(worseFirst.reversed())
+                        .map { it.first }
                     for ((i, lo) in lowers.withIndex()) {
                         val hi = order.getOrNull(rest + i) ?: break
                         val s = e(lo, hi)
@@ -498,20 +511,31 @@ object Odds {
 
     /**
      * The upper groups' players from place [from] up (from the bottom: 0 is each group's last),
-     * worst first within a place, [count] of them (global indices); one run's sorted tables.
+     * worst first within a place by [worseFirst], [count] of them (global indices); one run's
+     * sorted tables.
      */
-    private fun nextUp(sorted: LongArray, start: IntArray, size: IntArray, firstDiv: Int, endDiv: Int, from: Int, count: Int, rankMask: Long): IntArray {
+    private fun nextUp(
+        sorted: LongArray,
+        start: IntArray,
+        size: IntArray,
+        firstDiv: Int,
+        endDiv: Int,
+        from: Int,
+        count: Int,
+        rankMask: Long,
+        worseFirst: Comparator<Pair<Int, Int>>,
+    ): IntArray {
         val out = IntArray(count)
         var got = 0
         var p = from
         val most = (firstDiv until endDiv).maxOf { size[it] }
         while (got < count && p < most) {
-            // The p-th from the bottom of each group, worst (largest key) first.
-            val level = (firstDiv until endDiv).filter { size[it] > p }.map { d -> sorted[start[d] + size[d] - 1 - p] to d }
-                .sortedByDescending { it.first }
-            for ((key, d) in level) {
+            // The p-th from the bottom of each group, worst first.
+            val level = (firstDiv until endDiv).filter { size[it] > p }.map { d -> start[d] + (sorted[start[d] + size[d] - 1 - p] and rankMask).toInt() to d }
+                .sortedWith(worseFirst)
+            for ((g, _) in level) {
                 if (got >= count) break
-                out[got++] = start[d] + (key and rankMask).toInt()
+                out[got++] = g
             }
             p++
         }

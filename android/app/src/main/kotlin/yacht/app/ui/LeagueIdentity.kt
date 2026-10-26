@@ -35,6 +35,17 @@ import yacht.app.core.IdentityView
 import yacht.engine.league.Abilities
 import yacht.engine.league.Tendencies
 
+/**
+ * Nations a search [q] names: the whole name or short name, or their start from two letters on
+ * ("브라" finds 브라질; a family name like "이" finds no nation).
+ */
+fun nationsMatching(q: String): Set<String> {
+    if (q.isEmpty()) return emptySet()
+    return yacht.engine.league.Nations.ALL.filter { n ->
+        q == n.name || q == n.short || (q.length >= 2 && (n.name.startsWith(q) || n.short.startsWith(q)))
+    }.map { it.code }.toSet()
+}
+
 /** A grade for an ability (1–99): S from 90, A from 80, B from 70, C from 55, D from 40, else E. */
 fun abilityGrade(v: Int): String = when {
     v >= 90 -> "S"
@@ -205,7 +216,8 @@ private enum class NationSort(val label: String) {
 @Composable
 fun NationRanking(lg: yacht.app.core.LeagueController) {
     val cs = MaterialTheme.colorScheme
-    androidx.compose.runtime.LaunchedEffect(Unit) { lg.loadNations() }
+    // Read again each season (titles and squads change at a rollover).
+    androidx.compose.runtime.LaunchedEffect(lg.view?.season?.number) { lg.loadNations() }
     var sort by remember { mutableStateOf(NationSort.CUPS) }
     val all = lg.nations
     if (all.isEmpty()) {
@@ -360,7 +372,7 @@ private fun PlayerLine(name: String, note: String, onClick: () -> Unit) {
 @Composable
 fun Prospects(lg: yacht.app.core.LeagueController, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    androidx.compose.runtime.LaunchedEffect(Unit) { lg.loadProspects() }
+    androidx.compose.runtime.LaunchedEffect(lg.view?.season?.number) { lg.loadProspects() }
     val ps = lg.prospects
     if (ps.isEmpty()) {
         CenterText("22세 이하 선수가 리그에 들어오면 잠재력 순으로 여기에 보여요.")
@@ -413,7 +425,7 @@ fun CompareDialog(lg: yacht.app.core.LeagueController, first: String, rows: List
         dismissButton = {
             if (shown != null) androidx.compose.material3.TextButton(onClick = { lg.closeCompare() }) { Text("다른 선수") }
         },
-        title = { Text(if (shown == null) "⚖ ${lg.name(first)}와 비교할 선수" else "⚖ 선수 비교", fontWeight = FontWeight.Bold) },
+        title = { Text(if (shown == null) "⚖ ${yacht.engine.explain.Ko.wa(lg.name(first))} 비교할 선수" else "⚖ 선수 비교", fontWeight = FontWeight.Bold) },
         text = {
             if (shown == null) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -422,7 +434,7 @@ fun CompareDialog(lg: yacht.app.core.LeagueController, first: String, rows: List
                         placeholder = { Text("선수 이름이나 나라 검색") }, modifier = Modifier.fillMaxWidth(),
                     )
                     val q = query.trim()
-                    val nations = yacht.engine.league.Nations.ALL.filter { q.isNotEmpty() && q in it.name }.map { it.code }.toSet()
+                    val nations = nationsMatching(q)
                     val picks = rows.filter { it.key != first && !it.isMe && (q.isEmpty() || q in it.name || it.nation in nations) }.take(40)
                     androidx.compose.foundation.lazy.LazyColumn(Modifier.height(320.dp)) {
                         items(picks.size) { i ->

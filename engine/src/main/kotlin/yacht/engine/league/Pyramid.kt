@@ -198,8 +198,8 @@ object Pyramid {
      * players by tier ([ranking]) with [moves] applied (promoted players at the bottom of their
      * new tier, relegated ones at the top), departed ones removed and newcomers in the last
      * tier; then each tier brought to its size from the top (places left free are filled by the
-     * best of the tier below who did not just come down from it; too many, and the worst go
-     * down), and each tier cut into its groups by region.
+     * best of the tiers below who did not just come down; too many, and the worst who did not
+     * just come up go down), and each tier cut into its groups by region.
      */
     fun next(league: Season, moves: List<Offseason.Move>, ctx: Offseason.Context, shape: List<Int>): Pair<List<List<String>>, Tiers> {
         val keys = ctx.keys.toSet()
@@ -216,14 +216,28 @@ object Pyramid {
         if (lists.isEmpty()) lists += ArrayList<String>()
         lists.last().addAll(newcomers)
         val relegated = moves.filter { it.to > it.from }.map { it.key }.toSet()
-        return fill(lists, ctx, shape, relegated)
+        val promoted = moves.filter { it.to < it.from }.associate { it.key to it.to }
+        return fill(lists, ctx, shape, relegated, promoted)
     }
 
     /** The first season's tiers: [ranking] (best first) down the tiers, each cut into its groups by region. */
     fun first(ranking: List<String>, ctx: Offseason.Context, shape: List<Int>): Pair<List<List<String>>, Tiers> =
-        fill(mutableListOf(ranking.toMutableList()), ctx, shape, emptySet())
+        fill(mutableListOf(ranking.toMutableList()), ctx, shape, emptySet(), emptyMap())
 
-    private fun fill(lists: MutableList<MutableList<String>>, ctx: Offseason.Context, shape: List<Int>, relegated: Set<String>): Pair<List<List<String>>, Tiers> {
+    /**
+     * [lists] (players by tier, best first) brought to [shape]'s tier sizes from the top and cut
+     * into groups. A tier short of players takes the best of the tiers below (the next one
+     * first; any one further down when it is empty) who were not [relegated] this season; a tier
+     * with too many sends its worst down, those [promoted] into it last (a player announced as
+     * promoted keeps its place unless nobody else is left).
+     */
+    private fun fill(
+        lists: MutableList<MutableList<String>>,
+        ctx: Offseason.Context,
+        shape: List<Int>,
+        relegated: Set<String>,
+        promoted: Map<String, Int>,
+    ): Pair<List<List<String>>, Tiers> {
         val n = lists.sumOf { it.size }
         val sizes = sizes(n, shape)
         val targets = ArrayList<Int>()
@@ -237,13 +251,23 @@ object Pyramid {
         while (lists.size > shape.size) lists[shape.size - 1].addAll(lists.removeAt(shape.size))
         for (t in 0 until shape.size - 1) {
             val cur = lists[t]
-            val below = lists[t + 1]
             if (cur.size > targets[t]) {
-                val extra = cur.subList(targets[t], cur.size)
-                below.addAll(0, extra)
-                extra.clear()
+                // The worst first, those just promoted into this tier only when nobody else is left.
+                val extra = cur.size - targets[t]
+                val stayers = cur.indices.reversed().filter { promoted[cur[it]] != t }
+                val newcomers = cur.indices.reversed().filter { promoted[cur[it]] == t }
+                val out = (stayers + newcomers).take(extra).toHashSet()
+                val down = cur.filterIndexed { i, _ -> i in out }
+                cur.removeAll(down.toSet())
+                lists[t + 1].addAll(0, down)
             }
-            while (cur.size < targets[t] && below.isNotEmpty()) {
+            var u = t + 1
+            while (cur.size < targets[t] && u < lists.size) {
+                val below = lists[u]
+                if (below.isEmpty()) {
+                    u++
+                    continue
+                }
                 val i = below.indexOfFirst { it !in relegated }.takeIf { it >= 0 } ?: 0
                 cur += below.removeAt(i)
             }

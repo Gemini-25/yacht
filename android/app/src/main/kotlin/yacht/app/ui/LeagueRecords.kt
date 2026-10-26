@@ -69,6 +69,7 @@ fun honourLabel(kind: String): String {
         "CC2" -> "대륙컵 준우승"
         "CCW" -> "대륙컵 우승 멤버"
         "NSQ" -> "국가대표 선발"
+        "POTW" -> "이 주의 선수"
         else -> kind
     }
 }
@@ -190,7 +191,11 @@ fun SeasonReviewDialog(lg: LeagueController, r: yacht.engine.league.SeasonReview
                 for (line in r.sentences) Text(line, style = MaterialTheme.typography.bodyMedium)
                 if (r.champions.isNotEmpty()) {
                     Text("🏆 우승", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (h in r.champions.filter { trophy(it.kind) != null }) Text("${trophy(h.kind)} ${honourLabel(h.kind)} ${honourWinner(lg, h.kind, h.key)}", style = MaterialTheme.typography.bodySmall)
+                    // A pyramid's group titles below 3부 in one line.
+                    val shown = r.champions.filter { trophy(it.kind) != null }
+                    val lower = shown.filter { h -> division(h.kind, "L")?.let { it > 2 } == true }
+                    for (h in shown - lower.toSet()) Text("${trophy(h.kind)} ${honourLabel(h.kind)} ${honourWinner(lg, h.kind, h.key)}", style = MaterialTheme.typography.bodySmall)
+                    if (lower.isNotEmpty()) Text("🥇 4부 이하 지역 리그 조 우승 ${lower.size}명", style = MaterialTheme.typography.bodySmall)
                 }
                 if (r.awards.isNotEmpty()) {
                     Text("🏅 시상식", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))

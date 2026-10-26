@@ -158,7 +158,7 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
         LeagueConfig(),
     ),
     FAST(
-        "빠른 시즌", "2부까지, 단판 경기, 클럽 리그와 국가대항전 없이 시즌이 빨리 돌아요",
+        "빠른 시즌", "단판 경기, 플레이오프·클럽 리그·국가대항전 없이 시즌이 빨리 돌아요 (선수가 적으면 2부까지)",
         LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false),
     ),
     CHAOS(

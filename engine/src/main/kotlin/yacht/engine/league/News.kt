@@ -269,7 +269,10 @@ object News {
             val a0 = arg(0)
             // A division index, an honour kind ("L0", "CUP"), a competition ("CHAMPIONS") or its name.
             val division = a0?.toIntOrNull()?.takeIf { it in 0..98 } ?: a0?.takeIf { Regex("L\\d").matches(it) }?.drop(1)?.toInt()
+            // A pyramid's group ("A조") after the division.
+            val group = arg(1)?.takeIf { it.endsWith("조") }
             v["t"] = when {
+                division != null && group != null -> "${division + 1}부 $group"
                 division != null -> "${division + 1}부 리그"
                 // A competition's code (the club league's "K").
                 a0 != null && a0.length == 1 && Comp.of(a0[0]) != null -> Comp.of(a0[0])!!.label

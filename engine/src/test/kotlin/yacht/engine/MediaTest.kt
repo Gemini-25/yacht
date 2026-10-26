@@ -253,6 +253,7 @@ class MediaTest {
             e("milestone", listOf("ai3"), listOf("yachts", "100")), e("milestone", listOf("ai1"), listOf("title", "1")),
             e("milestone", listOf("ai1"), listOf("titles", "5")), e("milestone", listOf("ai4"), listOf("300", "1")),
             e("title", listOf("ai1"), listOf("0"), Comp.LEAGUE), e("title", listOf("ai2"), listOf("2"), Comp.LEAGUE),
+            e("title", listOf("ai2"), listOf("1", "B조"), Comp.LEAGUE),
             e("title", listOf("ai1"), listOf("요트컵"), Comp.CUP), e("title", listOf("HUMAN"), listOf("계열 대항전"), Comp.FAMILY),
             e("title", listOf("c1"), emptyList(), Comp.CLUB), e("title", listOf("ai3"), listOf("0"), Comp.TITLE_PLAYOFF),
             e("promoted", listOf("ai1"), listOf("1")), e("promoted", listOf("ai1"), listOf("2", "1"), Comp.PROMOTION_PLAYOFF),

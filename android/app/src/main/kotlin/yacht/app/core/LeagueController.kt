@@ -1494,6 +1494,15 @@ class LeagueController(
         preview = null
         loadRecords()
         loadPastPlayers()
+        // The new league's nations and prospects (an open list reads them again); a sheet or a
+        // comparison of the old league closes.
+        nationSheet = null
+        closeCompare()
+        comparing = null
+        nations = emptyList()
+        prospects = emptyList()
+        loadNations()
+        loadProspects()
     }
 
     private suspend fun save() = withContext(Dispatchers.Default) {
@@ -1907,6 +1916,21 @@ class LeagueController(
     private var lastComps: List<Pair<Comp, CompetitionView>> = emptyList()
     private var lastClubs: ClubsView? = null
     private var lastHistory: List<SeasonHistoryItem> = emptyList()
+    private var historyFor = -1
+    private var historyBook: HonourBook? = null
+
+    /** The hall of fame's seasons, built again only when the honours change (a pyramid's seasons hold hundreds); under the lock. */
+    private fun history(): List<SeasonHistoryItem> {
+        val book = honours
+        val n = book.all.size
+        if (book !== historyBook || n != historyFor) {
+            val bySeason = book.all.groupBy { it.season }
+            lastHistory = book.seasons.reversed().map { historyItem(it, bySeason[it].orEmpty()) }
+            historyFor = n
+            historyBook = book
+        }
+        return lastHistory
+    }
 
     private fun seasonView(p: SeasonPlan): SeasonView {
         val s = p.league
@@ -1940,7 +1964,7 @@ class LeagueController(
         return SeasonView(
             // Next season's newcomers: members not in this season (the rules keep the rest out).
             s.number, s.fixturesPlayed, s.fixturesTotal, divisions, world?.members.orEmpty().filter { it !in inLeague }.map { name(it) },
-            honours.seasons.reversed().map { historyItem(it, honours.of(it)) }.let { h -> if (h == lastHistory) lastHistory else h.also { lastHistory = it } },
+            history(),
             s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap,
         )
     }
@@ -2188,10 +2212,15 @@ class LeagueController(
         private set
 
     fun closeCompare() {
+        compareWanted = null
         compare = null
     }
 
+    /** The pair asked for last: a result that comes back after the comparison closed is dropped. */
+    private var compareWanted: Pair<String, String>? = null
+
     fun loadCompare(a: String, b: String) {
+        compareWanted = a to b
         scope.launch(Dispatchers.Default) {
             val v = synchronized(lock) {
                 val w = world ?: return@synchronized null
@@ -2231,7 +2260,7 @@ class LeagueController(
                     lines, met,
                 )
             } ?: return@launch
-            scope.launch { compare = v }
+            scope.launch { if (compareWanted == (a to b)) compare = v }
         }
     }
 

@@ -377,7 +377,7 @@ class AnalysisTest {
         val q = Preview.of("ai01", "ai02", Ladder(keys(4)), Season.start(1, 1L, listOf(keys(4))), null, profile(5), null, profile(500))
         q.lines.forEach(::println)
         assertText(q.lines)
-        assertTrue(q.lines.any { it.contains("처음") })
+        assertTrue(q.lines.any { it.contains("맞대결 기록이 아직 없어요") })
         assertNull(q.weaponA)
     }
 

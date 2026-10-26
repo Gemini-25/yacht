@@ -103,6 +103,14 @@ fun LeagueScreen(c: AppController) {
     val lg = c.league
     val v = lg.view
     val tab = lg.tab
+    // Leaving the league (a ranked game, watching) closes a nation sheet or comparison left open.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            lg.closeNation()
+            lg.closeCompare()
+            lg.comparing = null
+        }
+    }
     var resetAsk by remember { mutableStateOf(false) }
     var rankedAsk by remember { mutableStateOf(false) }
     var rulesAsk by remember { mutableStateOf(false) }
@@ -301,7 +309,7 @@ private fun SeasonNews(h: SeasonHistoryItem, onDismiss: () -> Unit) {
                     listOfNotNull(
                         h.topScorer?.let { "득점왕 $it" },
                         h.yachtKing?.let { "요트왕 $it" },
-                        h.promoted.takeIf { it.isNotEmpty() }?.let { "승격 ${it.size}팀" },
+                        h.promotedCount.takeIf { it > 0 }?.let { "승격 ${it}명" },
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onTertiaryContainer,
@@ -325,7 +333,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
     val favs = lg.favourites
     // A search also finds a nation by its name ("브라질").
     val q = query.trim()
-    val byName = yacht.engine.league.Nations.ALL.filter { q.isNotEmpty() && (it.name.contains(q) || it.short.contains(q)) }.map { it.code }.toSet()
+    val byName = nationsMatching(q)
     val rows = v.rows.filter {
         (family == null || it.family == family) && (!onlyFavourites || it.key in favs) && (origin == null || it.origin == origin) &&
             (nation == null || it.nation == nation) && (q.isEmpty() || it.name.contains(q, ignoreCase = true) || it.nation in byName)

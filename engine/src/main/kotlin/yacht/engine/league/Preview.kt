@@ -203,7 +203,8 @@ object Preview {
     private fun points(x: Double): String = if (x == Math.floor(x)) "${x.toInt()}" else Ko.num(x)
 
     private fun headToHead(na: String, nb: String, pointsA: Double, games: Int): String {
-        if (games == 0) return "두 AI가 맞붙는 건 이번이 처음이에요."
+        // No games kept: never met, or met a few times long ago (the ladder lets those go).
+        if (games == 0) return "두 AI의 맞대결 기록이 아직 없어요."
         val pointsB = games - pointsA
         val half = pointsA != Math.floor(pointsA)
         val note = if (half) "(무승부는 반 승으로 쳐요)" else ""

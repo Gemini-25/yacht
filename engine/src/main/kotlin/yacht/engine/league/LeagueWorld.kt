@@ -271,13 +271,18 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         var lowerUp = 0
         for (x in h) {
             val e = when {
-                DIVISION.matches(x.kind) -> LeagueEvent("title", p.number, listOf(x.key), listOf(x.kind.removePrefix("L")), Comp.LEAGUE)
+                // A pyramid's group title names its group ("2부 A조").
+                DIVISION.matches(x.kind) -> LeagueEvent(
+                    "title", p.number, listOf(x.key),
+                    listOf(x.kind.removePrefix("L")) + listOfNotNull(p.league.divisionOf(x.key)?.let { p.league.tiers.groupLabel(it) }?.takeIf { it.isNotEmpty() }),
+                    Comp.LEAGUE,
+                )
                 x.kind.startsWith("UP") -> LeagueEvent("promoted", p.number, listOf(x.key), listOf(x.kind.removePrefix("UP")))
                 x.kind.startsWith("DOWN") -> LeagueEvent("relegated", p.number, listOf(x.key), listOf(x.kind.removePrefix("DOWN")))
                 else -> null
             } ?: continue
             if (grouped) {
-                val t = e.args.single().toIntOrNull() ?: 0
+                val t = e.args.first().toIntOrNull() ?: 0
                 when {
                     e.kind == "title" && t > NEWS_TIERS -> { lowerChampions += x.key; continue }
                     e.kind == "promoted" && t > PromotionPlayoff.NEWS_BOUNDARIES -> { lowerUp++; continue }
