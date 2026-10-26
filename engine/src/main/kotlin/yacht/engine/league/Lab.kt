@@ -191,7 +191,7 @@ class LabResult internal constructor(
     val target: Int,
     /** The session is over: its target reached, precise enough, or [stopped]. */
     val done: Boolean,
-    /** Stopped by the player before its target. */
+    /** Stopped before its target: by the player, or because one of its AIs could not play. */
     val stopped: Boolean,
     stats: LabStats,
 ) {
@@ -335,14 +335,18 @@ class LabSession(
         if (owns(f) && taken.remove(f.id) && !done) again += f.id
     }
 
-    /** Takes a finished match; false when it is not one of this session's open matches. */
+    /**
+     * Takes a finished match; false when it is not one of this session's open matches. A result
+     * that is not a mirrored match of its two AIs (fewer than [GAMES] games: the app forfeits a
+     * job whose AI is gone, e.g. retired at the season's end) would come back the same every
+     * time, so the session stops there with the matches it has ([stopped]).
+     */
     fun record(r: JobResult): Boolean {
         val f = r.fixture
         if (done || !owns(f) || f.id !in taken) return false
-        val games = r.boards.singleOrNull()?.takeIf { it.a == a && it.b == b }?.games
-        if (games.isNullOrEmpty()) return false
         taken.remove(f.id)
-        put(f.id, games)
+        val games = r.boards.singleOrNull()?.takeIf { it.a == a && it.b == b }?.games
+        if (games == null || games.size < GAMES) stop() else put(f.id, games)
         return true
     }
 
@@ -431,6 +435,9 @@ class LabSession(
 
         /** Matches before the until-precise mode may stop (a few equal results have no spread). */
         const val MIN_MATCHES = 200
+
+        /** Games of a mirrored match (a decider may add one): a result with fewer was not played. */
+        const val GAMES = 2
     }
 }
 
@@ -488,7 +495,7 @@ class LabBook {
     fun record(r: JobResult): Boolean {
         val s = current ?: return false
         if (!s.record(r)) return false
-        if (s.done) archive(s)
+        if (s.done && s.matches > 0) archive(s)
         return true
     }
 

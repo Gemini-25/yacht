@@ -265,8 +265,10 @@ object Preview {
                 }
             }
         }
-        val oa = odds?.get(a)
-        val ob = odds?.get(b)
+        // Odds of another season (computed before a rollover) say nothing about this one.
+        val current = odds?.takeIf { season == null || it.season == season.number }
+        val oa = current?.get(a)
+        val ob = current?.get(b)
         if (oa != null || ob != null) out += races(na, nb, oa, ob)
         return out
     }
@@ -314,15 +316,15 @@ object Preview {
             val x = o?.let(f) ?: return
             if (open(x)) out += "${n}의 $label 확률은 ${Ko.ieyo(pct(x))}."
         }
-        val d = oa?.division ?: ob?.division ?: 0
-        val titleLabel = if (d == 0) "우승" else "${d + 1}부 우승"
-        if (!both(titleLabel, "우승을 다투는 맞대결이에요.") { it.title }) {
-            single(oa, na, titleLabel) { it.title }
-            single(ob, nb, titleLabel) { it.title }
+        // Each side's own division title (a cup tie may bring two divisions together).
+        fun titleLabel(o: AiOdds?) = o?.division?.takeIf { it > 0 }?.let { "${it + 1}부 우승" } ?: "우승"
+        if (!both(titleLabel(oa ?: ob), "우승을 다투는 맞대결이에요.") { it.title }) {
+            single(oa, na, titleLabel(oa)) { it.title }
+            single(ob, nb, titleLabel(ob)) { it.title }
         }
         for ((o, n) in listOf(oa to na, ob to nb)) {
             if (o == null || o.division != 0 || o.playoff <= 0.0) continue
-            if (open(o.playoff)) out +="${Ko.i(n)} 우승 플레이오프(1부 4위 안)에 나갈 확률은 ${Ko.ieyo(pct(o.playoff))}."
+            if (open(o.playoff)) out += "${Ko.i(n)} 우승 플레이오프(1부 4위 안)에 나갈 확률은 ${Ko.ieyo(pct(o.playoff))}."
         }
         if (!both("승격", "승격을 다투는 맞대결이에요.") { it.promotion }) {
             single(oa, na, "승격") { it.promotion }
@@ -336,7 +338,7 @@ object Preview {
             if (o == null) continue
             val spot = o.promotionPlayoff + o.relegationPlayoff
             if (spot >= 0.1 && spot <= OPEN_HIGH) out += "${Ko.i(n)} 승강 플레이오프로 갈 확률은 ${Ko.ieyo(pct(spot))}."
-            if (o.champions in 0.05..0.95) out += "${n}의 챔피언스 리그 진출 확률은 ${Ko.ieyo(pct(o.champions))}."
+            if (o.champions in 0.05..0.95) out += "${n}의 다음 시즌 챔피언스 리그 진출 확률은 ${Ko.ieyo(pct(o.champions))}."
         }
         return out
     }
