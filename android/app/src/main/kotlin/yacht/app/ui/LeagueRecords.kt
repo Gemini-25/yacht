@@ -273,11 +273,11 @@ private val RECORDS_MODES = setOf(RecordsMode.ROOM, RecordsMode.HALL, RecordsMod
 /** 기록: the hall of fame by season, the legends and retired players, and the families. */
 @Composable
 fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, families: @Composable () -> Unit) {
-    var mode by remember { mutableStateOf(RecordsMode.ROOM) }
+    val mode = RecordsMode.entries.getOrElse(lg.recordsMode) { RecordsMode.ROOM }
     LaunchedEffect(mode) { if (mode in RECORDS_MODES) lg.loadRecords() }
     Column {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
+            for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { lg.recordsMode = m.ordinal }, label = { Text(m.label, fontSize = 12.sp) })
         }
         val r = lg.records
         when (mode) {

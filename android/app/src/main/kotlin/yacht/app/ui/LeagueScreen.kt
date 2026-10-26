@@ -187,11 +187,10 @@ fun LeagueScreen(c: AppController) {
         }
     }
     lg.nationSheet?.let { NationSheetDialog(lg, it) { k -> lg.detail = k } }
-    var compareFrom by remember { mutableStateOf<String?>(null) }
-    compareFrom?.let { k -> CompareDialog(lg, k, v?.rows.orEmpty()) { compareFrom = null } }
+    lg.comparing?.let { k -> CompareDialog(lg, k, v?.rows.orEmpty()) { lg.comparing = null } }
     val key = lg.detail
     val row = v?.rows?.firstOrNull { it.key == key }
-    if (row != null) AiDetail(c, row, onCompare = { compareFrom = row.key; lg.detail = null }) { lg.detail = null }
+    if (row != null) AiDetail(c, row, onCompare = { lg.comparing = row.key; lg.detail = null }) { lg.detail = null }
     else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
     if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }

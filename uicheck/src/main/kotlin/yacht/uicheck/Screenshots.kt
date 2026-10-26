@@ -194,10 +194,33 @@ private fun run(args: Array<String>) {
     shot(c, out, "17_league_feed", heightDp = 1100)
     c.league.tab = 6
     shot(c, out, "18_league_records", heightDp = 1500)
+    // 기록 › 국가 랭킹, a nation's sheet, 유망주.
+    c.league.recordsMode = 1
+    waitFor("nations") { c.league.nations.isNotEmpty() }
+    shot(c, out, "18b_league_nations", heightDp = 1500)
+    c.league.loadNation("KR")
+    waitFor("nation sheet") { c.league.nationSheet != null }
+    shot(c, out, "18c_league_nation_sheet", heightDp = 1500)
+    c.league.closeNation()
+    c.league.recordsMode = 2
+    waitFor("prospects") { c.league.prospects.isNotEmpty() }
+    shot(c, out, "18d_league_prospects", heightDp = 1300)
+    c.league.recordsMode = 0
     c.league.tab = 0
-    c.league.detail = "win"
-    shot(c, out, "19_league_detail", heightDp = 1100)
+    // A generated player's page (the best ranked), then two players side by side.
+    val top = c.league.view?.rows?.filter { it.rank != null && !it.isMe }?.sortedBy { it.rank } ?: emptyList()
+    c.league.detail = top.firstOrNull()?.key ?: "win"
+    waitFor("profile") { c.league.profile?.key == c.league.detail }
+    shot(c, out, "19_league_detail", heightDp = 1800)
     c.league.detail = null
+    if (top.size >= 2) {
+        c.league.comparing = top[0].key
+        c.league.loadCompare(top[0].key, top[1].key)
+        waitFor("compare") { c.league.compare != null }
+        shot(c, out, "19b_league_compare", heightDp = 1500)
+        c.league.closeCompare()
+        c.league.comparing = null
+    }
     c.league.stop()
     waitFor("league stopped", 60_000) { !c.league.running }
     println("league: ${c.league.view?.matches} matches; top: " + c.league.view?.rows?.take(5)?.joinToString { "${it.name} ${it.rating}" })

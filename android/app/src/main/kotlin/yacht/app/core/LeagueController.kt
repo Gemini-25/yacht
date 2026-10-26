@@ -602,6 +602,10 @@ class LeagueController(
     var tab by mutableStateOf(0)
     var detail by mutableStateOf<String?>(null)
 
+    /** The part of 기록 shown (its chips, in order), and the player a 선수 비교 starts from. */
+    var recordsMode by mutableStateOf(0)
+    var comparing by mutableStateOf<String?>(null)
+
     /** The competition the 대회 tab shows (null: the first), and the week the 일정 tab shows (null: the week in play). */
     var compFocus by mutableStateOf<Comp?>(null)
     var scheduleWeek by mutableStateOf<Int?>(null)
@@ -1919,11 +1923,13 @@ class LeagueController(
                 zone.putIfAbsent(l, 2)
             }
         }
+        val book = world?.players
+        fun shown(k: String) = book?.get(k)?.identity?.nation?.let { Nations.of(it)?.flag }?.let { "$it ${name(k)}" } ?: name(k)
         val divisions = s.divisions.indices.map { d ->
             val table = s.table(d)
             table.mapIndexed { i, st ->
                 SeasonRow(
-                    st.key, name(st.key), st.played, st.wins, st.draws, st.losses, st.points, st.diff, st.avgScore, st.yachts,
+                    st.key, shown(st.key), st.played, st.wins, st.draws, st.losses, st.points, st.diff, st.avgScore, st.yachts,
                     zone[st.key] ?: 0,
                     st.aggPoints,
                     oddsNow?.takeIf { it.season == s.number }?.get(st.key),
