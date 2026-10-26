@@ -41,6 +41,8 @@ import yacht.engine.league.WeekStage
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
+import yacht.engine.league.Nations
+import yacht.engine.league.diff
 import yacht.engine.league.Origin
 import yacht.engine.league.Club
 import yacht.engine.league.ClubLeague
@@ -132,7 +134,14 @@ data class LadderRow(
     /** 기본 (hand-made), 생성, 진화 or 내 AI. */
     val origin: Origin = Origin.BASE,
     val hometown: String = "",
-)
+    /** A generated or evolved player's nation code, flag and age ("" / null for the others). */
+    val nation: String = "",
+    val flag: String = "",
+    val age: Int? = null,
+) {
+    /** The name with its flag, as lists show it ("🇧🇷 루카스 시우바"). */
+    val shown: String get() = if (flag.isEmpty()) name else "$flag $name"
+}
 
 data class FeedItem(
     val a: String,
@@ -318,6 +327,46 @@ data class ProfileView(
     /** 성장 곡선: one line per season, oldest first. */
     val lines: List<SeasonLine> = emptyList(),
     val hallOfFame: Boolean = false,
+    /** Nation, age, abilities, tendencies and style of a generated or evolved player. */
+    val identity: IdentityView? = null,
+)
+
+/**
+ * Who a generated or evolved player is, for its page: nation, gender and age, its nickname, its
+ * abilities (with the change since the season began and its best) and tendencies, its style, its
+ * national team career, its rival and its 이 주의 선수 count. Only what is known is filled in (a
+ * player retired before identities has a nation and an age at most).
+ */
+data class IdentityView(
+    val flag: String,
+    val nationCode: String,
+    val nation: String,
+    val gender: String,
+    /** Its age now, or when it retired. */
+    val age: Int?,
+    val stage: String?,
+    val debutAge: Int?,
+    val nickname: String? = null,
+    val abilities: List<Int>? = null,
+    val change: List<Int> = emptyList(),
+    val peak: List<Int>? = null,
+    val potential: Int? = null,
+    val outlook: String? = null,
+    val tendencies: List<Int>? = null,
+    val style: String? = null,
+    val styleNotes: List<String> = emptyList(),
+    /** Hidden genes as chips: mistakes by feel or slips, the temper. */
+    val chips: List<String> = emptyList(),
+    val school: String? = null,
+    /** Rival: (name, its points, games). */
+    val rival: Triple<String, Double, Int>? = null,
+    val caps: Int = 0,
+    val capTitles: Int = 0,
+    val capBoards: Triple<Int, Int, Int>? = null,
+    /** Its rank among its nation's players by rating. */
+    val nationRank: Int? = null,
+    val nationPlayers: Int = 0,
+    val weeks: Int = 0,
 )
 
 /** The 기록 tab's records room, archive and meta (read on request). */
@@ -1693,6 +1742,8 @@ class LeagueController(
         val l = ladder ?: return null
         val s = plan
         val ranking = l.ranking().filter { it != Ladder.ME || l.entry(it)!!.games > 0 }
+        val ids = world?.players?.alive?.associate { it.key to it.identity }.orEmpty()
+        val season = s?.number ?: 1
         val rows = ranking.mapNotNull { k ->
             val me = k == Ladder.ME
             val ai = byKey[k]
@@ -1708,6 +1759,7 @@ class LeagueController(
                 e.streak, e.bestStreak, e.recent.joinToString(""), e.history.toList(), e.peak.takeIf { !it.isNaN() }?.roundToInt(),
                 lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.league?.divisionOf(k),
                 Origin.of(k), world?.hometown(k) ?: "",
+                ids[k]?.nation ?: "", ids[k]?.let { Nations.of(it.nation)?.flag } ?: "", ids[k]?.let { id -> world?.players?.get(k)?.let { p -> id.age(season, p.born) } },
             )
         }
         val curves = world?.live
@@ -1819,10 +1871,69 @@ class LeagueController(
                     season = w.stats.season(key)?.copy(), career = w.stats.career(key)?.copy(),
                     league = runCatching { w.stats.liveMeta() }.getOrNull() ?: w.stats.meta,
                     lines = w.archive.lines(key).sortedBy { it.season }, hallOfFame = w.archive.inHallOfFame(key),
+                    identity = runCatching { identityView(w, key) }.getOrNull(),
                 )
             }
             scope.launch { profile = v }
         }
+    }
+
+    /** [key]'s identity view (under the lock), null for a player without one (base AIs and mine). */
+    private fun identityView(w: LeagueWorld, key: String): IdentityView? {
+        val b = w.players
+        val season = w.plan?.number ?: (b.evolvedSeason + 1)
+        val alive = b[key]
+        val legend = b.legend(key)
+        val past = if (alive == null) b.retiredRecord(key) else null
+        val id = alive?.identity ?: legend?.identity
+        val code = id?.nation ?: past?.nation ?: return null
+        val nat = Nations.of(code) ?: return null
+        val honours = w.honours.of(key)
+        val age = when {
+            alive != null && id != null -> id.age(season, alive.born)
+            past != null && past.retiredAge > 0 -> past.retiredAge
+            else -> null
+        }
+        val spec = alive?.spec ?: legend?.spec
+        val gene = spec?.play
+        val record = alive ?: legend?.asPlayer()
+        val chips = buildList {
+            when (spec?.mistake) {
+                yacht.engine.league.CustomMistake.FEEL -> add("🎲 감으로 두는 편")
+                yacht.engine.league.CustomMistake.SLIP -> add("🎯 가끔 실수")
+                yacht.engine.league.CustomMistake.NONE -> add("💎 실수 없음")
+                null -> {}
+            }
+            spec?.temper?.takeIf { it != yacht.engine.league.Temper.NONE }?.let { add("🌀 ${it.label}") }
+        }
+        val notes = buildList {
+            gene?.let { g ->
+                yacht.engine.league.PlayStyles.recipe(g.primary)?.let { add(it.desc) }
+                g.secondary?.let { s -> yacht.engine.league.PlayStyles.recipe(s)?.let { add("+${it.name}: ${it.desc}") } }
+                g.overlay?.let { o -> yacht.engine.league.PlayStyles.overlay(o)?.let { add("${it.name}: ${it.desc}") } }
+            }
+        }
+        val cap = w.nations.cap(key)
+        val compatriots = b.alive.filter { it.identity?.nation == code }
+        val rank = if (alive == null) null else compatriots.map { it.key }.sortedByDescending { w.ladder.rating(it).takeIf { r -> !r.isNaN() } ?: 0.0 }.indexOf(key).takeIf { it >= 0 }?.plus(1)
+        val members = w.members.toSet()
+        return IdentityView(
+            nat.flag, code, nat.name, (id?.gender ?: past?.gender)?.label ?: "", age, age?.let { yacht.engine.league.Profiles.stage(it) }.takeIf { alive != null },
+            id?.debutAge ?: past?.debutAge?.takeIf { it > 0 },
+            nickname = record?.let { yacht.engine.league.Nicknames.of(it, honours, season) },
+            abilities = id?.abilities?.toList(),
+            change = if (alive != null && id != null) id.abilities.diff(id.lastAbl) else emptyList(),
+            peak = id?.peakAbl?.toList(),
+            potential = id?.potential,
+            outlook = if (alive != null && id != null && age != null) yacht.engine.league.Profiles.outlook(id, age) else null,
+            tendencies = gene?.let { yacht.engine.league.Tendencies.of(it.style()).toList() },
+            style = gene?.label, styleNotes = notes, chips = chips,
+            school = yacht.engine.league.Schools.of(code).motto.takeIf { it.isNotEmpty() },
+            rival = w.ladder.rival(key, members)?.let { (o, p, g) -> Triple(name(o), p, g) },
+            caps = cap?.caps ?: 0, capTitles = cap?.titles ?: 0, capBoards = cap?.let { Triple(it.won, it.drawn, it.lost) },
+            nationRank = rank, nationPlayers = compatriots.size,
+            weeks = honours.count { it.kind == "POTW" },
+        )
     }
 
     /** The records room, archive and meta, read on request. */

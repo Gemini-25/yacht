@@ -318,11 +318,15 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
     var sort by remember { mutableStateOf(LadderSort.RATING) }
     var onlyFavourites by remember { mutableStateOf(false) }
     var origin by remember { mutableStateOf<yacht.engine.league.Origin?>(null) }
+    var nation by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     val favs = lg.favourites
+    // A search also finds a nation by its name ("브라질").
+    val q = query.trim()
+    val byName = yacht.engine.league.Nations.ALL.filter { q.isNotEmpty() && (it.name.contains(q) || it.short.contains(q)) }.map { it.code }.toSet()
     val rows = v.rows.filter {
         (family == null || it.family == family) && (!onlyFavourites || it.key in favs) && (origin == null || it.origin == origin) &&
-            (query.isBlank() || it.name.contains(query.trim(), ignoreCase = true))
+            (nation == null || it.nation == nation) && (q.isEmpty() || it.name.contains(q, ignoreCase = true) || it.nation in byName)
     }.let { r ->
         when (sort) {
             LadderSort.RATING -> r
@@ -337,7 +341,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
             androidx.compose.material3.OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("AI 이름 검색", fontSize = 13.sp) },
+                placeholder = { Text("선수 이름이나 나라 검색", fontSize = 13.sp) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.fillMaxWidth(),
@@ -349,6 +353,19 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
                 for (o in yacht.engine.league.Origin.entries) {
                     val n = v.rows.count { it.origin == o }
                     if (n > 0) FilterChip(selected = origin == o, onClick = { origin = if (origin == o) null else o }, label = { Text("${o.label} $n", fontSize = 12.sp) })
+                }
+            }
+        }
+        // Nations of the league, most players first.
+        val nations = v.rows.filter { it.nation.isNotEmpty() }.groupingBy { it.nation }.eachCount().entries.sortedByDescending { it.value }
+        if (nations.size > 1) {
+            item {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = nation == null, onClick = { nation = null }, label = { Text("🌐 전체 국적", fontSize = 12.sp) })
+                    for ((code, n) in nations) {
+                        val nat = yacht.engine.league.Nations.of(code) ?: continue
+                        FilterChip(selected = nation == code, onClick = { nation = if (nation == code) null else code }, label = { Text("${nat.flag} ${nat.short} $n", fontSize = 12.sp) })
+                    }
                 }
             }
         }
@@ -428,7 +445,7 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (favourite) Text("★ ", color = cs.secondary, fontSize = 13.sp)
                     Text(
-                        if (r.isMe) "🙋 나 (랭크전)" else r.name,
+                        if (r.isMe) "🙋 나 (랭크전)" else r.shown,
                         fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false),
                     )
@@ -1082,7 +1099,7 @@ private fun AiDetail(c: AppController, r: LadderRow, onDismiss: () -> Unit) {
                 TierBadge(r.tier, r.games, Modifier.width(78.dp), if (r.isMe) Ladder.ME_PLACEMENT else Ladder.PLACEMENT)
                 Spacer(Modifier.width(10.dp))
                 Column {
-                    Text(r.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text(r.shown, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     Text(
                         (r.rank?.let { "${it}위 · " } ?: "") + "레이팅 ${r.rating ?: "–"}" + (r.margin?.let { " ±$it" } ?: "") + (r.peak?.let { " · 최고 $it" } ?: ""),
                         style = MaterialTheme.typography.bodySmall,
