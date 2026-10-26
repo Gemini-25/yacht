@@ -126,14 +126,22 @@ class SeasonPlan(
      * The next team fixture, in the competitions' order; a competition whose open match waits
      * for busy players keeps them from the ones after it ([Competition.waiting]).
      */
-    private fun teams(o: DoubleArray, busy: Set<String>): Fixture? {
+    private fun teams(o: DoubleArray, busy: Set<String>, lastWeek: Int): Fixture? {
         var blocked: MutableSet<String>? = null
         for ((i, c) in comps.withIndex()) {
             if (!isTeam(c.comp)) continue
-            c.next(open(o, i), blocked ?: busy)?.let { return stamp(c, it) }
+            c.next(open(o, i), blocked ?: busy)?.let { f -> within(c, f, lastWeek)?.let { return it } }
             val w = c.waiting(open(o, i))
             if (w.isNotEmpty()) blocked = (blocked ?: busy.toMutableSet()).apply { addAll(w) }
         }
+        return null
+    }
+
+    /** [f] with the week of its stage, or null (and [f] given back) when that week is after [lastWeek]. */
+    private fun within(c: Competition, f: Fixture, lastWeek: Int): Fixture? {
+        val s = stamp(c, f)
+        if (s.week == SeasonCalendar.NONE || s.week <= lastWeek) return s
+        c.release(f)
         return null
     }
 
@@ -149,27 +157,31 @@ class SeasonPlan(
      * post-season. A competition's stage opens in its calendar week (the week of the league
      * round in play, [week]); when nothing else is free the next week's stages may start, so no
      * worker waits. [cost] estimates a league fixture's ms per game (heaviest first late in the
-     * season).
+     * season). Nothing of a week after [lastWeek] is given (1주씩 plays one week): a fixture
+     * that turns out to be later is given back and the next one tried, so it holds up nothing.
      */
-    fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null, teamsInFlight: Int = Int.MAX_VALUE): Fixture? {
+    fun next(
+        busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null, teamsInFlight: Int = Int.MAX_VALUE,
+        lastWeek: Int = Int.MAX_VALUE,
+    ): Fixture? {
         val o = opens(if (league.finished) leagueWeeks else league.currentMatchday + 1)
         if (cupsInFlight < cupCap) {
-            for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
+            for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { f -> within(c, f, lastWeek)?.let { return it } }
         }
         // One team fixture at a time ahead of the league, so the club league and the family cup
         // play their rounds as they open instead of all after the league.
-        if (teamsInFlight < 1) teams(o, busy)?.let { return it }
-        league.next(busy, cost)?.let { return league.job(it) }
-        teams(o, busy)?.let { return it }
+        if (teamsInFlight < 1) teams(o, busy, lastWeek)?.let { return it }
+        league.next(busy, cost, lastMatchday = if (lastWeek == Int.MAX_VALUE) Int.MAX_VALUE else lastWeek - 1)?.let { return league.job(it) }
+        teams(o, busy, lastWeek)?.let { return it }
         // Cup fixtures are not capped when nothing else is left to do.
-        for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
+        for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { f -> within(c, f, lastWeek)?.let { return it } }
         if (!league.finished) {
             // Nothing else is free: next week's stages start early rather than a worker waiting.
             val cal = calendar
             val w = league.currentMatchday + 2
-            for (c in comps) c.next(cal.progress(c.comp, w).let { if (it.isNaN()) progress else it }, busy)?.let { return stamp(c, it) }
+            if (w <= lastWeek) for (c in comps) c.next(cal.progress(c.comp, w).let { if (it.isNaN()) progress else it }, busy)?.let { f -> within(c, f, lastWeek)?.let { return it } }
         }
-        if (league.finished) for (c in post) c.next(1.0, busy)?.let { return stamp(c, it) }
+        if (league.finished) for (c in post) c.next(1.0, busy)?.let { f -> within(c, f, lastWeek)?.let { return it } }
         return null
     }
 

@@ -179,6 +179,44 @@ class SeasonCalendarTest {
     }
 
     @Test
+    fun weekByWeekGivesNothingOfALaterWeekAndNeverStalls() {
+        val w = world(LeagueConfig(generated = 100))
+        w.openFirstSeason(11L)
+        val p = w.plan!!
+        val rng = java.util.Random(4)
+        var weeks = 0
+        var guard = 0
+        while (!w.seasonOver) {
+            // 1주씩: the week in play, then nothing of a later week until it is played.
+            val goal = p.week
+            val flight = ArrayList<Fixture>()
+            while (true) {
+                while (flight.size < 4) {
+                    val busy = flight.flatMap { it.players }.toSet()
+                    val f = w.next(busy, flight.count { !p.isTeam(it.comp) && it.comp != Comp.LEAGUE }, 3, lastWeek = goal) ?: break
+                    assertTrue(f.week == SeasonCalendar.NONE || f.week <= goal, "${f.comp} ${f.label} of week ${f.week} in week $goal")
+                    flight += f
+                }
+                if (flight.isEmpty()) break
+                w.recordJob(play(flight.removeAt(rng.nextInt(flight.size))))
+                check(++guard < 200_000)
+            }
+            // Its league round is played (a week that cannot be played would stall here).
+            assertTrue(w.seasonOver || p.week > goal, "week $goal still in play")
+            weeks++
+        }
+        assertEquals(p.calendar.lastWeek, weeks)
+        assertTrue(p.comps.all { it.finished } && p.post.all { it.finished })
+        // A league round never runs past the last matchday it is allowed.
+        val w2 = world(LeagueConfig(generated = 100))
+        w2.openFirstSeason(12L)
+        val l = w2.plan!!.league
+        val taken = generateSequence { l.next(emptySet(), lastMatchday = 0) }.toList()
+        assertTrue(taken.isNotEmpty() && taken.all { it.matchday == 0 })
+        assertEquals(null, l.next(emptySet(), lastMatchday = 0))
+    }
+
+    @Test
     fun aDefaultSeasonPlaysEveryStageInItsWeek() {
         val w = world(LeagueConfig(generated = 100))
         w.openFirstSeason(5L)

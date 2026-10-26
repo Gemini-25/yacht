@@ -65,6 +65,7 @@ import yacht.app.core.FeedItem
 import yacht.app.core.LadderRow
 import yacht.app.core.LeagueBackground
 import yacht.app.core.LeagueController
+import yacht.app.core.LeagueRunMode
 import yacht.app.core.LeagueSpeed
 import yacht.app.core.LeagueView
 import yacht.app.core.Screen
@@ -243,6 +244,7 @@ private fun ControlCard(c: AppController, v: LeagueView?, onSchedule: () -> Unit
                     )
                     Text(
                         when {
+                            lg.running && v != null && lg.runMode == LeagueRunMode.WEEK -> "이번 주만 치르고 멈춰요 · 분당 ${"%.0f".format(lg.pace)}경기 · 지금 ${v.live.size}경기"
                             lg.running && v != null -> "분당 ${"%.0f".format(lg.pace)}경기 · 지금 ${v.live.size}경기 진행 중"
                             lg.background == LeagueBackground.KEEP -> "앱을 나가도 계속 돌아요. 결과는 저장돼요"
                             else -> "앱을 나가면 멈추고, 돌아오면 이어서 해요"
@@ -256,11 +258,30 @@ private fun ControlCard(c: AppController, v: LeagueView?, onSchedule: () -> Unit
                 if (lg.running) {
                     Button(onClick = { lg.stop() }, colors = ButtonDefaults.buttonColors(containerColor = cs.error)) { Text("■ 정지") }
                 } else {
-                    Button(onClick = { lg.start() }, enabled = v != null) { Text(if ((v?.matches ?: 0) > 0) "▶ 이어서" else "▶ 시작") }
+                    val label = when {
+                        lg.runMode == LeagueRunMode.WEEK -> "▶ 1주 진행"
+                        (v?.matches ?: 0) > 0 -> "▶ 이어서"
+                        else -> "▶ 시작"
+                    }
+                    Button(onClick = { lg.start() }, enabled = v != null) { Text(label) }
                 }
             }
             lg.stopReason?.let { reason ->
                 Text(reason, style = MaterialTheme.typography.bodySmall, color = cs.error)
+            }
+            if (!lg.running) lg.weekDone?.let { note ->
+                Text("✓ $note", style = MaterialTheme.typography.bodySmall, color = cs.primary)
+            }
+            // How far ▶ goes: the week in play, or on until ■.
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("진행", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                for (m in LeagueRunMode.entries) {
+                    FilterChip(selected = lg.runMode == m, onClick = { lg.changeRunMode(m) }, label = { Text(m.label, fontSize = 12.sp) })
+                }
+                Text(
+                    if (lg.runMode == LeagueRunMode.WEEK) "한 주를 치르면 멈춰요" else "■를 누를 때까지 계속 돌아요",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
             }
             v?.clock?.let { ClockLine(it, onSchedule) }
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -503,6 +503,15 @@ enum class LeagueBackground(val label: String) {
     KEEP("나가도 계속"),
 }
 
+/** How far ▶ goes: the week in play, or on and on until ■. */
+enum class LeagueRunMode(val label: String) {
+    /** It plays the week in play (the league round and the week's cup matches) and stops. */
+    WEEK("1주씩"),
+
+    /** It plays on, week after week and season after season, until stopped. */
+    ON("계속"),
+}
+
 enum class LeagueSpeed(val label: String) {
     ECO("절약 · 1코어"),
     NORMAL("보통 · 절반"),
@@ -565,6 +574,7 @@ class LeagueController(
     private val customFile = File(folder, "custom.txt")
     private val prefs = File(folder, "prefs.txt")
     private val backgroundFile = File(folder, "background.txt")
+    private val runModeFile = File(folder, "runmode.txt")
 
     /** Present while the league should be running: it goes on by itself the next time the app opens. */
     private val resumeFile = File(folder, "resume.txt")
@@ -583,6 +593,25 @@ class LeagueController(
     /** Why the league stopped by itself (errors), shown on its screen until the next start. */
     var stopReason by mutableStateOf<String?>(null)
         private set
+
+    /** How far ▶ goes (saved). */
+    var runMode by mutableStateOf(LeagueRunMode.ON)
+        private set
+
+    /** A 1주씩 run that played its week: what it played, shown until the next start. */
+    var weekDone by mutableStateOf<String?>(null)
+        private set
+
+    /** The season and week a 1주씩 run plays (null: it plays on); read and set under the lock. */
+    private var weekGoal: Pair<Int, Int>? = null
+
+    /** Set by a run that stops by itself and says why (its week played, errors); null otherwise. */
+    @Volatile
+    private var endedBy: String? = null
+
+    /** A stuck run was told to the app (once per run). */
+    @Volatile
+    private var stallTold = false
 
     /** Told about every error the league meets while it runs (the app logs it). */
     var onError: (Throwable) -> Unit = {}
@@ -701,6 +730,9 @@ class LeagueController(
         }
         runCatching {
             backgroundFile.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueBackground.entries.firstOrNull { it.name == v }?.let { background = it } }
+        }
+        runCatching {
+            runModeFile.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueRunMode.entries.firstOrNull { it.name == v }?.let { runMode = it } }
         }
         customs = runCatching { customFile.takeIf { it.exists() }?.readLines()?.mapNotNull { CustomAiSpec.decode(it) } }.getOrNull().orEmpty()
         config = readConfig()
@@ -1021,7 +1053,11 @@ class LeagueController(
         if (running || ladder == null || restoring) return
         running = true
         stopReason = null
+        weekDone = null
+        endedBy = null
+        stallTold = false
         failures.set(0)
+        lastRecord = System.currentTimeMillis()
         scope.launch(fileWrites) { runCatching { resumeFile.writeTextAtomically("1") } }
         val flag = AtomicBoolean(false)
         stop = flag
@@ -1044,6 +1080,7 @@ class LeagueController(
                             configureWorld(w)
                             w.openFirstSeason(System.nanoTime())
                         }
+                        weekGoal = if (runMode == LeagueRunMode.WEEK) w.plan?.let { it.number to it.week } else null
                     }
                 }
                 val r = extra!!
@@ -1056,7 +1093,9 @@ class LeagueController(
                 }
                 preparing = null
                 if (flag.get()) return@launch
-                val pool = Executors.newFixedThreadPool(threads) { job -> Thread(job, "yacht-league").apply { isDaemon = true; priority = Thread.MIN_PRIORITY } }
+                // A roomy stack: Android's default is small, and a StackOverflowError in one
+                // match must not end the run.
+                val pool = Executors.newFixedThreadPool(threads) { job -> Thread(null, job, "yacht-league", WORKER_STACK).apply { isDaemon = true; priority = Thread.MIN_PRIORITY } }
                 val dispatcher = pool.asCoroutineDispatcher()
                 try {
                     val workers = (0 until threads).map { w -> launch(dispatcher) { work(t, flag, Random(System.nanoTime() + w)) } }
@@ -1075,13 +1114,18 @@ class LeagueController(
                 stopReason = reasonOf(e)
                 clearResume()
             } finally {
-                // A run that ended by itself (errors) must not leave the screen showing a league
-                // running with no one playing.
+                // A run that ended by itself (errors, its week played) must not leave the screen
+                // showing a league running with no one playing, nor end without a word or a save.
                 withContext(kotlinx.coroutines.NonCancellable) {
                     if (stop === flag && running) {
                         flag.set(true)
                         running = false
                         preparing = null
+                        if (endedBy == null) stopReason = "리그가 저절로 멈췄어요. ‘이어서’를 누르면 다시 해요."
+                        scope.launch {
+                            withContext(kotlinx.coroutines.NonCancellable) { save() }
+                            publish(force = true)
+                        }
                     }
                 }
             }
@@ -1123,10 +1167,10 @@ class LeagueController(
         if (if (labCap > 0) labInFlight < labCap else rng.nextBoolean()) w.lab.next()?.let { return it }
         val cost = { f: yacht.engine.league.LeagueFixture -> (costMs[f.a] ?: 5.0) + (costMs[f.b] ?: 5.0) }
         val cap = maxOf(1, speed.threads(cores) - 1)
-        w.next(busy, cupsInFlight, cap, cost)?.let { return it }
+        w.next(busy, cupsInFlight, cap, cost, lastWeek(w))?.let { return it }
         if (w.seasonOver) {
             rollover(w)
-            w.next(busy, cupsInFlight, cap, cost)?.let { return it }
+            w.next(busy, cupsInFlight, cap, cost, lastWeek(w))?.let { return it }
         }
         // Nothing official is free: the worker waits. (Friendlies to fill the wait went to the
         // light AIs only, a heavy one holding up its own fixtures, so the light ones piled up
@@ -1209,7 +1253,7 @@ class LeagueController(
                 synchronized(lock) { takeJob(rng) { f -> seasonFormat = f } }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 // Even the next fixture failed (a season that cannot close): retried a few times,
                 // then the league stops and says why.
                 if (failed(e, flag)) break
@@ -1217,6 +1261,7 @@ class LeagueController(
                 continue
             }
             if (job == null) {
+                if (weekPlayed(flag)) break
                 delay(50)
                 continue
             }
@@ -1247,13 +1292,14 @@ class LeagueController(
                         lastDelta[m.b] = m.deltaB
                     }
                     recorded = true
+                    lastRecord = System.currentTimeMillis()
                     meter(result)
                     runMatches += result.boards.size
                 }
                 failures.set(0)
             } catch (e: CancellationException) {
                 // stopped mid-match: the match is dropped
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 // This match failed: it is given back to the season and the league goes on; the
                 // second time (it fails the same way: its deal is fixed) it is settled level.
                 if (job.comp != Comp.LAB && job.comp != Comp.FRIENDLY) synchronized(lock) {
@@ -1284,7 +1330,10 @@ class LeagueController(
 
     /** The next job, marked as taken (under the lock); [format] gets the season's match format. */
     private fun takeJob(rng: Random, format: (MatchFormat) -> Unit): Fixture? =
-        nextJob(rng)?.also {
+        nextJob(rng)?.takeIf { f ->
+            // 1주씩: a match of a later week (or of the next season) is given back.
+            !pastGoal(f).also { past -> if (past) world?.release(f) }
+        }?.also {
             // The season keeps the format it started with (a change applies next season); read
             // after nextJob, which may have opened the next season.
             world?.plan?.config?.matchFormat?.let(format)
@@ -1297,15 +1346,56 @@ class LeagueController(
             if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
         }
 
+    /** The last week a 1주씩 run plays in [w]'s season (none once the season is another). */
+    private fun lastWeek(w: LeagueWorld): Int {
+        val (season, week) = weekGoal ?: return Int.MAX_VALUE
+        return if (w.plan?.number == season) week else 0
+    }
+
+    /** True (under the lock) when [f] is past the week a 1주씩 run plays. */
+    private fun pastGoal(f: Fixture): Boolean {
+        val (season, week) = weekGoal ?: return false
+        val p = world?.plan ?: return false
+        if (p.number != season) return true
+        // Friendlies and lab games have no week: they go on while the week does.
+        if (f.week == SeasonCalendar.NONE || f.comp == Comp.FRIENDLY || f.comp == Comp.LAB) return p.week > week
+        return f.week > week
+    }
+
+    /**
+     * 1주씩: true once the run's week is played (its league round done, nothing of it in flight);
+     * the run then stops by itself and says what it played.
+     */
+    private fun weekPlayed(flag: AtomicBoolean): Boolean {
+        val note = synchronized(lock) {
+            val (season, week) = weekGoal ?: return false
+            val p = world?.plan ?: return false
+            if (p.number == season && p.week <= week) return false
+            if (live.isNotEmpty() || labInFlight > 0) return false
+            weekGoal = null
+            if (p.number != season) "시즌 $season 일정을 다 마쳤어요. ▶를 누르면 시즌 ${p.number} 1주차를 해요."
+            else "${week}주차를 다 치렀어요. ▶를 누르면 ${p.week}주차를 해요."
+        }
+        if (flag.getAndSet(true)) return true
+        endedBy = note
+        scope.launch {
+            weekDone = note
+            // The player's stop: it does not go on by itself at the next launch.
+            stop()
+        }
+        return true
+    }
+
     /**
      * An error while running: told to the app; true (and the league stops, saying why) once
      * [MAX_FAILURES] came in a row.
      */
-    private fun failed(e: Exception, flag: AtomicBoolean): Boolean {
+    private fun failed(e: Throwable, flag: AtomicBoolean): Boolean {
         // Told on the main thread (the app shows it).
         scope.launch { onError(e) }
         if (failures.incrementAndGet() < MAX_FAILURES) return false
         if (!flag.getAndSet(true)) {
+            endedBy = reasonOf(e)
             scope.launch {
                 stopReason = reasonOf(e)
                 clearResume()
@@ -1336,13 +1426,47 @@ class LeagueController(
                     lastSave = System.currentTimeMillis()
                     save()
                 }
+                unstall(flag)
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (failed(e, flag)) break
             }
             publish()
         }
+    }
+
+    /** When this run last recorded a match. */
+    @Volatile
+    private var lastRecord = 0L
+
+    /**
+     * A run with nothing in flight and no match recorded for [STALL_MS] is stuck (a slot or a
+     * fixture still marked as taken by a match that is gone): the marks are rebuilt from the
+     * matches really in flight, and the league goes on. Told to the app (crash log) when it finds
+     * something.
+     */
+    private fun unstall(flag: AtomicBoolean) {
+        if (flag.get() || System.currentTimeMillis() - lastRecord < STALL_MS) return
+        val found = synchronized(lock) {
+            if (live.isNotEmpty()) return
+            val w = world ?: return
+            val lostSlots = busy.size + cupsInFlight + w.teamsInFlight
+            busy.clear()
+            cupsInFlight = 0
+            w.teamsInFlight = 0
+            val lostFixtures = w.plan?.league?.reclaim(emptySet()) ?: 0
+            lastRecord = System.currentTimeMillis()
+            val p = w.plan
+            val state = "season ${p?.number}, week ${p?.week}, left ${p?.league?.fixturesLeft}, over ${w.seasonOver}"
+            when {
+                lostSlots + lostFixtures > 0 -> "리그가 멈춰 있어 다시 풀었어요: busy $lostSlots, fixtures $lostFixtures ($state)"
+                // Nothing to free: said once, so the crash log shows where it waits.
+                !stallTold -> "리그가 다음 경기를 찾지 못하고 있어요 ($state)".also { stallTold = true }
+                else -> return
+            }
+        }
+        scope.launch { onError(IllegalStateException(found)) }
     }
 
     /** The latest 우승·승강 확률, made off the lock at most every 10% of the season. */
@@ -1463,6 +1587,21 @@ class LeagueController(
     fun changeBackground(b: LeagueBackground) {
         background = b
         scope.launch(fileWrites) { runCatching { backgroundFile.writeTextAtomically(b.name) } }
+    }
+
+    /**
+     * Sets how far ▶ goes (saved). Chosen while the league runs: 1주씩 finishes the week in play
+     * and stops; 계속 plays on.
+     */
+    fun changeRunMode(m: LeagueRunMode) {
+        runMode = m
+        scope.launch(fileWrites) { runCatching { runModeFile.writeTextAtomically(m.name) } }
+        if (!running) return
+        scope.launch(Dispatchers.Default) {
+            synchronized(lock) {
+                weekGoal = if (m == LeagueRunMode.WEEK) world?.plan?.let { it.number to it.week } else null
+            }
+        }
     }
 
     /** True when the app ships a seed ladder to start from. */
@@ -2572,6 +2711,12 @@ class LeagueController(
         /** Errors in a row after which the league stops and says why. */
         private const val MAX_FAILURES = 12
         private const val ERROR_PAUSE_MS = 500L
+
+        /** A run with nothing in flight this long without a match is stuck (see unstall). */
+        private const val STALL_MS = 20_000L
+
+        /** Stack of a league worker thread (bytes). */
+        private const val WORKER_STACK = 16L shl 20
 
         /** Feed labels of the player's ranked games and of watched games (friendlies on the ladder). */
         const val RANKED_LABEL = "랭크전"

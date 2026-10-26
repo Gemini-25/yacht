@@ -227,6 +227,14 @@ private fun run(args: Array<String>) {
     }
     c.league.stop()
     waitFor("league stopped", 60_000) { !c.league.running }
+    // 1주씩: ▶ plays the week in play and stops by itself, saying what it played.
+    c.league.changeRunMode(yacht.app.core.LeagueRunMode.WEEK)
+    c.league.start()
+    waitFor("week started") { c.league.running }
+    waitFor("week played", 300_000) { !c.league.running }
+    check(c.league.weekDone != null) { "the week stopped without its note: ${c.league.stopReason}" }
+    shot(c, out, "16f_league_week_done", heightDp = 1000)
+    c.league.changeRunMode(yacht.app.core.LeagueRunMode.ON)
     println("league: ${c.league.view?.matches} matches; top: " + c.league.view?.rows?.take(5)?.joinToString { "${it.name} ${it.rating}" })
 
     // A ranked game against a league AI near 1400, played greedily to the end.

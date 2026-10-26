@@ -184,6 +184,23 @@ competition is finished; then playoffs; then rollover (section 5). `SeasonPlan` 
 everything into `league/season.txt` (`season 3`, decoding `season 1` files as a migration that
 starts the next season with the new structure).
 
+**Run modes (진행 방식, app).** `LeagueRunMode` (saved in `league/runmode.txt`): 계속 plays on
+until ■; 1주씩 plays the week in play and stops by itself. A 1주씩 run takes its goal (season,
+week) when it starts (or when the mode is chosen while running) and asks for fixtures with
+`next(..., lastWeek = goal)`: the league gives no round after it (`Season.next(lastMatchday)`)
+and a competition fixture whose stage week is later is given back at once and the next one
+tried, so a later stage first in line holds up nothing. Friendlies and lab games run while the
+week does. The week is played once the clock is past it with nothing in flight; the run then
+stops (a player's stop: no auto-resume) and says what it played ("12주차를 다 치렀어요"). After a
+season's last week the next request closes the season (rollover), finds a new season and stops.
+
+**Never a silent stop (app).** Workers catch every `Throwable` from a job (a match fails, is
+retried, then voided; 12 errors in a row stop the league with the reason shown), worker threads
+get a 16 MB stack, and a run that ends by itself without a reason says so and saves. A watchdog
+in the upkeep loop: nothing in flight and no match for 20 s means something is still marked as
+taken; the busy set, cup and team counters and the league's taken fixtures
+(`Season.reclaim`) are rebuilt from the jobs really in flight, and it is told to the crash log.
+
 ## 3. Per-game facts and statistics
 
 **GameFacts** (computed in `LeagueMatch` from the 24 boards after each half-turn, plus the

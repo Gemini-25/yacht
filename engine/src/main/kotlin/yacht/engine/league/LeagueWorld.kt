@@ -124,12 +124,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     /**
      * The next fixture of the season (the post-season is set up once the league stage is over);
-     * null when none is free now. See [SeasonPlan.next].
+     * null when none is free now; none of a week after [lastWeek]. See [SeasonPlan.next].
      */
-    fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null): Fixture? {
+    fun next(busy: Set<String>, cupsInFlight: Int, cupCap: Int, cost: ((LeagueFixture) -> Double)? = null, lastWeek: Int = Int.MAX_VALUE): Fixture? {
         val p = plan ?: return null
         if (p.league.finished && !p.postStarted) p.startPost(Competitions.postFactories())
-        return p.next(busy, cupsInFlight, cupCap, cost, teamsInFlight)
+        return p.next(busy, cupsInFlight, cupCap, cost, teamsInFlight, lastWeek)
     }
 
     /** Team fixtures (club league, family cup) being played; set by the app around [next]. */

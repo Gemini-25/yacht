@@ -222,17 +222,19 @@ class Season private constructor(
      * The next fixture whose two AIs are free, from the current matchday or the next one,
      * preferring the earlier matchday and AIs that have played less; [cost] (estimated ms per
      * game of a fixture) puts the heaviest first once 80% of the league is played, so the season
-     * does not end waiting for one slow match. Null when none is available now.
+     * does not end waiting for one slow match. Null when none is available now; none after
+     * matchday [lastMatchday].
      */
-    fun next(busy: Set<String>, cost: ((LeagueFixture) -> Double)? = null): LeagueFixture? {
+    fun next(busy: Set<String>, cost: ((LeagueFixture) -> Double)? = null, lastMatchday: Int = Int.MAX_VALUE): LeagueFixture? {
         if (remaining.isEmpty()) return null
-        val md = currentMatchday
+        // The current matchday and the next (not past [lastMatchday]).
+        val last = minOf(currentMatchday + 1, lastMatchday)
         val late = progress >= 0.8 && cost != null
         var best: LeagueFixture? = null
         var bestKey = Double.MAX_VALUE
         for (id in remaining) {
             val f = fixtures[id]
-            if (f.matchday > md + 1) break
+            if (f.matchday > last) break
             // The key first (no map read), the busy sides only for a better one.
             val key = if (late) -cost!!(f) else f.matchday * 10_000.0 + standingA[id].played + standingB[id].played
             if (key < bestKey && f.a !in busy && f.b !in busy) {
@@ -250,6 +252,16 @@ class Season private constructor(
     /** A fixture taken by [next] that was not played (stopped): back in the list. */
     fun release(id: Int) {
         if (inProgress.remove(id)) remaining += id
+    }
+
+    /**
+     * Fixtures taken by [next] that nobody plays any more (only [playing] are in flight): back in
+     * the list. Returns how many came back (none unless a taken fixture was lost).
+     */
+    fun reclaim(playing: Set<Int>): Int {
+        val lost = inProgress.filter { it !in playing }
+        for (id in lost) release(id)
+        return lost.size
     }
 
     /** Records fixture [id] (its [LeagueFixture.a] is "a" in [games]); false if it was not taken. */

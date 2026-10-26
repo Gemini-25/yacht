@@ -30,7 +30,13 @@
 
 ## AI 리그
 
-시작 버튼을 누르면 AI끼리 계속 경기를 치르고, 시즌이 끝나면 승강·시상·은퇴·신인 입단까지 저절로 이어진다. 앱을 꺼도 다음에 이어서 진행한다.
+시작 버튼을 누르면 AI끼리 경기를 치르고, 시즌이 끝나면 승강·시상·은퇴·신인 입단까지 저절로 이어진다. 앱을 꺼도 다음에 이어서 진행한다.
+
+**진행 방식** (리그 화면 위 카드에서 고른다, 저장됨)
+- **계속**: ▶ 이어서를 누르면 ■ 정지를 누를 때까지 주차와 시즌을 넘어 계속 돈다.
+- **1주씩**: ▶ 1주 진행을 누를 때마다 지금 주차(리그 한 라운드와 그 주의 컵·챔스·클럽 경기)만 치르고 저절로 멈춘다. "12주차를 다 치렀어요"처럼 무엇을 했는지 알려 준다. 시즌 마지막 주 다음에는 시즌 마감(시상·승강·은퇴)까지 하고 멈춘다. 도는 중에 바꿔도 된다(1주씩으로 바꾸면 그 주까지만 하고 멈춘다).
+- 앱을 나가면: '나가면 멈춤'(배터리 절약, 돌아오면 이어서) 또는 '나가도 계속'(알림을 띄우고 화면이 꺼져도 돈다).
+- 오류가 나도 그 경기만 다시 하거나 무효로 하고 계속 간다. 같은 오류가 계속되거나 무언가 막혀서 저절로 멈추면 카드에 이유를 빨간 글씨로 보여 준다(아무 말 없이 멈추지 않는다). 20초 넘게 아무 경기도 진행되지 않으면 막힌 자리를 찾아 풀고 오류 기록에 남긴다.
 
 **선수 (생성 선수만 출전, 기본 1000명, 최대 3000명)**
 - 선수마다 이름·성별·국적(28개국, 나라별 이름과 도시)·나이·고향이 있다. 이름은 나라마다 그 나라 방식으로 쓴다. 국적 비중은 실제 인구에 비례하되, 가장 큰 나라와 작은 나라가 5배 넘게 차이 나지 않게 제한했다(1000명이면 중국·미국·브라질·인도·나이지리아 각 약 69명, 한국 약 24명, 작은 나라 약 14명). 특정 나라를 일부러 키우지 않아서 대표팀 전력이 나라마다 고르게 나온다.
@@ -83,6 +89,8 @@ tools/build/install/tools/bin/tools league --tables tables --deals 120 --csv lea
 tools/build/install/tools/bin/tools ladder --tables tables --minutes 30 --threads 4 --state ladder.txt   # 앱의 AI 리그(103개, 매칭·티어)를 서버에서
 tools/build/install/tools/bin/tools commentary --tables tables --games 1                          # 실황 해설 문장 전체 출력
 ./gradlew -p uicheck compileKotlin                        # 안드로이드 SDK 없이 UI 컴파일 검사
+./gradlew -p uicheck installDist && java -cp "uicheck/build/install/uicheck/lib/*" yacht.uicheck.RunCheckKt tables 5 FULL seed week
+                                                          # 앱의 리그 진행(컨트롤러)을 화면 없이 검사: 1주씩 60번, 계속 (week 대신 make: 선수를 만들며 5분)
 # APK (안드로이드 SDK 필요)
 tools/build/install/tools/bin/tools gen --out android/app/src/main/assets
 ./gradlew -p android :app:assembleRelease                  # 두 앱: app-next-release.apk, app-classic-release.apk
