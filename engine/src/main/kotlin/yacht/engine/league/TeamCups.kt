@@ -33,6 +33,7 @@ class AllStar private constructor(
     override fun release(f: Fixture) = bracket.release(f.id)
 
     override fun record(r: JobResult): List<LeagueEvent> {
+        if (!Knockout.current(seed, comp, r)) return emptyList()
         val t = bracket.record(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) ?: return emptyList()
         return KnockoutNews.final(season, comp, t, null)
     }
@@ -150,7 +151,8 @@ class FamilyCup private constructor(
         if (f.id in stage) stage.release(f.id) else bracket?.release(f.id)
     }
 
-    override fun record(r: JobResult): List<LeagueEvent> = put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r))
+    override fun record(r: JobResult): List<LeagueEvent> =
+        if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
 
     private fun put(id: Int, a: String, b: String, s: TieScore): List<LeagueEvent> {
         if (id in stage) {

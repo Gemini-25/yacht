@@ -172,6 +172,9 @@ class Knockout(
             if (!opened(p, opensAt(r))) continue
             for (t in round) {
                 if (!t.ready || t.id in taken) continue
+                // Busy sides wait without building their fixture (team ids are never busy: their
+                // lineups are checked below).
+                if (t.a!!.key in busy || t.b!!.key in busy) continue
                 val f = make(t)
                 if (f.players.any { it in busy }) continue
                 taken += t.id
@@ -233,13 +236,18 @@ class Knockout(
         for (r in results) if (r.id in byId) record(r.id, r.a, r.b, r.score)
     }
 
-    /** The bracket for the screen; a side waiting for its opponent shows on its own. */
+    /**
+     * The bracket for the screen; a side waiting for its opponent shows on its own, and a bye
+     * shows its side as [TieView.a] with no [TieView.b].
+     */
     fun view(): List<BracketRound> = rounds.mapIndexed { r, round ->
         BracketRound(
             labelOf(r),
             round.map { t ->
                 val s = t.result
-                TieView((t.a ?: t.top)?.key, (t.b ?: t.bottom)?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs)
+                val a = if (t.bye) t.a else t.a ?: t.top
+                val b = if (t.bye) null else t.b ?: t.bottom
+                TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs)
             },
         )
     }
@@ -247,6 +255,12 @@ class Knockout(
     companion object {
         /** The deal of a competition's fixture: a pure function of the season, the competition and the id. */
         internal fun fixtureSeed(seasonSeed: Long, comp: Comp, id: Int): Long = DiceStream.mix(seasonSeed, comp.code.code.toLong(), id.toLong())
+
+        /**
+         * True when [r] is a result of this season's fixture: a job of another season or league
+         * with the same id and sides (a stale result) has another deal and is ignored.
+         */
+        internal fun current(seasonSeed: Long, comp: Comp, r: JobResult): Boolean = r.fixture.seed == fixtureSeed(seasonSeed, comp, r.fixture.id)
 
         /** Seed of a competition's draw (negative salt: never a fixture id). */
         internal fun drawSeed(seasonSeed: Long, comp: Comp): Long = DiceStream.mix(seasonSeed, comp.code.code.toLong(), -1L)
@@ -383,6 +397,7 @@ class GroupStage(
         for (m in matches) {
             if (m.result != null || m.id in taken) continue
             if (!Knockout.opened(p, opensAt(m.round))) break
+            if (m.a in busy || m.b in busy) continue
             val f = make(m)
             if (f.players.any { it in busy }) continue
             taken += m.id
@@ -516,6 +531,7 @@ abstract class BracketCompetition(
 
     override fun record(r: JobResult): List<LeagueEvent> {
         val f = r.fixture
+        if (!Knockout.current(seed, comp, r)) return emptyList()
         val t = bracket.record(f.id, f.a, f.b, TieScore.of(r)) ?: return emptyList()
         return news(t)
     }

@@ -26,6 +26,7 @@ import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.SuperCup
 import yacht.engine.league.TieRule
+import yacht.engine.league.TieView
 import yacht.engine.league.TitlePlayoff
 import java.util.Random
 import kotlin.test.Test
@@ -242,9 +243,9 @@ class CompetitionsTest {
         assertNull(SuperCup.create(start(10, number = 2, lastHonours = double, config = LeagueConfig(superCup = false))))
     }
 
-    /** A league stage of 24 AIs in 2 divisions played out by strength. */
-    private fun playedLeague(config: LeagueConfig = LeagueConfig(divisions = 2)): SeasonPlan {
-        val ctx = Offseason.Context((1..24).map(::key), ::rating, ::family, { "서울" }, config)
+    /** A league stage of [n] AIs (24 in 2 divisions) played out by strength. */
+    private fun playedLeague(config: LeagueConfig = LeagueConfig(divisions = 2), n: Int = 24): SeasonPlan {
+        val ctx = Offseason.Context((1..n).map(::key), ::rating, ::family, { "서울" }, config)
         val plan = Offseason.first(3L, ctx)
         while (true) plan.record(play(plan.next(emptySet(), 0, 1) ?: break))
         assertTrue(plan.league.finished)
@@ -501,6 +502,152 @@ class CompetitionsTest {
             val again = Competitions.codecs.getValue(c.comp).decode(lines(c), 2, s.seed)
             assertEquals(text(c), text(again), c.comp.label)
             assertEquals(c.next(1.0, emptySet()), again.next(1.0, emptySet()), c.comp.label)
+        }
+    }
+
+    @Test
+    fun aMiddleDivisionOfThreeNeverSendsAnAiUpAndDownAtOnce() {
+        // 3 divisions of 3, one automatic move per boundary: the middle division's 2nd is the
+        // lower side above and the upper side below. It plays only for promotion.
+        val config = LeagueConfig(divisions = 3)
+        val plan = playedLeague(config, n = 9)
+        plan.startPost(listOf(PromotionPlayoff::create))
+        val po = plan.post.single() as PromotionPlayoff
+        assertEquals(listOf(PromotionPlayoff.Spot(0, "ai02", "ai05")), po.spots)
+        // Every lower side wins: ai05 goes up, and no second tie could send it down as well.
+        run(po, 1.0) { play(it, flip = true) }
+        assertTrue(plan.finished)
+        assertEquals(listOf(Honour(1, "UP0", "ai05")), po.honours())
+        val (next, _) = Offseason.next(plan, Offseason.Context((1..9).map(::key), ::rating, ::family, { "서울" }, config))
+        val all = next.league.divisions.flatten()
+        assertEquals(all.size, all.toSet().size, "an AI in two divisions: ${next.league.divisions}")
+        assertTrue("ai05" in next.league.divisions[0] && "ai02" in next.league.divisions[1])
+    }
+
+    @Test
+    fun aResultOfAnotherSeasonIsIgnored() {
+        // The same ratings make the same cup draw every season; only the deal tells them apart.
+        val one = assertNotNull(Cup.create(start(13, number = 1)))
+        val two = assertNotNull(Cup.create(start(13, number = 2)))
+        val old = assertNotNull(one.next(0.05, emptySet()))
+        val now = assertNotNull(two.next(0.05, emptySet()))
+        assertEquals(old.copy(seed = now.seed), now)
+        assertTrue(two.record(play(old, flip = true)).isEmpty())
+        assertEquals(12, two.fixturesLeft)
+        two.record(play(now))
+        assertEquals(11, two.fixturesLeft)
+        assertEquals(now.a, (two.view() as CompetitionView.Bracket).rounds[0].ties.single { it.a == now.a }.winner)
+        // A team competition too: last season's all-star game does not count this season.
+        val stars = assertNotNull(AllStar.create(start(12, number = 2)))
+        val lastYear = assertNotNull(AllStar.create(start(12, number = 1))?.next(0.5, emptySet()))
+        assertTrue(stars.record(play(lastYear)).isEmpty())
+        assertTrue(!stars.finished && stars.honours().isEmpty())
+    }
+
+    @Test
+    fun aByeShowsOnlyItsSide() {
+        val e = (1..3).map { DrawEntry(key(it), it, rating(key(it))) }
+        // A draw read back with a seed missing: the top side of a tie is empty.
+        val k = Knockout(listOf(null to e[1], e[0] to e[2]), { 1 }, { "r$it" }, { 0.0 })
+        assertEquals(TieView("ai02", null, 0.0, 0.0, "ai02", false, 1), k.view()[0].ties[0])
+        // The final waits for the other tie: its known side shows, the other is not known yet.
+        assertEquals(TieView("ai02", null, 0.0, 0.0, null, false, 1), k.view()[1].ties[0])
+    }
+
+    /** A result from the fixture's deal: the same fixture always ends the same way, whenever it is played. */
+    private fun dealt(f: Fixture, gone: Set<String>): JobResult {
+        if (f.players.any { it in gone }) {
+            // As LeagueController.forfeit: the side still here wins, off the ladder.
+            val aHere = f.players.take(maxOf(1, f.lineupA.size)).none { it in gone }
+            val games = listOf(if (aHere) GameScore(1, 0) else GameScore(0, 1))
+            val boards = if (f.kind == JobKind.TEAM) f.lineupA.zip(f.lineupB).map { (x, y) -> BoardResult(x, y, games, emptyList()) }
+            else listOf(BoardResult(f.a, f.b, games, emptyList()))
+            return JobResult(f.copy(rated = false), boards, if (aHere) 1 else -1, 0)
+        }
+        val rng = Random(f.seed)
+        fun games(n: Int) = List(n) { GameScore(150 + rng.nextInt(60), 150 + rng.nextInt(60)) }
+        return when (f.kind) {
+            JobKind.MATCH -> games(2).let { JobResult(f, listOf(BoardResult(f.a, f.b, it, emptyList())), TieRule.match(it), 0) }
+            JobKind.TIE -> {
+                val g = games(2 * f.legs).toMutableList()
+                while (g.size < 2 * f.legs + 3 && TieRule.match(g) == 0) g += games(1)
+                JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g).let { if (it == 0) 1 else it }, 0)
+            }
+            JobKind.TEAM -> {
+                val boards = f.lineupA.zip(f.lineupB).map { (x, y) -> BoardResult(x, y, games(2), emptyList()) }
+                JobResult(f, boards, TieRule.team(boards), 0)
+            }
+        }
+    }
+
+    /**
+     * [count] seasons of [n] AIs with up to [threads] jobs in flight that finish in a random
+     * order ([order] seeds it), the rules changed for season 3, and with [reload] the plan saved
+     * and read back now and then (the jobs in flight lost, as after a kill); with [leave] ai05
+     * leaves in the middle of season 2 (its fixtures forfeited). Checks that the season never
+     * waits for nothing, that no AI is handed out twice and none plays in two divisions.
+     * Returns every season's honours.
+     */
+    private fun seasons(n: Int, config: LeagueConfig, count: Int, threads: Int, order: Long, reload: Boolean, leave: Boolean = false): List<Honour> {
+        val rng = Random(order)
+        var keys = (1..n).map(::key)
+        val gone = HashSet<String>()
+        val history = ArrayList<Honour>()
+        var rules = config
+        fun ctx() = Offseason.Context(keys, ::rating, ::family, { "서울" }, rules, Competitions.factories(), history.toList())
+        var plan = Offseason.first(11L, ctx())
+        var season = 1
+        val flight = ArrayList<Fixture>()
+        while (true) {
+            if (plan.league.finished) plan.startPost(Competitions.postFactories())
+            if (plan.finished) {
+                if (season == count) return history + Offseason.honours(plan, Offseason.moves(plan))
+                keys = keys - gone
+                rules = if (season == 2) config.copy(divisions = maxOf(1, config.divisions - 1), champions = !config.champions, titlePlayoff = !config.titlePlayoff, autoSwap = 0) else config
+                val (next, h) = Offseason.next(plan, ctx())
+                history += h
+                val all = next.league.divisions.flatten()
+                assertEquals(all.size, all.toSet().size, "an AI in two divisions after season $season")
+                plan = next
+                season++
+                continue
+            }
+            if (leave && season == 2 && plan.progress > 0.3) gone += key(5)
+            val busy = flight.flatMap { it.players }.toSet()
+            val cups = flight.count { it.comp != Comp.LEAGUE && it.comp != Comp.ALL_STAR && it.comp != Comp.FAMILY }
+            val f = if (flight.size < threads) plan.next(busy, cups, maxOf(1, threads - 1)) else null
+            if (f != null) {
+                assertTrue(f.players.none { it in busy }, "a busy AI handed out: $f")
+                flight += f
+                continue
+            }
+            assertTrue(flight.isNotEmpty(), "season $season waits for nothing at ${plan.progress}: ${(plan.comps + plan.post).map { it.comp to it.fixturesLeft }}")
+            plan.record(dealt(flight.removeAt(rng.nextInt(flight.size)), gone))
+            if (rng.nextInt(40) == 0) Competitions.views(plan)
+            if (reload && rng.nextInt(60) == 0) {
+                flight.clear()
+                plan = SeasonPlan.decode(plan.encode(), keys, Competitions.codecs)
+            }
+        }
+    }
+
+    @Test
+    fun leaguesOfEverySizeEndTheSameWayHoweverTheirFixturesAreScheduled() {
+        for ((n, config) in listOf(
+            9 to LeagueConfig(divisions = 3),
+            16 to LeagueConfig(divisions = 4),
+            18 to LeagueConfig(divisions = 6, autoSwap = 1),
+            45 to LeagueConfig(divisions = 2),
+            5 to LeagueConfig(divisions = 1),
+        )) {
+            val calm = seasons(n, config, 5, threads = 1, order = 1L, reload = false)
+            assertEquals(calm, seasons(n, config, 5, threads = 6, order = 2L, reload = true), "$n AIs")
+            if (n == 45) {
+                // Seasons 2 and 5 hold a family cup; season 3 runs without the champions league.
+                assertEquals(listOf(2, 5), calm.filter { it.kind == "FAMILY" }.map { it.season })
+                assertEquals(listOf(1, 2, 4, 5), calm.filter { it.kind == "CL" }.map { it.season })
+            }
+            seasons(n, config, 3, threads = 4, order = 3L, reload = true, leave = true)
         }
     }
 }

@@ -80,7 +80,7 @@ class PromotionPlayoff private constructor(
     override fun record(r: JobResult): List<LeagueEvent> {
         val f = r.fixture
         val i = brackets.indexOfFirst { f.id in it }
-        if (i < 0) return emptyList()
+        if (i < 0 || !Knockout.current(seed, comp, r)) return emptyList()
         val t = brackets[i].record(f.id, f.a, f.b, TieScore.of(r)) ?: return emptyList()
         val s = spots[i]
         val out = arrayListOf(KnockoutNews.round(season, comp, t, label(s.division)))
@@ -121,8 +121,9 @@ class PromotionPlayoff private constructor(
         fun label(d: Int): String = "${d + 1}·${d + 2}부 승강전"
 
         /**
-         * The ties of a finished league stage, the places computed as [Offseason.moves] does;
-         * null when the playoff is off or no boundary has both places.
+         * The ties of a finished league stage, the places computed as [Offseason.moves] does (a
+         * boundary whose upper place already plays the boundary above has no tie); null when the
+         * playoff is off or no boundary has both places.
          */
         fun create(plan: SeasonPlan): PromotionPlayoff? {
             val cfg = plan.config
@@ -135,6 +136,10 @@ class PromotionPlayoff private constructor(
                 val swap = minOf(cfg.autoSwap, upper.size / 3, lower.size / 3)
                 val upperSpot = upper.getOrNull(upper.size - swap - 1) ?: continue
                 val lowerSpot = lower.getOrNull(swap) ?: continue
+                // In a middle division of 3 the same AI is the lower side above and the upper side
+                // here: it plays only for promotion, or Offseason.moves could send it up and down
+                // at once (into two divisions). Without this tie both places stay.
+                if (spots.any { it.lower == upperSpot }) continue
                 spots += Spot(d, upperSpot, lowerSpot)
             }
             if (spots.isEmpty()) return null
