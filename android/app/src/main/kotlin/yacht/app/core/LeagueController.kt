@@ -121,6 +121,7 @@ data class LadderRow(
     val bestStreak: Int,
     /** Last results, oldest first ('W', 'D', 'L'). */
     val recent: String,
+    /** Empty in snapshots: the profile carries it ([ProfileView.ratingHistory]). */
     val history: List<Int>,
     val peak: Int?,
     /** Rating change in its last match. */
@@ -340,6 +341,8 @@ data class ProfileView(
     val hallOfFame: Boolean = false,
     /** Nation, age, abilities, tendencies and style of a generated or evolved player. */
     val identity: IdentityView? = null,
+    /** Its rating after each of its last matches (레이팅 흐름). */
+    val ratingHistory: List<Int> = emptyList(),
 )
 
 /**
@@ -1839,7 +1842,8 @@ class LeagueController(
                 rating.takeIf { !it.isNaN() }?.roundToInt(),
                 l.error(k).takeIf { !it.isNaN() }?.let { (1.96 * it).roundToInt() },
                 l.tier(k), e.games, e.wins, e.ties, e.losses, e.winRate, e.avgScore, e.best, e.yachts, e.bonuses,
-                e.streak, e.bestStreak, e.recent.joinToString(""), e.history.toList(), e.peak.takeIf { !it.isNaN() }?.roundToInt(),
+                // The rating history is read with the profile (thousands of rows, every snapshot).
+                e.streak, e.bestStreak, e.recent.joinToString(""), emptyList(), e.peak.takeIf { !it.isNaN() }?.roundToInt(),
                 lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.league?.divisionOf(k),
                 Origin.of(k), world?.hometown(k) ?: "",
                 ids[k]?.nation ?: "", ids[k]?.let { Nations.of(it.nation)?.flag } ?: "", ids[k]?.let { id -> world?.players?.get(k)?.let { p -> id.age(season, p.born) } },
@@ -1959,6 +1963,7 @@ class LeagueController(
                     league = runCatching { w.stats.liveMeta() }.getOrNull() ?: w.stats.meta,
                     lines = w.archive.lines(key).sortedBy { it.season }, hallOfFame = w.archive.inHallOfFame(key),
                     identity = runCatching { identityView(w, key) }.getOrNull(),
+                    ratingHistory = w.ladder.entry(key)?.history?.toList().orEmpty(),
                 )
             }
             scope.launch { profile = v }

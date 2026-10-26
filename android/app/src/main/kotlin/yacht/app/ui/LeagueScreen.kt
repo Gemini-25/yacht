@@ -1097,6 +1097,8 @@ private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         }
         items(groups, key = { it.first.name }) { (f, rows) ->
             val rated = rows.filter { it.rating != null }
+            // A family of a league of thousands holds hundreds: its best ten, the rest on request.
+            var all by remember(f) { mutableStateOf(false) }
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1108,8 +1110,17 @@ private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
                         )
                     }
                     HorizontalDivider()
-                    for (r in rows.sortedBy { it.rank ?: Int.MAX_VALUE }) {
-                        FamilyMember(r.key, r.rank, r.name, r.tier?.label, r.tier?.name?.let { tierColor(it) }, r.rating, onOpen)
+                    val sorted = rows.sortedBy { it.rank ?: Int.MAX_VALUE }
+                    for (r in if (all) sorted.take(FAMILY_MAX) else sorted.take(FAMILY_TOP)) {
+                        FamilyMember(r.key, r.rank, r.shown, r.tier?.label, r.tier?.name?.let { tierColor(it) }, r.rating, onOpen)
+                    }
+                    if (sorted.size > FAMILY_TOP) {
+                        Text(
+                            if (all) "접기" + (if (sorted.size > FAMILY_MAX) " (상위 ${FAMILY_MAX}명까지 보여요)" else "") else "더 보기 (${sorted.size - FAMILY_TOP}명)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = cs.primary,
+                            modifier = Modifier.clickable { all = !all }.padding(vertical = 4.dp),
+                        )
                     }
                 }
             }
@@ -1199,9 +1210,10 @@ private fun AiDetail(c: AppController, r: LadderRow, onCompare: () -> Unit, onDi
                     FormDots(r.recent)
                     StreakText(r.streak)
                 }
-                if (r.history.size >= 2) {
-                    Text("레이팅 흐름 (최근 ${r.history.size}경기)", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                    RatingLine(r.history)
+                val history = profile?.ratingHistory.orEmpty()
+                if (history.size >= 2) {
+                    Text("레이팅 흐름 (최근 ${history.size}경기)", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    RatingLine(history)
                 }
                 if (best.isNotEmpty()) {
                     Text("😊 잘 잡는 상대", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
@@ -1267,6 +1279,10 @@ private fun RatingLine(points: List<Int>) {
         }
     }
 }
+
+/** A family card's members at first, and at most when opened. */
+private const val FAMILY_TOP = 10
+private const val FAMILY_MAX = 200
 
 /** How often an open 상대 전적 matrix reads the numbers again while the league runs. */
 private const val H2H_REFRESH_MS = 10_000L
