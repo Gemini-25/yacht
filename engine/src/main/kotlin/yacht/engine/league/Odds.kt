@@ -25,7 +25,10 @@ data class AiOdds(
     val title: Double,
     /** A place in the title playoff (division 1's top 4); 0 when there is none. */
     val playoff: Double,
-    /** A champions league place by league position (see [Odds]). */
+    /**
+     * A place in next season's champions league: by [ChampionsLeague.entrants]' rule once the
+     * cup's finalists are known (or there is no cup), else by league position alone (see [Odds]).
+     */
     val champions: Double,
     /** Up a division next season: the automatic places, plus winning the promotion playoff. */
     val promotion: Double,
@@ -98,6 +101,13 @@ class OddsInput internal constructor(
     /** Winners already known: the title playoff's champion, the promotion ties (spot, lower side went up). */
     internal val champion: String?,
     internal val decided: List<Pair<PromotionPlayoff.Spot, Boolean>>,
+    /**
+     * Champions league places by [ChampionsLeague.entrants]' rule: the cup finalists (global
+     * indices, -1 when not in the league; empty without a cup), or null while the cup is on.
+     */
+    internal val finalists: IntArray?,
+    /** Every AI by rating, best first: the entrants' rule fills its last places from it. */
+    internal val byRating: IntArray,
 ) {
     /** Fixtures the runs play. */
     val fixtures: Int get() = fa.size
@@ -118,9 +128,10 @@ class OddsInput internal constructor(
  *   promotion and relegation odds add that share of it; and a tie's outcome is added as an
  *   expectation in each run instead of being drawn, which costs nothing and lowers the noise.
  *   A playoff counts as decided only once the whole competition is over ([input] of a plan).
- * - Champions league places: division 1's top 12 and division 2's top 2 (one division: its top
- *   14). The cup finalists' places, and the places they pass down the 1st division when they
- *   already qualified, are not counted.
+ * - Champions league places: while the cup is still on, division 1's top 12 and division 2's
+ *   top 2 (one division: its top 14), the cup finalists' places not counted. Once the cup's
+ *   finalists are known, or without a cup, each run applies [ChampionsLeague.entrants]' rule:
+ *   those places, the finalists, then the 1st division's next places until 16, then by rating.
  *
  * Under 15 ns per fixture and run on a desktop: 5100 fixtures and 2000 runs take about 120 ms.
  * The app copies with [input] under its lock and calls [run] on a background thread.
@@ -180,7 +191,14 @@ object Odds {
         val champion = plan.competition(Comp.TITLE_PLAYOFF)?.takeIf { it.finished }?.honours()?.firstOrNull { it.kind == "L0" }?.key
         val promo = (plan.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff)?.takeIf { it.finished }
         val decided = promo?.let { p -> p.spots.map { s -> s to p.honours().any { it.kind == "UP${s.division}" && it.key == s.lower } } }.orEmpty()
-        return input(plan.league, plan.config, rating, drawRate(plan.league), champion, decided)
+        // The cup's finalists take champions league places (no cup this season: none).
+        val cup = plan.competition(Comp.CUP)
+        val finalists = when {
+            cup == null -> emptyList()
+            cup.finished -> cup.honours().filter { it.kind == "CUP" || it.kind == "CUP2" }.map { it.key }
+            else -> null
+        }
+        return input(plan.league, plan.config, rating, drawRate(plan.league), champion, decided, finalists)
     }
 
     /**
@@ -189,7 +207,7 @@ object Odds {
      * [LeagueWorld.START_RATING]) and [drawRate].
      */
     fun input(season: Season, config: LeagueConfig, rating: (String) -> Double, drawRate: Double): OddsInput =
-        input(season, config, rating, drawRate, null, emptyList())
+        input(season, config, rating, drawRate, null, emptyList(), if (config.cup) null else emptyList())
 
     private fun input(
         season: Season,
@@ -198,6 +216,7 @@ object Odds {
         drawRate: Double,
         champion: String?,
         decided: List<Pair<PromotionPlayoff.Spot, Boolean>>,
+        finalists: List<String>?,
     ): OddsInput {
         val divs = season.divisions
         val nd = divs.size
@@ -222,7 +241,7 @@ object Odds {
         }
         // Relative to 1500 so the strengths stay small.
         val strength = DoubleArray(n) { g ->
-            val r = rating(keys[g]).takeIf { !it.isNaN() } ?: LeagueWorld.START_RATING
+            val r = rating(keys[g]).takeIf { it.isFinite() } ?: LeagueWorld.START_RATING
             10.0.pow((r - 1500.0) / 400.0)
         }
         val draw = drawRate.coerceIn(0.0, 1.0)
@@ -253,8 +272,10 @@ object Odds {
             swapBelow[d] = swap
             playoffBelow[d] = config.promotionPlayoff && size[d] - swap - 1 >= 0 && swap < size[d + 1]
         }
+        val clOn = config.champions && n >= ChampionsLeague.SIZE
+        val exact = finalists?.takeIf { clOn }?.map { index[it] ?: -1 }?.toIntArray()
         val clPlaces = IntArray(nd) { d ->
-            if (!config.champions || n < ChampionsLeague.SIZE) 0
+            if (!clOn || exact != null) 0
             else when (d) {
                 0 -> if (nd == 1) CL_FIRST + CL_SECOND else CL_FIRST
                 1 -> CL_SECOND
@@ -262,10 +283,11 @@ object Odds {
             }.coerceAtMost(size[d])
         }
         val table = (0 until nd).map { d -> season.table(d).map { index.getValue(it.key) }.toIntArray() }
+        val byRating = (0 until n).sortedByDescending { strength[it] }.toIntArray()
         return OddsInput(
             season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, strength,
             fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), swapBelow, playoffBelow, clPlaces,
-            config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided,
+            config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating,
         )
     }
 
@@ -307,10 +329,12 @@ object Odds {
         val upShare = DoubleArray(n)
         val downShare = DoubleArray(n)
         val title = DoubleArray(n)
+        val finalists = input.finalists
+        val entered = if (finalists != null) IntArray(n) else null
         fun e(x: Int, y: Int) = strength[x] / (strength[x] + strength[y])
 
         var state = DiceStream.mix(seed, 0x0DD5)
-        repeat(r) {
+        repeat(r) { runNo ->
             System.arraycopy(input.basePoints, 0, points, 0, n)
             System.arraycopy(input.baseDiff, 0, diff, 0, n)
             for (i in 0 until m) {
@@ -359,6 +383,7 @@ object Odds {
                     if (d == 0 && titlePlayoff && pos < TITLE_PLAYOFF) top[g]++
                 }
             }
+            if (finalists != null && nd > 0) entrants(sorted, rankMask, start, size, finalists, input.byRating, entered!!, runNo + 1, cl)
             if (titlePlayoff) {
                 // Semi-finals 1v4 and 2v3, then the final (division 1 starts at index 0).
                 val t1 = (sorted[0] and rankMask).toInt()
@@ -407,5 +432,42 @@ object Odds {
             }
         }
         return OddsTable(input.season, input.played, input.total, r, input.drawRate, rows)
+    }
+
+    /**
+     * One run's champions league entrants by [ChampionsLeague.entrants]' rule, counted in [cl]:
+     * the 1st division's top 12 and the 2nd division's top 2, the cup [finalists], then the 1st
+     * division's next places (a place taken twice passes down), then by rating, until 16.
+     * [entered] marks this run's entrants with [stamp].
+     */
+    private fun entrants(
+        sorted: LongArray,
+        rankMask: Long,
+        start: IntArray,
+        size: IntArray,
+        finalists: IntArray,
+        byRating: IntArray,
+        entered: IntArray,
+        stamp: Int,
+        cl: IntArray,
+    ) {
+        fun enter(g: Int): Int {
+            if (g < 0 || entered[g] == stamp) return 0
+            entered[g] = stamp
+            cl[g]++
+            return 1
+        }
+        val first = size[0]
+        var count = 0
+        // Division 1 starts at index 0, so its sorted entries hold global indices.
+        for (pos in 0 until minOf(CL_FIRST, first)) count += enter((sorted[pos] and rankMask).toInt())
+        if (size.size > 1) {
+            for (pos in 0 until minOf(CL_SECOND, size[1])) count += enter(start[1] + (sorted[start[1] + pos] and rankMask).toInt())
+        }
+        for (g in finalists) count += enter(g)
+        var pos = CL_FIRST
+        while (count < ChampionsLeague.SIZE && pos < first) count += enter((sorted[pos++] and rankMask).toInt())
+        var i = 0
+        while (count < ChampionsLeague.SIZE && i < byRating.size) count += enter(byRating[i++])
     }
 }

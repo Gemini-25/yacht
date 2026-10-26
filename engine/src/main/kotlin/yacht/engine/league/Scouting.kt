@@ -174,7 +174,7 @@ object Scouting {
         when (spec.effectiveMistake) {
             CustomMistake.NONE -> if (spec.temper == Temper.NONE) lines += "실수 없이 계산대로 둬요."
             CustomMistake.SLIP -> {
-                lines += "판단의 ${pct(spec.effectiveAmount)}는 차선을 둬요."
+                lines += "수를 고를 때 ${pct(spec.effectiveAmount)}의 확률로 최선 대신 차선을 둬요."
                 if (spec.effectiveAmount >= SLIPPY) advice += 2.0 + spec.effectiveAmount to "실수가 잦은 상대라 정석대로만 둬도 승산이 커요."
             }
             CustomMistake.FEEL -> {
@@ -186,7 +186,7 @@ object Scouting {
         if (spec.temper == Temper.TILT) advice += 2.2 to "멘탈이 약한 상대라 초반에 앞서 나가면 상대가 스스로 무너질 수 있어요."
         if (spec.base != CustomBase.EV) return
         spec.belief?.let { b ->
-            lines += "${Ko.quote(CustomAiSpec.BELIEFS[b] ?: "규칙 착각")} 버릇이 있어서 실제와 다른 규칙대로 계산해요."
+            lines += "규칙을 잘못 알고 있어서(${Ko.quote(CustomAiSpec.BELIEFS[b] ?: "규칙 착각")}) 실제와 다른 규칙대로 계산해요."
         }
         val tastes = ArrayList<String>()
         fun pts(x: Double) = Ko.num(abs(x))

@@ -3,8 +3,10 @@ package yacht.engine
 import yacht.engine.league.AiOdds
 import yacht.engine.league.BoardResult
 import yacht.engine.league.BoxProfile
+import yacht.engine.league.ChampionsLeague
 import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
+import yacht.engine.league.Cup
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.CustomBase
 import yacht.engine.league.CustomMistake
@@ -25,6 +27,7 @@ import yacht.engine.league.Preview
 import yacht.engine.league.PromotionPlayoff
 import yacht.engine.league.Scouting
 import yacht.engine.league.Season
+import yacht.engine.league.SeasonStart
 import yacht.engine.league.Temper
 import yacht.engine.league.TieRule
 import java.util.Random
@@ -205,6 +208,70 @@ class AnalysisTest {
     }
 
     @Test
+    fun championsPlacesFollowTheEntrantsRule() {
+        // No cup: the cup's two places pass down the 1st division (its 13th and 14th get in).
+        val season = Season.start(1, 15L, Season.split(keys(30), 2))
+        play(season, season.fixturesTotal / 2)
+        val noCup = LeagueConfig(divisions = 2, cup = false)
+        val mid = Odds.compute(season, noCup, ::rating, 0.02, 1000, 1L)
+        assertProbabilities(mid)
+        assertEquals(16.0, sum(mid.rows) { it.champions }, 1e-9)
+        assertEquals(14.0, sum(mid.division(0)) { it.champions }, 1e-9)
+        assertEquals(2.0, sum(mid.division(1)) { it.champions }, 1e-9)
+        play(season)
+        val top = season.table(0).map { it.key }
+        val second = season.table(1).map { it.key }
+        val end = Odds.compute(season, noCup, ::rating, 0.02, 100, 1L)
+        assertEquals((top.take(14) + second.take(2)).toSet(), end.rows.filter { it.champions == 1.0 }.map { it.key }.toSet())
+        // One division without a cup: its top 16.
+        val one = Season.start(1, 16L, listOf(keys(20)))
+        play(one)
+        val single = Odds.compute(one, LeagueConfig(divisions = 1, cup = false), ::rating, 0.02, 100, 1L)
+        assertEquals(one.table(0).take(16).map { it.key }.toSet(), single.rows.filter { it.champions == 1.0 }.map { it.key }.toSet())
+        // With the cup on: league places only until its finalists are known, then the rule.
+        val keys = keys(40)
+        val ctx = Offseason.Context(
+            keys, ::rating, { null }, { "서울" }, LeagueConfig(divisions = 3, superCup = false, allStar = false, familyCup = false, clubs = 0),
+            listOf(Cup::create),
+        )
+        val plan = Offseason.first(23L, ctx)
+        val cup = assertNotNull(plan.competition(Comp.CUP))
+        val rng = Random(4)
+        val before = Odds.compute(plan, ::rating, 300)
+        assertEquals(14.0, sum(before.rows) { it.champions }, 1e-9)
+        while (!cup.finished) {
+            val f = plan.next(emptySet(), 0, 1) ?: break
+            plan.record(job(f, games(f.a, f.b, rng)))
+        }
+        assertTrue(cup.finished && !plan.league.finished)
+        val after = Odds.compute(plan, ::rating, 300)
+        assertProbabilities(after)
+        assertEquals(16.0, sum(after.rows) { it.champions }, 1e-9)
+        for (h in cup.honours()) assertEquals(1.0, after[h.key]!!.champions, h.toString())
+        // The rule as the champions league applies it, on the final tables of a finished season.
+        while (true) {
+            val f = plan.next(emptySet(), 0, 1) ?: break
+            plan.record(job(f, games(f.a, f.b, rng)))
+        }
+        assertTrue(plan.league.finished)
+        val final = Odds.compute(plan, ::rating, 300)
+        val lastTables = plan.league.divisions.indices.map { d -> plan.league.table(d).map { it.key } }
+        val start = SeasonStart(2, 1L, plan.config, keys.sortedByDescending(::rating), ::rating, lastTables, lastTables, cup.honours(), { null }, { "서울" })
+        assertEquals(ChampionsLeague.entrants(start).toSet(), final.rows.filter { it.champions == 1.0 }.map { it.key }.toSet())
+        assertEquals(16, final.rows.count { it.champions == 1.0 })
+    }
+
+    @Test
+    fun anInfiniteRatingDoesNotPoisonTheOdds() {
+        val season = Season.start(1, 17L, Season.split(keys(12), 2))
+        play(season, 10)
+        fun r(k: String) = if (k == "ai03") Double.POSITIVE_INFINITY else rating(k)
+        val t = Odds.compute(season, LeagueConfig(divisions = 2), ::r, 0.02, 500, 1L)
+        assertProbabilities(t)
+        assertEquals(1.0, sum(t.division(0)) { it.title }, 1e-9)
+    }
+
+    @Test
     fun oddsRunFastOnAFullLeague() {
         val season = Season.start(1, 13L, Season.split(keys(204), 4))
         assertEquals(5100, season.fixturesTotal)
@@ -278,6 +345,24 @@ class AnalysisTest {
         val cup = Preview.of("ai03", "ai05", ladder, null, null, null, null, null, fixture = Fixture(Comp.CUP, 1, "ai03", "ai05", 1L, JobKind.TIE, label = "16강"))
         assertTrue(cup.stakes.any { it.contains("요트컵 16강이에요") }, cup.stakes.toString())
         assertText(cup.stakes)
+        // Odds of another season (before a rollover's first estimate) are left out.
+        val next = Season.start(2, 4L, listOf(keys))
+        val old = Preview.of("ai03", "ai05", ladder, next, odds, null, null, null)
+        assertTrue(old.stakes.none { it.contains("확률") }, old.stakes.toString())
+    }
+
+    @Test
+    fun aCupTieAcrossDivisionsNamesEachSidesTitle() {
+        val season = Season.start(1, 6L, Season.split(keys(20), 2))
+        play(season, 20)
+        val odds = Odds.compute(season, LeagueConfig(divisions = 2), ::rating, 0.02, 2000, 1L)
+        val tie = Fixture(Comp.CUP, 3, "ai01", "ai11", 1L, JobKind.TIE, label = "8강")
+        val p = Preview.of("ai01", "ai11", null, season, odds, null, null, null, fixture = tie)
+        p.stakes.forEach(::println)
+        assertText(p.stakes)
+        assertTrue(odds["ai11"]!!.title in 0.03..0.97, "${odds["ai11"]}")
+        assertTrue(p.stakes.any { it.startsWith("ai11의 2부 우승 확률은") }, p.stakes.toString())
+        assertTrue(p.stakes.none { it.startsWith("ai11의 우승 확률") }, p.stakes.toString())
     }
 
     @Test
@@ -311,13 +396,14 @@ class AnalysisTest {
         assertTrue(full.lines.any { it.startsWith("가장 강한 칸은") && it.contains("풀하우스") }, full.lines.toString())
         assertTrue(full.lines.any { it.startsWith("가장 약한 칸은 ‘1’") }, full.lines.toString())
         assertTrue(full.lines.any { it.contains("‘멘탈 약함’ 기질") })
+        assertTrue(full.lines.any { it == "수를 고를 때 8%의 확률로 최선 대신 차선을 둬요." }, full.lines.toString())
         // An EV gene AI with tastes and a belief.
         val taste = CustomAiSpec("g8", "이하은", yacht = 25.0, zero = 8.0, saveChoice = true, future = 0.8, belief = "no-bonus", mistake = CustomMistake.FEEL, amount = 1.5)
         val t = Scouting.report("이하은", null, taste, profile(100), league)
         t.lines.forEach(::println)
         assertText(t.lines + t.advice)
         assertTrue(t.lines.any { it.contains("요트를 실제보다 25점") })
-        assertTrue(t.lines.any { it.contains("‘보너스를 모름’") })
+        assertTrue(t.lines.any { it.startsWith("규칙을 잘못 알고 있어서(‘보너스를 모름’) ") }, t.lines.toString())
         // A base AI: the family, and θ read from its description.
         val base = Scouting.report("철벽", Family.RISK, null, null, null, desc = "크게 망하는 걸 극도로 싫어함(θ=−0.1)")
         assertText(base.lines + base.advice)
@@ -493,6 +579,39 @@ class AnalysisTest {
         runAll(again, 0.7)
         assertEquals(whole, again.results.stats())
         assertEquals(whole, lost.history.first().stats())
+    }
+
+    @Test
+    fun aLabSessionWhoseAiIsGoneStops() {
+        val book = LabBook()
+        book.start("ai01", "ai02", 1000, 3L)
+        repeat(40) { assertTrue(book.record(labMatch(book.next()!!, 0.6))) }
+        val late = book.next()!!
+        // The app forfeits a job whose AI is gone (retired at the season's end): one game, 1-0.
+        val f = book.next()!!
+        assertTrue(book.record(job(f, listOf(GameScore(1, 0)))))
+        val s = assertNotNull(book.current)
+        assertTrue(s.done && s.stopped)
+        assertEquals(40, s.matches)
+        assertNull(book.next())
+        // A match still in flight is not taken any more.
+        assertTrue(!book.record(labMatch(late, 0.6)))
+        val r = book.history.single()
+        assertTrue(r.stopped && r.done)
+        assertEquals(40, r.matches)
+        assertEquals(80, r.games)
+        // Saved and read back, it stays over.
+        val back = LabBook.decode(book.encode())
+        assertTrue(back.current!!.done)
+        assertNull(back.next())
+        assertEquals(r.stats(), back.history.single().stats())
+        // Gone before any match: stopped, and nothing to keep.
+        val empty = LabBook()
+        empty.start("ai01", "gone", 200, 4L)
+        assertTrue(empty.record(job(empty.next()!!, listOf(GameScore(0, 1)))))
+        assertTrue(empty.current!!.done)
+        assertTrue(empty.history.isEmpty())
+        assertNull(empty.next())
     }
 
     @Test
