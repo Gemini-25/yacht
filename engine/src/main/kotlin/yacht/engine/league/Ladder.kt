@@ -476,7 +476,10 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     /**
      * This ladder for [newKeys] (the roster changed): the records, results and ratings of the
      * AIs in both, empty entries for the new ones; AIs gone take their results with them. A warm
-     * fit follows (O(results), no copy through text).
+     * fit follows (O(results), no copy through text). Pairs that met only a few times long ago
+     * (under [PRUNE_GAMES] games, faded under [PRUNE_WEIGHT] in the fit) are dropped: in a
+     * league of thousands they would pile up season after season, and they count for next to
+     * nothing in the fit and in no head-to-head shown.
      */
     fun rekey(newKeys: List<String>): Ladder {
         val l = Ladder(newKeys, anchor)
@@ -493,6 +496,7 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             val x = map[pairs.a[s]]
             val y = map[pairs.b[s]]
             if (x < 0 || y < 0) continue
+            if (pairs.games[s] < PRUNE_GAMES && pairs.fitGames[s] < PRUNE_WEIGHT) continue
             l.pairs.copy(pairs, s, x, y)
         }
         l.recountWins()
@@ -676,6 +680,10 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
 
         /** Results faded below this weight leave the fit ([decay]). */
         private const val MIN_WEIGHT = 1e-3
+
+        /** [rekey] drops a pair of fewer games than this whose fit weight faded under [PRUNE_WEIGHT]. */
+        const val PRUNE_GAMES = 4
+        const val PRUNE_WEIGHT = 0.25
 
         /** Standard errors taken off the rating for the ranking (see [rankScore]). */
         const val RANK_ERRORS = 3.0

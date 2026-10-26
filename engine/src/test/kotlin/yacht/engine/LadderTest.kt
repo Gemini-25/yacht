@@ -287,6 +287,23 @@ class LadderTest {
     }
 
     @Test
+    fun oldPairsOfAFewGamesAreDroppedWhenTheRosterChanges() {
+        val keys = listOf("ev", "a", "b", "c")
+        val l = Ladder(keys)
+        // a met b once long ago; a and c met often; b and c met once this season.
+        l.record("a", "b", listOf(GameScore(200, 150), GameScore(150, 200)))
+        repeat(10) { l.record("a", "c", listOf(GameScore(200, 150), GameScore(200, 150))) }
+        for (season in 1..4) l.decay(setOf("a", "b", "c"), 0.5, season)
+        l.record("b", "c", listOf(GameScore(200, 150), GameScore(150, 200)))
+        val re = l.rekey(keys)
+        assertEquals(0, re.headToHead("a", "b").second, "faded and few: gone")
+        assertEquals(20, re.headToHead("a", "c").second, "many games: kept")
+        assertEquals(2, re.headToHead("b", "c").second, "recent: kept")
+        // The career records stay.
+        assertEquals(l.entry("b")!!.games, re.entry("b")!!.games)
+    }
+
+    @Test
     fun aLadderOfThousandsStaysSmallAndFitsQuickly() {
         // 3000 AIs, each playing 40 others near it: 60k pairs.
         val n = 3000
