@@ -194,8 +194,10 @@ private fun run(args: Array<String>) {
     shot(c, out, "17_league_feed", heightDp = 1100)
     c.league.tab = 6
     shot(c, out, "18_league_records", heightDp = 1500)
-    // 기록 › 국가 랭킹, a nation's sheet, 유망주.
+    // 기록 › 국가 랭킹, a nation's sheet, 유망주 (each screen loads its data when composed:
+    // here before the shot, which is the first composition).
     c.league.recordsMode = 1
+    c.league.loadNations()
     waitFor("nations") { c.league.nations.isNotEmpty() }
     shot(c, out, "18b_league_nations", heightDp = 1500)
     c.league.loadNation("KR")
@@ -203,6 +205,7 @@ private fun run(args: Array<String>) {
     shot(c, out, "18c_league_nation_sheet", heightDp = 1500)
     c.league.closeNation()
     c.league.recordsMode = 2
+    c.league.loadProspects()
     waitFor("prospects") { c.league.prospects.isNotEmpty() }
     shot(c, out, "18d_league_prospects", heightDp = 1300)
     c.league.recordsMode = 0
@@ -210,6 +213,7 @@ private fun run(args: Array<String>) {
     // A generated player's page (the best ranked), then two players side by side.
     val top = c.league.view?.rows?.filter { it.rank != null && !it.isMe }?.sortedBy { it.rank } ?: emptyList()
     c.league.detail = top.firstOrNull()?.key ?: "win"
+    c.league.detail?.let { c.league.loadProfile(it) }
     waitFor("profile") { c.league.profile?.key == c.league.detail }
     shot(c, out, "19_league_detail", heightDp = 1800)
     c.league.detail = null
