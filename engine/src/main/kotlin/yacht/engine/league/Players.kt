@@ -52,7 +52,12 @@ data class PlayerRecord(
     val spec: CustomAiSpec,
     /** Best season-end rating so far (NaN before its first season ends). */
     val peak: Double = Double.NaN,
-)
+    /** Nation, gender, age and abilities (null only for a record made before identities, until the book fills it in). */
+    val identity: Identity? = null,
+) {
+    /** Age in [season] (its debut age when it has no identity yet). */
+    fun age(season: Int): Int = identity?.age(season, born) ?: 0
+}
 
 /** An AI that left the league at the end of season [retired] (a `retired` line). */
 data class RetiredRecord(
@@ -67,93 +72,80 @@ data class RetiredRecord(
     val titles: Int,
     val hometown: String,
     val origin: Origin,
+    /** Its nation code, gender and debut age (age at retirement = debutAge + seasons - 1). */
+    val nation: String = Nations.KR.code,
+    val gender: Gender? = null,
+    val debutAge: Int = 0,
 ) {
     /** Seasons it played. */
     val seasons: Int get() = retired - born + 1
+
+    /** Its age in its last season (0 when unknown). */
+    val retiredAge: Int get() = if (debutAge > 0) debutAge + seasons - 1 else 0
 }
 
 /**
  * A retired AI with honours, kept with its genes (a `legend` line) so it can be rebuilt for the
  * legend match and the 레전드 보관소. [honours] is a summary such as "L0:2,CUP:1" ([Evolution.summary]).
  */
-data class Legend(val record: RetiredRecord, val spec: CustomAiSpec, val honours: String) {
+data class Legend(val record: RetiredRecord, val spec: CustomAiSpec, val honours: String, val identity: Identity? = null) {
     val key: String get() = record.key
     val name: String get() = record.name
 
     /** As a player record, for [leagueAi]. */
     fun asPlayer(): PlayerRecord =
-        PlayerRecord(record.key, record.name, record.hometown, record.origin, record.born, record.parentA, record.parentB, spec, record.bestRating)
-}
+        PlayerRecord(record.key, record.name, record.hometown, record.origin, record.born, record.parentA, record.parentB, spec, record.bestRating, identity)
 
-/** Korean names: a surname (weighted by how common it is) and a two-syllable given name. */
-internal object KoreanNames {
-    private val SURNAMES: List<Pair<String, Int>> = listOf(
-        "김" to 20, "이" to 14, "박" to 8, "최" to 5, "정" to 5, "강" to 2, "조" to 2, "윤" to 2, "장" to 2, "임" to 2,
-    ) + "한오서신권황안송류전홍고문양손배백허남심노하곽성차주우구민진나지엄채원천방공현".map { it.toString() to 1 }
-    private val TOTAL = SURNAMES.sumOf { it.second }
-    private const val FIRST = "민서지현준도하예수시우주연유윤은채재승태정다성진동영혜소상경건선나보아세원규형미가"
-    private const val SECOND = "준우호진민서윤아은원현연빈율희영수혁훈성재경린하람솔결온별비나지주석환범기철미혜"
-
-    fun draw(rng: Random): String {
-        var x = rng.nextInt(TOTAL)
-        var surname = SURNAMES.last().first
-        for ((s, w) in SURNAMES) {
-            if (x < w) {
-                surname = s
-                break
-            }
-            x -= w
-        }
-        var a = FIRST[rng.nextInt(FIRST.length)]
-        var b = SECOND[rng.nextInt(SECOND.length)]
-        // No doubled syllable ("정정우", "민민").
-        if (a.toString() == surname) a = FIRST[(FIRST.indexOf(a) + 1) % FIRST.length]
-        if (b == a) b = SECOND[(SECOND.indexOf(b) + 1) % SECOND.length]
-        return "$surname$a$b"
-    }
-
-    /** A name not in [taken]: draws until one is free (a number is added in the unlikely case none is). */
-    fun unique(rng: Random, taken: Set<String>): String {
-        repeat(200) {
-            val n = draw(rng)
-            if (n !in taken) return n
-        }
-        val base = draw(rng)
-        var i = 2
-        while ("$base$i" in taken) i++
-        return "$base$i"
+    /** The legend at its best: its genes with the abilities of its peak season (as it retired when none were kept). */
+    fun atPeak(): CustomAiSpec {
+        val id = identity ?: return spec
+        val peak = id.peakAbl ?: return spec
+        return Profiles.apply(spec, id.copy(abilities = peak))
     }
 }
 
 /**
- * The genes of generated players (docs/LEAGUE_SPEC.md section 1). Player i's genes come from its
- * own random stream only, so the first N of N+10 players are the same players.
+ * New players (docs/LEAGUE_SPEC.md section 1). Player i is drawn from its own random streams
+ * only (identity, name, profile), so the same index always gives the same player.
  *
- * Base genes: EV-shaped 55%, RISK 20% (θ from [LeagueRoster.THETAS]), BELIEF 10% (max
- * expectation under one of the six misremembered rules) and SITUATION 15%. CustomAiSpec has no
- * plan that reads the score, so the SITUATION overlay is a [Temper] (the 상황 판단 family's
- * tilting, tiring, warming-up and moody players) on an EV (70%) or RISK base, always with
- * mistakes for it to scale. Mistakes otherwise: none 30%, slips 35% (0.3-30%, log-uniform), feel
- * 35% (τ 0.1-3 points). Tastes (EV base only) with probability 0.3 each: Yacht, straight,
- * upper points, zeros, saving Choice, short or long sight. Never the win search: all are light.
+ * Identity: a nation by the weights (or [Nations.rebalance]d for rookies), gender 50/50, the
+ * debut age ([Profiles.FOUNDING_AGES] for a league's founders, [Profiles.ROOKIE_AGES] after),
+ * a city of its nation and a name of its nation.
+ *
+ * Profile: a potential ~ N(64, 13) (25..97), abilities for its age with its nation's [School]
+ * bias, mistakes by feel 60% (else slips), a temper kind for a low 멘탈. Style: a recipe by
+ * [Tier] (the potential decides which styles it can take up: the best never the misread rules
+ * or the rule-bound beginners' styles), its nation's favourite styles [Schools.FAVOUR] times as
+ * often, at an intensity k (log-uniform 0.7..1.7); a second style at half strength 20%; a
+ * situation overlay 25% (gambler 7, locker 7, panic 4, streaky 4, chameleon 3).
  */
 object PlayerGenerator {
     const val GEN_SEED = 0x67656E5EED01L
     private const val NAME_SALT = 0x4E414D45L
+    private const val IDENTITY_SALT = 0x1DL
+    private const val PROFILE_SALT = 0x9FL
 
-    const val EV_SHARE = 0.55
-    const val RISK_SHARE = 0.20
-    const val BELIEF_SHARE = 0.10
-    const val TASTE = 0.3
     const val SLIP_MIN = 0.003
     const val SLIP_MAX = 0.30
     const val FEEL_MIN = 0.1
     const val FEEL_MAX = 3.0
 
+    /** Share of players whose mistakes are by feel (the rest slip). */
+    const val FEEL_SHARE = 0.6
+
+    /** Share with a second style mixed in. */
+    const val BLEND = 0.2
+
+    /** Situation overlays and their shares (25% in all). */
+    val OVERLAY_SHARES: List<Pair<String, Double>> = listOf("gambler" to 0.07, "locker" to 0.07, "panic" to 0.04, "streaky" to 0.04, "chameleon" to 0.03)
+
+    /** Mean and spread of the potential. */
+    const val POTENTIAL_MEAN = 64.0
+    const val POTENTIAL_SD = 13.0
+
     /** θ of a non-risk spec (unused by its plan; the [CustomAiSpec] default). */
     const val PLAIN_THETA = 0.03
 
-    val BELIEF_KEYS: List<String> = CustomAiSpec.BELIEFS.keys.toList()
     val TEMPERS: List<Temper> = Temper.entries.filter { it != Temper.NONE }
 
     fun key(i: Int): String = "g" + i.toString().padStart(3, '0')
@@ -161,45 +153,118 @@ object PlayerGenerator {
     /** The index of a generated key ("g007" → 7), null for any other key. */
     fun index(key: String): Int? = key.removePrefix("g").takeIf { key.startsWith("g") }?.toIntOrNull()?.takeIf { it > 0 && key(it) == key }
 
-    /** Genes of generated player [i] (id = its key, no name). */
-    fun spec(i: Int): CustomAiSpec = draw(Random(DiceStream.mix(GEN_SEED, i.toLong())), key(i))
-
     /** The stream naming player [i], apart from its genes: a name clash never changes them. */
     internal fun nameRng(i: Int) = Random(DiceStream.mix(GEN_SEED, NAME_SALT, i.toLong()))
 
-    /** A random spec by the shares above. */
-    fun draw(rng: Random, id: String = "", name: String = ""): CustomAiSpec {
-        val u = rng.nextDouble()
-        val situation = u >= EV_SHARE + RISK_SHARE + BELIEF_SHARE
-        val believer = !situation && u >= EV_SHARE + RISK_SHARE
-        val base = when {
-            u < EV_SHARE -> CustomBase.EV
-            u < EV_SHARE + RISK_SHARE -> CustomBase.RISK
-            believer -> CustomBase.EV
-            else -> if (rng.nextDouble() < 0.3) CustomBase.RISK else CustomBase.EV
+    /** Which styles a potential can take up. */
+    enum class Tier(val minAvg: Double) {
+        TOP(179.0),
+        MID(165.0),
+        LOW(150.0),
+        NOVICE(0.0),
+        ;
+
+        companion object {
+            fun of(potential: Int): Tier = when {
+                potential >= 75 -> TOP
+                potential >= 58 -> MID
+                potential >= 42 -> LOW
+                else -> NOVICE
+            }
         }
-        val theta = if (base == CustomBase.RISK) LeagueRoster.THETAS[rng.nextInt(LeagueRoster.THETAS.size)] else PLAIN_THETA
-        val belief = if (believer) BELIEF_KEYS[rng.nextInt(BELIEF_KEYS.size)] else null
-        val temper = if (situation) TEMPERS[rng.nextInt(TEMPERS.size)] else Temper.NONE
-        val m = rng.nextDouble()
-        val mistake = when {
-            !situation && m < 0.3 -> CustomMistake.NONE
-            m < 0.65 -> CustomMistake.SLIP
-            else -> CustomMistake.FEEL
+    }
+
+    /**
+     * How often a recipe is drawn in a tier: the clearly visible styles more than the subtle
+     * ones, rule-bound beginners' styles mostly among low potentials, misread rules never at the top.
+     */
+    fun weight(key: String, tier: Tier): Double = when (key) {
+        "ev" -> if (tier == Tier.TOP) 3.0 else 0.3
+        "dumper", "bigchoice", "contrarian" -> 0.3
+        "ss3", "fh2pair" -> when (tier) {
+            Tier.TOP -> 0.0
+            Tier.MID -> 0.5
+            else -> 1.5
         }
-        val amount = when (mistake) {
-            CustomMistake.NONE -> 0.0
-            CustomMistake.SLIP -> round(logUniform(rng, SLIP_MIN, SLIP_MAX), 3)
-            CustomMistake.FEEL -> round(logUniform(rng, FEEL_MIN, FEEL_MAX), 2)
+        "high", "topdown", "bottomup", "allornothing", "runonly" -> when (tier) {
+            Tier.TOP, Tier.MID -> 0.0
+            Tier.LOW -> 1.0
+            Tier.NOVICE -> 2.5
         }
-        fun taste() = base == CustomBase.EV && rng.nextDouble() < TASTE
-        val yacht = if (taste()) round(if (rng.nextDouble() < 0.75) uniform(rng, 5.0, 60.0) else -uniform(rng, 5.0, 25.0), 0) else 0.0
-        val straight = if (taste()) round(uniform(rng, 3.0, 15.0), 0) else 0.0
-        val bonus = if (taste()) round(uniform(rng, 0.2, 1.5), 1) else 0.0
-        val zero = if (taste()) round(uniform(rng, 3.0, 30.0), 0) else 0.0
-        val saveChoice = taste()
-        val future = if (taste()) twentieths(if (rng.nextBoolean()) uniform(rng, 0.3, 0.9) else uniform(rng, 1.1, 1.5)) else 1.0
-        return CustomAiSpec(id, name, base, theta, mistake, amount, yacht, straight, bonus, zero, saveChoice, future, temper, belief)
+        "hunter", "collector", "purist", "lower", "timid", "straight", "fourkind", "scratcher", "noscratch", "copycat", "fullhouse" -> 1.5
+        else -> 1.0
+    }
+
+    /** A recipe's average score at intensity [k] (the more of a style, the further from max expectation). */
+    fun avgAt(r: PlayRecipe, k: Double): Double = if (r.scales) PlayStyles.EV_AVG - (PlayStyles.EV_AVG - r.avg) * k else r.avg
+
+    /**
+     * New player [i] debuting in [season] ([founding]: one of a new league's first players, of
+     * any age), named apart from [taken]; [boost] tilts the nation draw, [meta] adds to recipes'
+     * weights (a style in fashion after a cup).
+     */
+    fun recruit(
+        i: Int,
+        season: Int,
+        founding: Boolean,
+        taken: Set<String>,
+        boost: (Nation) -> Double = { 1.0 },
+        meta: Map<String, Double> = emptyMap(),
+    ): PlayerRecord {
+        val key = key(i)
+        val idRng = Random(DiceStream.mix(GEN_SEED, IDENTITY_SALT, i.toLong()))
+        val nation = Nations.draw(idRng, boost)
+        val gender = if (idRng.nextBoolean()) Gender.MALE else Gender.FEMALE
+        val age = (if (founding) Profiles.FOUNDING_AGES else Profiles.ROOKIE_AGES).draw(idRng).toInt()
+        val town = PlayerNames.hometown(nation, idRng)
+        val name = PlayerNames.unique(nation, gender, age, nameRng(i), taken)
+        val rng = Random(DiceStream.mix(GEN_SEED, PROFILE_SALT, i.toLong()))
+        val potential = potential(rng)
+        val school = Schools.of(nation.code)
+        val id = Identity(
+            nation.code, gender, age, Profiles.drawAbilities(rng, key, age, potential, school.bias), potential,
+            TEMPERS[rng.nextInt(TEMPERS.size)], rng.nextDouble() < FEEL_SHARE,
+        )
+        val gene = style(rng, potential, school, meta)
+        val spec = Profiles.apply(CustomAiSpec(key, name, play = gene), id)
+        return PlayerRecord(key, name, town, Origin.GENERATED, season, null, null, spec, identity = id)
+    }
+
+    fun potential(rng: Random): Int = Math.round(POTENTIAL_MEAN + POTENTIAL_SD * rng.nextGaussian()).toInt().coerceIn(25, 97)
+
+    /** A style for a player of [potential] from [school], by the shares above. */
+    fun style(rng: Random, potential: Int, school: School, meta: Map<String, Double> = emptyMap()): PlayGene {
+        val tier = Tier.of(potential)
+        val k0 = round(Math.exp(uniform(rng, Math.log(0.7), Math.log(1.7))), 2)
+        val eligible = PlayStyles.RECIPES.filter { avgAt(it, k0) >= tier.minAvg && weight(it.key, tier) > 0 }
+        fun favour(key: String) = (if (key in school.favoured) Schools.FAVOUR else 1.0) * (1 + (meta[key] ?: 0.0).coerceAtLeast(-0.9))
+        val primary = pick(rng, eligible.ifEmpty { PlayStyles.RECIPES.take(1) }.map { it to weight(it.key, tier) * favour(it.key) })
+        val k = if (primary.scales) k0 else 1.0
+        val secondary = if (rng.nextDouble() < BLEND) {
+            pick(rng, PlayStyles.RECIPES.filter { it.scales && it.key != primary.key && it.key != "ev" }.map { it to favour(it.key) }).key
+        } else null
+        val overlay = overlay(rng, school)
+        val moods = if (overlay == "chameleon") List(3) { pick(rng, PlayStyles.RECIPES.filter { it.scales }.map { it to favour(it.key) }).key } else emptyList()
+        return PlayGene(primary.key, k, secondary, overlay, moods)
+    }
+
+    private fun overlay(rng: Random, school: School): String? {
+        val shares = OVERLAY_SHARES.map { (o, p) -> o to if (o == school.overlay) p * Schools.FAVOUR else p }
+        var u = rng.nextDouble()
+        for ((o, p) in shares) {
+            u -= p
+            if (u < 0) return o
+        }
+        return null
+    }
+
+    internal fun <T> pick(rng: Random, xs: List<Pair<T, Double>>): T {
+        var x = rng.nextDouble() * xs.sumOf { it.second }
+        for ((v, w) in xs) {
+            x -= w
+            if (x < 0) return v
+        }
+        return xs.last().first
     }
 
     internal fun uniform(rng: Random, lo: Double, hi: Double) = lo + (hi - lo) * rng.nextDouble()
@@ -216,13 +281,29 @@ object PlayerGenerator {
 }
 
 /** The family of a generated or evolved player, by its base gene: BELIEF, then SITUATION (a temper), RISK, EV. */
-fun familyOf(spec: CustomAiSpec): Family = when {
+fun familyOf(spec: CustomAiSpec): Family = spec.play?.let { familyOf(it) } ?: when {
     spec.base == CustomBase.EV && spec.belief != null -> Family.BELIEF
     spec.temper != Temper.NONE -> Family.SITUATION
     spec.base == CustomBase.RISK -> Family.RISK
     spec.base == CustomBase.WIN -> Family.WIN
     else -> Family.EV
 }
+
+/**
+ * The family of a player with a style: a misread rule is 규칙 착각, a rule-bound style 단순 규칙,
+ * the gambler overlay 위험 성향, another overlay 상황 판단, plain max expectation 기대점수형,
+ * every other style 개성파.
+ */
+fun familyOf(gene: PlayGene): Family = when {
+    gene.primary in MISREAD -> Family.BELIEF
+    PlayStyles.recipe(gene.primary)?.scales == false && gene.primary != "ev" -> Family.RULE
+    gene.overlay == "gambler" -> Family.RISK
+    gene.overlay != null -> Family.SITUATION
+    gene.primary == "ev" -> Family.EV
+    else -> Family.CHARACTER
+}
+
+private val MISREAD = setOf("ss3", "fh2pair")
 
 /** The league AI of a generated or evolved player (light: never the win search). */
 fun leagueAi(record: PlayerRecord, tables: Tables, extra: LeagueTables): LeagueAi = CustomAis.build(
@@ -294,34 +375,69 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         legendList.forEach { add(it.name) }
     }
 
+    /** The next generated index: every new generated player takes the next one, so a key is never given out twice. */
+    var next: Int = 1
+        internal set
+
     /**
-     * Adds the generated players g001..g<[n]> that are missing, debuting in [season]; a key that
-     * ever retired is never added again. Returns the new ones. Lowering [n] removes nobody: the
-     * extra players stay until evolution retires them, and the population only shrinks (or,
-     * once [n] is raised again, grows back past the g-keys already used) through
-     * [Evolution.run]'s `population` (pass the same [n]).
-     * At most [max] are added (a book refilled by evolution's children only tops up what it lacks).
+     * Brings the book up to [n] alive players with new generated ones debuting in [season]
+     * (at most [max]); returns them. Lowering [n] removes nobody: the population only shrinks
+     * through retirements. [founding] players are of every age (a new league's first players,
+     * or a big top-up: 50 or more at once, or a fifth of [n]); others are rookies. Rookies'
+     * nations are rebalanced toward the weights ([Nations.rebalance]); [meta] tilts styles.
      */
-    fun ensureGenerated(n: Int, season: Int = 1, max: Int = Int.MAX_VALUE): List<PlayerRecord> {
+    fun ensureGenerated(
+        n: Int,
+        season: Int = 1,
+        max: Int = Int.MAX_VALUE,
+        meta: Map<String, Double> = emptyMap(),
+        founding: Boolean? = null,
+        accept: (CustomAiSpec) -> Boolean = { true },
+    ): List<PlayerRecord> {
+        val count = minOf(n - byKey.size, max)
+        if (count <= 0) return emptyList()
+        val old = founding ?: (season <= 1 || count >= 50 || count * 5 >= n)
         val added = ArrayList<PlayerRecord>()
         val taken = names().toMutableSet()
-        for (i in 1..n) {
-            if (added.size >= max) break
-            val key = PlayerGenerator.key(i)
-            if (key in byKey || i in gone || retiredRecord(key) != null) continue
-            val name = KoreanNames.unique(PlayerGenerator.nameRng(i), taken)
-            taken += name
-            val r = PlayerRecord(key, name, Hometowns.of(key), Origin.GENERATED, season, null, null, PlayerGenerator.spec(i).copy(name = name))
-            byKey[key] = r
+        val nations = nationCounts().toMutableMap()
+        var total = byKey.size
+        var refused = 0
+        while (added.size < count && refused < count * Evolution.TRIES) {
+            val i = next++
+            val boost = if (old) { _: Nation -> 1.0 } else Nations.rebalance(nations, total)
+            val r = PlayerGenerator.recruit(i, season, old, taken, boost, meta)
+            // A player the league's filter refuses (the chaos preset's only flawed players) is never generated.
+            if (!accept(r.spec)) {
+                refused++
+                continue
+            }
+            taken += r.name
+            nations.merge(r.identity!!.nation, 1, Int::plus)
+            total++
+            byKey[r.key] = r
             added += r
         }
         return added
     }
 
+    /** The season its players saved before styles took one (the league's reform), 0 when it never had any. */
+    var reformed: Int = 0
+        internal set
+
+    /** Alive players by nation code. */
+    fun nationCounts(): Map<String, Int> = byKey.values.groupingBy { it.identity?.nation ?: Nations.KR.code }.eachCount()
+
+    /** Replaces an alive player's record (same key): its genes, identity or peak after a season. */
+    fun update(record: PlayerRecord) {
+        if (record.key in byKey) byKey[record.key] = record
+    }
+
     /** Adds a new player (an evolved child); a key already known is refused. */
     fun add(record: PlayerRecord): Boolean {
         if (record.key in byKey || retiredRecord(record.key) != null) return false
-        byKey[record.key] = record.copy(spec = record.spec.copy(id = record.key, name = record.name))
+        val r = record.copy(spec = record.spec.copy(id = record.key, name = record.name))
+        byKey[record.key] = if (r.identity == null) r.copy(identity = Profiles.legacy(r, r.born)) else r
+        PlayerGenerator.index(record.key)?.let { if (it >= next) next = it + 1 }
         return true
     }
 
@@ -329,7 +445,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
     fun notePeak(key: String, rating: Double) {
         val r = byKey[key] ?: return
         if (rating.isNaN()) return
-        if (r.peak.isNaN() || rating > r.peak) byKey[key] = r.copy(peak = rating)
+        if (r.peak.isNaN() || rating > r.peak) byKey[key] = r.copy(peak = rating, identity = r.identity?.let { it.copy(peakAbl = it.abilities) })
     }
 
     /**
@@ -341,12 +457,16 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         val p = byKey.remove(key) ?: return null
         PlayerGenerator.index(key)?.let { gone += it }
         val best = listOf(bestRating, p.peak).filter { !it.isNaN() }.maxOrNull() ?: Double.NaN
-        val r = RetiredRecord(key, p.name, p.born, season, p.parentA, p.parentB, best, titles, p.hometown, p.origin)
+        val id = p.identity
+        val r = RetiredRecord(
+            key, p.name, p.born, season, p.parentA, p.parentB, best, titles, p.hometown, p.origin,
+            id?.nation ?: Nations.KR.code, id?.gender, id?.debutAge ?: 0,
+        )
         retiredList += r
         while (retiredList.size > MAX_RETIRED) retiredList.removeAt(0)
         if (honours != null) {
             legendList.removeAll { it.key == key }
-            legendList += Legend(r, p.spec, honours.ifBlank { "-" })
+            legendList += Legend(r, p.spec, honours.ifBlank { "-" }, id)
             trimLegends()
         }
         return r
@@ -425,19 +545,34 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         append("$HEADER\n")
         append("evolved $evolvedSeason\n")
         append("gone ${gone.joinToString(",").ifEmpty { "-" }}\n")
+        append("next $next\n")
+        if (reformed > 0) append("reformed $reformed\n")
+        // Identity and style are name=value tokens after the fields older versions read.
         for (p in byKey.values) {
             append("ai ${p.key} ${esc(p.name)} ${esc(p.hometown)} ${p.origin.name} ${p.born} ${p.parentA ?: "-"} ${p.parentB ?: "-"} ")
-            append("${p.spec.genes().joinToString(" ")} ${num(p.peak)}\n")
+            append("${p.spec.genes().joinToString(" ")} ${num(p.peak)}")
+            p.identity?.let { append(' ').append(it.tokens()) }
+            append(styleTokens(p.spec)).append('\n')
         }
         for (r in retiredList) {
             append("retired ${r.key} ${esc(r.name)} ${r.born} ${r.retired} ${r.parentA ?: "-"} ${r.parentB ?: "-"} ${num(r.bestRating)} ${r.titles} ")
-            append("${esc(r.hometown)} ${r.origin.name}\n")
+            append("${esc(r.hometown)} ${r.origin.name} nat=${r.nation}")
+            r.gender?.let { append(" sex=").append(it.code) }
+            if (r.debutAge > 0) append(" da=").append(r.debutAge)
+            append('\n')
         }
         for (l in legendList) {
             val r = l.record
             append("legend ${r.key} ${esc(r.name)} ${r.born} ${r.retired} ${l.spec.genes().joinToString(" ")} ${esc(l.honours)} ")
-            append("${r.parentA ?: "-"} ${r.parentB ?: "-"} ${num(r.bestRating)} ${r.titles} ${esc(r.hometown)} ${r.origin.name}\n")
+            append("${r.parentA ?: "-"} ${r.parentB ?: "-"} ${num(r.bestRating)} ${r.titles} ${esc(r.hometown)} ${r.origin.name}")
+            l.identity?.let { append(' ').append(it.tokens()) }
+            append(styleTokens(l.spec)).append('\n')
         }
+    }
+
+    private fun styleTokens(spec: CustomAiSpec): String = buildString {
+        spec.play?.let { append(" play=").append(it.encode()) }
+        if (spec.temperStrength != 1.0) append(" ts=").append(spec.temperStrength)
     }
 
     companion object {
@@ -475,25 +610,37 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         private fun keyOf(s: String) = s.takeIf { it != "-" }
     }
 
+    // A style from a newer version this one cannot read plays the genes before it.
+    private fun withStyle(spec: CustomAiSpec, t: Map<String, String>): CustomAiSpec =
+        spec.copy(play = t["play"]?.let { PlayGene.decode(it) }, temperStrength = t["ts"]?.toDoubleOrNull() ?: 1.0)
+
     /** One saved line; every field is read before anything is added (a cut line changes nothing). */
     private fun decodeLine(f: List<String>) {
         when (f[0]) {
             "evolved" -> evolvedSeason = f[1].toInt()
-            "gone" -> if (f[1] != "-") gone += f[1].split(',').map { it.toInt() }
+            "gone" -> if (f[1] != "-") gone += f[1].split(',').map { it.toInt() }.onEach { if (it >= next) next = it + 1 }
+            "next" -> next = maxOf(next, f[1].toInt())
+            "reformed" -> reformed = f[1].toInt()
             "ai" -> {
-                // key name town origin born parentA parentB, the genes, the peak.
+                // key name town origin born parentA parentB, the genes, the peak, then tokens.
                 require(f.size >= 8 + G + 1)
                 val key = f[1]
                 val name = unesc(f[2])
-                val spec = CustomAiSpec.ofGenes(key, name, f.subList(8, 8 + G))
+                val t = Identity.fields(f, 9 + G)
+                val spec = withStyle(CustomAiSpec.ofGenes(key, name, f.subList(8, 8 + G)), t)
                 val r = PlayerRecord(key, name, unesc(f[3]), Origin.valueOf(f[4]), f[5].toInt(), keyOf(f[6]), keyOf(f[7]), spec, numOf(f[8 + G]))
-                byKey[key] = r
+                // A line from before identities: read as the Korean player it always was.
+                byKey[key] = r.copy(identity = Identity.read(t) ?: Profiles.legacy(r, evolvedSeason + 1))
+                PlayerGenerator.index(key)?.let { if (it >= next) next = it + 1 }
             }
             "retired" -> {
                 require(f.size >= 11)
+                val t = Identity.fields(f, 11)
                 retiredList += RetiredRecord(
                     f[1], unesc(f[2]), f[3].toInt(), f[4].toInt(), keyOf(f[5]), keyOf(f[6]), numOf(f[7]), f[8].toInt(), unesc(f[9]), Origin.valueOf(f[10]),
+                    Nations.of(t["nat"])?.code ?: Nations.KR.code, Gender.of(t["sex"]?.singleOrNull()), t["da"]?.toIntOrNull() ?: 0,
                 )
+                PlayerGenerator.index(f[1])?.let { if (it >= next) next = it + 1 }
                 while (retiredList.size > MAX_RETIRED) retiredList.removeAt(0)
             }
             "legend" -> {
@@ -502,13 +649,16 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
                 require(f.size >= at + 7)
                 val key = f[1]
                 val name = unesc(f[2])
-                val spec = CustomAiSpec.ofGenes(key, name, f.subList(5, at))
+                val t = Identity.fields(f, at + 7)
+                val spec = withStyle(CustomAiSpec.ofGenes(key, name, f.subList(5, at)), t)
+                val id = Identity.read(t)
                 val r = RetiredRecord(
                     key, name, f[3].toInt(), f[4].toInt(), keyOf(f[at + 1]), keyOf(f[at + 2]), numOf(f[at + 3]), f[at + 4].toInt(),
-                    unesc(f[at + 5]), Origin.valueOf(f[at + 6]),
+                    unesc(f[at + 5]), Origin.valueOf(f[at + 6]), id?.nation ?: Nations.KR.code, id?.gender, id?.debutAge ?: 0,
                 )
+                PlayerGenerator.index(key)?.let { if (it >= next) next = it + 1 }
                 legendList.removeAll { it.key == key }
-                legendList += Legend(r, spec, unesc(f[at]).ifEmpty { "-" })
+                legendList += Legend(r, spec, unesc(f[at]).ifEmpty { "-" }, id)
                 trimLegends()
             }
         }

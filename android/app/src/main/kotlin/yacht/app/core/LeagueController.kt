@@ -737,7 +737,7 @@ class LeagueController(
         w.present = { k -> k in byKey }
         w.name = { k -> name(k) }
         // What a highlight replay checks: an AI's play (its description and, for players, its genes).
-        w.version = { k -> (byKey[k]?.desc ?: "") + (customs.firstOrNull { it.key == k }?.encode() ?: "") + (w.players[k]?.spec?.genes()?.joinToString(",") ?: "") }
+        w.version = { k -> (byKey[k]?.desc ?: "") + (customs.firstOrNull { it.key == k }?.encode() ?: "") + (w.players[k]?.spec?.encode()?.substringAfter('|')?.substringAfter('|') ?: "") }
         w.members = members(w, c)
     }
 
@@ -749,7 +749,8 @@ class LeagueController(
         var keys = roster.filter { ai ->
             val player = w.players[ai.key]
             // No generated players asked for: the book's players sit out (they stay on the ladder).
-            (player == null || c.generated > 0) &&
+            // The hand-made AIs play only when asked (they stay for ranked games and the lab).
+            (player == null || c.generated > 0) && (c.baseAis || Origin.of(ai.key) != Origin.BASE) &&
                 (!c.onlyFlawed || ai.family == Family.MINE || ai.family in LeagueWorld.FLAWED || player?.spec?.flawed == true)
         }.map { it.key }
         if (c.onlyTop > 0) {
@@ -966,7 +967,8 @@ class LeagueController(
         configureWorld(
             w,
             config.copy(
-                generated = rules.generated, evolution = rules.evolution, onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
+                generated = rules.generated, aging = rules.aging, childShare = rules.childShare, baseAis = rules.baseAis,
+                onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
                 clubs = rules.clubs, squad = rules.squad,
             ),
         )

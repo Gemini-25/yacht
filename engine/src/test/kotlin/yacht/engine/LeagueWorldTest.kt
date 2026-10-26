@@ -74,7 +74,7 @@ class LeagueWorldTest {
     fun recordsAheadOfTheSeasonAreAnotherLeaguesAndStartAfresh() {
         // Older versions' 리그 초기화 kept stats.txt and archive.txt: season 1 opened over a
         // book that had closed season 3, whose awards it then handed out again.
-        val config = LeagueConfig(divisions = 2, generated = 10, evolution = 0, clubs = 0, familyCup = false)
+        val config = LeagueConfig(divisions = 2, generated = 10, aging = false, clubs = 0, familyCup = false)
         val w = world(config)
         w.openFirstSeason(5L)
         repeat(3) {
@@ -99,7 +99,7 @@ class LeagueWorldTest {
 
     @Test
     fun seasonsRollOverWithCompetitionsEvolutionAndSaves() {
-        val config = LeagueConfig(divisions = 3, generated = 20, evolution = 4, clubs = 8, squad = 5)
+        val config = LeagueConfig(divisions = 3, generated = 20, aging = true, clubs = 8, squad = 5)
         val w = world(config)
         val opening = w.openFirstSeason(9L)
         assertTrue(opening.any { it.kind == "draw_cup" }, opening.map { it.kind }.toString())
@@ -109,6 +109,9 @@ class LeagueWorldTest {
         val news = season(w)
         assertTrue(news.any { it.kind == "final" }, news.map { it.kind }.distinct().toString())
         assertTrue(w.plan!!.post.any { it.comp == Comp.TITLE_PLAYOFF })
+        // One player is 40: it retires at the end of the season.
+        val veteran = w.players.alive.first()
+        w.players.update(veteran.copy(identity = veteran.identity!!.copy(debutAge = 40)))
         val first = rollover(w)
         val kinds = first.honours.map { it.kind }.toSet()
         for (k in listOf("REG", "L0", "L0R", "L1", "L2", "CUP", "CUP2", "CL", "CL2", "CLUB", "CLUB2")) assertTrue(k in kinds, "$k missing from $kinds")
@@ -117,9 +120,13 @@ class LeagueWorldTest {
         assertTrue(clubbed.all { it in w.members }, "a club member left the league")
         assertEquals(clubbed.size, clubbed.toSet().size)
         assertTrue(first.events.any { it.kind == "promoted" } && first.events.any { it.kind == "relegated" })
-        // Evolution: 4 retired, 4 born, and the children join the next season's lowest division.
-        assertEquals(4, first.events.count { it.kind == "born" })
-        val born = first.events.filter { it.kind == "born" }.map { it.keys.first() }
+        // Aging: the veteran retired, newcomers (pupils and rookies) fill its place and join the
+        // next season's lowest division.
+        assertTrue(w.players[veteran.key] == null)
+        assertTrue(first.events.any { it.kind == "retirements" && veteran.key in it.keys }, first.events.map { it.kind }.toString())
+        assertEquals(config.generated, w.players.size)
+        val born = w.players.alive.filter { it.born == 2 }.map { it.key }
+        assertTrue(born.isNotEmpty())
         assertTrue(born.all { it in w.plan!!.league.divisions.last() }, "children placed: $born")
         assertTrue(w.members.containsAll(born))
         assertEquals(2, w.plan!!.number)
@@ -162,8 +169,8 @@ class LeagueWorldTest {
     @Test
     fun aSeasonFinishesWithEveryCompetitionOffOrOn() {
         for (config in listOf(
-            LeagueConfig(divisions = 1, cup = false, champions = false, superCup = false, allStar = false, familyCup = false, titlePlayoff = false, promotionPlayoff = false, generated = 0, evolution = 0, clubs = 0),
-            LeagueConfig(divisions = 6, generated = 30, evolution = 0, clubs = 0),
+            LeagueConfig(divisions = 1, cup = false, champions = false, superCup = false, allStar = false, familyCup = false, titlePlayoff = false, promotionPlayoff = false, generated = 0, aging = false, clubs = 0),
+            LeagueConfig(divisions = 6, generated = 30, aging = false, clubs = 0),
         )) {
             val w = world(config)
             w.openFirstSeason(3L)
@@ -176,7 +183,7 @@ class LeagueWorldTest {
 
     @Test
     fun seasonFileIsWrittenLastAndEmptyWithoutASeason() {
-        val w = world(LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0))
+        val w = world(LeagueConfig(divisions = 2, generated = 0, aging = false, clubs = 0))
         val before = w.encodeFiles()
         assertEquals(listOf(LeagueWorld.LADDER, LeagueWorld.SEASON), before.keys.toList().takeLast(2))
         assertEquals("", before[LeagueWorld.SEASON])
@@ -189,7 +196,7 @@ class LeagueWorldTest {
 
     @Test
     fun aFirstSeasonComesAfterTheHistoryAlreadyKept() {
-        val config = LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0)
+        val config = LeagueConfig(divisions = 2, generated = 0, aging = false, clubs = 0)
         val w = world(config)
         w.openFirstSeason(5L)
         season(w)
@@ -210,7 +217,7 @@ class LeagueWorldTest {
 
     @Test
     fun averageScoresCountTheGamesOfEachMatch() {
-        val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, evolution = 0, clubs = 0))
+        val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, aging = false, clubs = 0))
         w.openFirstSeason(7L)
         var n = 0
         while (n < 20) {
@@ -233,7 +240,7 @@ class LeagueWorldTest {
 
     @Test
     fun anAiDeletedDuringTheSeasonPlacesNowhere() {
-        val config = LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0, promotionPlayoff = false, titlePlayoff = false)
+        val config = LeagueConfig(divisions = 2, generated = 0, aging = false, clubs = 0, promotionPlayoff = false, titlePlayoff = false)
         val w = world(config)
         w.openFirstSeason(9L)
         season(w)
@@ -258,13 +265,13 @@ class LeagueWorldTest {
 
     @Test
     fun theArchiveIsWrittenBeforeTheStats() {
-        val keys = world(LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0)).encodeFiles().keys.toList()
+        val keys = world(LeagueConfig(divisions = 2, generated = 0, aging = false, clubs = 0)).encodeFiles().keys.toList()
         assertTrue(keys.indexOf(LeagueWorld.ARCHIVE) < keys.indexOf(LeagueWorld.STATS), keys.toString())
     }
 
     @Test
     fun olderSeasonFilesCountGamesFromTheirResults() {
-        val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, evolution = 0, clubs = 0))
+        val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, aging = false, clubs = 0))
         w.openFirstSeason(11L)
         repeat(30) {
             val f = w.next(emptySet(), 0, 2) ?: return@repeat
@@ -289,7 +296,7 @@ class LeagueWorldTest {
 
     @Test
     fun aCloseReplayedAfterAKillGivesTheSameHonoursAndLines() {
-        val config = LeagueConfig(divisions = 3, generated = 30, evolution = 6, clubs = 8, squad = 5)
+        val config = LeagueConfig(divisions = 3, generated = 30, aging = true, clubs = 8, squad = 5)
         // Results with luck in them (the stronger side wins more often, not always), so the
         // ratings are a well-posed fit, as in a real league.
         fun noisy(a: String, b: String, seed: Long, n: Int): List<GameScore> {
@@ -352,7 +359,7 @@ class LeagueWorldTest {
                 val players = yacht.engine.league.PlayerBook.decode(mixed.getValue(LeagueWorld.ROSTER), emptyList())
                 val keys = base + players.alive.map { it.key } + Ladder.ME
                 val back = LeagueWorld.decode(mixed, keys, emptyList())
-                back.config = config.copy(evolution = 2)
+                back.config = config.copy(aging = true)
                 back.family = w.family
                 back.members = base + back.players.alive.map { it.key }
                 back.present = { it in keys }
@@ -372,7 +379,7 @@ class LeagueWorldTest {
 
     @Test
     fun clubsSwitchedOnAtARolloverAreNotDraftedTwiceOnAReplay() {
-        val off = LeagueConfig(divisions = 2, generated = 10, evolution = 0, clubs = 0)
+        val off = LeagueConfig(divisions = 2, generated = 10, aging = false, clubs = 0)
         val on = off.copy(clubs = 8, squad = 5)
         val w = world(off)
         w.openFirstSeason(31L)
@@ -401,10 +408,10 @@ class LeagueWorldTest {
     fun aReplayWithChangedRulesKeepsClubsInTheLeague() {
         // (rules at the first close, rules at the replay, the replay's members)
         // 14 clubs of 5: every AI (40 base, 30 generated) is in a squad, retirees included.
-        val start = LeagueConfig(divisions = 3, generated = 30, evolution = 0, clubs = 14, squad = 5)
+        val start = LeagueConfig(divisions = 3, generated = 30, aging = false, clubs = 14, squad = 5)
         val scenarios = listOf<Triple<LeagueConfig, LeagueConfig, (LeagueWorld) -> List<String>>>(
-            Triple(start, start.copy(evolution = 3), { w -> base + w.players.alive.map { it.key } }),
-            Triple(start.copy(evolution = 4), start.copy(evolution = 4, generated = 0), { _ -> base }),
+            Triple(start, start.copy(aging = true), { w -> base + w.players.alive.map { it.key } }),
+            Triple(start.copy(aging = true), start.copy(aging = true, generated = 0), { _ -> base }),
         )
         for ((i, sc) in scenarios.withIndex()) {
             val (firstRules, replayRules, membersOf) = sc
@@ -440,10 +447,10 @@ class LeagueWorldTest {
 
     @Test
     fun theClosingRulesAreSavedWithTheFinishedSeason() {
-        val w = world(LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0))
+        val w = world(LeagueConfig(divisions = 2, generated = 0, aging = false, clubs = 0))
         w.openFirstSeason(51L)
         season(w)
-        val rules = LeagueConfig(divisions = 3, generated = 20, evolution = 5, clubs = 8)
+        val rules = LeagueConfig(divisions = 3, generated = 20, aging = true, clubs = 8)
         w.plan!!.closing = rules
         val back = LeagueWorld.decode(w.encodeFiles(), w.ladder.keys, emptyList())
         assertEquals(rules, back.plan!!.closing)

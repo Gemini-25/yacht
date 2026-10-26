@@ -26,10 +26,16 @@ data class LeagueConfig(
     val promotionPlayoff: Boolean = true,
     /** The top 4 of the 1st division play semis and a final for the title. */
     val titlePlayoff: Boolean = true,
-    /** Generated players in the league (besides the 103 hand-made AIs). */
-    val generated: Int = 100,
-    /** Generated/evolved players replaced by children each season (0 = no evolution). */
-    val evolution: Int = 8,
+    /** Generated and evolved players in the league (the book is kept at this size). */
+    val generated: Int = DEFAULT_PLAYERS,
+    /** Players age, grow, decline and retire, and new ones come in (나이와 은퇴); off, nobody changes. */
+    val aging: Boolean = true,
+    /** Percent of the free places that go to pupils of the best players (the rest to rookies). */
+    val childShare: Int = 40,
+    /** The 103 hand-made AIs play in the league too (off: generated players only; they stay for ranked games and the lab). */
+    val baseAis: Boolean = false,
+    /** National teams play the 요트 월드컵 and the continental cups (국가대항전). */
+    val nationCup: Boolean = true,
     /** Clubs in the club league (0 = no club league). */
     val clubs: Int = 16,
     val squad: Int = 6,
@@ -46,8 +52,8 @@ data class LeagueConfig(
     init {
         require(divisions in 1..6) { "divisions $divisions" }
         require(autoSwap in 0..5)
-        require(generated in 0..300)
-        require(evolution in 0..30)
+        require(generated in 0..MAX_PLAYERS)
+        require(childShare in 0..100)
         require(clubs == 0 || clubs in 4..24)
         require(squad in 5..8)
         require(onlyTop >= 0)
@@ -62,7 +68,10 @@ data class LeagueConfig(
         append("promotionPlayoff ${flag(promotionPlayoff)}\n")
         append("titlePlayoff ${flag(titlePlayoff)}\n")
         append("generated $generated\n")
-        append("evolution $evolution\n")
+        append("aging ${flag(aging)}\n")
+        append("childShare $childShare\n")
+        append("baseAis ${flag(baseAis)}\n")
+        append("nationCup ${flag(nationCup)}\n")
         append("clubs $clubs\n")
         append("squad $squad\n")
         append("cup ${flag(cup)}\n")
@@ -76,6 +85,10 @@ data class LeagueConfig(
 
     companion object {
         private fun flag(b: Boolean) = if (b) "1" else "0"
+
+        /** Players in a new league, and the most a league can have. */
+        const val DEFAULT_PLAYERS = 200
+        const val MAX_PLAYERS = 3000
 
         /** Reads a saved config; missing or bad values keep the defaults. */
         fun decode(text: String): LeagueConfig {
@@ -93,7 +106,12 @@ data class LeagueConfig(
                         "promotionPlayoff" -> c.copy(promotionPlayoff = v == "1")
                         "titlePlayoff" -> c.copy(titlePlayoff = v == "1")
                         "generated" -> c.copy(generated = v.toInt())
-                        "evolution" -> c.copy(evolution = v.toInt())
+                        // Before ages: the number replaced each season, 0 = no evolution.
+                        "evolution" -> c.copy(aging = v != "0")
+                        "aging" -> c.copy(aging = v == "1")
+                        "childShare" -> c.copy(childShare = v.toInt())
+                        "baseAis" -> c.copy(baseAis = v == "1")
+                        "nationCup" -> c.copy(nationCup = v == "1")
                         "clubs" -> c.copy(clubs = v.toInt())
                         "squad" -> c.copy(squad = v.toInt())
                         "cup" -> c.copy(cup = v == "1")
@@ -115,19 +133,19 @@ data class LeagueConfig(
 /** Ready-made rule sets (리그 프리셋). */
 enum class LeaguePreset(val label: String, val desc: String, val config: LeagueConfig) {
     REAL(
-        "현실 축구형", "4부 리그, 같은 주사위 두 판, 승강 플레이오프와 우승 플레이오프, 컵·챔스·클럽 리그·진화 모두",
+        "현실 축구형", "4부 리그, 같은 주사위 두 판, 승강 플레이오프와 우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
         LeagueConfig(),
     ),
     FAST(
-        "빠른 시즌", "2부까지, 단판 경기, 클럽 리그와 계열 대항전 없이 시즌이 빨리 돌아요",
-        LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, titlePlayoff = false, promotionPlayoff = false),
+        "빠른 시즌", "2부까지, 단판 경기, 클럽 리그와 국가대항전 없이 시즌이 빨리 돌아요",
+        LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false),
     ),
     CHAOS(
-        "대혼돈", "실수하는 AI만 남기고 진화를 세게: 이변이 쏟아져요",
-        LeagueConfig(onlyFlawed = true, evolution = 20, generated = 150),
+        "대혼돈", "실수하는 선수만 남기고 제자를 많이: 이변이 쏟아져요",
+        LeagueConfig(onlyFlawed = true, childShare = 70),
     ),
     ELITE(
-        "강자만", "레이팅 상위 48개 AI만 2부로, 생성 선수 없이 정상급 싸움만",
-        LeagueConfig(divisions = 2, onlyTop = 48, generated = 0, evolution = 0, clubs = 8, familyCup = false),
+        "강자만", "레이팅 상위 48명만 2부로, 정상급 싸움만",
+        LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false),
     ),
 }

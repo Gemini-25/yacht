@@ -230,28 +230,19 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             } ?: continue
             if (!announced(e.kind, x.key)) out += e
         }
-        var changed = false
-        if (config.evolution > 0) {
-            // Players who sat the season out (a preset left them out) neither retire nor breed;
-            // children keep the book at the configured size, and the chaos preset breeds only
-            // flawed ones (others would never play).
-            val played = p.league.standings.keys
-            val r = Evolution.run(
-                players, p.number, { k -> if (k in played) ladder.rating(k) else Double.NaN }, honours::titles, config.evolution, p.seed,
-                { honours.of(it) }, population = config.generated, accept = { s -> !config.onlyFlawed || s.flawed },
-            )
-            out += r.events
-            changed = r.born.isNotEmpty() || r.retired.isNotEmpty()
-            // A book below the configured size (generated players switched on again, nobody to
-            // breed from): the next generated players come in.
-            if (players.size < config.generated && players.ensureGenerated(config.generated, p.number + 1, config.generated - players.size).isNotEmpty()) changed = true
-        } else {
-            // No evolution this season, and none on a replay of this close either (the rules
-            // may change before a replay after a kill).
-            players.evolvedSeason = maxOf(players.evolvedSeason, p.number)
-            // Without evolution, a raised setting brings in the next generated players.
-            if (players.size < config.generated && players.ensureGenerated(config.generated, p.number + 1, config.generated - players.size).isNotEmpty()) changed = true
-        }
+        // Players age, retire and grow (with aging on), and new ones bring the book back to the
+        // configured size. Players who sat the season out (a preset left them out) sit in the
+        // middle of the ratings; the chaos preset brings in only flawed ones (others would never
+        // play). Played: the share of the most league matches anyone played.
+        val standings = p.league.standings
+        val most = standings.values.maxOfOrNull { it.played }?.coerceAtLeast(1) ?: 1
+        val r = Evolution.run(
+            players, p.number, { k -> if (k in standings) ladder.rating(k) else Double.NaN }, honours::titles, p.seed, config.generated,
+            { honours.of(it) }, childShare = config.childShare / 100.0, played = { k -> (standings[k]?.played ?: 0).toDouble() / most },
+            accept = { s -> !config.onlyFlawed || s.flawed }, aging = config.aging,
+        )
+        out += r.events
+        val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
         val closed = out.map { it.at(SeasonCalendar.CLOSING) }
         note(closed)
         return Closing(p.number, h + end?.awards.orEmpty(), closed, changed)

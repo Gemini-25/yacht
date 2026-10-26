@@ -81,9 +81,19 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("우승 플레이오프 (1부 상위 4팀)", cfg.titlePlayoff) { cfg = cfg.copy(titlePlayoff = it) }
                 HorizontalDivider()
                 Text("선수", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                Stepper("생성 선수", cfg.generated, 0..300, { "${it}명" }, step = 10) { cfg = cfg.copy(generated = it) }
-                Stepper("시즌마다 진화 (은퇴·탄생)", cfg.evolution, 0..30, { if (it == 0) "끄기" else "${it}명" }) { cfg = cfg.copy(evolution = it) }
-                Toggle("실수하는 AI만", cfg.onlyFlawed) { cfg = cfg.copy(onlyFlawed = it) }
+                Stepper("선수 수", cfg.generated, 0..LeagueConfig.MAX_PLAYERS, { "${it}명" }, step = 50) { cfg = cfg.copy(generated = it) }
+                Toggle("나이와 은퇴", cfg.aging) { cfg = cfg.copy(aging = it) }
+                Text(
+                    "선수가 시즌마다 한 살씩 먹어요. 어린 선수는 성장하고 노장은 기량이 떨어지다 은퇴해요. 빈 자리는 신인과 상위 선수의 제자로 채워요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
+                if (cfg.aging) Stepper("제자 비율", cfg.childShare, 0..100, { "${it}%" }, step = 10) { cfg = cfg.copy(childShare = it) }
+                Toggle("기본 AI 103명도 리그에 출전", cfg.baseAis) { cfg = cfg.copy(baseAis = it) }
+                Text(
+                    "끄면 생성 선수만으로 리그를 꾸려요. 기본 AI는 랭크 게임과 AI 연구소에서 그대로 만날 수 있어요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
+                Toggle("실수하는 선수만", cfg.onlyFlawed) { cfg = cfg.copy(onlyFlawed = it) }
                 Stepper("레이팅 상위만", cfg.onlyTop, 0..200, { if (it == 0) "모두" else "${it}명" }, step = 8) { cfg = cfg.copy(onlyTop = it) }
                 HorizontalDivider()
                 Text("대회", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
@@ -96,7 +106,8 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("챔피언스 리그", cfg.champions) { cfg = cfg.copy(champions = it) }
                 Toggle("슈퍼컵", cfg.superCup) { cfg = cfg.copy(superCup = it) }
                 Toggle("올스타전", cfg.allStar) { cfg = cfg.copy(allStar = it) }
-                Toggle("계열 대항전 (3시즌마다)", cfg.familyCup) { cfg = cfg.copy(familyCup = it) }
+                Toggle("국가대항전 (요트 월드컵·대륙컵)", cfg.nationCup) { cfg = cfg.copy(nationCup = it) }
+                Toggle("계열 대항전 (3시즌마다 · 기본 AI가 출전할 때만)", cfg.familyCup) { cfg = cfg.copy(familyCup = it) }
                 Toggle("클럽 리그", cfg.clubs > 0) { cfg = cfg.copy(clubs = if (it) 16 else 0) }
                 if (cfg.clubs > 0) {
                     Stepper("클럽 수", cfg.clubs, 4..24, { "${it}개" }, step = 2) { cfg = cfg.copy(clubs = it) }

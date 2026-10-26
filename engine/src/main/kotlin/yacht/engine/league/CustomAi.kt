@@ -81,6 +81,16 @@ data class CustomAiSpec(
 
     fun describe(): String {
         val parts = ArrayList<String>()
+        play?.let { g ->
+            parts += g.label
+            parts += when (effectiveMistake) {
+                CustomMistake.NONE -> "실수 없음"
+                CustomMistake.SLIP -> "실수 ${fmt(amount * 100)}%"
+                CustomMistake.FEEL -> "감(τ=${fmt(amount)}점)"
+            }
+            if (temper != Temper.NONE) parts += temper.label
+            return parts.joinToString(" · ")
+        }
         parts += when (base) {
             CustomBase.EV -> "기대점수 정석"
             CustomBase.WIN -> "승률 계산"

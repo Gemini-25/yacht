@@ -13,6 +13,14 @@ enum class Gender(val code: Char, val label: String) {
     }
 }
 
+/** The four confederations (대륙): each holds its own continental cup (대륙컵) and hosts the world cup in turn. */
+enum class Confed(val label: String, val cup: String, val icon: String) {
+    ASIA("아시아", "아시아컵", "🌏"),
+    EUROPE("유럽", "유럽컵", "🌍"),
+    AMERICAS("아메리카", "아메리카컵", "🌎"),
+    AFRICA("아프리카·중동", "아프리카·중동컵", "🌍"),
+}
+
 /** How a nation writes a full name in Korean. */
 enum class NameOrder {
     /** Family name then given name, no space: 김민준, 왕웨이, 응우옌꽝하이. */
@@ -128,11 +136,17 @@ class Nation(
         NameOrder.FAMILY_GIVEN -> families.names.filter { full.startsWith(it) && full.length > it.length }.maxByOrNull { it.length }
     }
 
-    override fun toString() = "$flag $name"
+    /** Its confederation (대륙). */
+    val confed: Confed get() = Nations.confedOf(code)
+
+    /** "🇯🇵 일본". */
+    val flagged: String get() = "$flag $name"
+
+    override fun toString() = flagged
 }
 
 /**
- * The 22 nations. Weights add up to [TOTAL] (100): Korea 30%, then Japan, the US, China and
+ * The 28 nations. Weights add up to [TOTAL] (106): Korea 30 (28%), then Japan, the US, China and
  * the big football nations; every nation has at least 1% (about 10 players in a league of
  * 1000, enough for a national team of 5). The order and the codes are fixed (saves keep the
  * code; generated players draw by the list): only append.
@@ -496,8 +510,91 @@ object Nations {
         cities = "바르샤바:5 크라쿠프:3 우치:2 브로츠와프:2 포즈난:2 그단스크:2 슈체친:1 카토비체:1 루블린:1 비아위스토크:1",
     )
 
+    // The Arabic given names Egypt, Morocco and Saudi Arabia share.
+    private const val ARABIC_MALE = "무함마드:4 아흐메드:3 마흐무드:2 오마르:2 알리:2 유세프:2 하산 칼리드 이브라힘 카림 타리크 아므르 함자 " +
+        "압둘라 사미르 나빌 아이만 와엘 지아드 야신 아나스 바실 파이살 술탄 나와프 투르키 마지드 사이프 아딜 함단"
+    private const val ARABIC_FEMALE = "파티마:3 마리암:3 누르:2 라일라 야스민 아미라 하나 살마 사라 아야 자이나브 라니아 다나 리나 " +
+        "하디자 누르한 말락 히바 사나 아스마 라나 샤히드 와파 가다 루브나 아비르 하난 마나르"
+
+    val CO = Nation(
+        "CO", "콜롬비아", "콜롬비아", "🇨🇴", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        families = "로드리게스:5 고메스:5 곤살레스:5 마르티네스:4 가르시아:4 로페스:4 에르난데스:3 산체스:3 라미레스:3 페레스:3 " +
+            "디아스:3 토레스:2 로하스:2 바르가스:2 모레노:2 구티에레스:2 히메네스:2 무뇨스:2 카스트로:2 오르티스:2 " +
+            "레스트레포 오소리오 산타마리아 아리스티사발 사파타 쿠아드라도 레온 바예호 사라비아 몬토야",
+        male = LATAM_MALE, female = LATAM_FEMALE,
+        cities = "보고타:6 메데인:3 칼리:3 바랑키야:2 카르타헤나:1 부카라망가:1 페레이라:1 마니살레스:1",
+    )
+
+    val EG = Nation(
+        "EG", "이집트", "이집트", "🇪🇬", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        families = "하산 압델라흐만 엘사예드 모스타파 파루크 가말 나세르 엘마스리 사이드 아델 함디 라가브 샤반 마흐무드 " +
+            "엘바드리 조흐디 압델아지즈 엘샤페이 오스만 수브히 엘가브리 파흐미 타우피크 아수르",
+        male = ARABIC_MALE, female = ARABIC_FEMALE,
+        cities = "카이로:6 알렉산드리아:3 기자:2 포트사이드:1 수에즈:1 룩소르:1 아스완:1 만수라:1",
+    )
+
+    val MA = Nation(
+        "MA", "모로코", "모로코", "🇲🇦", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        families = "벤나니 알라위 엘파시 탄지 베라다 엘울라디 벤살라 부자이드 엘아미리 사이디 엘이드리시 벤잘룬 라흐마니 아마르 " +
+            "엘카티비 지하니 벤자키 엘마그리비 부스타니 타하리 엘알라미 하다드 엘구자",
+        male = ARABIC_MALE, female = ARABIC_FEMALE,
+        cities = "카사블랑카:5 라바트:3 마라케시:2 페스:2 탕헤르:2 아가디르:1 메크네스:1 우지다:1",
+    )
+
+    val SA = Nation(
+        "SA", "사우디아라비아", "사우디", "🇸🇦", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        families = "알도사리 알카흐타니 알오타이비 알샴리 알하르비 알마리 알가므디 알자흐라니 알무타이리 알시흐리 알말키 " +
+            "알아나지 알하젬 알부카리 알루와일리 알수바이이 알자미 알라시디 알오마리 알바카르",
+        male = ARABIC_MALE, female = ARABIC_FEMALE,
+        cities = "리야드:5 제다:4 담맘:2 메카:1 메디나:1 타이프:1 아브하:1 타부크:1",
+    )
+
+    val SN = Nation(
+        "SN", "세네갈", "세네갈", "🇸🇳", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        families = "디오프:3 은디아예:3 디알로:2 파이:2 세크 시세 사르 니앙 바 팔 투레 카마라 은당 시 음바이 은도예 소우 " +
+            "디아뉴 티암 공디암 사네 바지 디아타",
+        male = "마마두 이브라히마 셰이크 우스만 무사 바카리 우마르 압둘라예 이드리사 라민 바바카르 엘하지 말릭 세리뉴 모두 " +
+            "아마두 시디 샤리프 알리운 파페 은디아가 사무엘 율리스 앙투안",
+        female = "파투 아미나타 아이사투 마리에메 쿰바 아와 다바 소피에투 코디아 은고네 아스투 야시네 빈타 라마 마티 니마 " +
+            "디아라 아디자 마리아마 셀리네 카디 로키아",
+        cities = "다카르:6 티에스:2 생루이:1 지갱쇼르:1 카올라크:1 투바:1 음부르:1",
+    )
+
+    val ZA = Nation(
+        "ZA", "남아프리카공화국", "남아공", "🇿🇦", 1, NameOrder.GIVEN_SPACE_FAMILY,
+        families = "은코시 들라미니 응쿠베 마흘랑구 몰레피 은돌로부 판데르메르베 보타 판와이크 스미트 졸라 모코에나 마세코 " +
+            "쿠말로 은델라 몰로이 프레토리우스 모체가 뒤플레시 스테인 판니케르크 마부자 시탈레",
+        male = "시부시소 반딜레 음툰지 타보 시포 레보 테보고 카기소 시야볼라 로노 피터 요한 데온 브랜던 루안 니코 탄도 템바 " +
+            "로완 키건 무지 라이언",
+        female = "레라토 은톰비 줌바 탄디웨 노지포 부시시웨 케갈리 리네 아넬리스 노물라 지네 아마라 미셸 엘마리 보이토모 " +
+            "날레디 쳄비 카리나 리엔 친에레 요란디",
+        cities = "요하네스버그:5 케이프타운:4 더반:3 프리토리아:2 포트엘리자베스:1 블룸폰테인:1 이스트런던:1",
+    )
+
     /** Every nation, in draw order (fixed: append only). */
-    val ALL: List<Nation> = listOf(KR, JP, CN, US, GB, FR, DE, ES, BR, IT, VN, AR, MX, CA, AU, IN, TR, NL, SE, TH, NG, PL)
+    val ALL: List<Nation> = listOf(KR, JP, CN, US, GB, FR, DE, ES, BR, IT, VN, AR, MX, CA, AU, IN, TR, NL, SE, TH, NG, PL, CO, EG, MA, SA, SN, ZA)
+
+    private val CONFEDS: Map<String, Confed> = buildMap {
+        for (c in listOf("KR", "JP", "CN", "VN", "IN", "TH", "AU")) put(c, Confed.ASIA)
+        for (c in listOf("GB", "FR", "DE", "ES", "IT", "TR", "NL", "SE", "PL")) put(c, Confed.EUROPE)
+        for (c in listOf("US", "BR", "AR", "MX", "CA", "CO")) put(c, Confed.AMERICAS)
+        for (c in listOf("NG", "EG", "MA", "SA", "SN", "ZA")) put(c, Confed.AFRICA)
+    }
+
+    fun confedOf(code: String): Confed = CONFEDS[code] ?: Confed.ASIA
+
+    /** "🇯🇵 일본" for a nation code; null for anything else. */
+    fun flagged(code: String?): String? = of(code)?.flagged
+
+    /** Famous meetings (news call them by name). */
+    val RIVALS: Map<Set<String>, String> = mapOf(
+        setOf("KR", "JP") to "한일전",
+        setOf("BR", "AR") to "남미 라이벌전",
+        setOf("US", "MX") to "북중미 라이벌전",
+        setOf("EG", "MA") to "북아프리카 더비",
+    )
+
+    fun rivalry(a: String, b: String): String? = RIVALS[setOf(a, b)]
 
     val TOTAL: Int = ALL.sumOf { it.weight }
 
