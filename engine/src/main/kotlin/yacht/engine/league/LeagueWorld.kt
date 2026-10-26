@@ -278,16 +278,17 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * Every file of the league, by name, in the order to write them (atomically, one by one).
      * The season goes last and the ladder just before it: killed halfway through a rollover's
      * save, the league reads the closed season again and closes it again (every book's season
-     * guard makes that a replay). No season or clubs: empty files, so an older one is not read.
+     * guard makes that a replay). The honours, clubs and archive go before the stats, and the
+     * stats before the roster: once the roster has moved on (this season's retirees gone from
+     * the ladder), the stats say the season ended and its awards, lines and review are kept as
+     * they were. No season or clubs: empty files, so an older one is not read.
      */
     fun encodeFiles(): Map<String, String> = buildMap {
-        // The honours before the roster: once the roster has moved on, the book holds the close's awards.
         put(HONOURS, honours.encode())
-        put(ROSTER, players.encode())
         put(CLUBS, clubs?.encode() ?: "")
-        // The archive before the stats: once stats.txt says a season ended, its summary is kept.
         put(ARCHIVE, archive.encode())
         put(STATS, stats.encode())
+        put(ROSTER, players.encode())
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
         put(LAB, lab.encode())

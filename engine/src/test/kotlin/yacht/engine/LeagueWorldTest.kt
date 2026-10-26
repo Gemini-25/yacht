@@ -261,30 +261,63 @@ class LeagueWorldTest {
     }
 
     @Test
-    fun aCloseReplayedAfterAKillGivesTheSameHonours() {
-        val config = LeagueConfig(divisions = 3, generated = 30, evolution = 6, clubs = 0)
-        for (seed in listOf(21L, 22L, 23L)) {
+    fun aCloseReplayedAfterAKillGivesTheSameHonoursAndLines() {
+        val config = LeagueConfig(divisions = 3, generated = 30, evolution = 6, clubs = 8, squad = 5)
+        // Results with luck in them (the stronger side wins more often, not always), so the
+        // ratings are a well-posed fit, as in a real league.
+        fun noisy(a: String, b: String, seed: Long, n: Int): List<GameScore> {
+            val rng = java.util.Random(seed)
+            val p = 1 / (1 + Math.pow(10.0, (strength(b) - strength(a)) / 25.0))
+            return List(n) { if (rng.nextDouble() < p) GameScore(230, 190) else GameScore(190, 230) }
+        }
+        fun playNoisy(f: Fixture): JobResult = when (f.kind) {
+            JobKind.MATCH -> noisy(f.a, f.b, f.seed, 2).let { g -> JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g), 0) }
+            JobKind.TIE -> noisy(f.a, f.b, f.seed, 2 * f.legs).let { g -> JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g).let { if (it == 0) 1 else it }, 0) }
+            JobKind.TEAM -> f.lineupA.zip(f.lineupB).mapIndexed { i, (x, y) -> BoardResult(x, y, noisy(x, y, f.seed + i, 2), emptyList()) }.let { JobResult(f, it, TieRule.team(it), 0) }
+        }
+        fun noisySeason(w: LeagueWorld) {
+            var guard = 0
+            while (!w.seasonOver) {
+                val f = w.next(emptySet(), 0, 2) ?: break
+                w.recordJob(playNoisy(f))
+                check(++guard < 100_000)
+            }
+        }
+        for (seed in listOf(21L, 22L)) {
             val w = world(config)
             w.openFirstSeason(seed)
-            season(w)
+            noisySeason(w)
             rollover(w)
-            season(w)
+            noisySeason(w)
+            // As the app: the finished season saved, closed, opened, saved again.
             w.ladder.fit()
-            // Killed while the close was saved: the finished season, with the new honours and
-            // roster already written (they come first).
             val before = w.encodeFiles()
-            val first = w.closeSeason()
+            val n = w.plan!!.number
+            val first = rollover(w)
             val after = w.encodeFiles()
-            val mixed = before + mapOf(LeagueWorld.HONOURS to after.getValue(LeagueWorld.HONOURS), LeagueWorld.ROSTER to after.getValue(LeagueWorld.ROSTER))
-            val players = yacht.engine.league.PlayerBook.decode(after.getValue(LeagueWorld.ROSTER), emptyList())
-            val keys = base + players.alive.map { it.key } + Ladder.ME
-            val back = LeagueWorld.decode(mixed, keys, emptyList())
-            back.config = config
-            back.family = w.family
-            back.members = base + back.players.alive.map { it.key }
-            back.present = { it in keys }
-            val again = back.closeSeason()
-            assertEquals(first.honours.sortedBy { it.kind + it.key }, again.honours.sortedBy { it.kind + it.key }, "seed $seed")
+            val order = after.keys.toList()
+            val lineKeys = w.archive.lineKeys
+            fun linesOf(a: yacht.engine.league.Archive) = lineKeys.associateWith { k -> a.lines(k).firstOrNull { it.season == n }?.rating }
+            val firstLines = linesOf(w.archive)
+            // Killed after k files of the second save (all but the season file).
+            for (k in 0 until order.size - 1) {
+                val mixed = before + order.take(k).associateWith { after.getValue(it) }
+                val players = yacht.engine.league.PlayerBook.decode(mixed.getValue(LeagueWorld.ROSTER), emptyList())
+                val keys = base + players.alive.map { it.key } + Ladder.ME
+                val back = LeagueWorld.decode(mixed, keys, emptyList())
+                back.config = config
+                back.family = w.family
+                back.members = base + back.players.alive.map { it.key }
+                back.present = { it in keys }
+                back.ladder.fit()
+                val again = back.closeSeason()
+                assertEquals(first.honours.sortedBy { it.kind + it.key }, again.honours.sortedBy { it.kind + it.key }, "seed $seed, k $k")
+                for ((key, r) in linesOf(back.archive)) {
+                    val was = firstLines[key] ?: continue
+                    assertTrue(r != null && !r.isNaN() && kotlin.math.abs(r - was) <= 4.0, "seed $seed, k $k: $key line $was -> $r")
+                }
+            }
         }
     }
+
 }

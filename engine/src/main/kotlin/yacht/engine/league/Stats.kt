@@ -818,7 +818,9 @@ class StatsBook(
         for (d in league.divisions.indices) {
             for ((pos, s) in league.table(d).withIndex()) {
                 val st = seasonStats[s.key]
-                archive.addLine(s.key, SeasonLine(n, d, pos + 1, s.wins, s.draws, s.losses, rating(s.key), st?.avgRating ?: Double.NaN))
+                // No rating now (off the ladder): the line's rating as kept, else none.
+                val r = rating(s.key).takeIf { !it.isNaN() } ?: archive.lines(s.key).firstOrNull { it.season == n }?.rating ?: Double.NaN
+                archive.addLine(s.key, SeasonLine(n, d, pos + 1, s.wins, s.draws, s.losses, r, st?.avgRating ?: Double.NaN))
                 careerStats.getOrPut(s.key) { AiStats() }.seasons++
             }
         }

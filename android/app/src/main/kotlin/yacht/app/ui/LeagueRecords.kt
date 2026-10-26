@@ -145,16 +145,18 @@ private fun Growth(p: ProfileView) {
     if (lines.isEmpty()) return
     val cs = MaterialTheme.colorScheme
     Text("🌱 성장 곡선", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    if (lines.size >= 2) {
+    // Seasons without a rating (the AI had none at the end) are left out of the curve.
+    val rated = lines.filter { !it.rating.isNaN() }
+    if (rated.size >= 2) {
         val titled = p.honours.filter { trophy(it.kind) == "👑" || trophy(it.kind) == "🥇" || trophy(it.kind) == "🏆" }.map { it.season }.toSet()
         LineChart(
-            lines.map { it.rating }, labels = "시즌 ${lines.first().season}" to "시즌 ${lines.last().season}",
-            mark = lines.withIndex().filter { it.value.season in titled }.map { it.index }.toSet(),
+            rated.map { it.rating }, labels = "시즌 ${rated.first().season}" to "시즌 ${rated.last().season}",
+            mark = rated.withIndex().filter { it.value.season in titled }.map { it.index }.toSet(),
         )
     }
     for (l in lines.takeLast(8).reversed()) {
         Text(
-            "시즌 ${l.season} · ${l.division + 1}부 ${l.position}위 · ${l.wins}승 ${l.draws}무 ${l.losses}패 · 레이팅 ${"%.0f".format(l.rating)}" +
+            "시즌 ${l.season} · ${l.division + 1}부 ${l.position}위 · ${l.wins}승 ${l.draws}무 ${l.losses}패 · 레이팅 ${if (l.rating.isNaN()) "–" else "%.0f".format(l.rating)}" +
                 if (l.avgRating.isNaN()) "" else " · 평점 ${"%.2f".format(l.avgRating)}",
             style = MaterialTheme.typography.labelSmall,
             color = cs.onSurfaceVariant,
