@@ -71,6 +71,33 @@ class LeagueWorldTest {
     }
 
     @Test
+    fun recordsAheadOfTheSeasonAreAnotherLeaguesAndStartAfresh() {
+        // Older versions' 리그 초기화 kept stats.txt and archive.txt: season 1 opened over a
+        // book that had closed season 3, whose awards it then handed out again.
+        val config = LeagueConfig(divisions = 2, generated = 10, evolution = 0, clubs = 0, familyCup = false)
+        val w = world(config)
+        w.openFirstSeason(5L)
+        repeat(3) {
+            season(w)
+            rollover(w)
+        }
+        val ahead = w.encodeFiles()
+        val fresh = world(config)
+        fresh.openFirstSeason(6L)
+        val files = fresh.encodeFiles().toMutableMap()
+        files[LeagueWorld.STATS] = ahead.getValue(LeagueWorld.STATS)
+        files[LeagueWorld.ARCHIVE] = ahead.getValue(LeagueWorld.ARCHIVE)
+        val read = LeagueWorld.decode(files, fresh.ladder.keys, emptySet())
+        assertEquals(1, read.plan!!.number)
+        assertEquals(0, read.stats.ended)
+        assertTrue(read.archive.summaries.isEmpty())
+        // A season closed and not yet followed (killed in the rollover) keeps its records.
+        val closing = w.encodeFiles()
+        val again = LeagueWorld.decode(closing, w.ladder.keys, emptySet())
+        assertEquals(w.stats.ended, again.stats.ended)
+    }
+
+    @Test
     fun seasonsRollOverWithCompetitionsEvolutionAndSaves() {
         val config = LeagueConfig(divisions = 3, generated = 20, evolution = 4, clubs = 8, squad = 5)
         val w = world(config)

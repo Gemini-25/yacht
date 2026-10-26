@@ -651,8 +651,10 @@ class LeagueController(
         }
         val first = !loaded.isCompleted
         loaded.complete(Unit)
-        // Running when the app was last closed (or killed): it goes on by itself.
-        if (first && resumeFile.exists()) scope.launch { start() }
+        // Running when the app was last closed (or killed): it goes on by itself, once the app is
+        // in view (hidden while loading, it waits for the app to come back: the 나가면 멈춤
+        // choice, and Android does not let a hidden app start the 나가도 계속 service).
+        if (first && resumeFile.exists()) scope.launch { if (visible) start() else resumeOnForeground = true }
         // A restore may have brought the rules and the favourites too.
         val favs = readFavourites()
         val rv = synchronized(lock) { w.archive.pendingReview }
@@ -981,6 +983,21 @@ class LeagueController(
 
     private fun friendly(pair: Pair<String, String>, rng: Random) = Fixture(Comp.FRIENDLY, -1, pair.first, pair.second, rng.nextLong())
 
+    /**
+     * A job that failed twice (it would fail the same way every time: the deal is fixed): settled
+     * level and off the ladder, so the season can go past it (a level knockout tie sends side A,
+     * the better seed, through). No games: nothing is counted in the statistics.
+     */
+    private fun void(job: Fixture): JobResult {
+        val games = listOf(GameScore(0, 0))
+        val boards = if (job.kind == JobKind.TEAM) job.lineupA.zip(job.lineupB).map { (x, y) -> BoardResult(x, y, games, emptyList()) }
+        else listOf(BoardResult(job.a, job.b, games, emptyList()))
+        return JobResult(job.copy(rated = false), boards, 0, 0)
+    }
+
+    /** Failures per season fixture this run ("season:comp:id"), under the lock. */
+    private val jobFailures = HashMap<String, Int>()
+
     /** A job that cannot be played (an AI was removed): the side still here wins, off the ladder. */
     private fun forfeit(job: Fixture): JobResult {
         val aHere = job.players.take(maxOf(1, job.lineupA.size)).all { byKey.containsKey(it) }
@@ -1042,8 +1059,19 @@ class LeagueController(
             } catch (e: CancellationException) {
                 // stopped mid-match: the match is dropped
             } catch (e: Exception) {
-                // This match failed: it is given back to the season and the league goes on.
-                failed(e, flag)
+                // This match failed: it is given back to the season and the league goes on; the
+                // second time (it fails the same way: its deal is fixed) it is settled level.
+                if (job.comp != Comp.LAB && job.comp != Comp.FRIENDLY) synchronized(lock) {
+                    val w = world
+                    val key = "${w?.plan?.number}:${job.comp.code}:${job.id}"
+                    val n = (jobFailures[key] ?: 0) + 1
+                    jobFailures[key] = n
+                    if (n >= 2 && w != null && !flag.get()) {
+                        recorded = runCatching { w.recordJob(void(job), System.currentTimeMillis()) }.isSuccess
+                        if (recorded) jobFailures.remove(key)
+                    }
+                }
+                if (!failed(e, flag) && !recorded) delay(ERROR_PAUSE_MS)
             } finally {
                 synchronized(lock) {
                     if (!recorded && job.comp != Comp.FRIENDLY) world?.release(job)
@@ -1183,14 +1211,14 @@ class LeagueController(
      * Stops after abandoning the matches in progress, and saves. [keepResume]: it goes on by
      * itself later (the app hidden or closed, a speed change); a plain stop is the player's.
      */
-    fun stop(keepResume: Boolean = false) {
+    fun stop(keepResume: Boolean = false): Job? {
         if (!keepResume) clearResume()
-        if (!running) return
+        if (!running) return null
         stop.set(true)
         running = false
         preparing = null
         val job = runJob
-        scope.launch {
+        return scope.launch {
             // Leaving the app stops the league and then clears the scope: the last save must
             // not be cancelled with it.
             withContext(kotlinx.coroutines.NonCancellable) {
@@ -1206,6 +1234,7 @@ class LeagueController(
      * is back; with [LeagueBackground.KEEP] it keeps playing (the app keeps a notification up).
      */
     fun onBackground() {
+        visible = false
         if (background == LeagueBackground.PAUSE) {
             if (running) resumeOnForeground = true
             stop(keepResume = true)
@@ -1219,6 +1248,7 @@ class LeagueController(
 
     /** App shown again: the league goes on if it was running when the app was hidden. */
     fun onForeground() {
+        visible = true
         if (liveOnForeground) {
             liveOnForeground = false
             watchLive(true)
@@ -1230,6 +1260,9 @@ class LeagueController(
 
     private var resumeOnForeground = false
     private var liveOnForeground = false
+
+    /** The app is in view (main thread); true until the app says otherwise. */
+    private var visible = true
 
     /** Sets what the league does while the app is hidden (saved). */
     fun changeBackground(b: LeagueBackground) {

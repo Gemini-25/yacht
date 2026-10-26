@@ -24,6 +24,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -75,8 +78,14 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         CrashLog.install(app)
     }
 
+    /**
+     * The app's work. Not viewModelScope: Android cancels that before onCleared, which would
+     * drop the league's last save when the app is closed; this one ends after that save.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     val controller = AppController(
-        viewModelScope, GameStorage(app.filesDir), { loadTables(app) },
+        scope, GameStorage(app.filesDir), { loadTables(app) },
         loadAsset = { name -> runCatching { app.assets.open(name).use { String(it.readBytes()) } }.getOrNull() },
     )
 
@@ -84,8 +93,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         controller.start()
         // The league kept going while the app is hidden: its service runs while the league does
         // in that mode (a short stop, like a speed change, does not end it).
-        LeagueService.stopLeague = { viewModelScope.launch { controller.league.stop() } }
-        viewModelScope.launch {
+        LeagueService.stopLeague = { scope.launch { controller.league.stop() } }
+        scope.launch {
             snapshotFlow { controller.league.running && controller.league.background == LeagueBackground.KEEP }
                 .distinctUntilChanged()
                 .collectLatest { keep ->
@@ -102,7 +111,11 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         LeagueService.stopLeague = null
         LeagueService.stop(getApplication())
-        controller.shutdown()
+        val save = controller.shutdown()
+        scope.launch {
+            save?.join()
+            scope.cancel()
+        }
     }
 }
 
@@ -130,6 +143,9 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.controller.onForeground()
+        // 나가도 계속: Android may have refused the service while the app was hidden; in view it can start.
+        val lg = vm.controller.league
+        if (lg.running && lg.background == LeagueBackground.KEEP) LeagueService.start(this)
     }
 
     override fun onStop() {
@@ -210,7 +226,13 @@ class MainActivity : ComponentActivity() {
             }
             YachtTheme(dark = isSystemInDarkTheme()) {
                 val c = vm.controller
-                BackHandler(enabled = c.screen != Screen.HOME) {
+                // Back on the home screen sends the app back (as Android 12+ does) instead of closing
+                // it: closing would stop a league that keeps going while the app is hidden.
+                BackHandler {
+                    if (c.screen == Screen.HOME) {
+                        moveTaskToBack(true)
+                        return@BackHandler
+                    }
                     if (c.screen == Screen.WATCH) c.league.stopWatch()
                     c.screen = when (c.screen) {
                         Screen.REVIEW -> Screen.HISTORY

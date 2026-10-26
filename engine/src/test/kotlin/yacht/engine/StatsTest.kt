@@ -580,6 +580,31 @@ class StatsTest {
     }
 
     @Test
+    fun ratingSumsFromFilesInHundredthsReadAtTheirValue() {
+        // Older versions kept rating sums in 0.01 steps (and no title counts on career lines).
+        val s = AiStats()
+        repeat(4) { s.addGame(SideGame(220, 180, false, false, null, Double.NaN, Double.NaN, 6.5, false)) }
+        val book = StatsBook()
+        book.startSeason(3, mapOf("a" to 1500.0))
+        val text = book.encode().lines().joinToString("\n") { l ->
+            when {
+                l.startsWith("book ") -> "book 3 2 4"
+                else -> l
+            }
+        } + "c a " + s.encode().split(' ').toMutableList().also { f ->
+            // The rating sum field (the 22nd): what an older version wrote, in hundredths.
+            f[21] = java.lang.Long.toString(Math.round(s.ratingSum * 100), 36)
+        }.joinToString(" ") + "\n"
+        val legacy = text.lines().filter { !it.startsWith("units ") }.joinToString("\n")
+        assertEquals(26.0, StatsBook.decode(legacy).career("a")!!.ratingSum, 1e-9)
+        // The same line in a file of this version (it says its units) is read as written.
+        assertEquals(13.0, StatsBook.decode(text).career("a")!!.ratingSum, 1e-9)
+        // A file written now reads back exactly.
+        val now = StatsBook.decode(legacy)
+        assertEquals(26.0, StatsBook.decode(now.encode()).career("a")!!.ratingSum, 1e-9)
+    }
+
+    @Test
     fun anUnknownStartRatingStaysUnknownAfterARestart() {
         val book = StatsBook()
         book.startSeason(4, mapOf("old" to 1500.4, "newborn" to Double.NaN))

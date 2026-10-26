@@ -357,6 +357,13 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             // A season in progress that the stats do not know (stats.txt is newer than the
             // season, or was lost): start ratings and rookies from now, so its awards are made.
             w.plan?.let { p ->
+                // Records ahead of this league's seasons are another league's (older versions'
+                // 리그 초기화 kept them): they would hand this one that league's awards. Closing
+                // this very season again after a kill leaves them equal, not ahead.
+                if (w.stats.ended > p.number || (w.archive.summaries.maxOfOrNull { it.season } ?: 0) > p.number) {
+                    w.stats = StatsBook()
+                    w.archive = Archive()
+                }
                 if (w.stats.season != p.number && w.stats.ended < p.number) {
                     val keys = p.league.standings.keys
                     w.stats.startSeason(p.number, keys.associateWith { ladder.rating(it) }, keys.filter { w.players[it]?.born == p.number })

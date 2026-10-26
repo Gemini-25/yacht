@@ -418,14 +418,16 @@ class AppController(
     @Volatile
     private var closed = false
 
-    fun shutdown() {
+    /** Closing the app; returns the league's last save, still running (null when there is none). */
+    fun shutdown(): Job? {
         closed = true
         // Closing the app is not the player's stop: the league goes on at the next launch.
-        league.stop(keepResume = true)
+        val save = league.stop(keepResume = true)
         verifyJob?.cancel()
         stopDuel()
         pool.shutdown()
         background.shutdown()
+        return save
     }
 
     /** App visible again: resume background work that was paused. */

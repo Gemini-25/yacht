@@ -92,7 +92,8 @@ class LeagueTables(
             synchronized(tables) { tables[spec.key]?.let { return it } }
             val t = runCatching { load(spec.key, spec.rules) }.getOrNull()
                 ?: EvTable(spec.rules, TableBuilder(spec.rules, threads = threads, theta = spec.theta).build(withDist = false).ev)
-                    .also { save(spec.key, it) }
+                    // A table that cannot be saved (a full phone) is used all the same: built again next time.
+                    .also { runCatching { save(spec.key, it) } }
             synchronized(tables) { tables[spec.key] = t }
             return t
         }

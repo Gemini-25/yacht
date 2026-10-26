@@ -64,6 +64,11 @@ class AiStats {
             ratingUnits = Math.round(v * RATING_STEPS)
         }
     private var ratingUnits = 0L
+
+    /** A sum read from a file of 0.01 steps (older versions) into 0.005 steps. */
+    internal fun doubleRatingUnits() {
+        ratingUnits *= 2
+    }
     var ratingCount = 0
 
     /** 운 보정 승점: 3 when its total over a match's mirrored games beat the opponent's, 1 when level. */
@@ -259,6 +264,7 @@ class AiStats {
 
         /** Match ratings come in steps of 1/200 (0.005). */
         private const val RATING_STEPS = 200.0
+        internal const val RATING_UNITS = 200
 
         /** Space-separated fields of [encode]. */
         const val FIELDS = 33
@@ -873,6 +879,8 @@ class StatsBook(
 
     fun encode(): String = buildString {
         append("stats 1\n")
+        // Rating sums are in 0.005 steps; files before this line kept them in 0.01 steps.
+        append("units ${AiStats.RATING_UNITS}\n")
         append("book $season $ended $officialGames\n")
         for (k in (startRatings.keys + seasonStats.keys + rookieKeys).sorted()) {
             val s = seasonStats[k] ?: AiStats()
@@ -981,6 +989,12 @@ class StatsBook(
             // Every line ends in a newline: a last one without it was cut (a torn write).
             val lines = if (text.endsWith('\n')) all else all.dropLast(1)
             val book = StatsBook(recordWarmup)
+            // Rating sums in 0.01 steps (files from before the 0.005 steps): such files have no
+            // "units" line, and no career line with title or MVP counts although seasons ended.
+            val units = lines.firstOrNull { it.startsWith("units ") }?.substringAfter(' ')?.trim()?.toIntOrNull()
+            val careerLines = lines.filter { it.startsWith("c ") }
+            val legacy = units == null && careerLines.isNotEmpty() && careerLines.none { it.split(' ').size > 2 + AiStats.FIELDS } &&
+                lines.any { it.startsWith("book ") && (it.split(' ').getOrNull(2)?.toIntOrNull() ?: 0) > 0 }
             val metas = ArrayList<MetaReport>()
             val shares = ArrayList<Pair<Int, TraitShare>>()
             for (line in lines) {
@@ -999,7 +1013,7 @@ class StatsBook(
                             val k = Field.unesc(f[1])
                             val start = Field.dbl(f[2])
                             val rookie = f[3] == "1"
-                            val st = AiStats.decode(f, 4)
+                            val st = AiStats.decode(f, 4).also { if (legacy) it.doubleRatingUnits() }
                             // Kept when unknown (NaN) too: a restart's startSeason must not fill
                             // it with a rating from the middle of the season.
                             book.startRatings[k] = start
@@ -1008,7 +1022,7 @@ class StatsBook(
                         }
                         "c" -> {
                             val k = Field.unesc(f[1])
-                            val st = AiStats.decode(f, 2)
+                            val st = AiStats.decode(f, 2).also { if (legacy) it.doubleRatingUnits() }
                             val t = f.getOrNull(2 + AiStats.FIELDS)?.toInt(36) ?: 0
                             val m = f.getOrNull(3 + AiStats.FIELDS)?.toInt(36) ?: 0
                             book.careerStats[k] = st
