@@ -220,4 +220,33 @@ class LadderTest {
             assertTrue(top.none { it in news }, "seed $seed: ${top.filter { it in news }.map { it to l.rating(it).toInt() }}")
         }
     }
+
+    @Test
+    fun establishedAisRankByRatingWhateverTheirGameCount() {
+        // Some AIs play four times as many games as others (light ones used to get friendlies):
+        // once each has enough games, the ranking follows the rating, not the count.
+        val rng = Random(9)
+        val keys = listOf("ev") + (1..39).map { "a$it" }
+        val truth = keys.withIndex().associate { (i, k) -> k to if (k == "ev") 1500.0 else 1300.0 + 5.0 * i }
+        val l = Ladder(keys + Ladder.ME)
+        fun game(a: String, b: String): GameScore {
+            val p = 1 / (1 + Math.pow(10.0, (truth.getValue(b) - truth.getValue(a)) / 400))
+            return if (rng.nextDouble() < p) GameScore(200, 180) else GameScore(180, 200)
+        }
+        repeat(40_000) {
+            // Odd-numbered AIs are chosen four times as often.
+            fun pick(): String { while (true) { val k = keys[rng.nextInt(keys.size)]; if (k == "ev" || k.drop(1).toInt() % 2 == 1 || rng.nextInt(4) == 0) return k } }
+            val a = pick()
+            var b = pick()
+            while (b == a) b = pick()
+            l.record(a, b, listOf(game(a, b), game(a, b)))
+        }
+        l.fit()
+        val few = keys.filter { it != "ev" && it.drop(1).toInt() % 2 == 0 }
+        val many = keys.filter { it != "ev" && it.drop(1).toInt() % 2 == 1 }
+        assertTrue(few.sumOf { l.entry(it)!!.games } * 2 < many.sumOf { l.entry(it)!!.games }, "the counts should differ")
+        assertTrue(keys.all { l.error(it) < Ladder.RANK_FREE_ERROR }, "everyone should have enough games")
+        val ranked = l.ranking().filter { it != Ladder.ME }
+        assertEquals(ranked.sortedByDescending { l.rating(it) }, ranked)
+    }
 }

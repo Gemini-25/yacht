@@ -373,7 +373,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         item {
             Text(
                 "레이팅: 모든 판을 브래들리-테리 모형(엘로와 같은 눈금)으로 맞춘 값, 기대점수 AI = 1500. ±는 95% 범위, 7점 ≈ 승률 1%p. " +
-                    "순위는 레이팅에서 오차의 3배(± 범위의 1.5배쯤)를 뺀 값 순서라, 판이 적은 AI는 운 좋은 출발로 꼭대기에 오르지 않고 판이 쌓일 때까지 아래에 놓여요. " +
+                    "순위는 레이팅 순서예요. 판이 적어 ± 범위가 넓은(±20 넘게) AI만 넘는 만큼의 3배를 내려서 매겨서, 운 좋은 출발로 꼭대기에 오르지 않아요. 판이 충분하면 판 수와 상관없이 레이팅만 봐요. " +
                     "티어는 레이팅으로 매겨요: 마스터 1490↑, 그랜드마스터 1500↑ 상위 10, 챌린저 1505↑ 상위 3. 그래서 판이 적은 AI는 티어가 높아도 아래에 놓일 수 있어요.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

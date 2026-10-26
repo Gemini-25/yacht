@@ -198,13 +198,17 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     }
 
     /**
-     * What ranks are by: the rating less [RANK_ERRORS] standard errors, so AIs fresh out of
-     * placement (a range of a hundred points or more) do not jump over the established ones: of
-     * a hundred newcomers the luckiest is about 2.5 errors above its true level, and one error
-     * let several of them top the ladder. With thousands of games the error is a few points.
-     * Me with one error: a single player is not the luckiest of many.
+     * What ranks are by: the rating less [RANK_ERRORS] times the part of its standard error above
+     * [RANK_FREE_ERROR], so AIs fresh out of placement (a range of a hundred points or more) do
+     * not jump over the established ones (of a hundred newcomers the luckiest is about 2.5
+     * errors above its true level, and one error let several of them top the ladder), while AIs
+     * with enough games (an error of a few points) are ranked by their rating alone, however
+     * many games each played. Me with one error: a single player is not the luckiest of many.
      */
-    private fun rankScore(i: Int): Double = ratings[i] - (if (i == meIndex) 1.0 else RANK_ERRORS) * errors[i].let { if (it.isNaN()) 0.0 else it }
+    private fun rankScore(i: Int): Double {
+        val e = errors[i].let { if (it.isNaN()) 0.0 else it }
+        return ratings[i] - if (i == meIndex) e else RANK_ERRORS * maxOf(0.0, e - RANK_FREE_ERROR)
+    }
 
     /** The rank score of [key] (see [rankScore]); NaN before its first game. */
     fun rankScore(key: String): Double = index[key]?.let { rankScore(it) } ?: Double.NaN
@@ -516,6 +520,9 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
 
         /** Standard errors taken off the rating for the ranking (see [rankScore]). */
         const val RANK_ERRORS = 3.0
+
+        /** An error up to this (about ±20 shown, a few hundred games) costs no ranking place. */
+        const val RANK_FREE_ERROR = 10.0
         private const val MAX_ITER = 3000
 
         /**

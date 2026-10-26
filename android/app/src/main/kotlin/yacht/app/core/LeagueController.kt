@@ -885,10 +885,10 @@ class LeagueController(
             rollover(w)
             w.next(busy, cupsInFlight, cap, cost)?.let { return it }
         }
-        // Fillers only between light members: a heavy one would burn a worker on a game that
-        // does not move the season, and hold up its own fixtures.
-        val idle = members.filter { it !in busy && it !in heavyKeys }
-        return Matchmaker.pick(l, rng, busy + heavyKeys, among = idle)?.let { friendly(it, rng) }
+        // Nothing official is free: the worker waits. (Friendlies to fill the wait went to the
+        // light AIs only, a heavy one holding up its own fixtures, so the light ones piled up
+        // thousands more games than the heavy ones: not fair. Waiting also saves battery.)
+        return null
     }
 
     /**
