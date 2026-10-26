@@ -219,6 +219,13 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         if (f.comp == Comp.LAB) lab.release(f) else plan?.release(f)
     }
 
+    /** [key]'s age in [season] (alive, retired or a legend); null when it has none (a hand-made AI). */
+    internal fun ageAt(key: String, season: Int): Int? {
+        players[key]?.let { r -> return r.identity?.age(season, r.born) }
+        val gone = players.retired.lastOrNull { it.key == key } ?: players.legend(key)?.record ?: return null
+        return if (gone.debutAge > 0) gone.debutAge + season - gone.born else null
+    }
+
     /** What [closeSeason] did. */
     class Closing(val season: Int, val honours: List<Honour>, val events: List<LeagueEvent>, val rosterChanged: Boolean)
 
@@ -248,6 +255,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         honours.add(h + end?.awards.orEmpty() + picks)
         val out = ArrayList<LeagueEvent>()
         end?.let { out += it.events }
+        out += runCatching { stats.honourRecords(honours, p.number, ::ageAt) }.getOrDefault(emptyList())
         // The season's three best games go to the archive.
         runCatching { archive.putHighlights(p.number, highlights.archiveLines(p.number)) }
         val champion = h.firstOrNull { it.kind == "L0" }?.key ?: "-"

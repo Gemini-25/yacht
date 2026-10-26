@@ -31,7 +31,9 @@ import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
 import yacht.app.core.ProfileView
 import yacht.app.core.SeasonHistoryItem
+import yacht.engine.league.LeagueRecord
 import yacht.engine.league.Origin
+import yacht.engine.league.RecordGroup
 import yacht.engine.game.label
 
 /** An honour in Korean ("1부 우승", "요트컵 준우승", "신인왕", ...). */
@@ -408,18 +410,14 @@ private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsView?, on
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item { Text("📜 리그 기록", fontWeight = FontWeight.Bold) }
         if (r.records.isEmpty()) item { Text("공식 경기가 쌓이면 기록이 생겨요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
-        items(r.records, key = { "rec-${it.kind}" }) { rec ->
-            Card(Modifier.fillMaxWidth().clickable { onOpen(rec.holder) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-                Column(Modifier.padding(10.dp)) {
-                    Text(rec.kind.label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-                    Text("${rec.kind.text(rec.value)} · ${lg.name(rec.holder)}", fontWeight = FontWeight.Bold)
-                    Text(
-                        "시즌 ${rec.season}" + (rec.other?.let { " · 상대 ${lg.name(it)}" } ?: "") + (rec.comp?.let { " · ${it.label}" } ?: ""),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = cs.onSurfaceVariant,
-                    )
-                }
+        // By section (레이팅, 한 판·한 경기, 한 시즌, 통산, 우승·수상), each in its kinds' order.
+        for (g in RecordGroup.entries) {
+            val list = r.records.filter { it.kind.group == g }.sortedBy { it.kind.ordinal }
+            if (list.isEmpty()) continue
+            item(key = "rec-group-${g.name}") {
+                Text(g.label, style = MaterialTheme.typography.labelLarge, color = cs.primary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
             }
+            items(list, key = { "rec-${it.kind}" }) { rec -> RecordCard(lg, rec, onOpen) }
         }
         if (r.mvpRace.isNotEmpty()) {
             item { Text("⭐ 이번 시즌 평점 순위 (MVP 레이스)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
@@ -451,6 +449,23 @@ private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsView?, on
             items(r.milestones.take(30), key = { "ms-${it.season}-${it.keys}-${it.args}" }) { e ->
                 Text("시즌 ${e.season} · ${lg.name(e.keys.firstOrNull() ?: "")} ${milestoneText(e.args)}", style = MaterialTheme.typography.bodySmall)
             }
+        }
+    }
+}
+
+/** One record: what it is, its value and holder, and when, against whom and where. */
+@Composable
+private fun RecordCard(lg: LeagueController, rec: LeagueRecord, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth().clickable { onOpen(rec.holder) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(rec.kind.label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text("${rec.kind.text(rec.value)} · ${lg.name(rec.holder)}", fontWeight = FontWeight.Bold)
+            Text(
+                "시즌 ${rec.season}" + (rec.other?.let { " · 상대 ${lg.name(it)}" } ?: "") + (rec.comp?.let { " · ${it.label}" } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+            )
         }
     }
 }

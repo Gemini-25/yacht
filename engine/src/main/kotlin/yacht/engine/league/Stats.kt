@@ -591,11 +591,24 @@ class StatsBook(
                     officialGames++
                     meta(ga)
                     meta(gb)
-                    gameRecords(b.a, b.b, ga, ctx.season, f.comp, events)
-                    gameRecords(b.b, b.a, gb, ctx.season, f.comp, events)
+                    gameRecords(b.a, b.b, ga, ctx.season, f.comp, events, pair = true)
+                    gameRecords(b.b, b.a, gb, ctx.season, f.comp, events, pair = false)
                 }
                 streakRecord(b.a, ca, ga, ctx.season, f.comp, events)
                 streakRecord(b.b, cb, gb, ctx.season, f.comp, events)
+                careerRecords(b.a, ca, ctx.season, events)
+                careerRecords(b.b, cb, ctx.season, events)
+            }
+            if (official) {
+                // Ratings before the match: the best ever (once the rating has settled) and the
+                // biggest gap a winner overcame.
+                peakRecord(b.a, ra, ca, ctx.season, f.comp, events)
+                peakRecord(b.b, rb, cb, ctx.season, f.comp, events)
+                if (!ra.isNaN() && !rb.isNaN() && result != 0) {
+                    val (w, l, gap) = if (result > 0) Triple(b.a, b.b, rb - ra) else Triple(b.b, b.a, ra - rb)
+                    val g = gap.roundToInt().toDouble()
+                    if (g > 0 && records.beats(RecordKind.UPSET, g)) offer(LeagueRecord(RecordKind.UPSET, w, g, ctx.season, l, f.comp), events)
+                }
             }
             val giantA = !ra.isNaN() && !rb.isNaN() && rb - ra >= AiStats.GIANT
             val giantB = !ra.isNaN() && !rb.isNaN() && ra - rb >= AiStats.GIANT
@@ -673,9 +686,13 @@ class StatsBook(
         while (milestoneList.size > MAX_MILESTONES) milestoneList.removeLast()
     }
 
-    private fun gameRecords(key: String, opp: String, g: SideGame, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
+    /** One side's game records; [pair]: this side also offers the game's two-player total (once a game). */
+    private fun gameRecords(key: String, opp: String, g: SideGame, season: Int, comp: Comp, out: MutableList<LeagueEvent>, pair: Boolean) {
         if (records.beats(RecordKind.BEST_GAME, g.own.toDouble())) offer(LeagueRecord(RecordKind.BEST_GAME, key, g.own.toDouble(), season, opp, comp), out)
+        val both = (g.own + g.opp).toDouble()
+        if (pair && records.beats(RecordKind.BEST_PAIR, both)) offer(LeagueRecord(RecordKind.BEST_PAIR, key, both, season, opp, comp), out)
         if (g.own <= g.opp) return
+        if (records.beats(RecordKind.LOW_WIN, g.own.toDouble())) offer(LeagueRecord(RecordKind.LOW_WIN, key, g.own.toDouble(), season, opp, comp), out)
         val margin = (g.own - g.opp).toDouble()
         if (records.beats(RecordKind.MARGIN, margin)) offer(LeagueRecord(RecordKind.MARGIN, key, margin, season, opp, comp), out)
         if (!g.minP.isNaN()) {
@@ -690,17 +707,54 @@ class StatsBook(
         if (records.beats(RecordKind.STREAK, s)) offer(LeagueRecord(RecordKind.STREAK, key, s, season, null, comp), out)
     }
 
+    /** Career counts (every rated game, as the milestones): games, wins, Yachts, 300-point games. */
+    private fun careerRecords(key: String, c: AiStats, season: Int, out: MutableList<LeagueEvent>) {
+        if (records.beats(RecordKind.CAREER_GAMES, c.games.toDouble())) offer(LeagueRecord(RecordKind.CAREER_GAMES, key, c.games.toDouble(), season), out)
+        if (records.beats(RecordKind.CAREER_WINS, c.gameWins.toDouble())) offer(LeagueRecord(RecordKind.CAREER_WINS, key, c.gameWins.toDouble(), season), out)
+        if (records.beats(RecordKind.CAREER_YACHTS, c.yachts.toDouble())) offer(LeagueRecord(RecordKind.CAREER_YACHTS, key, c.yachts.toDouble(), season), out)
+        if (records.beats(RecordKind.CAREER_300, c.over300.toDouble())) offer(LeagueRecord(RecordKind.CAREER_300, key, c.over300.toDouble(), season), out)
+    }
+
+    /** The best rating ever, from [rating] before an official match once [c] has [PEAK_GAMES] games (a new rating still moves a lot). */
+    private fun peakRecord(key: String, rating: Double, c: AiStats, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
+        if (rating.isNaN() || c.games < PEAK_GAMES) return
+        val v = rating.roundToInt().toDouble()
+        if (records.beats(RecordKind.PEAK_RATING, v)) offer(LeagueRecord(RecordKind.PEAK_RATING, key, v, season, null, comp), out)
+    }
+
     /** Puts [r] in the records if it beats the holder; news once the league has warmed up. */
     internal fun offer(r: LeagueRecord, out: MutableList<LeagueEvent>, warm: Boolean = officialGames >= recordWarmup) {
         if (r.value <= 0 && !r.kind.lowerIsBetter) return
         val b = records.offer(r) ?: return
         val prev = b.previous ?: return
         if (!warm) return
-        // A winning run going on past the record is one break, not one per game.
-        val own = r.kind == RecordKind.STREAK && prev.holder == r.holder && breaks[r.kind]?.record?.holder == r.holder
+        // A winning run or a career count going on past the record is one break, not one per game.
+        val own = r.kind.running && prev.holder == r.holder && breaks[r.kind]?.record?.holder == r.holder
         breaks[r.kind] = if (own) RecordBreak(r, breaks.getValue(r.kind).previous) else b
         if (own) return
         out += LeagueEvent("record", r.season, listOf(r.holder, prev.holder), listOf(r.kind.name, r.kind.plain(r.value), r.kind.plain(prev.value)), r.comp)
+    }
+
+    /**
+     * Records from the honours once season [season]'s are in [honours] (이 주의 선수 included):
+     * most 이 주의 선수, and the youngest and oldest 1부 champion by [ageAt] (a player's age in a
+     * season; null when unknown). Earlier seasons count too (an older league's champions are
+     * found the first time), without news; returns the news of this season's.
+     */
+    fun honourRecords(honours: HonourBook, season: Int, ageAt: (String, Int) -> Int?): List<LeagueEvent> {
+        val events = ArrayList<LeagueEvent>()
+        val warm = season > 1
+        honours.all.filter { it.kind == "POTW" }.groupingBy { it.key }.eachCount().entries
+            .maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenByDescending { it.key })?.let {
+                offer(LeagueRecord(RecordKind.POTW, it.key, it.value.toDouble(), season), events, warm)
+            }
+        for (h in honours.all.filter { it.kind == "L0" }.sortedBy { it.season }) {
+            val age = ageAt(h.key, h.season)?.takeIf { it > 0 } ?: continue
+            val now = warm && h.season == season
+            offer(LeagueRecord(RecordKind.YOUNGEST_CHAMPION, h.key, age.toDouble(), h.season), events, now)
+            offer(LeagueRecord(RecordKind.OLDEST_CHAMPION, h.key, age.toDouble(), h.season), events, now)
+        }
+        return events
     }
 
     /**
@@ -782,6 +836,29 @@ class StatsBook(
             .maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.avgRating }.thenByDescending { it.key })?.let { (k, st) ->
                 offer(LeagueRecord(RecordKind.SEASON_RATING, k, Math.round(st.avgRating * 100) / 100.0, n), events, warm)
             }
+        // A season's best average score, match win rate and Yachts (over enough matches), and the
+        // biggest rating gain since the season began.
+        // Enough matches: 20, or three quarters of a short season's rounds.
+        val enough = minOf(Awards.RATING_MATCHES, maxOf(1, league.matchdays * 3 / 4))
+        val full = seasonStats.entries.filter { it.value.matches >= enough && it.key !in gone }
+        full.maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.avgScore }.thenByDescending { it.key })?.let { (k, st) ->
+            offer(LeagueRecord(RecordKind.SEASON_SCORE, k, Math.round(st.avgScore * 10) / 10.0, n), events, warm)
+        }
+        full.maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.matchWins.toDouble() / it.value.matches }.thenByDescending { it.key })?.let { (k, st) ->
+            offer(LeagueRecord(RecordKind.SEASON_WINRATE, k, Math.round(1000.0 * st.matchWins / st.matches) / 10.0, n), events, warm)
+        }
+        seasonStats.entries.filter { it.key !in gone }.maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.yachts }.thenByDescending { it.key })?.let { (k, st) ->
+            offer(LeagueRecord(RecordKind.SEASON_YACHTS, k, st.yachts.toDouble(), n), events, warm)
+        }
+        keys.filter { it !in gone }.mapNotNull { k ->
+            val gain = rating(k) - startRating(k)
+            if (gain.isNaN()) null else k to gain
+        }.maxWithOrNull(compareBy<Pair<String, Double>> { it.second }.thenByDescending { it.first })?.let { (k, gain) ->
+            offer(LeagueRecord(RecordKind.RATING_GAIN, k, gain.roundToInt().toDouble(), n), events, warm)
+        }
+        mvpCounts.entries.maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenByDescending { it.key })?.let {
+            offer(LeagueRecord(RecordKind.MVPS, it.key, it.value.toDouble(), n), events, warm)
+        }
         // Most titles: the book's count (earliest to reach it when level) or a longer career's.
         val careerBest = titleCounts.entries.maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenByDescending { it.key })
             ?.let { LeagueRecord(RecordKind.TITLES, it.key, it.value.toDouble(), n) }
@@ -905,6 +982,9 @@ class StatsBook(
 
     companion object {
         const val RECORD_WARMUP = 2000
+
+        /** Games before a player's rating counts for 역대 최고 레이팅 (a new one still moves a lot). */
+        const val PEAK_GAMES = 60
         const val MAX_MILESTONES = 100
         const val MAX_TRAITS = 32
 

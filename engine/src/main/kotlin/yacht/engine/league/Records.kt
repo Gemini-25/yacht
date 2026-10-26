@@ -2,25 +2,57 @@ package yacht.engine.league
 
 import kotlin.math.roundToInt
 
+/** Sections of the 기록실, in order. */
+enum class RecordGroup(val label: String) {
+    RATING("레이팅"),
+    GAME("한 판·한 경기"),
+    SEASON("한 시즌"),
+    CAREER("통산"),
+    TITLE("우승·수상"),
+}
+
 /**
  * The league's all-time records (기록실). Game and match records come from official games
- * ([StatsBook.countsForSeason]), the winning run from every rated game as on the ladder, the
- * season records and titles from finished seasons. [lowerIsBetter]: the comeback, the lowest
- * P(win) a winner had (in percent). YACHTS_MATCH counts one AI's Yachts in one match (경기).
+ * ([StatsBook.countsForSeason]), the winning run and the career counts from every rated game as
+ * on the ladder, the peak rating and upsets from official matches (ratings before the match),
+ * the season records, titles and awards from finished seasons. [lowerIsBetter]: the comeback (the
+ * lowest P(win) a winner had, in percent), the lowest winning score, the youngest champion.
+ * [running]: a count one holder keeps raising game by game (one break a season, not one a game).
+ * YACHTS_MATCH counts one AI's Yachts in one match (경기).
  */
-enum class RecordKind(val label: String, val lowerIsBetter: Boolean = false) {
-    BEST_GAME("한 판 최고 점수"),
-    MARGIN("최다 점수 차 승리"),
-    COMEBACK("최대 역전승", lowerIsBetter = true),
-    YACHTS_MATCH("한 경기 최다 요트"),
-    STREAK("최다 연승"),
-    SEASON_POINTS("한 시즌 최다 승점"),
-    SEASON_RATING("한 시즌 최고 평균 평점"),
-    TITLES("최다 우승"),
+enum class RecordKind(val label: String, val group: RecordGroup, val lowerIsBetter: Boolean = false, val running: Boolean = false) {
+    BEST_GAME("한 판 최고 점수", RecordGroup.GAME),
+    MARGIN("최다 점수 차 승리", RecordGroup.GAME),
+    COMEBACK("최대 역전승", RecordGroup.GAME, lowerIsBetter = true),
+    YACHTS_MATCH("한 경기 최다 요트", RecordGroup.GAME),
+    STREAK("최다 연승", RecordGroup.CAREER, running = true),
+    SEASON_POINTS("한 시즌 최다 승점", RecordGroup.SEASON),
+    SEASON_RATING("한 시즌 최고 평균 평점", RecordGroup.SEASON),
+    TITLES("최다 우승", RecordGroup.TITLE),
+    PEAK_RATING("역대 최고 레이팅", RecordGroup.RATING, running = true),
+    RATING_GAIN("한 시즌 최대 레이팅 상승", RecordGroup.RATING),
+    UPSET("최대 이변", RecordGroup.RATING),
+    LOW_WIN("가장 낮은 점수로 이긴 판", RecordGroup.GAME, lowerIsBetter = true),
+    BEST_PAIR("한 판 두 선수 합계 최고", RecordGroup.GAME),
+    SEASON_SCORE("한 시즌 최고 평균 점수", RecordGroup.SEASON),
+    SEASON_WINRATE("한 시즌 최고 승률", RecordGroup.SEASON),
+    SEASON_YACHTS("한 시즌 최다 요트", RecordGroup.SEASON),
+    CAREER_GAMES("통산 최다 판", RecordGroup.CAREER, running = true),
+    CAREER_WINS("통산 최다 승리", RecordGroup.CAREER, running = true),
+    CAREER_YACHTS("통산 최다 요트", RecordGroup.CAREER, running = true),
+    CAREER_300("통산 최다 300점 경기", RecordGroup.CAREER, running = true),
+    MVPS("최다 MVP", RecordGroup.TITLE),
+    POTW("최다 이 주의 선수", RecordGroup.TITLE),
+    YOUNGEST_CHAMPION("최연소 1부 우승", RecordGroup.TITLE, lowerIsBetter = true),
+    OLDEST_CHAMPION("최고령 1부 우승", RecordGroup.TITLE),
     ;
 
-    /** The value as events carry it: a whole number, or the rating with two decimals. */
-    fun plain(v: Double): String = if (this == SEASON_RATING) Field.num(v, 2) else v.roundToInt().toString()
+    /** The value as events carry it: a whole number, the rating with two decimals, an average or a rate with one. */
+    fun plain(v: Double): String = when (this) {
+        SEASON_RATING -> Field.num(v, 2)
+        SEASON_SCORE, SEASON_WINRATE -> Field.num(v, 1)
+        else -> v.roundToInt().toString()
+    }
 
     /** The value for the screen, in Korean. */
     fun text(v: Double): String = when (this) {
@@ -32,6 +64,21 @@ enum class RecordKind(val label: String, val lowerIsBetter: Boolean = false) {
         SEASON_POINTS -> "승점 ${plain(v)}"
         SEASON_RATING -> "평점 ${plain(v)}"
         TITLES -> "우승 ${plain(v)}회"
+        PEAK_RATING -> "레이팅 ${plain(v)}"
+        RATING_GAIN -> "레이팅 +${plain(v)}"
+        UPSET -> "레이팅 ${plain(v)} 높은 상대를 꺾음"
+        LOW_WIN -> "${plain(v)}점으로 승리"
+        BEST_PAIR -> "두 선수 합계 ${plain(v)}점"
+        SEASON_SCORE -> "평균 ${plain(v)}점"
+        SEASON_WINRATE -> "경기 승률 ${plain(v)}%"
+        SEASON_YACHTS -> "요트 ${plain(v)}번"
+        CAREER_GAMES -> "%,d판".format(v.roundToInt())
+        CAREER_WINS -> "%,d승".format(v.roundToInt())
+        CAREER_YACHTS -> "요트 %,d번".format(v.roundToInt())
+        CAREER_300 -> "300점 이상 ${plain(v)}판"
+        MVPS -> "MVP ${plain(v)}회"
+        POTW -> "이 주의 선수 ${plain(v)}회"
+        YOUNGEST_CHAMPION, OLDEST_CHAMPION -> "${plain(v)}세에 우승"
     }
 }
 

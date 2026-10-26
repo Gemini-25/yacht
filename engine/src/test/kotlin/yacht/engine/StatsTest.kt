@@ -219,6 +219,68 @@ class StatsTest {
         assertEquals("승리 확률 3%에서 역전", RecordKind.COMEBACK.text(3.0))
     }
 
+    @Test
+    fun ratingGameAndCareerRecords() {
+        val book = StatsBook(recordWarmup = 10)
+        val ratings = HashMap(mapOf("low" to 1400.0, "high" to 1800.0, "x" to 1700.0))
+        val ctx = StatsContext(1, { ratings[it] ?: 1500.0 })
+        val events = ArrayList<LeagueEvent>()
+        // The lower rated wins: the biggest upset, a low winning score and the best two-player total.
+        events += book.record(job("low", "high", GameScore(150, 140), GameScore(160, 150)), ctx)
+        val upset = book.records[RecordKind.UPSET]!!
+        assertEquals(listOf("low", "high"), listOf(upset.holder, upset.other))
+        assertEquals(400.0, upset.value)
+        assertEquals(150.0, book.records[RecordKind.LOW_WIN]!!.value)
+        assertEquals(310.0, book.records[RecordKind.BEST_PAIR]!!.value)
+        assertEquals("레이팅 400 높은 상대를 꺾음", RecordKind.UPSET.text(400.0))
+        // No peak before 60 games: a new rating still moves a lot.
+        assertNull(book.records[RecordKind.PEAK_RATING])
+        // x plays 40 matches (80 games) climbing to 1739: its peak counts from its 60th game.
+        repeat(40) { i ->
+            ratings["x"] = 1700.0 + i
+            events += book.record(job("x", "o${i % 3}", GameScore(250, 200), GameScore(240, 210)), ctx)
+        }
+        val peak = book.records[RecordKind.PEAK_RATING]!!
+        assertEquals("x" to 1739.0, peak.holder to peak.value)
+        assertEquals("x" to 80.0, book.records[RecordKind.CAREER_GAMES]!!.let { it.holder to it.value })
+        assertEquals(80.0, book.records[RecordKind.CAREER_WINS]!!.value)
+        assertEquals(450.0, book.records[RecordKind.BEST_PAIR]!!.value)
+        // A count one holder keeps raising is one break, not one a game.
+        val records = events.filter { it.kind == "record" }
+        for (k in listOf(RecordKind.CAREER_GAMES, RecordKind.CAREER_WINS, RecordKind.PEAK_RATING, RecordKind.STREAK)) {
+            assertTrue(records.count { it.args[0] == k.name } <= 1, "$k: ${records.filter { it.args[0] == k.name }}")
+        }
+        // Every kind has a section, a label and a text.
+        for (k in RecordKind.entries) assertTrue(k.label.isNotBlank() && k.text(12.0).isNotBlank(), k.name)
+        assertEquals("12,345판", RecordKind.CAREER_GAMES.text(12345.0))
+    }
+
+    @Test
+    fun seasonAwardAndChampionRecords() {
+        val lg = threeSeasons()
+        val r = lg.book.records
+        // ai15 gains 40 rating points a season; ai1 is the MVP every season and wins every match.
+        assertEquals("ai15" to 40.0, r[RecordKind.RATING_GAIN]!!.let { it.holder to it.value })
+        assertEquals("ai1" to 3.0, r[RecordKind.MVPS]!!.let { it.holder to it.value })
+        assertEquals(100.0, r[RecordKind.SEASON_WINRATE]!!.value)
+        assertEquals(217.5, r[RecordKind.SEASON_SCORE]!!.value)
+        assertTrue(r[RecordKind.SEASON_SCORE]!!.holder in setOf("ai1", "ai11"))
+        // From the honours: most 이 주의 선수, the youngest and oldest champions (older seasons too, quietly).
+        val book = StatsBook()
+        val h = HonourBook().apply {
+            add(listOf(Honour(1, "L0", "a"), Honour(1, "POTW", "a"), Honour(1, "POTW", "a"), Honour(2, "L0", "b"), Honour(2, "POTW", "b"), Honour(3, "L0", "c"), Honour(3, "POTW", "a")))
+        }
+        val ages = mapOf("a" to 25, "b" to 19, "c" to 33)
+        val events = book.honourRecords(h, 3) { k, s -> ages[k]?.let { it + s - 3 } }
+        assertEquals("b" to 18.0, book.records[RecordKind.YOUNGEST_CHAMPION]!!.let { it.holder to it.value })
+        assertEquals(2, book.records[RecordKind.YOUNGEST_CHAMPION]!!.season)
+        assertEquals("c" to 33.0, book.records[RecordKind.OLDEST_CHAMPION]!!.let { it.holder to it.value })
+        assertEquals("a" to 3.0, book.records[RecordKind.POTW]!!.let { it.holder to it.value })
+        // News only for this season's champion breaking a record.
+        assertEquals(listOf(listOf("c", "a")), events.filter { it.kind == "record" }.map { it.keys })
+        assertTrue(book.honourRecords(h, 3) { k, s -> ages[k]?.let { it + s - 3 } }.isEmpty())
+    }
+
     /** A match the stronger AI wins 220-180 and 215-185, with facts (A first in game 1, B in game 2). */
     private fun result(f: Fixture, strength: (String) -> Int): JobResult {
         val aWins = strength(f.a) > strength(f.b)
@@ -343,7 +405,8 @@ class StatsTest {
         // A record broken: its value in brackets after the record's name, not after the verb.
         val said = s2.review!!.sentences
         assertTrue("선수9가 한 시즌 최다 승점 기록(승점 30)을 새로 썼어요." in said, said.toString())
-        assertTrue("이번 시즌 깨진 리그 기록은 모두 2개예요." in said, said.toString())
+        // 최다 승점, 최다 우승 and 최다 MVP (ai1's second).
+        assertTrue("이번 시즌 깨진 리그 기록은 모두 3개예요." in said, said.toString())
         assertEquals(RatingMove("ai15", 1665.0, 1705.0), review.risers.single())
         assertTrue(review.meta.any { it.label == "리그 평균 점수" && it.delta == 0.0 })
         println(review.sentences.joinToString("\n"))

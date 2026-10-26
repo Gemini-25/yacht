@@ -233,9 +233,17 @@ aggregate points; 25-point score histogram (16 bins); cost EWMA (ms per game).
 prevalence (mistake level, risk θ, yacht taste, belief) among generated/evolved AIs in the top
 fifth vs the rest, with the change from the previous season (메타 리포트).
 
-**Records** (`rec` lines, updated in O(1) per game): best game, biggest margin, biggest comeback,
-longest winning streak (from the ladder), most yachts in a game, most points in a season, best
-average match rating in a season, most titles (computed from honours).
+**Records** (`rec` lines, updated in O(1) per game; `RecordKind`, shown by `RecordGroup` in the
+기록실): 레이팅 — best rating ever (before an official match, once a player has 60 games),
+biggest rating gain in a season (from its start rating), biggest upset (rating gap a winner
+overcame); 한 판·한 경기 — best game, biggest margin, biggest comeback, lowest winning score,
+best two-player total in a game, most yachts in a match; 한 시즌 — most points, best average
+match rating, best average score, best match win rate (20 matches, or 3/4 of a short season's
+rounds), most yachts; 통산 — longest winning streak, most games, wins, yachts and 300-point
+games (from every rated game, as the milestones); 우승·수상 — most titles, most MVPs, most
+이 주의 선수, youngest and oldest 1부 champion (by age in the title season; earlier seasons are
+counted quietly the first time, `StatsBook.honourRecords`). A count one holder keeps raising
+(`running`) is one break a season, not one a game.
 
 **Milestones** (news + 마일스톤 list): career games 1000/5000/10000/…, wins 100/500/1000/…,
 yachts 50/100/500/…, first title, every 5th title, 300+ games.
