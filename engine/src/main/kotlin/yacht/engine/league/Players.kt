@@ -21,17 +21,22 @@ enum class Origin(val label: String) {
     GENERATED("생성"),
     EVOLVED("진화"),
     MINE("내 AI"),
+
+    /** A player the player made (선수 만들기): a league player like the generated ones. */
+    CREATED("직접 만든"),
     ;
 
     companion object {
         private val GENERATED_KEY = Regex("g\\d+")
         private val EVOLVED_KEY = Regex("e\\d+_\\d+")
+        private val CREATED_KEY = Regex("u\\d+")
 
-        /** The origin read from a key: g001 generated, e3_1 evolved, me, the clone and custom AIs mine, the rest base. */
+        /** The origin read from a key: g001 generated, e3_1 evolved, u1 made by the player, me, the clone and custom AIs mine, the rest base. */
         fun of(key: String): Origin = when {
             key == Ladder.ME || key == CustomAis.CLONE || key.startsWith("custom-") -> MINE
             GENERATED_KEY.matches(key) -> GENERATED
             EVOLVED_KEY.matches(key) -> EVOLVED
+            CREATED_KEY.matches(key) -> CREATED
             else -> BASE
         }
     }
@@ -55,6 +60,8 @@ data class PlayerRecord(
     val peak: Double = Double.NaN,
     /** Nation, gender, age and abilities (null only for a record made before identities, until the book fills it in). */
     val identity: Identity? = null,
+    /** Forever in its prime (영원히 현역): it never ages, grows, declines nor retires (a player made so). */
+    val keep: Boolean = false,
 ) {
     /** Age in [season] (its debut age when it has no identity yet). */
     fun age(season: Int): Int = identity?.age(season, born) ?: 0
@@ -500,6 +507,31 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         legendList.forEach { add(it.name) }
     }
 
+    /** The next made player's number (u1, u2, ...): never given out twice, as honours and records are by key. */
+    var madeNext: Int = 1
+        private set
+
+    private fun madeIndex(key: String): Int? = if (Origin.of(key) == Origin.CREATED) key.drop(1).toIntOrNull() else null
+
+    /** Adds the player [draft] describes, debuting in [season] (선수 만들기); its key is the next made one. */
+    fun make(draft: PlayerDraft, season: Int): PlayerRecord {
+        val key = "u${madeNext++}"
+        val r = PlayerMaker.build(draft, key, season, null)
+        byKey[key] = r
+        return r
+    }
+
+    /** [key] remade from [draft] (its records and debut stay); null when it is not alive here. */
+    fun edit(key: String, draft: PlayerDraft, season: Int): PlayerRecord? {
+        val old = byKey[key] ?: return null
+        val r = PlayerMaker.build(draft, key, season, old)
+        byKey[key] = r
+        return r
+    }
+
+    /** Takes a player the player made out of the book (지우기): it leaves as if deleted, no retirement. */
+    fun remove(key: String): Boolean = Origin.of(key) == Origin.CREATED && byKey.remove(key) != null
+
     /** The next generated index: every new generated player takes the next one, so a key is never given out twice. */
     var next: Int = 1
         internal set
@@ -692,6 +724,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         append("evolved $evolvedSeason\n")
         append("gone ${gone.joinToString(",").ifEmpty { "-" }}\n")
         append("next $next\n")
+        if (madeNext > 1) append("made $madeNext\n")
         if (reformed > 0) append("reformed $reformed\n")
         if (meta.isNotEmpty()) append("meta ${meta.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }}\n")
         // Identity and style are name=value tokens after the fields older versions read.
@@ -699,6 +732,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             append("ai ${p.key} ${esc(p.name)} ${esc(p.hometown)} ${p.origin.name} ${p.born} ${p.parentA ?: "-"} ${p.parentB ?: "-"} ")
             append("${p.spec.genes().joinToString(" ")} ${num(p.peak)}")
             p.identity?.let { append(' ').append(it.tokens()) }
+            if (p.keep) append(" keep=1")
             append(styleTokens(p.spec)).append('\n')
         }
         for (r in retiredList) {
@@ -775,6 +809,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             "evolved" -> evolvedSeason = f[1].toInt()
             "gone" -> if (f[1] != "-") gone += f[1].split(',').map { it.toInt() }.onEach { if (it >= next) next = it + 1 }
             "next" -> next = maxOf(next, f[1].toInt())
+            "made" -> madeNext = maxOf(madeNext, f[1].toInt())
             "reformed" -> reformed = f[1].toInt()
             "meta" -> meta = f[1].split(',').associate { it.substringBefore(':') to it.substringAfter(':').toDouble() }
             "ai" -> {
@@ -786,8 +821,9 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
                 val spec = withStyle(CustomAiSpec.ofGenes(key, name, f.subList(8, 8 + G)), t)
                 val r = PlayerRecord(key, name, unesc(f[3]), Origin.valueOf(f[4]), f[5].toInt(), keyOf(f[6]), keyOf(f[7]), spec, numOf(f[8 + G]))
                 // A line from before identities: read as the Korean player it always was.
-                byKey[key] = r.copy(identity = Identity.read(t) ?: Profiles.legacy(r, evolvedSeason + 1))
+                byKey[key] = r.copy(identity = Identity.read(t) ?: Profiles.legacy(r, evolvedSeason + 1), keep = t["keep"] == "1")
                 PlayerGenerator.index(key)?.let { if (it >= next) next = it + 1 }
+                madeIndex(key)?.let { if (it >= madeNext) madeNext = it + 1 }
             }
             "retired" -> {
                 require(f.size >= 11)
@@ -797,6 +833,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
                     Nations.of(t["nat"])?.code ?: Nations.KR.code, Gender.of(t["sex"]?.singleOrNull()), t["da"]?.toIntOrNull() ?: 0,
                 )
                 PlayerGenerator.index(f[1])?.let { if (it >= next) next = it + 1 }
+                madeIndex(f[1])?.let { if (it >= madeNext) madeNext = it + 1 }
                 while (retiredList.size > MAX_RETIRED) retiredList.removeAt(0)
             }
             "legend" -> {
@@ -813,6 +850,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
                     unesc(f[at + 5]), Origin.valueOf(f[at + 6]), id?.nation ?: Nations.KR.code, id?.gender, id?.debutAge ?: 0,
                 )
                 PlayerGenerator.index(key)?.let { if (it >= next) next = it + 1 }
+                madeIndex(key)?.let { if (it >= madeNext) madeNext = it + 1 }
                 legendList.removeAll { it.key == key }
                 legendList += Legend(r, spec, unesc(f[at]).ifEmpty { "-" }, id)
                 trimLegends()

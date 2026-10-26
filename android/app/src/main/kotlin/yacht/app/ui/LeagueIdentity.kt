@@ -145,7 +145,7 @@ private fun AbilityRow(label: String, v: Int, change: Int, peak: Int?) {
 
 /** 성향: two-ended bars from -50 to +50, the dot where the player stands. */
 @Composable
-private fun TendencyBars(t: List<Int>) {
+fun TendencyBars(t: List<Int>) {
     val cs = MaterialTheme.colorScheme
     val dot = gameColors.me
     val mid = cs.outline

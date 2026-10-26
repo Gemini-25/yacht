@@ -108,7 +108,7 @@ fun ProfileSection(lg: LeagueController, key: String) {
             color = cs.secondary,
         )
         p.identity?.let { IdentityPart(it, alive = p.retired == null) }
-        p.genes?.takeIf { p.identity?.style == null && (p.origin == Origin.GENERATED || p.origin == Origin.EVOLVED) }?.let {
+        p.genes?.takeIf { p.identity?.style == null && (p.origin == Origin.GENERATED || p.origin == Origin.EVOLVED || p.origin == Origin.CREATED) }?.let {
             Text("스타일: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
         Honours(p)

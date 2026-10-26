@@ -43,6 +43,8 @@ import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
 import yacht.engine.league.NationBook
 import yacht.engine.league.Nations
+import yacht.engine.league.PlayerMaker
+import yacht.engine.league.PlayerDraft
 import yacht.engine.league.diff
 import yacht.engine.league.Origin
 import yacht.engine.league.Club
@@ -960,6 +962,50 @@ class LeagueController(
         customs = customs.filter { it.id != id }
         persistCustoms()
         rosterChanged()
+    }
+
+    // ---- 선수 만들기 -------------------------------------------------------------------------------
+
+    /** The season a player made now belongs to (its age is counted from it). */
+    private fun seasonNow(w: LeagueWorld): Int = w.plan?.number ?: (w.players.evolvedSeason + 1)
+
+    /** [key] (a league player: generated, evolved or made) as a draft to edit; null for any other AI. */
+    fun draftOf(key: String): PlayerDraft? = synchronized(lock) {
+        val w = world ?: return null
+        val p = w.players[key] ?: return null
+        PlayerMaker.of(p, seasonNow(w))
+    }
+
+    /** A drawn player to start from (🎲 무작위), named apart from everyone. */
+    fun randomDraft(): PlayerDraft {
+        val taken = synchronized(lock) { world?.players?.names().orEmpty() }
+        return PlayerMaker.random(java.util.Random(), taken)
+    }
+
+    /**
+     * Saves [draft]: a new league player ([key] null), or [key] remade (its records stay). It
+     * plays friendlies until next season, which it starts in the lowest division like any
+     * newcomer. Returns why it could not be saved (해요체), or null.
+     */
+    fun savePlayer(key: String?, draft: PlayerDraft): String? {
+        synchronized(lock) {
+            val w = world ?: return "리그를 불러오는 중이에요. 잠시 뒤에 다시 해 주세요."
+            val b = w.players
+            val own = key?.let { b[it]?.name }
+            PlayerMaker.problem(draft, b.names() - setOfNotNull(own))?.let { return it }
+            if (key == null) b.make(draft, seasonNow(w)) else b.edit(key, draft, seasonNow(w)) ?: return "이 선수는 이제 리그에 없어요."
+        }
+        rosterChanged()
+        scope.launch { save() }
+        return null
+    }
+
+    /** Takes a player I made out of the league for good (its past results stay under its key). */
+    fun deletePlayer(key: String) {
+        val removed = synchronized(lock) { world?.players?.remove(key) == true }
+        if (!removed) return
+        rosterChanged()
+        scope.launch { save() }
     }
 
     private fun persistCustoms() {

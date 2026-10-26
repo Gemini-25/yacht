@@ -236,7 +236,7 @@ class MainActivity : ComponentActivity() {
                     if (c.screen == Screen.WATCH) c.league.stopWatch()
                     c.screen = when (c.screen) {
                         Screen.REVIEW -> Screen.HISTORY
-                        Screen.WATCH, Screen.BUILDER -> Screen.LEAGUE
+                        Screen.WATCH, Screen.BUILDER, Screen.MAKER -> Screen.LEAGUE
                         else -> Screen.HOME
                     }
                 }

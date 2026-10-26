@@ -139,7 +139,7 @@ class GameStorage(val dir: File) {
         settings.writeTextAtomically(values.entries.joinToString("\n") { "${it.key}=${it.value}" })
 }
 
-enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ, LEAGUE, WATCH, BUILDER }
+enum class Screen { HOME, GAME, HISTORY, REVIEW, VERIFY, QUIZ, LEAGUE, WATCH, BUILDER, MAKER }
 
 /** Practice record (saved). */
 data class QuizStats(val answered: Int = 0, val correct: Int = 0, val lossSum: Double = 0.0)
@@ -322,6 +322,9 @@ class AppController(
 
     /** My AI open in the builder; null builds a new one. */
     var editingAi by mutableStateOf<yacht.engine.league.CustomAiSpec?>(null)
+
+    /** The league player 선수 만들기 opens on (null: a new one). */
+    var editingPlayer by mutableStateOf<String?>(null)
 
     /** The league AI of the ranked game in progress (made again after a restart). */
     private var rankedPlayer: Player? = null

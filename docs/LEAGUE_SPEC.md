@@ -55,6 +55,13 @@ Ground rules for all code:
 - **Base AIs**: the 103 hand-made AIs of `LeagueRoster`. With `baseAis` off they play one
   farewell season and leave the league as its founders (records kept; ranked games and the lab
   still use them).
+- **Made players** (`origin = CREATED`, keys `u1`, `u2`, ... never given twice; `made N` line):
+  선수 만들기 (`PlayerMaker`, `PlayerDraft`): name, gender, nation, hometown, age, abilities,
+  potential, feel or slips, temper kind, style (recipe, k 0.7..1.7, second style, overlay; a
+  drawn or edited player's tastes and situational habits kept), and `keep` (영원히 현역: no
+  aging, growth, decline or retirement; saved as `keep=1`). Abilities apply as for generated
+  players ([Profiles.apply]). Any league player can be remade the same way (its records,
+  debut, parents and peak stay); only made ones can be deleted (they leave as deleted AIs).
 - **Mine** (`origin = MINE`): the clone and custom AIs.
 - `league/roster.txt`: alive players with identity and style tokens; `retired` lines (newest
   3000, with nation, gender and ages) and `legend` lines (any honour, at most 300).

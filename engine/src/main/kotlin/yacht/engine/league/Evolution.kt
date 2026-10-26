@@ -96,8 +96,11 @@ object Evolution {
             // Ages stand still while nobody ages (the debut age moves along with the seasons).
             for (p in playing) p.identity?.let { id -> book[p.key]?.let { book.update(it.copy(identity = id.copy(debutAge = id.debutAge - 1))) } }
         }
+        // Players forever in their prime: their age stands still and they never retire.
+        if (aging) for (p in playing) if (p.keep) p.identity?.let { id -> book[p.key]?.let { book.update(it.copy(identity = id.copy(debutAge = id.debutAge - 1))) } }
         if (aging) {
             for (p in playing) {
+                if (p.keep) continue
                 val id = p.identity ?: continue
                 val age = id.age(season, p.born)
                 val r = Random(DiceStream.mix(seed, RETIRE_SALT, season.toLong(), p.key.hashCode().toLong()))
@@ -109,6 +112,7 @@ object Evolution {
             }
             for (p0 in playing) {
                 val p = book[p0.key] ?: continue
+                if (p.keep) continue
                 val id = p.identity ?: continue
                 val age = id.age(season, p.born)
                 val r = Random(DiceStream.mix(seed, GROW_SALT, season.toLong(), p.key.hashCode().toLong()))

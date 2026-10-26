@@ -156,6 +156,7 @@ fun LeagueScreen(c: AppController) {
                     onClick = { watchFeatured(c) },
                     label = { Text("👀 경기 관전") },
                 )
+                AssistChip(onClick = { c.editingPlayer = null; c.screen = Screen.MAKER }, label = { Text("🧑 선수 만들기") })
                 AssistChip(onClick = { c.editingAi = null; c.screen = Screen.BUILDER }, label = { Text("🛠 AI 만들기") })
             }
             lg.seasonNews?.let { SeasonNews(it) { lg.seasonNews = null } }
@@ -1198,6 +1199,10 @@ private fun AiDetail(c: AppController, r: LadderRow, onCompare: () -> Unit, onDi
                             },
                             label = { Text("👀 관전") },
                         )
+                        // A league player (generated, evolved or made): remade in 선수 만들기.
+                        if (r.origin == yacht.engine.league.Origin.GENERATED || r.origin == yacht.engine.league.Origin.EVOLVED || r.origin == yacht.engine.league.Origin.CREATED) {
+                            AssistChip(onClick = { onDismiss(); c.editingPlayer = r.key; c.screen = Screen.MAKER }, label = { Text("✏️ 선수 고치기") })
+                        }
                         val mine = lg.customs.firstOrNull { it.key == r.key }
                         if (mine != null) {
                             AssistChip(onClick = { onDismiss(); c.editingAi = mine; c.screen = Screen.BUILDER }, label = { Text("🛠 고치기") })

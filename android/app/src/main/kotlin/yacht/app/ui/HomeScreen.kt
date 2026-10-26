@@ -73,6 +73,7 @@ fun AppRoot(c: AppController) {
                 Screen.LEAGUE -> LeagueScreen(c)
                 Screen.WATCH -> WatchScreen(c)
                 Screen.BUILDER -> BuilderScreen(c)
+                Screen.MAKER -> PlayerMakerScreen(c)
             }
         }
     }

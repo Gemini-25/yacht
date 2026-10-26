@@ -282,6 +282,18 @@ private fun run(args: Array<String>) {
     shot(c, out, "26_builder_edit", heightDp = 1700)
     c.editingAi = null
 
+    // Making a league player, then editing it (its page and the maker on it).
+    c.editingPlayer = null
+    c.screen = Screen.MAKER
+    shot(c, out, "27_player_maker", heightDp = 3600)
+    val draft = c.league.randomDraft().copy(name = "스크린샷 선수", nation = "SE", hometown = "스톡홀름", age = 22, keep = true)
+    check(c.league.savePlayer(null, draft) == null) { "the made player was not saved" }
+    waitFor("made player") { c.league.view?.rows?.any { it.name == "스크린샷 선수" } == true }
+    val made = c.league.view!!.rows.first { it.name == "스크린샷 선수" }.key
+    c.editingPlayer = made
+    shot(c, out, "28_player_maker_edit", heightDp = 1300)
+    c.editingPlayer = null
+
     c.screen = Screen.VERIFY
     c.startVerify(4)
     waitFor("verify", 600_000) { !c.verifying }
