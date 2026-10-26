@@ -13,7 +13,7 @@ import java.util.Random
  */
 enum class Temper(val label: String, val desc: String) {
     NONE("기복 없음", "판 내내 같은 실력으로 둬요"),
-    TILT("멘탈 약함", "0점을 쓰거나 크게 망친 턴이 나오면 그 판 끝까지 실수가 늘어요"),
+    TILT("0점 뒤 흔들림", "0점을 쓰거나 크게 망친 턴이 나오면 그 판 끝까지 실수가 늘어요"),
     TIRED("지구력 부족", "마지막 4턴에 실수가 늘어요"),
     WARMUP("슬로 스타터", "처음 4턴에 실수가 많아요"),
     MOODY("컨디션 기복", "판마다 실수가 절반에서 두 배 사이로 달라져요"),

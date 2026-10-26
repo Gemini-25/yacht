@@ -122,6 +122,38 @@ class Season private constructor(
     /** Upcoming and played fixtures of a matchday (for the calendar). */
     fun matchday(k: Int): List<LeagueFixture> = fixtures.filter { it.matchday == k }
 
+    /** True when every fixture of matchday [k] is played (in every division). */
+    fun dayDone(k: Int): Boolean = k in 0 until matchdays && divisions.indices.all { (matchdayLeft[it to k] ?: 0) == 0 }
+
+    /** The 이 주의 선수 of a matchday: [key] beat [opponent] with the best average score of the week. */
+    data class WeekPick(val matchday: Int, val key: String, val opponent: String, val average: Double, val best: Int, val division: Int)
+
+    private val pickOrder: Comparator<WeekPick> = compareByDescending<WeekPick> { it.average }.thenByDescending { it.best }.thenBy { it.division }.thenBy { it.key }
+
+    /**
+     * 이 주의 선수 of each matchday in [days] (null for a day with no winner): of the players
+     * who won their match that day (none of [excluded]), the best average score; level, the best
+     * single game, then the higher division, then by key (all fixed by the results: the same
+     * pick whenever it is asked). One pass over the fixtures.
+     */
+    fun playersOfWeek(days: IntRange, excluded: Set<String> = emptySet()): Map<Int, WeekPick> {
+        val best = HashMap<Int, WeekPick>()
+        for (f in fixtures) {
+            if (f.matchday !in days) continue
+            val games = results[f.id] ?: continue
+            if (games.isEmpty()) continue
+            val res = TieRule.match(games)
+            if (res == 0) continue
+            val (w, l) = if (res > 0) f.a to f.b else f.b to f.a
+            if (w in excluded) continue
+            val own = games.map { if (res > 0) it.a else it.b }
+            val pick = WeekPick(f.matchday, w, l, own.average(), own.max(), f.division)
+            val cur = best[f.matchday]
+            if (cur == null || pickOrder.compare(pick, cur) < 0) best[f.matchday] = pick
+        }
+        return best
+    }
+
     fun isPlayed(id: Int): Boolean = id !in remaining && id !in inProgress
 
     /** The games of fixture [id] once played (its [LeagueFixture.a] is "a"); null before. */

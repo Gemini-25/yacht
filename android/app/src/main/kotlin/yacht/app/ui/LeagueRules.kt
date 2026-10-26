@@ -84,13 +84,13 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Stepper("선수 수", cfg.generated, 0..LeagueConfig.MAX_PLAYERS, { "${it}명" }, step = 50) { cfg = cfg.copy(generated = it) }
                 Toggle("나이와 은퇴", cfg.aging) { cfg = cfg.copy(aging = it) }
                 Text(
-                    "선수가 시즌마다 한 살씩 먹어요. 어린 선수는 성장하고 노장은 기량이 떨어지다 은퇴해요. 빈 자리는 신인과 상위 선수의 제자로 채워요.",
+                    "선수들이 시즌마다 나이를 한 살씩 먹어요. 어린 선수는 성장하고 노장은 기량이 떨어지다 은퇴해요. 빈자리는 신인과 상위 선수의 제자가 채워요.",
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
-                if (cfg.aging) Stepper("제자 비율", cfg.childShare, 0..100, { "${it}%" }, step = 10) { cfg = cfg.copy(childShare = it) }
+                if (cfg.aging) Stepper("빈자리 채우기: 제자 비율", cfg.childShare, 0..100, { "제자 ${it}% · 신인 ${100 - it}%" }, step = 10) { cfg = cfg.copy(childShare = it) }
                 Toggle("기본 AI 103명도 리그에 출전", cfg.baseAis) { cfg = cfg.copy(baseAis = it) }
                 Text(
-                    "끄면 생성 선수만으로 리그를 꾸려요. 기본 AI는 랭크 게임과 AI 연구소에서 그대로 만날 수 있어요.",
+                    "끄면 기본 AI 103명은 리그에서 빠지고 랭크 게임과 AI 연구소 상대로만 남아요. 다음 시즌부터 적용돼요.",
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
                 Toggle("실수하는 선수만", cfg.onlyFlawed) { cfg = cfg.copy(onlyFlawed = it) }
@@ -107,6 +107,10 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("슈퍼컵", cfg.superCup) { cfg = cfg.copy(superCup = it) }
                 Toggle("올스타전", cfg.allStar) { cfg = cfg.copy(allStar = it) }
                 Toggle("국가대항전 (요트 월드컵·대륙컵)", cfg.nationCup) { cfg = cfg.copy(nationCup = it) }
+                Text(
+                    "시즌 3부터 2시즌마다 나라별 레이팅 상위 5명이 대표팀을 꾸려 겨뤄요. 요트 월드컵과 대륙컵이 번갈아 열려요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
                 Toggle("계열 대항전 (3시즌마다 · 기본 AI가 출전할 때만)", cfg.familyCup) { cfg = cfg.copy(familyCup = it) }
                 Toggle("클럽 리그", cfg.clubs > 0) { cfg = cfg.copy(clubs = if (it) 16 else 0) }
                 if (cfg.clubs > 0) {

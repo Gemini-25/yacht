@@ -317,8 +317,11 @@ object Evolution {
         return pool[best]
     }
 
-    /** Call-ups to a family or national squad: every edition calls up a hundred, they make nobody a legend. */
-    val SQUAD_KINDS = setOf("FSQ", "NSQ")
+    /**
+     * Call-ups to a family or national squad and 이 주의 선수: every season hands out a hundred,
+     * they make nobody a legend.
+     */
+    val SQUAD_KINDS = setOf("FSQ", "NSQ", "POTW")
 
     /** Promotions, relegations and playoff stays are moves, not honours; neither are call-ups. */
     fun isHonour(kind: String): Boolean = !kind.startsWith("UP") && !kind.startsWith("DOWN") && !kind.startsWith("STAY") && kind !in SQUAD_KINDS

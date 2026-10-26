@@ -98,6 +98,23 @@ class LeagueWorldTest {
     }
 
     @Test
+    fun everyWeekHasItsPlayerOfTheWeekOnce() {
+        val config = LeagueConfig(divisions = 2, generated = 20, aging = false, clubs = 0, familyCup = false, nationCup = false)
+        val w = world(config)
+        w.openFirstSeason(3L)
+        val news = season(w)
+        val picks = news.filter { it.kind == "player_of_week" }
+        val days = w.plan!!.league.matchdays
+        assertEquals((1..days).map { it.toString() }, picks.map { it.args[0] })
+        assertTrue(picks.all { it.week == it.args[0].toInt() })
+        // Each pick won its match that week; the honours keep one per week.
+        val closing = rollover(w)
+        assertEquals(picks.map { it.keys[0] }, closing.honours.filter { it.kind == "POTW" }.map { it.key })
+        val a = yacht.engine.league.News.article(picks.first(), { it })
+        assertTrue("이 주의 선수" in a.headline + a.body, a.toString())
+    }
+
+    @Test
     fun seasonsRollOverWithCompetitionsEvolutionAndSaves() {
         val config = LeagueConfig(divisions = 3, generated = 20, aging = true, clubs = 8, squad = 5)
         val w = world(config)

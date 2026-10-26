@@ -37,7 +37,7 @@ object Schools {
         "NL" to s("straight lower", null, 0, 2, 2, 0, "족보 칸을 넓게 쓰는 토털 요트를 해요."),
         "SE" to s("ev timid", null, 1, 1, 0, 4, "흔들림 없이 침착한 선수가 많아요."),
         "TH" to s("small fullhouse", null, 0, 1, 1, 1, "작은 눈과 풀하우스를 알뜰하게 챙겨요."),
-        "NG" to s("reroller fourkind", null, 0, 0, 3, 1, "힘 있게 끝까지 굴려 큰 족보를 만들어요."),
+        "NG" to s("reroller fourkind", null, 0, 0, 3, 1, "끝까지 포기하지 않고 굴려 큰 족보를 만들어요."),
         "PL" to s("noscratch ev", null, 2, 1, 0, 1, "0점을 싫어하는 끈질긴 선수가 많아요."),
         "CO" to s("fullhouse hunter", "streaky", 0, 0, 2, 0, "리듬을 타면 무섭게 몰아쳐요."),
         "EG" to s("collector fourkind", null, 0, 2, 1, 0, "같은 눈을 모으는 끈기가 대단해요."),

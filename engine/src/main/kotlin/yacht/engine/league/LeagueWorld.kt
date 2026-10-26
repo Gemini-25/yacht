@@ -175,9 +175,37 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     /** Records a finished season fixture in the season alone; returns its news. */
     fun record(r: JobResult): List<LeagueEvent> {
-        val out = plan?.record(r).orEmpty().map { it.at(r.fixture.week) }
+        val out = ArrayList(plan?.record(r).orEmpty().map { it.at(r.fixture.week) })
+        weekPick(r)?.let { out += it }
         note(out)
         return out
+    }
+
+    /**
+     * The last matchday of season [pickedSeason] whose 이 주의 선수 was told: a matchday is told
+     * when its last fixture is recorded, once (a stale result recorded again tells nothing).
+     */
+    private var pickedDay = -1
+    private var pickedSeason = 0
+
+    /** 이 주의 선수 when [r] finished its matchday: `player_of_week` [player, opponent] (week, average, best, division). */
+    private fun weekPick(r: JobResult): LeagueEvent? {
+        val p = plan ?: return null
+        if (r.fixture.comp != Comp.LEAGUE) return null
+        val league = p.league
+        if (pickedSeason != p.number) {
+            pickedSeason = p.number
+            pickedDay = -1
+        }
+        val day = runCatching { league.fixture(r.fixture.id).matchday }.getOrNull() ?: return null
+        if (day <= pickedDay || !league.dayDone(day)) return null
+        pickedDay = day
+        val pick = league.playersOfWeek(day..day, closingGone + league.standings.keys.filter { !present(it) })[day] ?: return null
+        return LeagueEvent(
+            "player_of_week", p.number, listOf(pick.key, pick.opponent),
+            listOf((day + 1).toString(), String.format(java.util.Locale.ROOT, "%.1f", pick.average), pick.best.toString(), pick.division.toString()),
+            Comp.LEAGUE, day + 1,
+        )
     }
 
     fun release(f: Fixture) {
@@ -208,7 +236,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             // after a kill) has none, rather than a made-up starting one that would win awards.
             stats.endSeason(p, h, honours, archive, { k -> ladder.rating(k) }, family, name, null, ::traits, gone)
         }.getOrNull()
-        honours.add(h + end?.awards.orEmpty())
+        // 이 주의 선수 of every week, kept with the season's honours.
+        val picks = runCatching { p.league.playersOfWeek(0 until p.league.matchdays, gone).values.sortedBy { it.matchday }.map { Honour(p.number, "POTW", it.key) } }.getOrDefault(emptyList())
+        honours.add(h + end?.awards.orEmpty() + picks)
         val out = ArrayList<LeagueEvent>()
         end?.let { out += it.events }
         // The season's three best games go to the archive.
@@ -277,7 +307,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
         val closed = out.map { it.at(SeasonCalendar.CLOSING) }
         note(closed)
-        return Closing(p.number, h + end?.awards.orEmpty(), closed, changed)
+        return Closing(p.number, h + end?.awards.orEmpty() + picks, closed, changed)
     }
 
     /**

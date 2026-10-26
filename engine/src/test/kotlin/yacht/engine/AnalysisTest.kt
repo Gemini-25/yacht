@@ -395,7 +395,7 @@ class AnalysisTest {
         assertTrue(full.lines.any { it.contains("모험형") && it.contains("θ=+0.06") })
         assertTrue(full.lines.any { it.startsWith("가장 강한 칸은") && it.contains("풀하우스") }, full.lines.toString())
         assertTrue(full.lines.any { it.startsWith("가장 약한 칸은 ‘1’") }, full.lines.toString())
-        assertTrue(full.lines.any { it.contains("‘멘탈 약함’ 기질") })
+        assertTrue(full.lines.any { it.contains("‘0점 뒤 흔들림’ 기질") })
         assertTrue(full.lines.any { it == "수를 고를 때 8%의 확률로 최선 대신 차선을 둬요." }, full.lines.toString())
         // An EV gene AI with tastes and a belief.
         val taste = CustomAiSpec("g8", "이하은", yacht = 25.0, zero = 8.0, saveChoice = true, future = 0.8, belief = "no-bonus", mistake = CustomMistake.FEEL, amount = 1.5)

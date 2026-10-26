@@ -141,11 +141,11 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
         LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false),
     ),
     CHAOS(
-        "대혼돈", "실수하는 선수만 남기고 제자를 많이: 이변이 쏟아져요",
+        "대혼돈", "실수하는 선수만 남기고 제자 비율을 높여요: 이변이 쏟아져요",
         LeagueConfig(onlyFlawed = true, childShare = 70),
     ),
     ELITE(
-        "강자만", "레이팅 상위 48명만 2부로, 정상급 싸움만",
+        "강자만", "레이팅 상위 48명만 2개 부에서, 정상급 싸움만",
         // The same players season after season: rookies would never get the rating to be picked.
         LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false, aging = false),
     ),

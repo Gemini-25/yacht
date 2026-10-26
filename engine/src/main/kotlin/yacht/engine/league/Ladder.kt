@@ -225,6 +225,21 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     /** Pairs of AIs that have played each other. */
     val pairCount: Int get() = pairs.size
 
+    /** Everyone [key] has played: (opponent, [key]'s points, games) over their careers. */
+    fun opponents(key: String): List<Triple<String, Double, Int>> {
+        val i = index[key] ?: return emptyList()
+        val row = pairs.rows[i]
+        return List(row.size) { k -> val s = row[k]; Triple(keys[pairs.other(s, i)], pairs.points(s, i), pairs.games[s]) }
+    }
+
+    /**
+     * [key]'s rival (라이벌): of the opponents in [among] it met at least [min] games, the one
+     * it met most with a close record (35-65%), the closest record on a tie; null when none.
+     */
+    fun rival(key: String, among: Set<String>? = null, min: Int = 8): Triple<String, Double, Int>? =
+        opponents(key).filter { (o, p, g) -> g >= min && (among == null || o in among) && p / g in 0.35..0.65 }
+            .maxWithOrNull(compareBy<Triple<String, Double, Int>> { it.third }.thenByDescending { Math.abs(it.second / it.third - 0.5) }.thenByDescending { it.first })
+
     /** The last season whose end faded the results ([decay]). */
     var decayed = 0
         private set

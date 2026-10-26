@@ -285,6 +285,7 @@ class MediaTest {
             e("rivalry", listOf("KR", "JP"), listOf("한일전", "3-2", "A조 2차전"), Comp.WORLD_CUP),
             e("nation_awards", listOf("ai1", "ai2"), listOf("요트 월드컵", "5.5", "251.3"), Comp.WORLD_CUP),
             e("style_trend", listOf("BR"), listOf("hunter"), Comp.WORLD_CUP), e("draw_legend", two, emptyList(), Comp.LEGEND),
+            e("player_of_week", two, listOf("12", "265.5", "281", "0"), Comp.LEAGUE),
             e("award", listOf("ai1"), listOf("MVP")), e("award", listOf("ai4"), listOf("ROOKIE")), e("award", listOf("ai2"), listOf("MIP")),
             e("award", listOf("ai3"), listOf("YACHT")), e("award", listOf("ai1"), listOf("SCORER")),
             e("callup", listOf("ai1"), listOf("승률형"), Comp.FAMILY), e("dropped", listOf("ai2"), listOf("승률형"), Comp.FAMILY),

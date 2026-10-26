@@ -29,7 +29,7 @@ data class Abilities(val judgement: Int, val foresight: Int, val sense: Int, val
             "수를 얼마나 정확히 고르는지예요. 높을수록 실수가 적어요.",
             "남은 판을 얼마나 멀리 내다보는지예요. 낮으면 눈앞의 점수에 끌려요.",
             "막판에 점수 차를 보고 이길 확률이 높은 칸을 고르는 감각이에요.",
-            "흔들리지 않는 힘이에요. 낮으면 0점을 쓴 뒤 무너지거나, 막판에 지치거나, 판마다 기복이 커요.",
+            "흔들리지 않는 힘이에요. 낮으면 초반에 몸이 덜 풀리거나, 0점을 쓴 뒤 무너지거나, 막판에 지치거나, 판마다 기복이 커요.",
         )
 
         fun of(xs: List<Int>) = Abilities(xs[0], xs[1], xs[2], xs[3])
@@ -54,7 +54,7 @@ data class Tendencies(val bold: Int, val side: Int, val yacht: Int, val zero: In
         /** Bar names and their two ends (left = -50, right = +50). */
         val BARS = listOf(
             Triple("대담성", "안정", "도박"),
-            Triple("칸 운영", "아랫칸", "윗칸"),
+            Triple("칸 운영", "족보", "상단"),
             Triple("요트 사랑", "무관심", "집착"),
             Triple("0점 처리", "과감히 버림", "끝까지 피함"),
             Triple("끈기", "빨리 멈춤", "끝까지 굴림"),

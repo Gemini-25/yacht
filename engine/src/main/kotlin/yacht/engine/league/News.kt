@@ -86,7 +86,7 @@ object News {
         "upset", "comeback", "record", "milestone", "title", "promoted", "relegated", "cup_round", "eliminated",
         "qualified", "final", "transfer", "draft", "born", "retired", "award", "callup", "dropped", "title_race",
         "retirements", "rookies", "debut", "breakout", "decline", "learned_rule", "league_reform", "founders_farewell",
-        "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend", "draw_legend",
+        "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend", "draw_legend", "player_of_week",
         "hall_of_fame", "dynasty", "legend_match", "draw_cup", "draw_cl", "draw_super", "draw_allstar",
         "draw_family", "season_review",
     )
@@ -286,7 +286,7 @@ object News {
             }
             if (arg(1) == "first") listOf(
                 T("{a}, 사상 첫 {t} 우승!", "{a|이} 사상 처음으로 {t} 정상에 올랐어요. 대표 5명 모두 나라의 역사를 새로 썼어요."),
-                T("{a}의 첫 {t} 트로피", "{a|이} 오랜 기다림 끝에 첫 {t} 우승을 차지했어요. 시즌 {season}은 그 나라에 잊지 못할 해가 됐어요."),
+                T("{a}의 첫 {t} 트로피", "{a|이} 처음으로 {t} 우승을 차지했어요. {a}에게 시즌 {season|은} 잊지 못할 시즌으로 남아요."),
             ) to importance else listOf(
                 T("{a}, {t} 우승!", "{a|이} 시즌 {season}의 {t} 정상에 올랐어요. 시즌 내내 이어 온 노력이 결실을 맺었어요."),
                 T("{t}의 주인은 {a}", "시즌 {season}의 {t} 우승 트로피는 {a}에게 돌아갔어요. 축하 인사가 쏟아지고 있어요."),
@@ -326,7 +326,7 @@ object News {
             when {
                 e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL -> listOf(
                     T("{comp} {round}: {a}, {b} 꺾고 진출", "{a|이} {comp} {round}에서 {b|을}[[ 보드 {score|으로}]] 물리쳤어요. 대표팀의 도전이 다음 라운드로 이어져요."),
-                    T("{b}, {comp} {round}에서 탈락", "{b|은} {a}에게[[ 보드 {score|으로}]] 져 이번 {comp|을} 마쳤어요. {a|은} 다음 라운드로 향해요."),
+                    T("{b}, {comp} {round}에서 탈락", "{b|은} {a}에[[ 보드 {score|으로}]] 져 이번 {comp|을} 마쳤어요. {a|은} 다음 라운드로 향해요."),
                 ) to if (e.comp == Comp.WORLD_CUP) 3 else 2
                 e.comp == Comp.PROMOTION_PLAYOFF -> listOf(
                     T("{round}: {a}의 승리", "{a|이} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. 다음 시즌 어느 부에서 뛸지가 이 승부로 갈렸어요."),
@@ -439,7 +439,7 @@ object News {
                 ) to 3
             } else {
                 listOf(
-                    T("{a}, {age}세로 은퇴", "{a|이}[[ {seasons}시즌 만에]] 선수 생활을 마쳐요. 우승과는 인연이 없었지만 끝까지 최선을 다했어요."),
+                    T("{a}, {age}세로 은퇴", "{a|이}[[ {seasons}시즌의]] 선수 생활을 마쳐요. 우승과는 인연이 없었지만 끝까지 최선을 다했어요."),
                     T("{a}, 리그와 작별", "{a|이} 은퇴해요. 그 자리는 새 얼굴이 채워요."),
                 ) to 2
             }
@@ -448,13 +448,13 @@ object News {
             arg(0)?.let { v["count"] = it }
             listOf(
                 T("시즌 {season} 은퇴 선수 {count}명", "이번 시즌을 끝으로 {count}명이 선수 생활을 마쳐요. {seeds} 등이 정든 무대를 떠나요."),
-                T("베테랑 {count}명, 유니폼을 벗어요", "시즌 {season}을 끝으로 {count}명이 리그를 떠나요. {a|도} 그중 한 명이에요. 빈자리는 신인과 제자들이 채워요."),
+                T("베테랑 {count}명, 유니폼을 벗어요", "시즌 {season|을} 끝으로 {count}명이 리그를 떠나요. {a|도} 그중 한 명이에요. 빈자리는 신인과 제자들이 채워요."),
             ) to 2
         }
         "rookies" -> {
             arg(0)?.let { v["count"] = it }
             listOf(
-                T("시즌 {season} 신인 {count}명 합류", "올해도 새 얼굴 {count}명이 리그에 들어와요. {seeds|이} 가장 주목받는 신인이에요."),
+                T("시즌 {season} 신인 {count}명 합류", "이번 시즌에도 새 얼굴 {count}명이 리그에 들어와요. {seeds|이} 가장 주목받는 신인이에요."),
                 T("신인 {count}명, 데뷔 준비 끝", "{a|을} 비롯한 신인 {count}명이 첫 시즌을 맞아요. 모두 가장 낮은 부에서 데뷔해요."),
             ) to 2
         }
@@ -465,6 +465,9 @@ object News {
             arg(2)?.let { v["town"] = it }
             val potential = arg(3)?.toIntOrNull() ?: 0
             when {
+                potential >= 85 && (nation == null || nation == Nations.KR) -> listOf(
+                    T("대형 신인 {a}, 리그 합류", "{town} 출신의 {age}세 {a|이} 데뷔해요. 스카우트들이 일찌감치 주목한 유망주예요."),
+                )
                 potential >= 85 -> listOf(
                     T("대형 신인 {a}, 리그 합류", "{nat} {town} 출신의 {age}세 {a|이} 데뷔해요. 스카우트들이 일찌감치 주목한 유망주예요."),
                     T("{nat}의 보석 {a}", "{age}세 {a|이} 리그에 첫발을 내디뎌요. {town}에서 온 이 신인을 두고 벌써 기대가 커요."),
@@ -485,7 +488,7 @@ object News {
             if (e.kind == "breakout") {
                 listOf(
                     T("{a}, 한 시즌 만에 몰라보게 성장", "{age}세 {a}의 {skill|이} {from}에서 {to|으로} 올랐어요. 무서운 성장세예요."),
-                    T("성장하는 {a}", "{a|이} 한 시즌 사이 부쩍 늘었어요. {skill|은} {from}에서 {to|이에요}. 다음 시즌이 더 기대돼요."),
+                    T("성장하는 {a}", "{a}의 실력이 한 시즌 사이 부쩍 늘었어요. {skill|이} {from}에서 {to|으로} 뛰었어요. 다음 시즌이 더 기대돼요."),
                 ) to 2
             } else {
                 listOf(
@@ -497,16 +500,16 @@ object News {
         "learned_rule" -> {
             arg(0)?.let { k -> PlayStyles.recipe(k)?.let { v["belief"] = it.name } }
             listOf(
-                T("{a}, 규칙 착각에서 벗어나", "{a|이} 그동안 '{belief}'에 빠져 있었는데 이제 규칙을 제대로 알게 됐어요. 다음 시즌 진짜 실력이 나올지 지켜봐요."),
+                T("{a}, 규칙 착각에서 벗어나", "{a|이} 그동안 잘못 알고 있던 규칙('{belief}')을 바로잡았어요. 다음 시즌 진짜 실력이 나올지 지켜봐요."),
             ) to 2
         }
         "league_reform" -> listOf(
-            T("리그 개편: 생성 선수들의 시대", "시즌 {season}을 끝으로 리그가 새로 태어나요. 선수마다 나라·나이·능력치가 생기고, 나이가 들면 은퇴하고 신인과 제자가 그 자리를 채워요."),
+            T("리그 개편: 생성 선수들의 시대", "시즌 {season|을} 끝으로 리그가 새로 태어나요. 선수마다 나라·나이·능력치가 생기고, 나이가 들면 은퇴하고 신인과 제자가 그 자리를 채워요."),
         ) to 5
         "founders_farewell" -> {
             arg(0)?.let { v["count"] = it }
             listOf(
-                T("창립 멤버 {count}명, 리그와 작별", "기본 AI {count}명이 시즌 {season}을 끝으로 리그를 떠나요. {seeds}의 우승 기록과 통산 성적은 그대로 남아요. 다음 시즌부터는 생성 선수들만의 리그예요."),
+                T("창립 멤버 {count}명, 리그와 작별", "기본 AI {count}명이 시즌 {season|을} 끝으로 리그를 떠나요. {seeds}의 우승 기록과 통산 성적은 그대로 남아요. 다음 시즌부터는 생성 선수들만의 리그예요."),
                 T("고마웠어요, 창립 멤버", "{seeds} 등 리그의 첫 시즌부터 함께한 기본 AI {count}명이 유니폼을 벗었어요. 이제 랭크 게임과 AI 연구소에서 다시 만날 수 있어요."),
             ) to 5
         }
@@ -635,7 +638,7 @@ object News {
             arg(0)?.let { v["n"] = it }
             listOf(
                 T("시즌 {season} 요트 월드컵, {n}개국 출전", "{n}개국 대표팀이 시즌 {season} 요트 월드컵에 나서요.[[ 개최국은 {a|이에요}.]] 나라마다 레이팅 상위 5명이 대표로 뽑혀요."),
-                T("요트 월드컵의 해가 왔어요", "4시즌마다 열리는 요트 월드컵이 시즌 {season}에 돌아와요.[[ 개최국 {a|을} 포함해 ]]{n}개국이 우승컵을 다퉈요."),
+                T("요트 월드컵 시즌이 돌아왔어요", "4시즌마다 열리는 요트 월드컵이 시즌 {season}에 돌아와요.[[ 개최국 {a|을} 포함해 ]]{n}개국이 우승컵을 다퉈요."),
             ) to 3
         }
         "cc_open" -> {
@@ -686,9 +689,19 @@ object News {
             arg(1)?.let { v["score"] = it }
             arg(2)?.let { v["stage"] = it }
             listOf(
-                T("{label}: {a}, {b}에 승리", "{comp} {stage}에서 열린 {label}에서 {a|이} {b|을}[[ 보드 {score|으로}]] 꺾었어요. 자존심이 걸린 맞대결이었어요."),
+                T("{label}: {a}, {b}에 승리", "{comp} {stage} {label}에서 {a|이} {b|을}[[ 보드 {score|으로}]] 꺾었어요. 자존심이 걸린 맞대결이었어요."),
                 T("{label}의 승자는 {a}", "{a|과} {b}의 {label|은} {a}의 승리로 끝났어요.[[ 보드 스코어는 {score|이에요}.]] 다음 맞대결이 벌써 기다려져요."),
             ) to 3
+        }
+        "player_of_week" -> {
+            arg(0)?.let { v["week"] = it }
+            arg(1)?.let { v["avg"] = it }
+            arg(2)?.let { v["best"] = it }
+            arg(3)?.toIntOrNull()?.let { v["div"] = "${it + 1}부" }
+            listOf(
+                T("{week}주차 이 주의 선수: {a}", "{a|이} {week}주차 경기에서 {b|을} 꺾으며 평균 {avg}점을 기록했어요. 이번 주 리그에서 가장 빛난 선수예요."),
+                T("이 주의 선수 {a}, 평균 {avg}점", "[[{div} ]]{a|이} {b|을} 상대로 최고 {best}점까지 올렸어요. {week}주차 이 주의 선수로 뽑혔어요."),
+            ) to 2
         }
         "draw_legend" -> listOf(
             T("레전드 매치: {a} vs {b}", "은퇴한 레전드 {a|이} 전성기의 모습으로 돌아와 현역 {b|과} 맞붙어요. 순위와 상관없는 이벤트 경기예요."),
@@ -706,7 +719,9 @@ object News {
             arg(0)?.let { v["cup"] = it }
             arg(1)?.let { v["pts"] = it }
             arg(2)?.let { v["avg"] = it }
-            listOf(
+            if (e.keys.size >= 2 && e.keys[0] == e.keys[1]) listOf(
+                T("{a}, {cup} MVP·득점왕 석권", "{a|이} 보드 승점 {pts}점, 평균 {avg}점으로 MVP와 득점왕을 모두 차지했어요. 대회 내내 가장 빛난 선수예요."),
+            ) to 3 else listOf(
                 T("{cup} MVP는 {a}", "{a|이} 보드 승점 {pts}점으로 {cup} MVP에 뽑혔어요.[[ 득점왕은 평균 {avg}점의 {b|이에요}.]]"),
                 T("{cup} 개인상: MVP {a}, 득점왕 {b}", "대회 최우수 선수는 {a}, 평균 점수가 가장 높은 득점왕은 {b|이에요}. 두 선수 모두 대회 내내 빛났어요."),
             ) to 3

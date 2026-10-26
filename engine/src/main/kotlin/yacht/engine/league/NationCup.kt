@@ -525,7 +525,7 @@ class NationCup private constructor(
                     news += LeagueEvent("draw_wc", n, members.map { it.key }, listOfNotNull(label, ko, if (g == 0) host else null), comp)
                 }
             } else {
-                news += LeagueEvent("cc_open", n, emptyList(), listOf(sections.joinToString("·") { it.title }), comp)
+                news += LeagueEvent("cc_open", n, emptyList(), listOf(sections.joinToString(", ") { it.title }), comp)
                 for (s in sections) for (g in s.groups) {
                     val label = if (s.groupCount == 1) "조별 리그" else "${'A' + (g - s.firstGroup)}조"
                     news += LeagueEvent("draw_cc", n, groups[g].map { it.key }, listOf(label, "@" + s.title), comp)
