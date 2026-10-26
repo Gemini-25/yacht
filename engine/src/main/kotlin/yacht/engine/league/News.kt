@@ -118,6 +118,16 @@ object News {
         club: (String) -> String = { it },
         team: (String) -> String = Competitions::teamLabel,
         rating: ((String) -> Double)? = null,
+    ): Article = write(e, name, club, team, rating, null)
+
+    /** [article], with the rating gap of a knockout win already known from its `upset` event ([upsetGap]). */
+    private fun write(
+        e: LeagueEvent,
+        name: (String) -> String,
+        club: (String) -> String,
+        team: (String) -> String,
+        rating: ((String) -> Double)?,
+        upsetGap: Double?,
     ): Article {
         val v = HashMap<String, String>()
         v["season"] = e.season.toString()
@@ -139,26 +149,53 @@ object News {
         v["count"] = listed.size.toString()
         val arg = { i: Int -> e.args.getOrNull(i)?.takeIf { it.isNotBlank() && it != "-" } }
 
-        val (list, importance) = templates(e, v, arg, club, team, rating)
+        val (list, importance) = templates(e, v, arg, club, team, rating, upsetGap)
         val chosen = pick(list, v, e)
         val t = chosen ?: T(PLAIN_HEADLINE, "[[{seeds}의 ]]새 소식이 들어왔어요. 자세한 내용은 피드에서 볼 수 있어요.")
         return Article(e.season, e.kind, fill(t.headline, v), fill(t.body, v), e.keys, e.comp, (if (chosen == null) 1 else importance).coerceIn(1, 5))
     }
 
-    /** Articles of [events] in order (see [article]). */
+    /**
+     * Articles of [events] in order (see [article]). A knockout tie reports its `cup_round` and,
+     * besides, an `upset` [winner, loser] and an `eliminated` [loser] (round) of the same tie: those
+     * are one story, so they make one article (the round's, a giant killing when it was an upset).
+     */
     fun articles(
         events: List<LeagueEvent>,
         name: (String) -> String,
         club: (String) -> String = { it },
         team: (String) -> String = Competitions::teamLabel,
         rating: ((String) -> Double)? = null,
-    ): List<Article> = events.map { article(it, name, club, team, rating) }
+    ): List<Article> {
+        val rounds = events.filter { it.kind == "cup_round" && it.keys.size >= 2 }
+        fun sameTie(r: LeagueEvent, e: LeagueEvent) =
+            r.season == e.season && r.comp == e.comp && e.keys.size >= 2 && r.keys[0] == e.keys[0] && r.keys[1] == e.keys[1]
+        fun roundOf(e: LeagueEvent): LeagueEvent? = when (e.kind) {
+            "upset" -> rounds.firstOrNull { sameTie(it, e) }
+            "eliminated" -> rounds.firstOrNull { r ->
+                r.season == e.season && r.comp == e.comp && r.keys[1] == e.keys.firstOrNull() && r.args.firstOrNull() == e.args.firstOrNull()
+            }
+            else -> null
+        }
+        val out = ArrayList<Article>(events.size)
+        for (e in events) {
+            if (roundOf(e) != null) continue
+            val gap = if (e.kind == "cup_round") {
+                events.firstOrNull { it.kind == "upset" && sameTie(e, it) }?.args?.firstOrNull()?.toDoubleOrNull()
+            } else {
+                null
+            }
+            out += write(e, name, club, team, rating, gap)
+        }
+        return out
+    }
 
     /**
      * A `title_race` event [leader, second] (gap, "lead" or "close") when the 1st division's
      * leader changed between [before] and [after] (its table at two matchdays, (key, points) best
      * first) with at least 25% of the league played, or when the gap closed to one point or less
-     * late in the season (70%); null otherwise.
+     * late in the season (70%); null otherwise. Two leaders level on points both times only swap
+     * places on the tie-break: that is not news (it could repeat every matchday).
      */
     fun titleRace(season: Int, before: List<Pair<String, Int>>, after: List<Pair<String, Int>>, progress: Double): LeagueEvent? {
         if (before.size < 2 || after.size < 2) return null
@@ -167,7 +204,7 @@ object News {
         val gap = lp - sp
         val oldGap = before[0].second - before[1].second
         val reason = when {
-            leader != before[0].first && progress >= LEAD_FROM -> "lead"
+            leader != before[0].first && progress >= LEAD_FROM && (gap > 0 || oldGap > 0) -> "lead"
             gap <= 1 && oldGap > 1 && progress >= CLOSE_FROM -> "close"
             else -> return null
         }
@@ -186,6 +223,7 @@ object News {
         club: (String) -> String,
         team: (String) -> String,
         rating: ((String) -> Double)?,
+        upsetGap: Double?,
     ): Pair<List<T>, Int> = when (e.kind) {
         "upset" -> {
             arg(0)?.let { v["gap"] = it }
@@ -218,15 +256,17 @@ object News {
         "milestone" -> milestone(arg(0).orEmpty(), arg(1), v)
         "title" -> {
             val a0 = arg(0)
+            // A division index, an honour kind ("L0", "CUP"), a competition ("CHAMPIONS") or its name.
+            val division = a0?.toIntOrNull()?.takeIf { it in 0..98 } ?: a0?.takeIf { Regex("L\\d").matches(it) }?.drop(1)?.toInt()
             v["t"] = when {
-                a0 != null && a0.all { it.isDigit() } -> "${a0.toInt() + 1}부 리그"
+                division != null -> "${division + 1}부 리그"
                 // A competition's code (the club league's "K").
                 a0 != null && a0.length == 1 && Comp.of(a0[0]) != null -> Comp.of(a0[0])!!.label
-                a0 != null -> a0
+                a0 != null -> honourLabel(a0) ?: Comp.entries.firstOrNull { it.name == a0 }?.label ?: a0
                 else -> e.comp?.label ?: Comp.LEAGUE.label
             }
             val importance = when {
-                e.comp == Comp.LEAGUE || e.comp == Comp.TITLE_PLAYOFF -> if (a0 == "0") 5 else 3
+                e.comp == Comp.LEAGUE || e.comp == Comp.TITLE_PLAYOFF -> if (division == 0) 5 else 3
                 e.comp == Comp.CHAMPIONS -> 5
                 e.comp == Comp.CUP || e.comp == Comp.FAMILY || e.comp == Comp.CLUB -> 4
                 e.comp == Comp.ALL_STAR -> 2
@@ -263,7 +303,7 @@ object News {
         "cup_round" -> {
             arg(0)?.let { v["round"] = it }
             arg(1)?.let { v["score"] = it }
-            val gap = rating?.let { r ->
+            val gap = upsetGap?.takeIf { !it.isNaN() && it >= Drama.UPSET_GAP } ?: rating?.let { r ->
                 val w = e.keys.getOrNull(0)
                 val l = e.keys.getOrNull(1)
                 if (w == null || l == null) null else (r(l) - r(w)).takeIf { !it.isNaN() && it >= Drama.UPSET_GAP }
@@ -311,7 +351,7 @@ object News {
                 ) to 3
                 Comp.ALL_STAR -> listOf(
                     T("올스타전: {a}, {b}에 승리", "{a|이} 올스타전에서 {b|을}[[ {score|으로}]] 꺾었어요. 리그 반환점을 수놓은 축제였어요."),
-                    T("별들의 잔치, {a} 웃었어요", "올스타전에서 {a|이} {b|을} 눌렀어요. 승패를 떠나 팬들에게는 즐거운 무대였어요."),
+                    T("별들의 잔치, 웃은 쪽은 {a}", "올스타전에서 {a|이} {b|을} 눌렀어요. 승패를 떠나 팬들에게는 즐거운 무대였어요."),
                 ) to 2
                 else -> listOf(
                     T("{comp} 결승: {a}, {b} 꺾고 정상", "{a|이} {comp} 결승에서 {b|을}[[ {score|으로}]] 꺾었어요. 시즌 {season} {comp} 트로피를 들어 올렸어요."),
@@ -471,7 +511,7 @@ object News {
             arg(1)?.let { v["round"] = it }
             arg(2)?.takeIf { it != "0" }?.let { v["byes"] = it }
             listOf(
-                T("시즌 {season} 요트컵 대진 확정", "[[{n}개 AI가 나서는 ]]요트컵 대진이 나왔어요. {seeds|이} 우승 후보로 꼽혀요.[[ 상위 {byes}개 AI는 부전승으로 출발해요.]]"),
+                T("시즌 {season} 요트컵 대진 확정", "[[AI {n}명이 나서는 ]]요트컵 대진이 나왔어요. {seeds|이} 우승 후보로 꼽혀요.[[ 상위 시드 {byes}명은 부전승으로 출발해요.]]"),
                 T("요트컵 개막, 1번 시드는 {a}", "시즌 {season} 요트컵 대진 추첨이 끝났어요.[[ 첫 경기는 {round}부터예요.]] 1번 시드 {a|이} 정상을 노려요."),
             ) to 2
         }

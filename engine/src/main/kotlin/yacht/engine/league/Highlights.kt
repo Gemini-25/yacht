@@ -221,7 +221,7 @@ class Highlight(
     val b: String get() = if (fixture.kind == JobKind.TEAM) fixture.lineupB.getOrElse(board) { fixture.b } else fixture.b
 
     /** The game's deal: [LeagueMatch.playGame] with it and the board's AIs plays the game again. */
-    val deal: GameDeal get() = LeagueMatch.deal(fixture, board, game, perMatch)
+    val deal: GameDeal = LeagueMatch.deal(fixture, board, game, perMatch)
 
     /** Who moved first and second. */
     val first: String get() = if (deal.aFirst) a else b
@@ -341,11 +341,11 @@ class HighlightBook {
     private var previousSeason = 0
     private val previous = ArrayList<Highlight>()
 
-    /** This season's most dramatic games, best first. */
-    val thisSeason: List<Highlight> get() = current
+    /** This season's most dramatic games, best first (a copy: views may keep it outside the lock). */
+    val thisSeason: List<Highlight> get() = current.toList()
 
-    /** The most dramatic games ever (this season included), best first. */
-    val allTime: List<Highlight> get() = best
+    /** The most dramatic games ever (this season included), best first (a copy). */
+    val allTime: List<Highlight> get() = best.toList()
 
     /** The highlights of [key] (as either side of the board), this season's first. */
     fun of(key: String): List<Highlight> = (current + best).distinctBy { it.id }.filter { it.a == key || it.b == key }
@@ -391,8 +391,11 @@ class HighlightBook {
                     decider = gi >= legs * per, promotion = f.comp == Comp.PROMOTION_PLAYOFF,
                 )
                 val d = Drama.of(facts, ctx)
-                if (!fits(current, SEASON_TOP, d.score) && !fits(best, ALL_TIME, d.score)) continue
-                val h = Highlight(season, f, bi, gi, per, g.a, g.b, d.score, d.tags, facts.curve.copyOf(), versionHash(version(bd.a)), versionHash(version(bd.b)))
+                // Kept at the saved precision, so a book read back from its file ranks and admits
+                // games exactly as the one in memory would have.
+                val drama = Math.round(d.score * 10) / 10.0
+                if (!fits(current, SEASON_TOP, drama) && !fits(best, ALL_TIME, drama)) continue
+                val h = Highlight(season, f, bi, gi, per, g.a, g.b, drama, d.tags, facts.curve.copyOf(), versionHash(version(bd.a)), versionHash(version(bd.b)))
                 if (insert(current, h, SEASON_TOP)) out += h
                 insert(best, h, ALL_TIME)
             }

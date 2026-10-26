@@ -161,6 +161,30 @@ class MediaTest {
     }
 
     @Test
+    fun aBookReadBackBehavesLikeTheOneInMemory() {
+        val book = HighlightBook()
+        for (i in 0 until 25) book.offer(job(i, low = 3 + i), season = 2, rating = { if (it.startsWith("a")) 1400.0 + it.length else 1530.0 + it.length })
+        val back = HighlightBook.decode(book.encode())
+        // The drama is kept at the saved precision, so the lists match exactly ...
+        assertEquals(book.thisSeason.map { it.drama }, back.thisSeason.map { it.drama })
+        assertEquals(book.allTime.map { it.drama }, back.allTime.map { it.drama })
+        // ... and so do the games either book admits next.
+        for (i in 25 until 40) {
+            val j = job(i, low = 2 + (i * 7) % 20)
+            assertEquals(book.offer(j, season = 2).map { it.id }, back.offer(j, season = 2).map { it.id })
+        }
+        assertEquals(book.encode(), back.encode())
+        // The lists handed out are snapshots: a view built under the lock may keep them.
+        val seen = book.thisSeason
+        val ever = book.allTime
+        book.startSeason(3)
+        book.offer(job(77, low = 1), season = 3)
+        assertEquals(20, seen.size)
+        assertTrue(seen.all { it.season == 2 } && ever.none { it.season == 3 })
+        assertEquals(2, book.thisSeason.size)
+    }
+
+    @Test
     fun aStoredGameReplaysToTheSameScores() {
         val tables = SolverTest.tables
         val estimate = WinEstimate(tables)
@@ -292,6 +316,53 @@ class MediaTest {
         val other = News.article(LeagueEvent("something_new", 3, listOf("ai1")), name)
         assertEquals(News.PLAIN_HEADLINE, other.headline)
         assertTrue("김민준" in other.body)
+    }
+
+    @Test
+    fun oneKnockoutTieMakesOneArticle() {
+        val name = { k: String -> names[k] ?: k }
+        // What the cup reports when a top seed falls to an AI rated 200 lower in a late round.
+        val tie = listOf(
+            LeagueEvent("cup_round", 2, listOf("ai4", "ai2"), listOf("8강", "2-1"), Comp.CUP),
+            LeagueEvent("eliminated", 2, listOf("ai2"), listOf("8강"), Comp.CUP),
+            LeagueEvent("upset", 2, listOf("ai4", "ai2"), listOf("200"), Comp.CUP),
+        )
+        val one = News.articles(tie, name).single()
+        assertEquals("cup_round", one.kind)
+        // A giant killing from the upset's gap, even without ratings.
+        assertTrue("200점" in one.body && ("자이언트 킬링" in one.headline || "이변" in one.headline), one.toString())
+        // Events of other ties, an upset without a round (a group match) and an early exit stay.
+        val others = listOf(
+            LeagueEvent("upset", 2, listOf("ai4", "ai1"), listOf("150"), Comp.CHAMPIONS),
+            LeagueEvent("eliminated", 2, listOf("ai1"), listOf("32강"), Comp.CUP),
+            LeagueEvent("upset", 2, listOf("ai3", "ai2"), listOf("120"), Comp.CUP),
+        )
+        assertEquals(listOf("cup_round", "upset", "eliminated", "upset"), News.articles(tie + others, name).map { it.kind })
+        // A single article stays as it was.
+        assertEquals(News.article(tie[2], name), News.articles(listOf(tie[2]), name).single())
+    }
+
+    @Test
+    fun titlesNameTheirCompetitionInKorean() {
+        val name = { k: String -> names[k] ?: k }
+        fun title(arg: String, comp: Comp? = null) = News.article(LeagueEvent("title", 1, listOf("ai1"), listOf(arg), comp), name)
+        assertTrue("요트컵" in title("CUP", Comp.CUP).headline + title("CUP", Comp.CUP).body)
+        assertTrue("챔피언스 리그" in title("CHAMPIONS").let { it.headline + it.body })
+        assertTrue("2부 리그" in title("L1", Comp.LEAGUE).let { it.headline + it.body })
+        assertEquals(5, title("L0", Comp.LEAGUE).importance)
+        assertEquals(5, title("0", Comp.TITLE_PLAYOFF).importance)
+        // Nonsense never throws: it is shown as it is.
+        assertTrue("99999999999" in title("99999999999").let { it.headline + it.body })
+        // Counters for AIs read as people.
+        val draws = (1..8).map { s -> News.article(LeagueEvent("draw_cup", s, listOf("ai1", "ai2"), listOf("205", "256강", "51"), Comp.CUP), name).body }
+        assertTrue(draws.none { "개 AI" in it } && draws.any { "AI 205명" in it && "상위 시드 51명" in it }, draws.toString())
+    }
+
+    @Test
+    fun aTieBreakSwapBetweenLevelLeadersIsNoNews() {
+        assertNull(News.titleRace(5, listOf("a" to 30, "b" to 30), listOf("b" to 33, "a" to 33), 0.6))
+        // Drawing level and going top on the tie-break is.
+        assertEquals(listOf("0", "lead"), News.titleRace(5, listOf("a" to 31, "b" to 30), listOf("b" to 31, "a" to 31), 0.6)?.args)
     }
 
     @Test
