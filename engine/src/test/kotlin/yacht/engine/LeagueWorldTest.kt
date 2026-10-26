@@ -410,4 +410,19 @@ class LeagueWorldTest {
             }
         }
     }
+
+    @Test
+    fun theClosingRulesAreSavedWithTheFinishedSeason() {
+        val w = world(LeagueConfig(divisions = 2, generated = 0, evolution = 0, clubs = 0))
+        w.openFirstSeason(51L)
+        season(w)
+        val rules = LeagueConfig(divisions = 3, generated = 20, evolution = 5, clubs = 8)
+        w.plan!!.closing = rules
+        val back = LeagueWorld.decode(w.encodeFiles(), w.ladder.keys, emptyList())
+        assertEquals(rules, back.plan!!.closing)
+        assertEquals(w.plan!!.config, back.plan!!.config)
+        // A season not being closed has none.
+        w.plan!!.closing = null
+        assertEquals(null, LeagueWorld.decode(w.encodeFiles(), w.ladder.keys, emptyList()).plan!!.closing)
+    }
 }

@@ -25,6 +25,12 @@ class SeasonPlan(
     /** True once the post-season has been set up (it may be empty). */
     var postStarted = false
 
+    /**
+     * The rules this season is closed with, set by the app before it saves the finished season:
+     * a close replayed after a kill uses them again, whatever the rules are by then.
+     */
+    var closing: LeagueConfig? = null
+
     /** Sets up the post-season (playoffs) from the final tables, once the league is over. */
     fun startPost(factories: List<(SeasonPlan) -> Competition?>) {
         if (postStarted || !league.finished) return
@@ -84,6 +90,7 @@ class SeasonPlan(
         append("plan 1\n")
         append("post ${if (postStarted) 1 else 0}\n")
         append(config.encode().lines().filter { it.isNotBlank() }.joinToString("") { "cfg $it\n" })
+        closing?.let { c -> append(c.encode().lines().filter { it.isNotBlank() }.joinToString("") { "closecfg $it\n" }) }
         for ((list, tag) in listOf(comps to "comp", post to "postcomp")) {
             for (c in list) {
                 append("$tag ${c.comp.code}\n")
@@ -112,6 +119,8 @@ class SeasonPlan(
             val config = LeagueConfig.decode(lines.subList(0, leagueAt).filter { it.startsWith("cfg ") }.joinToString("\n") { it.removePrefix("cfg ") })
             val plan = SeasonPlan(league, config)
             plan.postStarted = lines.any { it.trim() == "post 1" }
+            val closing = lines.subList(0, leagueAt).filter { it.startsWith("closecfg ") }
+            if (closing.isNotEmpty()) plan.closing = runCatching { LeagueConfig.decode(closing.joinToString("\n") { it.removePrefix("closecfg ") }) }.getOrNull()
             var i = 0
             while (i < leagueAt) {
                 val l = lines[i]

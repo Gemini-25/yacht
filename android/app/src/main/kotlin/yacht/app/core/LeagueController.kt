@@ -853,14 +853,19 @@ class LeagueController(
         // Next season's divisions and seeds from the converged ratings.
         val t0 = System.nanoTime()
         // The rules saved during the season apply from here (evolution, generated players).
-        configureWorld(w)
+        // A close replayed after a kill keeps the rules of the first one (saved with the
+        // finished season), even if they were changed before the league resumed.
+        val p = w.plan ?: return
+        val rules = p.closing ?: config
+        p.closing = rules
+        configureWorld(w, rules)
         w.ladder.fit()
         // The finished season on disk first: killed while the close is saved, the league reads
         // the finished season again and closes it the same way (not a checkpoint from before).
         saveAsync()
         val closing = w.closeSeason()
         if (closing.rosterChanged) rebuildRoster()
-        configureWorld(w)
+        configureWorld(w, rules)
         w.openSeason()
         timings.note("rollover", System.nanoTime() - t0)
         val news = historyItem(closing.season, closing.honours)
