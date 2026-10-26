@@ -185,4 +185,39 @@ class LadderTest {
         val win = roster.first { it.key == "win" }
         assertEquals(LeagueMatch.play(tables.rules, win, ev, 9), LeagueMatch.play(tables.rules, win, ev, 9))
     }
+
+    @Test
+    fun luckyNewcomersDoNotTopTheLadder() {
+        // 100 established AIs with thousands of games, then 100 newcomers (true level at most
+        // 1500) with 20 games each, mostly against each other and weaker AIs: the luckiest come
+        // out far above their level, but none ranks in the top 10.
+        for (seed in 1L..2L) {
+            val rng = Random(seed)
+            val est = listOf("ev") + (1..99).map { "e$it" }
+            val news = (1..100).map { "n$it" }
+            val truth = HashMap<String, Double>()
+            for ((i, k) in est.withIndex()) truth[k] = if (k == "ev") 1500.0 else 1100.0 + 420.0 * i / 99
+            for (k in news) truth[k] = minOf(1500.0, 1430 + 40 * rng.nextGaussian())
+            val l = Ladder(est + news + Ladder.ME)
+            fun game(a: String, b: String): GameScore {
+                val p = 1 / (1 + Math.pow(10.0, (truth.getValue(b) - truth.getValue(a)) / 400))
+                return if (rng.nextDouble() < p) GameScore(200, 180) else GameScore(180, 200)
+            }
+            repeat(60_000) {
+                val a = est[rng.nextInt(est.size)]
+                var b = est[rng.nextInt(est.size)]
+                while (b == a) b = est[rng.nextInt(est.size)]
+                l.record(a, b, listOf(game(a, b), game(a, b)))
+            }
+            val low = est.filter { truth.getValue(it) in 1250.0..1420.0 }
+            for (k in news) repeat(10) {
+                val b = if (rng.nextDouble() < 0.6) news.filter { it != k }[rng.nextInt(99)] else low[rng.nextInt(low.size)]
+                l.record(k, b, listOf(game(k, b), game(k, b)))
+            }
+            l.fit()
+            assertTrue(news.maxOf { l.rating(it) } > 1550, "seed $seed: no lucky newcomer to test with")
+            val top = l.ranking().filter { it != Ladder.ME }.take(10)
+            assertTrue(top.none { it in news }, "seed $seed: ${top.filter { it in news }.map { it to l.rating(it).toInt() }}")
+        }
+    }
 }

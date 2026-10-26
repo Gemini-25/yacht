@@ -154,6 +154,7 @@ data class MatchRecord(
 class Ladder(keys: List<String>, private val anchor: String = "ev") {
     val keys: List<String> = keys.toList()
     private val index = this.keys.withIndex().associate { it.value to it.index }
+    private val meIndex = index[ME] ?: -1
     private val n = this.keys.size
     val entries: List<LadderEntry> = this.keys.map { LadderEntry(it) }
 
@@ -197,11 +198,13 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
     }
 
     /**
-     * What ranks are by: the rating less one standard error, so an AI fresh out of placement
-     * (a range of a hundred points) does not jump over the established ones on a lucky start;
-     * with thousands of games the error is a few points.
+     * What ranks are by: the rating less [RANK_ERRORS] standard errors, so AIs fresh out of
+     * placement (a range of a hundred points or more) do not jump over the established ones: of
+     * a hundred newcomers the luckiest is about 2.5 errors above its true level, and one error
+     * let several of them top the ladder. With thousands of games the error is a few points.
+     * Me with one error: a single player is not the luckiest of many.
      */
-    private fun rankScore(i: Int): Double = ratings[i] - errors[i].let { if (it.isNaN()) 0.0 else it }
+    private fun rankScore(i: Int): Double = ratings[i] - (if (i == meIndex) 1.0 else RANK_ERRORS) * errors[i].let { if (it.isNaN()) 0.0 else it }
 
     /** The rank score of [key] (see [rankScore]); NaN before its first game. */
     fun rankScore(key: String): Double = index[key]?.let { rankScore(it) } ?: Double.NaN
@@ -510,6 +513,9 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
         /** A game score worth a headline. */
         const val RECORD_SCORE = 300
         private const val PRIOR = 0.1
+
+        /** Standard errors taken off the rating for the ranking (see [rankScore]). */
+        const val RANK_ERRORS = 3.0
         private const val MAX_ITER = 3000
 
         /**
