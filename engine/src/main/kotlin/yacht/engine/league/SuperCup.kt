@@ -8,10 +8,12 @@ package yacht.engine.league
  * News: `draw_super` [champion, opponent] (their honours) at the start, then `final`, `title`
  * [winner] (슈퍼컵) and `upset`.
  */
-class SuperCup private constructor(season: Int, seed: Long, entries: List<DrawEntry>) :
+class SuperCup private constructor(season: Int, seed: Long, entries: List<DrawEntry>, override val long: Boolean) :
     BracketCompetition(Comp.SUPER, season, seed, entries) {
     override val header: String get() = HEADER
-    override val bracket = Knockout(listOf(entries[0] to entries[1]), { 1 }, { Comp.SUPER.label }, { 0.0 })
+
+    // A one-off curtain raiser: two matches when long, not a whole final's four.
+    override val bracket = Knockout(listOf(entries[0] to entries[1]), { if (long) 2 else 1 }, { Comp.SUPER.label }, { 0.0 })
 
     override fun news(t: KnockoutTie): List<LeagueEvent> =
         KnockoutNews.final(season, comp, t, comp.label) + listOfNotNull(KnockoutNews.upset(season, comp, t.winner!!, t.loser!!))
@@ -37,12 +39,12 @@ class SuperCup private constructor(season: Int, seed: Long, entries: List<DrawEn
             val cups = listOfNotNull(start.lastHonours.firstOrNull { it.kind == "CUP" }?.key, start.lastHonours.firstOrNull { it.kind == "CUP2" }?.key)
             val opponent = cups.firstOrNull { it != champion && it in inLeague } ?: return null
             val entries = listOf(DrawEntry(champion, 1, start.rating(champion)), DrawEntry(opponent, 2, start.rating(opponent)))
-            return SuperCup(start.number, start.seed, entries)
+            return SuperCup(start.number, start.seed, entries, start.config.longKnockouts)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
             val (entries, results) = read(lines, HEADER)
-            SuperCup(season, seed, entries.take(2)).also { it.restore(results) }
+            SuperCup(season, seed, entries.take(2), KnockoutLength.saved(lines)).also { it.restore(results) }
         }
     }
 }

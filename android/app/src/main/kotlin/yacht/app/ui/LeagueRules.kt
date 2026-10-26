@@ -124,6 +124,12 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("요트컵", cfg.cup) { cfg = cfg.copy(cup = it) }
                 Toggle("챔피언스 리그", cfg.champions) { cfg = cfg.copy(champions = it) }
                 Toggle("슈퍼컵", cfg.superCup) { cfg = cfg.copy(superCup = it) }
+                Toggle("긴 토너먼트 (16강부터 경기 수 늘림)", cfg.longKnockouts) { cfg = cfg.copy(longKnockouts = it) }
+                Text(
+                    if (cfg.longKnockouts) "요트컵·챔스·우승 플레이오프의 16강·8강은 2경기(4판), 4강은 3경기(6판), 결승은 4경기(8판)로 겨뤄요. 한 경기는 같은 주사위로 선공·후공 두 판이에요. 슈퍼컵은 2경기예요."
+                    else "토너먼트는 한 경기(두 판)로 끝나요. 챔스 8강·4강과 우승 플레이오프 4강만 2경기예요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
                 Toggle("올스타전", cfg.allStar) { cfg = cfg.copy(allStar = it) }
                 Toggle("국가대항전 (요트 월드컵·대륙컵)", cfg.nationCup) { cfg = cfg.copy(nationCup = it) }
                 Text(

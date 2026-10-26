@@ -556,6 +556,9 @@ abstract class BracketCompetition(
     /** First line of the saved section, e.g. "cup 1". */
     protected abstract val header: String
 
+    /** Drawn with longer late rounds ([KnockoutLength]); saved. */
+    protected open val long: Boolean get() = false
+
     /** News of a finished tie. */
     protected abstract fun news(t: KnockoutTie): List<LeagueEvent>
 
@@ -592,6 +595,7 @@ abstract class BracketCompetition(
 
     override fun encode(out: StringBuilder) {
         out.append(header).append('\n')
+        if (long) out.append(KnockoutLength.LINE).append('\n')
         for (e in entries) out.append("e ").append(e.encode()).append('\n')
         bracket.encode(out)
     }
@@ -611,4 +615,28 @@ abstract class BracketCompetition(
             return entries to TieScore.Saved.parse(lines)
         }
     }
+}
+
+/**
+ * Matches in a one-on-one knockout tie (긴 토너먼트): a round of [left] players plays [short]
+ * matches, or with [long] more from the last 16 on so a final is not one coin toss: 16강 and
+ * 8강 2, 4강 3, 결승 4 (each match two games on the same dice, deciders when level). A
+ * competition saves [LINE] when it was drawn long, so a season keeps the lengths it began with.
+ */
+object KnockoutLength {
+    const val LINE = "long 1"
+
+    fun legs(left: Int, short: Int, long: Boolean): Int = if (!long) short else when {
+        left <= 2 -> maxOf(short, FINAL)
+        left <= 4 -> maxOf(short, SEMI)
+        left <= 16 -> maxOf(short, LATE)
+        else -> short
+    }
+
+    /** True when a saved section was drawn long. */
+    fun saved(lines: List<String>): Boolean = lines.any { it.trim() == LINE }
+
+    private const val LATE = 2
+    private const val SEMI = 3
+    private const val FINAL = 4
 }

@@ -53,6 +53,11 @@ data class LeagueConfig(
     val superCup: Boolean = true,
     val allStar: Boolean = true,
     val familyCup: Boolean = true,
+    /**
+     * Knockouts grow longer toward the final (긴 토너먼트, [KnockoutLength]): from the last 16 on a
+     * tie is more matches (결승 4); off, one match a tie as before (two legs where it always was).
+     */
+    val longKnockouts: Boolean = true,
     /** Only AIs with mistakes (the "chaos" preset). */
     val onlyFlawed: Boolean = false,
     /** Only the strongest AIs by rating, 0 = everyone (the "elite" preset). */
@@ -93,6 +98,7 @@ data class LeagueConfig(
         append("superCup ${flag(superCup)}\n")
         append("allStar ${flag(allStar)}\n")
         append("familyCup ${flag(familyCup)}\n")
+        append("longKnockouts ${flag(longKnockouts)}\n")
         append("onlyFlawed ${flag(onlyFlawed)}\n")
         append("onlyTop $onlyTop\n")
     }
@@ -140,6 +146,7 @@ data class LeagueConfig(
                         "superCup" -> c.copy(superCup = v == "1")
                         "allStar" -> c.copy(allStar = v == "1")
                         "familyCup" -> c.copy(familyCup = v == "1")
+                        "longKnockouts" -> c.copy(longKnockouts = v == "1")
                         "onlyFlawed" -> c.copy(onlyFlawed = v == "1")
                         "onlyTop" -> c.copy(onlyTop = v.toInt())
                         else -> c
@@ -159,7 +166,7 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
     ),
     FAST(
         "빠른 시즌", "단판 경기, 플레이오프·클럽 리그·국가대항전 없이 시즌이 빨리 돌아요 (선수가 적으면 2부까지)",
-        LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false),
+        LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false, longKnockouts = false),
     ),
     CHAOS(
         "대혼돈", "실수하는 선수만 남기고 제자 비율을 높여요: 이변이 쏟아져요",

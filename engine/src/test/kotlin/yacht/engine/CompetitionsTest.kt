@@ -17,6 +17,7 @@ import yacht.engine.league.Honour
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.Knockout
+import yacht.engine.league.KnockoutLength
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
 import yacht.engine.league.Offseason
@@ -117,7 +118,8 @@ class CompetitionsTest {
 
     @Test
     fun theCupOpensByProgressGivesByesAndCrownsTheFavourite() {
-        val cup = assertNotNull(Cup.create(start(13)))
+        // One match a tie (긴 토너먼트 off); the long rounds have their own test.
+        val cup = assertNotNull(Cup.create(start(13, config = LeagueConfig(longKnockouts = false))))
         assertEquals(12, cup.fixturesTotal)
         assertNull(cup.next(0.0, emptySet()), "the first round opens at 5%")
         val view = cup.view() as CompetitionView.Bracket
@@ -155,6 +157,35 @@ class CompetitionsTest {
         assertEquals(listOf(Honour(1, "CUP", "ai01"), Honour(1, "CUP2", "ai02")), cup.honours())
         assertTrue(rest.any { it.kind == "final" && it.keys == listOf("ai01", "ai02") && it.args == listOf("2-0") })
         assertTrue(rest.any { it.kind == "title" && it.keys == listOf("ai01") })
+    }
+
+    @Test
+    fun knockoutsGrowLongerTowardTheFinal() {
+        fun legs(c: Competition) = ((c as yacht.engine.league.ViewableCompetition).view() as CompetitionView.Bracket).rounds.map { r -> r.label to r.ties.first().legs }
+        // 40 players: 64강 and 32강 one match, 16강 and 8강 two, 4강 three, 결승 four.
+        val cup = assertNotNull(Cup.create(start(40)))
+        assertEquals(listOf("64강" to 1, "32강" to 1, "16강" to 2, "8강" to 2, "4강" to 3, "결승" to 4), legs(cup))
+        val events = run(cup, 1.0)
+        assertTrue(events.any { it.kind == "final" && it.args == listOf("8-0") }, events.filter { it.kind == "final" }.toString())
+        // Saved long, read back long; a cup saved before (no line) keeps one match a round.
+        assertTrue(KnockoutLength.LINE in lines(cup))
+        assertEquals(legs(cup), legs(Cup.codec.decode(lines(cup), 1, 100L)))
+        assertEquals(List(6) { 1 }, legs(Cup.codec.decode(lines(cup).filter { it != KnockoutLength.LINE }, 1, 100L)).map { it.second })
+        // Off: one match a tie everywhere.
+        val short = assertNotNull(Cup.create(start(40, config = LeagueConfig(longKnockouts = false))))
+        assertEquals(List(6) { 1 }, legs(short).map { it.second })
+        assertTrue(KnockoutLength.LINE !in lines(short))
+        // The super cup: two matches; the champions league's bracket before the draw: 2, 3, 4.
+        val double = listOf(Honour(1, "L0", "ai01"), Honour(1, "CUP", "ai02"))
+        assertEquals(listOf(2), legs(assertNotNull(SuperCup.create(start(10, number = 2, lastHonours = double)))).map { it.second })
+        val cl = assertNotNull(ChampionsLeague.create(start(20)))
+        val ko = (cl.view() as CompetitionView.Groups).knockout!!.rounds.map { it.ties.first().legs }
+        assertEquals(listOf(2, 3, 4), ko)
+        val clShort = assertNotNull(ChampionsLeague.create(start(20, config = LeagueConfig(longKnockouts = false))))
+        assertEquals(listOf(2, 2, 1), (clShort.view() as CompetitionView.Groups).knockout!!.rounds.map { it.ties.first().legs })
+        // The rule itself: early rounds keep what they had.
+        assertEquals(listOf(1, 1, 2, 2, 3, 4), listOf(128, 32, 16, 8, 4, 2).map { KnockoutLength.legs(it, 1, true) })
+        assertEquals(listOf(2, 2, 2, 3, 4), listOf(64, 32, 16, 4, 2).map { KnockoutLength.legs(it, 2, true) })
     }
 
     @Test
@@ -204,7 +235,8 @@ class CompetitionsTest {
         cl.release(f)
         val seen = ArrayList<Fixture>()
         val ko = run(cl, 1.0) { seen += it; play(it) }
-        assertEquals(listOf(2, 2, 2, 2, 2, 2, 1), seen.map { it.legs })
+        // 긴 토너먼트: quarter-finals 2 matches, semis 3, the final 4.
+        assertEquals(listOf(2, 2, 2, 2, 3, 3, 4), seen.map { it.legs })
         assertTrue(cl.finished)
         assertEquals(Honour(1, "CL", "ai01"), cl.honours()[0])
         val half = if (winners.indexOf("ai01") < 2) winners.drop(2) else winners.take(2)
@@ -260,13 +292,13 @@ class CompetitionsTest {
         assertEquals(3, po.fixturesTotal)
         val semis = listOf(po.next(1.0, emptySet())!!, po.next(1.0, emptySet())!!)
         assertEquals(listOf("ai01" to "ai04", "ai02" to "ai03"), semis.map { it.a to it.b })
-        assertTrue(semis.all { it.legs == 2 && it.kind == JobKind.TIE })
+        assertTrue(semis.all { it.legs == 3 && it.kind == JobKind.TIE })
         assertNull(po.next(1.0, emptySet()), "the final waits for both semis")
-        // The 4th place knocks out the leader; the final is one match.
+        // The 4th place knocks out the leader; the final is four matches.
         for (f in semis) po.record(play(f, flip = f.a == "ai01"))
         val final = po.next(1.0, emptySet())!!
         assertEquals("ai02" to "ai04", final.a to final.b)
-        assertEquals(1, final.legs)
+        assertEquals(4, final.legs)
         po.record(play(final))
         assertTrue(plan.finished)
         assertEquals(listOf(Honour(1, "L0", "ai02"), Honour(1, "L0R", "ai04")), po.honours())

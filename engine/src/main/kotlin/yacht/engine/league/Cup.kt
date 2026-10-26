@@ -4,18 +4,19 @@ package yacht.engine.league
  * 요트컵 (docs/LEAGUE_SPEC.md 2.3): every AI of the league in one knockout bracket seeded by
  * rating, the next power of two with byes for the best seeds. Round r opens at league progress
  * 0.05 + 0.1 r (spread to end by 0.95 when there are more than ten rounds), so the final comes
- * last; each tie is one match with deciders when level. Honours CUP and CUP2.
+ * last; each tie is one match with deciders when level (longer from the last 16 on with
+ * [LeagueConfig.longKnockouts], see [KnockoutLength]). Honours CUP and CUP2.
  *
  * News: `cup_round` [winner, loser] (round, score) from the last 16 on and for every giant
  * killing before, `upset`, `eliminated` [ai] (round) when a top-4 seed goes out, `final` and
  * `title` [winner] (요트컵) at the end.
  */
-class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>) :
+class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>, override val long: Boolean) :
     BracketCompetition(Comp.CUP, season, seed, entries) {
     override val header: String get() = HEADER
     private val size = Knockout.size(maxOf(2, entries.maxOf { it.seed }))
     private val roundCount = Integer.numberOfTrailingZeros(size)
-    override val bracket = Knockout(Knockout.pairings(entries), { 1 }, { label(size, it) }, ::opensAt)
+    override val bracket = Knockout(Knockout.pairings(entries), { KnockoutLength.legs(size shr it, 1, long) }, { label(size, it) }, ::opensAt)
 
     private fun opensAt(r: Int): Double =
         if (roundCount <= 10) 0.05 + 0.1 * r else 0.05 + 0.9 * r / (roundCount - 1)
@@ -71,12 +72,12 @@ class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>)
         fun create(start: SeasonStart): Cup? {
             if (!start.config.cup || start.ranking.size < MIN_AIS) return null
             val entries = start.ranking.mapIndexed { i, k -> DrawEntry(k, i + 1, start.rating(k)) }
-            return Cup(start.number, start.seed, entries)
+            return Cup(start.number, start.seed, entries, start.config.longKnockouts)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
             val (entries, results) = read(lines, HEADER)
-            Cup(season, seed, entries).also { it.restore(results) }
+            Cup(season, seed, entries, KnockoutLength.saved(lines)).also { it.restore(results) }
         }
     }
 }

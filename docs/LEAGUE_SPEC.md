@@ -101,7 +101,7 @@ Ground rules for all code:
   tier t. In a pyramid, news covers 1부-3부 titles and the moves around 1부-3부; the rest is one
   `lower_tiers` article a season.
 - `titlePlayoff` (default on): 1st division top 4 play semis (1v4, 2v3, two legs) and a final
-  (one match). The winner is champion; the regular-season leader gets "정규리그 1위".
+  (one match); with 긴 토너먼트 (2.3) the semis are 3 matches and the final 4. The winner is champion; the regular-season leader gets "정규리그 1위".
 
 ### 2.2 Club league (team competition)
 - `clubs` (default 16) clubs of `squad` (default 6) AIs; a match day fields 5 (best rated first,
@@ -122,6 +122,12 @@ Ground rules for all code:
 ### 2.3 Cups and other competitions
 All knockout ties use `TieRule.knockout`: games won (draw = half) → total points → up to 3
 single decider games on new deals (seats alternating) → higher seed.
+**긴 토너먼트** (`longKnockouts`, default on; off in the 빠른 시즌 preset): one-on-one knockouts
+grow toward the final (`KnockoutLength`): 16강 and 8강 2 matches, 4강 3, 결승 4 (a match is two
+mirrored games, so a final is 8 games); earlier rounds keep their length. It applies to the
+요트컵, the champions league knockout and the title playoff; the 슈퍼컵 is 2 matches, the
+promotion playoff stays 2, team matches are unchanged. A competition drawn long saves a
+`long 1` line, so a season keeps the lengths it was drawn with (older saves read as short).
 - **요트컵** (cup): every AI except me. Bracket of the next power of two with byes for the best
   seeds (by rating), rounds spread over the season calendar from 4% to 88% of the regular
   season (2.4), final last.

@@ -6,7 +6,8 @@ import java.util.Random
  * 챔피언스 리그 (docs/LEAGUE_SPEC.md 2.3): 16 AIs in 4 groups of 4 drawn from pots by entry order,
  * a double round robin in each group (6 matchdays opening over league progress 0.05..0.6, 48
  * matches), then the top 2 of each group in a fixed bracket: quarter-finals A1-B2, B1-A2, C1-D2,
- * D1-C2 and semi-finals over two legs (at 0.7 and 0.8), a one-match final (at 0.9). Group tables:
+ * D1-C2 and semi-finals over two legs (at 0.7 and 0.8), a one-match final (at 0.9); with
+ * [LeagueConfig.longKnockouts] the semis are 3 matches and the final 4. Group tables:
  * points 3/1/0, then score difference. Honours CL and CL2.
  *
  * Entrants: the first season takes the top 16 by rating; later ones last season's 1st division
@@ -22,6 +23,8 @@ class ChampionsLeague private constructor(
     private val seed: Long,
     /** The groups, each in pot order (pot 1 first). */
     val groups: List<List<DrawEntry>>,
+    /** Longer knockout ties ([KnockoutLength]: 8강 2, 4강 3, 결승 4); saved. */
+    private val long: Boolean,
 ) : ViewableCompetition {
     override val comp: Comp get() = Comp.CHAMPIONS
 
@@ -87,7 +90,7 @@ class ChampionsLeague private constructor(
         val first = tables.mapIndexed { g, t -> t[0].entry.let { DrawEntry(it.key, g + 1, it.rating) } }
         val second = tables.mapIndexed { g, t -> t[1].entry.let { DrawEntry(it.key, g + 5, it.rating) } }
         val pairs = listOf(first[0] to second[1], first[1] to second[0], first[2] to second[3], first[3] to second[2])
-        bracket = Knockout(pairs, { if (it < 2) 2 else 1 }, { KO_LABELS[it] }, { KO_OPENS[it] }, idBase = KO_BASE)
+        bracket = Knockout(pairs, ::legs, { KO_LABELS[it] }, { KO_OPENS[it] }, idBase = KO_BASE)
         val out = ArrayList<LeagueEvent>()
         for ((g, t) in tables.withIndex()) {
             for (place in 0..1) out += LeagueEvent("qualified", season, listOf(t[place].entry.key), listOf(KO_LABELS[0], "${stage.groupLabel(g)} ${place + 1}위"), comp)
@@ -108,8 +111,12 @@ class ChampionsLeague private constructor(
     override fun opening(): List<LeagueEvent> =
         groups.mapIndexed { g, members -> LeagueEvent("draw_cl", season, members.map { it.key }, listOf(stage.groupLabel(g)), comp) }
 
+    /** Matches in a knockout tie of round [r] (8강, 4강, 결승). */
+    private fun legs(r: Int): Int = KnockoutLength.legs(8 shr r, if (r < 2) 2 else 1, long)
+
     override fun encode(out: StringBuilder) {
         out.append(HEADER).append('\n')
+        if (long) out.append(KnockoutLength.LINE).append('\n')
         for ((g, members) in groups.withIndex()) for (e in members) out.append("g $g ").append(e.encode()).append('\n')
         stage.encode(out)
         bracket?.encode(out)
@@ -120,7 +127,7 @@ class ChampionsLeague private constructor(
         groups.indices.map { stage.view(it) },
         CompetitionView.Bracket(
             comp.label,
-            bracket?.view() ?: Knockout.placeholder(4, { KO_LABELS[it] }, { if (it < 2) 2 else 1 }),
+            bracket?.view() ?: Knockout.placeholder(4, { KO_LABELS[it] }, ::legs),
         ),
     )
 
@@ -184,7 +191,7 @@ class ChampionsLeague private constructor(
                 val drawn = entries.subList(pot * POT, pot * POT + POT).shuffled(rng)
                 for (g in 0 until 4) groups[g] += drawn[g]
             }
-            return ChampionsLeague(start.number, start.seed, groups)
+            return ChampionsLeague(start.number, start.seed, groups, start.config.longKnockouts)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
@@ -197,7 +204,7 @@ class ChampionsLeague private constructor(
                 }
             }
             require(groups.all { it.size == POT }) { "incomplete champions league groups" }
-            ChampionsLeague(season, seed, groups.map { g -> g.sortedBy { it.seed } }).also { c ->
+            ChampionsLeague(season, seed, groups.map { g -> g.sortedBy { it.seed } }, KnockoutLength.saved(lines)).also { c ->
                 for (r in TieScore.Saved.parse(lines)) c.put(r.id, r.a, r.b, r.score)
             }
         }

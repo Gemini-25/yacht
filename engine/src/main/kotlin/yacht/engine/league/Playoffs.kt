@@ -2,17 +2,18 @@ package yacht.engine.league
 
 /**
  * 우승 플레이오프 (docs/LEAGUE_SPEC.md 2.1), after the league stage: the 1st division's top 4 play
- * semi-finals 1v4 and 2v3 over two legs and a one-match final; the better league place is side A.
+ * semi-finals 1v4 and 2v3 over two legs and a one-match final (3 and 4 matches with
+ * [LeagueConfig.longKnockouts]); the better league place is side A.
  * Honours "L0" (the champion, which [Offseason.honours] takes over the table's leader) and "L0R"
  * (the runner-up).
  *
  * News: `cup_round` [winner, loser] (4강, score) for the semis, `final` and `title` [winner] ("0",
  * the division) for the final.
  */
-class TitlePlayoff private constructor(season: Int, seed: Long, entries: List<DrawEntry>) :
+class TitlePlayoff private constructor(season: Int, seed: Long, entries: List<DrawEntry>, override val long: Boolean) :
     BracketCompetition(Comp.TITLE_PLAYOFF, season, seed, entries) {
     override val header: String get() = HEADER
-    override val bracket = Knockout(Knockout.pairings(entries), { if (it == 0) 2 else 1 }, { if (it == 0) "4강" else "결승" }, { 0.0 })
+    override val bracket = Knockout(Knockout.pairings(entries), { KnockoutLength.legs(4 shr it, if (it == 0) 2 else 1, long) }, { if (it == 0) "4강" else "결승" }, { 0.0 })
 
     override fun news(t: KnockoutTie): List<LeagueEvent> =
         if (t.round == 0) listOf(KnockoutNews.round(season, comp, t, bracket.label(0))) else KnockoutNews.final(season, comp, t, "0")
@@ -31,13 +32,13 @@ class TitlePlayoff private constructor(season: Int, seed: Long, entries: List<Dr
             val top = plan.league.table(0).take(4).map { it.key }
             if (top.size < 4) return null
             // Seeds are the league places; ratings are not known here, so no upsets are called.
-            return TitlePlayoff(plan.number, plan.seed, top.mapIndexed { i, k -> DrawEntry(k, i + 1, Double.NaN) })
+            return TitlePlayoff(plan.number, plan.seed, top.mapIndexed { i, k -> DrawEntry(k, i + 1, Double.NaN) }, plan.config.longKnockouts)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
             val (entries, results) = read(lines, HEADER)
             require(entries.size == 4) { "a title playoff has 4 entries" }
-            TitlePlayoff(season, seed, entries).also { it.restore(results) }
+            TitlePlayoff(season, seed, entries, KnockoutLength.saved(lines)).also { it.restore(results) }
         }
     }
 }
