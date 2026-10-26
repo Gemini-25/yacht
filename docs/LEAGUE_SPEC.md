@@ -20,39 +20,62 @@ Ground rules for all code:
 
 ## 1. Roster
 
-- **Base AIs**: the 103 hand-made AIs of `LeagueRoster` (permanent; never retired).
-- **Generated players** (`origin = GENERATED`): `LeagueConfig.generated` (default 100) light AIs
-  built from `CustomAiSpec` genes (EV-shaped 55%, RISK 20% with θ from `LeagueRoster.THETAS`,
-  BELIEF 10% from the 6 belief tables, SITUATION overlay 15%; mistakes slip 0.3-30% / feel
-  0.1-3 points / none; tastes with probability 0.3 each). Never the WIN base, so all are light.
-  Keys `g001`... Spec `i` comes from `Random(mix(GEN_SEED, i))` only, so the first N of N+10 are
-  the same players. `CustomAiSpec` gains optional trailing fields `temper` (NONE, TILT, TIRED,
-  WARMUP, MOODY) and `belief` (`-` or a belief key); old 12-field lines still decode.
-- **Evolved players** (`origin = EVOLVED`): children made at season end (section 5). Keys
-  `e<season>_<n>`.
-- **Mine** (`origin = MINE`): the clone and custom AIs, as today.
-- Every AI has a Korean name (base AIs keep theirs), a hometown (one of 16 cities; base AIs get
-  one from a hash of their key) and, for generated/evolved ones, parents and a debut season.
-- `league/roster.txt` (`roster 1`): one line per generated/evolved AI alive:
-  `ai key name hometown origin born parentA parentB <CustomAiSpec fields>`; plus
-  `retired key name born retiredSeason parentA parentB bestRating titles` (newest 500) and
-  `legend key name born retired <spec fields> <honours>` (AIs with any honour, kept forever, at
-  most 200).
+- **Generated players** (`origin = GENERATED`): the league is for them only by default
+  (`baseAis` off). `LeagueConfig.generated` (default 1000, at most 3000) players, keys
+  `g0001`... Player `i` comes from `Random(mix(GEN_SEED, salt, i))` only (`PlayerGenerator`).
+  - **Identity** (`Identity.kt`): nation (28, `Nations.kt`: names written the nation's way,
+    cities, a confederation), gender, debut age (age = debutAge + season - born), abilities
+    1-99 (판단력 → mistake rate, 예측력 → how far it plans, 승부 감각 → late-game score sense,
+    멘탈 → no temper from 50 up, a stronger temper below), potential, temper kind and whether
+    its mistakes come by feel or as slips. Saved as `name=value` tokens on the roster line.
+  - **Style** (`PlayStyles.kt`): one of 25 recipes with an intensity, an optional second
+    recipe (blend) and an overlay (gambler, locker, panic, streaky, chameleon). The app shows
+    it as five two-ended tendency bars (`Tendencies`).
+  - **Schools** (`Schools.kt`): each nation favours some recipes and an overlay (×2.5) and
+    tilts abilities by a few points; every style and level still comes from every nation.
+    A world champion's style comes into fashion for newcomers (fades ×0.6 a season).
+  - Tiers of quality at birth (TOP/MID/LOW/NOVICE) by potential.
+- **Evolved players** (`origin = EVOLVED`): pupils made at season end (section 5). Keys
+  `e<season>_<n>`. Their 스승 (mentors) are the parent links.
+- **Base AIs**: the 103 hand-made AIs of `LeagueRoster`. With `baseAis` off they play one
+  farewell season and leave the league as its founders (records kept; ranked games and the lab
+  still use them).
+- **Mine** (`origin = MINE`): the clone and custom AIs.
+- `league/roster.txt`: alive players with identity and style tokens; `retired` lines (newest
+  3000, with nation, gender and ages) and `legend` lines (any honour, at most 300).
 
 ## 2. Structure of a season
 
 ### 2.1 Individual league (the pyramid)
-- `divisions` (default 4) balanced divisions over all AIs except me. ~205 AIs → 4 × 51.
+- **Linear** (six groups or fewer of `groupSize`, or `pyramid` off): `divisions` (default 4)
+  balanced divisions over all AIs except me. ~205 AIs → 4 × 51.
+- **Regional pyramid** (`Pyramid.kt`, `pyramid` on and more than six groups of `groupSize`,
+  default 50): K = round(N / groupSize) groups; 1부 one group, 2부 two, 3부 four, ...; the rest
+  is a tier of its own when at least half the tier above, else joins it (1000: 1/2/4/8/5,
+  3000: 1/2/4/8/16/29). Group sizes as even as can be, higher groups first. Each group is a
+  division of the `Season`; `Tiers` maps divisions to tiers (saved as a `tiers` line only for
+  a pyramid, with region names). Each season a tier's members are sorted by confederation,
+  nation, hometown and cut into its groups, named after the region (a nation with half the
+  group, else a confederation, else the two biggest).
 - Single round robin per division (`doubleRoundRobin` option). Matchdays: the circle method
   splits each division's fixtures into rounds where every AI plays at most once; matchday `k`
   of every division opens together (a calendar). Fixture order inside an open matchday: fewest
-  played first, heaviest first once 80% of the league is played.
+  played first, heaviest first once 80% of the league is played. `season.txt` (`season 4`)
+  keeps the divisions and seed (fixtures are built again) and the played results only.
 - Match = 2 games on mirrored dice (`matchFormat`: SINGLE = 1 game, MIRRORED = 2 games default,
   BEST_OF_3 = mirrored + a decider when level). League points 3/1/0; a 1-1 match goes to the
   two-game total; equal totals draw.
-- End of season, per boundary d/d+1: `autoSwap` (default 2) go down/up automatically; with
-  `promotionPlayoff` on (default), d's (autoSwap+1)-th from bottom plays d+1's (autoSwap+1)-th
-  place in a knockout tie for the place in d.
+- End of season, per tier boundary (`Pyramid.crossing`): the top s of every lower group go up
+  (s = `autoSwap`, default 2, linear; `groupSwap`, default 3, pyramid; at most a third of the
+  smallest group) and as many go down from the upper groups' bottom places (each group's last,
+  then second last, ...; an uneven share by points per match across groups). With
+  `promotionPlayoff` (default on) each lower group's next place plays the next upper one in that
+  order (best lower vs first upper), a knockout tie for the place. Linear leagues get exactly
+  the old places. Places left by retirements are filled by the best of the tier below who did
+  not just come down; newcomers start in the last tier.
+- Honours by tier: `L<t>` a group title of tier t (one per group), `UP<t>`/`DOWN<t>` moves into
+  tier t. In a pyramid, news covers 1부-3부 titles and the moves around 1부-3부; the rest is one
+  `lower_tiers` article a season.
 - `titlePlayoff` (default on): 1st division top 4 play semis (1v4, 2v3, two legs) and a final
   (one match). The winner is champion; the regular-season leader gets "정규리그 1위".
 
@@ -78,8 +101,8 @@ single decider games on new deals (seats alternating) → higher seed.
 - **요트컵** (cup): every AI except me. Bracket of the next power of two with byes for the best
   seeds (by rating), rounds spread over the season calendar from 4% to 88% of the regular
   season (2.4), final last.
-- **챔피언스 리그**: 16 AIs — previous season's 1st division top 12, 2nd division top 2, cup
-  winner and runner-up (taken places pass down the 1st division). Season 1: top 16 by rating.
+- **챔피언스 리그**: 16 AIs — previous season's 1st division top 12, 2nd division top 2 (a
+  pyramid: each 2부 group's winner), cup winner and runner-up (taken places pass down the 1st division). Season 1: top 16 by rating.
   4 groups of 4 (pots by entry order, seeded draw), double round robin (6 matchdays, 48
   matches), top 2 to a fixed bracket: QF (A1-B2, B1-A2, C1-D2, D1-C2) and SF over two legs,
   final one match. Matchdays from 8% of the season about every four weeks, QF at 60%, SF at
@@ -92,6 +115,14 @@ single decider games on new deals (seats alternating) → higher seed.
   (rating) as a national team ("계열 대표 자동 선발": also announced as news with who was
   dropped/called up versus last time). 9 teams: 3 groups of 3 (single round robin of team
   matches), the 3 group winners and the best runner-up to semis, then a final (team matches).
+- **국가대항전** (`NationCup.kt`, `nationCup`): national teams of each nation's five best rated
+  players. 요트 월드컵 every fourth season from season 3 (3, 7, 11, ...; a host nation), the
+  continental cups (아시아·유럽·아메리카·아프리카컵) in between (5, 9, ...); groups then a
+  bracket of team matches. `NationBook` (`nations.txt`) keeps each nation's record, titles and
+  best finishes, players' caps and every edition's podium. Rivalries (한일전, ...) and honours
+  WC/WC2/WC4/WCW/WCMVP/WCTOP/WCH/CC/CC2/CCW/NSQ.
+- **레전드 매치** (`LegendMatch.kt`, every third season from 3): a recently retired legend at
+  its peak against the MVP, an exhibition off the ladder.
 - **Friendlies**: newcomer placement (20%, 60% while newcomers are >10% of the roster) only;
   no fillers when nothing else is free (the worker waits: fillers went to the light AIs only).
 
@@ -206,12 +237,15 @@ or less together.
 In order, idempotent by season number:
 1. Title and promotion playoffs (if on) are played as the last fixtures before rollover.
 2. Honours, awards, hall of fame, dynasties, records; season lines; archive.
-3. Evolution (if `evolution > 0`, default 8): retire the 8 lowest rated generated/evolved AIs
-   (never base or mine); keep retired records, legends for those with honours. Make 8 children:
-   parents by tournament selection (size 4) among generated/evolved AIs in the top half by
-   rating; uniform crossover of genes, mutation with probability 0.15 per gene (small steps).
-   Children debut in the lowest division with the hometown of parent A. Genealogy = the parent
-   links (계보도: ancestors up to 4 generations and descendants).
+3. Evolution (`Evolution.kt`, `aging` on): every generated/evolved player ages a year; it
+   retires by an age table (×1.6 for the worst rated down to ×0.4 for the best; at 40 at the
+   latest) and grows toward its potential (peak about 28-30, declining from 31-35, by ability).
+   Retired records are kept, legends for those with honours. The book is brought back to
+   `generated`: `childShare` (default 40%) of the free places go to pupils (mentors by
+   tournament selection; nation 55% the first mentor's, 35% the second's; style mostly the
+   first mentor's, mutated a little), the rest to rookies (18-22 mostly). A league grown by the
+   rules gets the places beyond the retirees' as a founding class of every age. 이 주의 선수
+   (best average score of a matchday's winners) are kept as `POTW` honours.
 4. Clubs: prize money; retirements free squad places; transfer window; draft.
 5. Promotion/relegation and the next season's divisions; newcomers to the lowest division.
 6. Next season's CL entrants, super cup, cup bracket, family cup (if due).
@@ -238,12 +272,14 @@ In order, idempotent by season number:
 
 ## 7. Settings and presets
 
-`LeagueConfig` (`league/config.txt`): divisions (1-6), doubleRoundRobin, matchFormat, autoSwap,
-promotionPlayoff, titlePlayoff, generated (0-300), evolution (0-20), clubs (0 = off, 8-24),
-squad, cup, champions, superCup, allStar, familyCup. Presets: 현실 축구형 (defaults),
-빠른 시즌 (2 divisions, single games, no club league, no family cup), 대혼돈 (only AIs with
-mistakes, evolution 20), 강자만 (the top 48 by rating in 2 divisions, no generated players).
-Changing structure applies at the next season start.
+`LeagueConfig` (`league/config.txt`): divisions (1-6), pyramid, groupSize (30-80),
+groupSwap (1-8), doubleRoundRobin, matchFormat, autoSwap, promotionPlayoff, titlePlayoff,
+generated (0-3000), aging, childShare, baseAis, nationCup, clubs (0 = off, 4-24), squad, cup,
+champions, superCup, allStar, familyCup, onlyFlawed, onlyTop. Presets: 현실 축구형 (defaults:
+1000 players in a pyramid), 빠른 시즌 (2 divisions, single games, no club league, no national
+cups), 대혼돈 (only players with mistakes, 70% pupils), 강자만 (the top 48 by rating in 2
+divisions, no aging). Rules saved before the pyramid with the old default of 200 players read
+as 1000. Changing structure applies at the next season start.
 
 ## 8. Screens (Korean labels)
 
@@ -251,25 +287,30 @@ LeagueScreen tabs: **순위표** · **일정** · **리그** · **대회** · **
 The control card shows the season clock on every tab: "📅 시즌 3 · 12주차 / 49주", what this week
 holds besides the league ("이번 주: 🏆 요트컵 64강 · 🛡 클럽 4라운드") or what comes next, and a bar
 of the weeks (played, in play, later; dots for finals). A tap opens 일정.
-- 순위표: today's ladder + search + origin chip (기본/생성/진화/내 AI) + 응원 ★.
+- 순위표: today's ladder + search (names and nations) + origin and nation chips + 응원 ★.
 - 일정: 이번 주 (any week with ◀ ▶: every stage with played/total, live matches, a tap opens its
   table or bracket; late stages of earlier weeks; the week's top news; next week; the finals
   ahead) and 시즌 전체 (a row per week, ✓ played, ● in play, the post-season apart).
-- 리그: division tables (with 운 보정 toggle and odds columns), 일정표 (matchday list with
+- 리그: tier chips, then group chips in a pyramid (the followed player's group first);
+  division tables (with 운 보정 toggle and odds columns), 일정표 (matchday list with
   results and upcoming fixtures, 프리뷰 on tap), 순위 변동 그래프, 플레이오프.
 - 대회: 요트컵 bracket, 챔스 groups + bracket, 슈퍼컵, 올스타전, 계열 대항전 (and 대표 명단).
   Chips say where each stands ("64강", "13주", "끝"); a card lists every stage with its week
   (✓, ●) and what is on now; bracket round chips carry their week.
 - 클럽: club table, club card (emblem, squad, budget, honours, transfers), 이적·드래프트 소식.
-- 기록: 기록실 (records, dynasties), 시상식·명예의 전당, 시즌 아카이브, 메타 리포트,
+- 기록: 기록실 (records, dynasties), 국가 랭킹 (by cups, strength or numbers; followed nations;
+  a nation's sheet: school, cups, core squad, most capped, honours by nation, ages, legends),
+  유망주 (22 or younger by potential), 시상식·명예의 전당, 시즌 아카이브, 메타 리포트,
   칸별 리그 메타, 상대 전적 매트릭스, 계보도, 레전드 보관소, 성장 곡선 (from a profile).
 - 소식: feed (where each match was played: "🏆 요트컵 64강 · 14주차", filters 리그/대회/친선) +
   하이라이트 + 뉴스 기사 by week under week headings + 마일스톤 + 라이브 스코어보드 (with the
   week) + 응원 AI filter.
 - Extra entries: AI 연구소 (from the league top bar), 백과사전 (search over AIs, retired,
   legends, clubs, competitions), 규칙·프리셋 (settings), 시즌 결산 (shown once at rollover),
-  스카우팅 (ranked start dialog), 프로필 (any AI name opens it: card with honours, stats,
-  growth curve, genealogy, highlights).
+  스카우팅 (ranked start dialog), 프로필 (any AI name opens it: flag, nation, gender, age and
+  stage, nickname, ability bars with grades and change, tendency bars, style card, rival,
+  national team, honours, stats, growth curve, 사제 계보, highlights; ⚖ 비교 puts two players
+  side by side).
 
 ## 9. Framework (implemented) and module boundaries
 
