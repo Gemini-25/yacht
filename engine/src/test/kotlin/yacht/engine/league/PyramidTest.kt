@@ -195,6 +195,45 @@ class PyramidTest {
     }
 
     @Test
+    fun aSavedSeasonBuildsItsFixturesAgainAndOldFilesStillRead() {
+        val ctx = context(400)
+        val plan = Offseason.first(3L, ctx)
+        drive(plan, Random(1), 0.4)
+        val s = plan.league
+        // One fixture taken and not played: it stays to play.
+        val taken = assertNotNull(s.next(emptySet()))
+        val text = s.encode()
+        assertTrue(text.startsWith("season 4\n") && !text.contains("\nfx "))
+        fun same(b: Season) {
+            assertEquals(s.fixturesTotal, b.fixturesTotal)
+            assertEquals(s.fixturesPlayed, b.fixturesPlayed + 0)
+            for (id in 0 until s.fixturesTotal) {
+                assertEquals(s.fixture(id), b.fixture(id))
+                assertEquals(s.result(id), b.result(id))
+                assertEquals(s.isPlayed(id) && id != taken.id, b.isPlayed(id), "fixture $id")
+            }
+            for ((k, st) in s.standings) assertEquals(st.points to st.games, b.standings.getValue(k).let { it.points to it.games })
+        }
+        same(Season.decode(text, ctx.keys))
+        // The file of the version before, every fixture in it.
+        val old = buildString {
+            append("season 3\n")
+            for (l in text.lines()) if (l.startsWith("number ") || l.startsWith("division ") || l.startsWith("tiers ")) append(l).append('\n')
+            for (id in 0 until s.fixturesTotal) {
+                val f = s.fixture(id)
+                val played = s.isPlayed(id) && id != taken.id
+                append("fx ${f.id} ${f.division} ${f.matchday} ${f.a} ${f.b} ${if (played) 1 else 0}")
+                s.result(id)?.let { gs -> append(' ').append(gs.joinToString(";") { Season.encodeGame(it) }) }
+                append('\n')
+            }
+            for (l in text.lines()) if (l.startsWith("standing ") || l.startsWith("pos ")) append(l).append('\n')
+        }
+        same(Season.decode(old, ctx.keys))
+        // Half the size or less.
+        assertTrue(text.length * 2 < old.length, "${text.length} vs ${old.length}")
+    }
+
+    @Test
     fun groupsAreCutByRegion() {
         val ctx = context(1000)
         val plan = Offseason.first(9L, ctx)

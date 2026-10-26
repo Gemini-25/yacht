@@ -50,6 +50,10 @@ class Season private constructor(
 ) {
     val standings = HashMap<String, Standing>()
     private val fixtures = ArrayList<LeagueFixture>()
+
+    /** Each fixture's two standings (by id), so [next] reads no map. */
+    private val standingA = ArrayList<Standing>()
+    private val standingB = ArrayList<Standing>()
     private val remaining = java.util.TreeSet<Int>()
     private val inProgress = HashSet<Int>()
 
@@ -121,8 +125,26 @@ class Season private constructor(
         return List(n) { StageCount(played[it], total[it]) }
     }
 
+    /** Fixture ids by matchday (built on first use; fixtures are only added while the season is built or read). */
+    private var byDay: Array<IntArray> = emptyArray()
+    private var byDayFor = -1
+
     /** Upcoming and played fixtures of a matchday (for the calendar). */
-    fun matchday(k: Int): List<LeagueFixture> = fixtures.filter { it.matchday == k }
+    fun matchday(k: Int): List<LeagueFixture> {
+        if (byDayFor != fixtures.size) {
+            val lists = List(matchdays) { ArrayList<Int>() }
+            for (f in fixtures) lists[f.matchday] += f.id
+            byDay = Array(lists.size) { lists[it].toIntArray() }
+            byDayFor = fixtures.size
+        }
+        return byDay.getOrNull(k)?.map { fixtures[it] }.orEmpty()
+    }
+
+    private fun add(f: LeagueFixture) {
+        fixtures += f
+        standingA += standings.getValue(f.a)
+        standingB += standings.getValue(f.b)
+    }
 
     /** True when every fixture of matchday [k] is played (in every division). */
     fun dayDone(k: Int): Boolean = k in 0 until matchdays && divisions.indices.all { (matchdayLeft[it to k] ?: 0) == 0 }
@@ -168,16 +190,16 @@ class Season private constructor(
         // Ids in matchday order (then division), so the open matchdays come first in [remaining].
         val rounds = divisions.map { keys -> if (double) Calendar.doubleRoundRobin(keys, rng) else Calendar.roundRobin(keys, rng) }
         var id = 0
+        for (d in divisions.indices) for (k in divisions[d]) standings[k] = Standing(k)
         for (md in 0 until (rounds.maxOfOrNull { it.size } ?: 0)) {
             for ((d, rs) in rounds.withIndex()) {
                 for ((a, b) in rs.getOrNull(md).orEmpty()) {
-                    fixtures += LeagueFixture(id, d, md, a, b)
+                    add(LeagueFixture(id, d, md, a, b))
                     remaining += id
                     id++
                 }
             }
         }
-        for (d in divisions.indices) for (k in divisions[d]) standings[k] = Standing(k)
         countMatchdays()
     }
 
@@ -211,10 +233,9 @@ class Season private constructor(
         for (id in remaining) {
             val f = fixtures[id]
             if (f.matchday > md + 1) break
-            if (f.a in busy || f.b in busy) continue
-            val played = standings.getValue(f.a).played + standings.getValue(f.b).played
-            val key = if (late) -cost!!(f) else f.matchday * 10_000.0 + played
-            if (key < bestKey) {
+            // The key first (no map read), the busy sides only for a better one.
+            val key = if (late) -cost!!(f) else f.matchday * 10_000.0 + standingA[id].played + standingB[id].played
+            if (key < bestKey && f.a !in busy && f.b !in busy) {
                 bestKey = key
                 best = f
             }
@@ -292,14 +313,20 @@ class Season private constructor(
 
     // ---- saving --------------------------------------------------------------------------------
 
+    /**
+     * The saved season (`season 4`): the divisions and the seed, from which [decode] builds the
+     * fixtures again, and the results of the played ones only (a league of thousands has tens of
+     * thousands of fixtures).
+     */
     fun encode(): String = buildString {
-        append("season 3\n")
+        append(HEADER).append('\n')
         append("number $number $seed ${if (double) 1 else 0}\n")
         for ((i, d) in divisions.withIndex()) append("division $i ${d.joinToString(",")}\n")
-        // A linear league's file stays as before (an older version reads it as it always did).
         if (!tiers.linear) append(tiers.encode()).append('\n')
+        append("fixtures ${fixtures.size}\n")
         for (f in fixtures) {
-            append("fx ${f.id} ${f.division} ${f.matchday} ${f.a} ${f.b} ${if (isPlayed(f.id)) 1 else 0}")
+            if (!isPlayed(f.id)) continue
+            append("r ").append(f.id)
             results[f.id]?.let { gs -> append(' ').append(gs.joinToString(";") { encodeGame(it) }) }
             append('\n')
         }
@@ -310,6 +337,11 @@ class Season private constructor(
     }
 
     companion object {
+        const val HEADER = "season 4"
+
+        /** The version before: every fixture saved. */
+        private const val OLD_HEADER = "season 3"
+
         /** "a:b:flags" with flags bits 1 aYacht, 2 bYacht, 4 aBonus, 8 bBonus. */
         fun encodeGame(g: GameScore): String {
             val flags = (if (g.aYacht) 1 else 0) or (if (g.bYacht) 2 else 0) or (if (g.aBonus) 4 else 0) or (if (g.bBonus) 8 else 0)
@@ -365,7 +397,9 @@ class Season private constructor(
          */
         fun decode(text: String, keys: Collection<String>): Season {
             val lines = text.lines()
-            require(lines.firstOrNull()?.trim() == "season 3") { "not a season 3 file" }
+            val header = lines.firstOrNull()?.trim()
+            require(header == HEADER || header == OLD_HEADER) { "not a season file" }
+            val rebuilt = header == HEADER
             var number = 1
             var seed = 0L
             var double = false
@@ -387,16 +421,30 @@ class Season private constructor(
             val known = keys.toSet()
             val tiers = tierLine?.let { Tiers.decode(it, divisions.size) } ?: Tiers.linear(divisions.size)
             val s = Season(number, seed, divisions, double, tiers)
-            for (d in divisions) for (k in d) s.standings[k] = Standing(k)
+            if (rebuilt) {
+                // The fixtures as the season built them; the played ones come off the list below.
+                s.build(Random(DiceStream.mix(seed, 0x5EA5)))
+                val saved = lines.firstOrNull { it.startsWith("fixtures ") }?.substringAfter(' ')?.trim()?.toIntOrNull()
+                require(saved == null || saved == s.fixtures.size) { "the fixtures do not rebuild" }
+                for (f in s.fixtures) if (f.a !in known || f.b !in known) s.remaining.remove(f.id)
+            } else {
+                for (d in divisions) for (k in d) s.standings[k] = Standing(k)
+            }
             // Standings from before games were counted: counted again from the saved results.
             val noGames = HashSet<String>()
             for (l in lines) {
                 val f = l.split(' ')
                 when (f[0]) {
-                    "fx" -> {
+                    "r" -> if (rebuilt) {
+                        val id = f[1].toInt()
+                        require(id in s.fixtures.indices) { "a result of no fixture" }
+                        s.remaining.remove(id)
+                        f.getOrNull(2)?.let { r -> runCatching { r.split(';').map { decodeGame(it) } }.getOrNull()?.let { s.results[id] = it } }
+                    }
+                    "fx" -> if (!rebuilt) {
                         val fx = LeagueFixture(f[1].toInt(), f[2].toInt(), f[3].toInt(), f[4], f[5])
                         require(fx.id == s.fixtures.size) { "fixtures out of order" }
-                        s.fixtures += fx
+                        s.add(fx)
                         val gone = fx.a !in known || fx.b !in known
                         if (f[6] == "0" && !gone) s.remaining += fx.id
                         f.getOrNull(7)?.let { r -> runCatching { r.split(';').map { decodeGame(it) } }.getOrNull()?.let { s.results[fx.id] = it } }
