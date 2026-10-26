@@ -500,4 +500,14 @@ class PlayersTest {
         val legend = leagueAi(book.legend("g999")!!, tables, extra)
         assertEquals(games, LeagueMatch.play(tables.rules, legend, ev, 11))
     }
+
+    @Test
+    fun aTopUpAddsAtMostWhatTheBookLacks() {
+        val book = yacht.engine.league.PlayerBook()
+        book.ensureGenerated(10)
+        assertEquals(10, book.size)
+        // Asked for 30 but only 5 may come in.
+        assertEquals(5, book.ensureGenerated(30, 2, max = 5).size)
+        assertEquals(15, book.size)
+    }
 }

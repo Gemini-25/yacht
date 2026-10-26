@@ -555,7 +555,10 @@ class LeagueController(
         val players = texts[LeagueWorld.ROSTER]?.let { runCatching { PlayerBook.decode(it, reserved) }.getOrNull() } ?: PlayerBook(reserved)
         // Players added mid-league debut in the season being played.
         val season = texts[LeagueWorld.SEASON]?.let { t -> Regex("(?m)^number (\\d+) ").find(t)?.groupValues?.get(1)?.toIntOrNull() } ?: 1
-        players.ensureGenerated(cfg.generated, season)
+        // Up to the setting (a raised count joins now), but not while a closed season waits to
+        // be closed again after a kill: that close tops up with the rules it was first closed with.
+        val closing = texts[LeagueWorld.SEASON]?.contains("\nclosecfg ") == true
+        if (!closing && players.size < cfg.generated) players.ensureGenerated(cfg.generated, season, cfg.generated - players.size)
         synchronized(lock) { pendingPlayers = players }
         rebuildRoster()
         val w = synchronized(lock) { LeagueWorld.decode(texts, ladderKeys(), reserved) }
@@ -865,7 +868,15 @@ class LeagueController(
         saveAsync()
         val closing = w.closeSeason()
         if (closing.rosterChanged) rebuildRoster()
-        configureWorld(w, rules)
+        // The next season: members and clubs as closed (they must replay the same), its shape
+        // (divisions, format, competitions) from the rules as they are now.
+        configureWorld(
+            w,
+            config.copy(
+                generated = rules.generated, evolution = rules.evolution, onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
+                clubs = rules.clubs, squad = rules.squad,
+            ),
+        )
         w.openSeason()
         timings.note("rollover", System.nanoTime() - t0)
         val news = historyItem(closing.season, closing.honours)

@@ -300,11 +300,13 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
      * extra players stay until evolution retires them, and the population only shrinks (or,
      * once [n] is raised again, grows back past the g-keys already used) through
      * [Evolution.run]'s `population` (pass the same [n]).
+     * At most [max] are added (a book refilled by evolution's children only tops up what it lacks).
      */
-    fun ensureGenerated(n: Int, season: Int = 1): List<PlayerRecord> {
+    fun ensureGenerated(n: Int, season: Int = 1, max: Int = Int.MAX_VALUE): List<PlayerRecord> {
         val added = ArrayList<PlayerRecord>()
         val taken = names().toMutableSet()
         for (i in 1..n) {
+            if (added.size >= max) break
             val key = PlayerGenerator.key(i)
             if (key in byKey || i in gone || retiredRecord(key) != null) continue
             val name = KoreanNames.unique(PlayerGenerator.nameRng(i), taken)

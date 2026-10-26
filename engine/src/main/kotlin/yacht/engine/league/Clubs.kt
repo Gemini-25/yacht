@@ -288,7 +288,8 @@ class ClubBook private constructor(
         reindex()
         if (clubs > 0) {
             val place = table.distinct().withIndex().associate { it.value to it.index }
-            draft(season, place, ratingOrder(rating), alive, squad, events)
+            val picked = moves.filter { it.season == season && it.kind == ClubMoveKind.DRAFT }.maxOfOrNull { it.amount } ?: 0
+            draft(season, place, ratingOrder(rating), alive, squad, events, picked)
         }
         trim()
         return events
@@ -380,10 +381,11 @@ class ClubBook private constructor(
         }
     }
 
-    private fun draft(season: Int, place: Map<String, Int>, order: Comparator<String>, alive: Set<String>, squad: Int, events: MutableList<LeagueEvent>) {
+    /** The draft of [season]; its picks are numbered after the [start] made already. */
+    private fun draft(season: Int, place: Map<String, Int>, order: Comparator<String>, alive: Set<String>, squad: Int, events: MutableList<LeagueEvent>, start: Int = 0) {
         val turns = entries.sortedWith(compareByDescending<Entry> { place[it.id] ?: Int.MAX_VALUE }.thenBy { it.id })
         val pool = ArrayDeque(alive.filter { it !in memberOf }.sortedWith(order))
-        var pick = 0
+        var pick = start
         do {
             var any = false
             for (e in turns) {

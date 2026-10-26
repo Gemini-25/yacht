@@ -577,4 +577,21 @@ class ClubsTest {
         assertEquals(3, f.lineupA.size)
         assertNull(lg.next(1.0, setOf("a1") + lineups.keys.filter { it != "c01" }.flatMap { lineups.getValue(it) }))
     }
+
+    @Test
+    fun aReplayedOffSeasonDraftsAfterTheSeasonsPicks() {
+        val all = keys(120)
+        val rating = { k: String -> strength(k).toDouble() }
+        val book = ClubBook.create(all.take(96), 16, 6, 7L, cities)
+        // The off-season of season 1, with 24 free agents to draft.
+        book.offseason(1, emptyList(), emptyList(), rating, all.toSet(), 16, 6, 99L)
+        val first = book.history.filter { it.season == 1 && it.kind == ClubMoveKind.DRAFT }.maxOfOrNull { it.amount } ?: 0
+        // Replayed with one squad member gone: it leaves, and the draft goes on from the last pick.
+        val gone = book.clubs.first().squad.first()
+        book.offseason(1, emptyList(), emptyList(), rating, (all - gone).toSet(), 16, 6, 99L)
+        val picks = book.history.filter { it.season == 1 && it.kind == ClubMoveKind.DRAFT }.map { it.amount }
+        assertEquals(picks.size, picks.toSet().size, picks.toString())
+        assertTrue(picks.max() > first)
+        assertTrue(book.clubs.none { gone in it.squad })
+    }
 }
