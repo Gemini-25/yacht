@@ -694,9 +694,21 @@ class LeagueController(
             backgroundFile.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueBackground.entries.firstOrNull { it.name == v }?.let { background = it } }
         }
         customs = runCatching { customFile.takeIf { it.exists() }?.readLines()?.mapNotNull { CustomAiSpec.decode(it) } }.getOrNull().orEmpty()
-        config = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: LeagueConfig()
+        config = readConfig()
         favourites = readFavourites()
     }
+
+    /**
+     * The saved rules, or the defaults. Rules saved before the pyramid with the old default of
+     * 200 players take today's default (a league of thousands): the players come in at the
+     * next season's close and the league becomes a pyramid.
+     */
+    private fun readConfig(): LeagueConfig = runCatching {
+        configFile.takeIf { it.exists() }?.readText()?.let { text ->
+            val c = LeagueConfig.decode(text)
+            if (!text.lines().any { it.startsWith("pyramid ") } && c.generated == OLD_DEFAULT_PLAYERS) c.copy(generated = LeagueConfig.DEFAULT_PLAYERS) else c
+        }
+    }.getOrNull() ?: LeagueConfig()
 
     private fun readFavourites(): Set<String> =
         runCatching { favouriteFile.takeIf { it.exists() }?.readLines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() }.getOrNull().orEmpty()
@@ -747,7 +759,7 @@ class LeagueController(
     private fun readLeague() {
         val texts = LeagueWorld.FILES.associateWith { name -> runCatching { File(folder, name).takeIf { it.exists() }?.readText() }.getOrNull() }
         // As at start-up: no rules file means the default rules (a restore removes this phone's).
-        val cfg = runCatching { configFile.takeIf { it.exists() }?.readText()?.let { LeagueConfig.decode(it) } }.getOrNull() ?: LeagueConfig()
+        val cfg = readConfig()
         val reserved = baseRoster.map { it.name }
         // The generated and evolved players first: they are AIs of the roster, so the
         // ladder and the season read with them.
@@ -2433,6 +2445,9 @@ class LeagueController(
 
         /** League files a backup restores (when this phone's league has no games yet). */
         val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")
+
+        /** The default number of players before the pyramid. */
+        private const val OLD_DEFAULT_PLAYERS = 200
 
         /** Moves a season's history names (more: only those into 1부 and 2부). */
         const val MOVES_LISTED = 16

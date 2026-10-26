@@ -66,6 +66,20 @@ class PlayersTest {
     }
 
     @Test
+    fun aLeagueGrownByTheRulesGetsPlayersOfEveryAge() {
+        val book = PlayerBook().apply { ensureGenerated(200) }
+        val r = Evolution.run(book, 1, ::ratingOf, { 0 }, 5L, 1000)
+        assertEquals(1000, book.size)
+        val newcomers = r.born.mapNotNull { book[it] }
+        assertTrue(newcomers.size >= 800 - 1)
+        // Not 800 teenage rookies: a founding class of every age, and only the retirees'
+        // places go to rookies and pupils.
+        val ages = newcomers.map { it.age(2) }
+        assertTrue(ages.count { it >= 26 } * 4 >= ages.size, ages.groupingBy { it }.eachCount().toSortedMap().toString())
+        assertTrue(newcomers.count { it.origin == Origin.EVOLVED } <= r.retired.size)
+    }
+
+    @Test
     fun generatedPlayersAreDeterministicAndAPrefixOfMore() {
         val small = PlayerBook().apply { ensureGenerated(30) }
         val big = PlayerBook().apply { ensureGenerated(40) }

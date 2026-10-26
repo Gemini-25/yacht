@@ -121,8 +121,11 @@ object Evolution {
         }
         val rng = Random(DiceStream.mix(seed, SALT, season.toLong()))
         val wanted = population - book.size
+        // A league grown by the rules (200 players to 1000, say): the places beyond the
+        // retirees' come as a founding class of every age, not hundreds of teenage rookies.
+        val expansion = (population - (book.size + retired.size)).coerceIn(0, maxOf(0, wanted))
         if (wanted > 0) {
-            val pupils = if (pool.isEmpty()) 0 else Math.round(wanted * childShare.coerceIn(0.0, 1.0)).toInt()
+            val pupils = if (pool.isEmpty()) 0 else Math.round((wanted - expansion) * childShare.coerceIn(0.0, 1.0)).toInt()
             val taken = book.names().toMutableSet()
             val counts = book.nationCounts().toMutableMap()
             var n = 0
@@ -150,7 +153,8 @@ object Evolution {
                     counts.merge(c.identity!!.nation, 1, Int::plus)
                 }
             }
-            book.ensureGenerated(population, season + 1, meta = meta, founding = false, accept = accept)
+            book.ensureGenerated(population - expansion, season + 1, meta = meta, founding = false, accept = accept)
+            book.ensureGenerated(population, season + 1, meta = meta, founding = true, accept = accept)
         }
         book.evolvedSeason = season
         return EvolutionResult(retired, debuts(book, season), events(book, season, learned))
