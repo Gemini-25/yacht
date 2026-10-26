@@ -82,7 +82,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     private fun factories(): List<(SeasonStart) -> Competition?> = Competitions.factories() + ClubLeague.factory(
         { clubs },
         { s -> ClubBook.create(s.ranking, s.config.clubs, s.config.squad, s.seed, Hometowns.ALL).also { clubs = it } },
-    )
+    ) + LegendMatch.factory { players.legends }
 
     /**
      * The first season: divisions by rating; returns the draw news. It comes after the newest
@@ -354,7 +354,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS)
 
         /** Readers of every competition in season.txt. */
-        val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec)
+        val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec) + (Comp.LEGEND to LegendMatch.codec)
 
         const val EVENTS = 300
 
@@ -366,23 +366,34 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
          * file starts that part fresh. A season file of the first version moves its history into
          * the honours (the next start begins a season of the new kind).
          */
+        /**
+         * [block], or null when it throws an exception (a file that cannot be read starts that
+         * part afresh). An Error is thrown on: running out of memory must not read as an empty
+         * file, which the next save would write over the league.
+         */
+        private inline fun <T> readOrNull(block: () -> T): T? = try {
+            block()
+        } catch (e: Exception) {
+            null
+        }
+
         fun decode(texts: Map<String, String?>, keys: List<String>, reserved: Collection<String>): LeagueWorld {
             // An empty file stands for a part not made yet (see encodeFiles).
             val files = texts.mapValues { (_, t) -> t?.takeIf { it.isNotBlank() } }
-            val ladder = files[LADDER]?.let { t -> runCatching { Ladder.decode(keys, t) }.getOrNull() } ?: Ladder(keys)
+            val ladder = files[LADDER]?.let { t -> readOrNull { Ladder.decode(keys, t) } } ?: Ladder(keys)
             val w = LeagueWorld(ladder)
             val seasonText = files[SEASON]
-            w.plan = seasonText?.let { t -> runCatching { SeasonPlan.decode(t, keys, CODECS) }.getOrNull() }
-            w.honours = files[HONOURS]?.let { t -> runCatching { HonourBook.decode(t) }.getOrNull() } ?: HonourBook()
+            w.plan = seasonText?.let { t -> readOrNull { SeasonPlan.decode(t, keys, CODECS) } }
+            w.honours = files[HONOURS]?.let { t -> readOrNull { HonourBook.decode(t) } } ?: HonourBook()
             if (w.plan == null && seasonText != null) w.honours.add(HonourBook.legacy(seasonText))
-            w.players = files[ROSTER]?.let { t -> runCatching { PlayerBook.decode(t, reserved) }.getOrNull() } ?: PlayerBook(reserved)
-            w.clubs = files[CLUBS]?.let { t -> runCatching { ClubBook.decode(t) }.getOrNull() }
-            w.stats = files[STATS]?.let { t -> runCatching { StatsBook.decode(t) }.getOrNull() } ?: StatsBook()
-            w.archive = files[ARCHIVE]?.let { t -> runCatching { Archive.decode(t) }.getOrNull() } ?: Archive()
-            w.highlights = files[HIGHLIGHTS]?.let { t -> runCatching { HighlightBook.decode(t) }.getOrNull() } ?: HighlightBook()
-            w.news = files[NEWS]?.let { t -> runCatching { NewsBook.decode(t) }.getOrNull() } ?: NewsBook()
-            w.lab = files[LAB]?.let { t -> runCatching { LabBook.decode(t) }.getOrNull() } ?: LabBook()
-            w.nations = files[NATIONS]?.let { t -> runCatching { NationBook.decode(t) }.getOrNull() } ?: NationBook()
+            w.players = files[ROSTER]?.let { t -> readOrNull { PlayerBook.decode(t, reserved) } } ?: PlayerBook(reserved)
+            w.clubs = files[CLUBS]?.let { t -> readOrNull { ClubBook.decode(t) } }
+            w.stats = files[STATS]?.let { t -> readOrNull { StatsBook.decode(t) } } ?: StatsBook()
+            w.archive = files[ARCHIVE]?.let { t -> readOrNull { Archive.decode(t) } } ?: Archive()
+            w.highlights = files[HIGHLIGHTS]?.let { t -> readOrNull { HighlightBook.decode(t) } } ?: HighlightBook()
+            w.news = files[NEWS]?.let { t -> readOrNull { NewsBook.decode(t) } } ?: NewsBook()
+            w.lab = files[LAB]?.let { t -> readOrNull { LabBook.decode(t) } } ?: LabBook()
+            w.nations = files[NATIONS]?.let { t -> readOrNull { NationBook.decode(t) } } ?: NationBook()
             // A season in progress that the stats do not know (stats.txt is newer than the
             // season, or was lost): start ratings and rookies from now, so its awards are made.
             w.plan?.let { p ->

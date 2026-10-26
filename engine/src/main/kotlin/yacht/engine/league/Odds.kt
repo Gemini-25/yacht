@@ -295,6 +295,15 @@ object Odds {
      * [runs] simulations of the rest of the season from [input], seeded by [seed]; with nothing
      * left to play, one exact run. Pure: may run on any thread.
      */
+    /**
+     * Simulations for [fixturesLeft] fixtures: [RUNS], fewer in a big league (about 1e8
+     * simulated fixtures at most per refresh, at least 200 runs).
+     */
+    fun runsFor(fixturesLeft: Int): Int = (1e8 / maxOf(1, fixturesLeft)).toInt().coerceIn(200, RUNS)
+
+    /** [fixturesLeft] of [input]: its league fixtures still to play. */
+    fun left(input: OddsInput): Int = input.total - input.played
+
     fun run(input: OddsInput, runs: Int = RUNS, seed: Long): OddsTable {
         val start = input.start
         val nd = start.size - 1

@@ -86,7 +86,7 @@ object News {
         "upset", "comeback", "record", "milestone", "title", "promoted", "relegated", "cup_round", "eliminated",
         "qualified", "final", "transfer", "draft", "born", "retired", "award", "callup", "dropped", "title_race",
         "retirements", "rookies", "debut", "breakout", "decline", "learned_rule", "league_reform", "founders_farewell",
-        "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend",
+        "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend", "draw_legend",
         "hall_of_fame", "dynasty", "legend_match", "draw_cup", "draw_cl", "draw_super", "draw_allstar",
         "draw_family", "season_review",
     )
@@ -690,6 +690,10 @@ object News {
                 T("{label}의 승자는 {a}", "{a|과} {b}의 {label|은} {a}의 승리로 끝났어요.[[ 보드 스코어는 {score|이에요}.]] 다음 맞대결이 벌써 기다려져요."),
             ) to 3
         }
+        "draw_legend" -> listOf(
+            T("레전드 매치: {a} vs {b}", "은퇴한 레전드 {a|이} 전성기의 모습으로 돌아와 현역 {b|과} 맞붙어요. 순위와 상관없는 이벤트 경기예요."),
+            T("돌아온 {a}, {b}에 도전장", "{a|이} 레전드 매치로 다시 무대에 서요. 상대는 지금 리그를 이끄는 {b|이에요}."),
+        ) to 3
         "style_trend" -> {
             arg(0)?.let { k -> PlayStyles.recipe(k)?.let { v["style"] = it.name } }
             listOf(

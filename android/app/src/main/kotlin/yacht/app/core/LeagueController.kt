@@ -1175,7 +1175,7 @@ class LeagueController(
             seed = p.seed xor p.league.fixturesPlayed.toLong()
             Odds.input(p, { k -> w.rating(k) })
         }
-        val table = runCatching { Odds.run(input, seed = seed) }.getOrNull() ?: return
+        val table = runCatching { Odds.run(input, Odds.runsFor(Odds.left(input)), seed) }.getOrNull() ?: return
         oddsNow = table
         publish()
     }

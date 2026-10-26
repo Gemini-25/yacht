@@ -311,8 +311,8 @@ fun leagueAi(record: PlayerRecord, tables: Tables, extra: LeagueTables): LeagueA
     desc = "${record.origin.label} 선수 · ${record.spec.describe()}",
 )
 
-/** A legend rebuilt from its archived genes (the legend match, the lab). */
-fun leagueAi(legend: Legend, tables: Tables, extra: LeagueTables): LeagueAi = leagueAi(legend.asPlayer(), tables, extra)
+/** A legend rebuilt from its archived genes at its best (the legend match, the lab). */
+fun leagueAi(legend: Legend, tables: Tables, extra: LeagueTables): LeagueAi = leagueAi(legend.asPlayer().copy(spec = legend.atPeak()), tables, extra)
 
 /**
  * The generated and evolved players (league/roster.txt, `roster 1`): the alive ones, the newest
@@ -614,7 +614,12 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             val b = PlayerBook(reserved)
             val body = lines.drop(1).let { if (text.endsWith("\n")) it else it.dropLast(1) }
             for (line in body) {
-                runCatching { b.decodeLine(line.trim().split(' ')) }
+                // A bad line is skipped; running out of memory is not (it would lose the players).
+                try {
+                    b.decodeLine(line.trim().split(' '))
+                } catch (e: Exception) {
+                    continue
+                }
             }
             return b
         }

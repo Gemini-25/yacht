@@ -865,7 +865,12 @@ class Ladder(keys: List<String>, private val anchor: String = "ev") {
             // loses only itself, not the whole league.
             for (line in text.lines()) {
                 val f = line.split(' ')
-                runCatching { decodeLine(l, f) }
+                // A bad line is skipped; running out of memory is not (it would lose the league).
+                try {
+                    decodeLine(l, f)
+                } catch (e: Exception) {
+                    continue
+                }
             }
             l.recountWins()
             // Entries of AIs no longer in the roster are gone: their games stay out of the fit
