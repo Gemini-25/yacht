@@ -540,8 +540,8 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
      * Brings the book up to [n] alive players with new generated ones debuting in [season]
      * (at most [max]); returns them. Lowering [n] removes nobody: the population only shrinks
      * through retirements. [founding] players are of every age (a new league's first players,
-     * or a big top-up: 50 or more at once, or a fifth of [n]); others are rookies. Rookies'
-     * nations are rebalanced toward the weights ([Nations.rebalance]); [meta] tilts styles.
+     * or a big top-up: 50 or more at once, or a fifth of [n]); others are rookies. Nations are
+     * drawn toward the weights from the counts so far ([Nations.rebalance]); [meta] tilts styles.
      */
     fun ensureGenerated(
         n: Int,
@@ -562,7 +562,8 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         var refused = 0
         while (added.size < count && refused < count * Evolution.TRIES) {
             val i = next++
-            val boost = if (old) { _: Nation -> 1.0 } else Nations.rebalance(nations, total)
+            // Founding players too: drawn freely, 1000 of them would scatter 25 to 46 a nation.
+            val boost = Nations.rebalance(nations, total)
             val r = PlayerGenerator.recruit(i, season, old, taken, boost, meta, genes)
             // A player the league's filter refuses (the chaos preset's only flawed players) is never generated.
             if (!accept(r.spec)) {

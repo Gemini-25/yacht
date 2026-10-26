@@ -253,7 +253,7 @@ object Evolution {
 
     /**
      * A pupil of [a] (its main mentor) and [b]: a nation from A (55%), B (35%) or the league's
-     * least represented ones, a city, a name of that nation, a potential halfway from the
+     * least represented ones (a mentor's nation above its share less often), a city, a name of that nation, a potential halfway from the
      * league's usual toward its mentors', and
      * a style from A (50%), B (30%) or of its own ([crossPlay]; [capped] main styles are not
      * taken up), never equal to an [alive] player's genes (its tastes change again).
@@ -273,11 +273,18 @@ object Evolution {
     ): PlayerRecord {
         val ia = a.identity ?: Profiles.legacy(a, season)
         val ib = b.identity ?: Profiles.legacy(b, season)
-        val u = rng.nextDouble()
+        // The mentors' nations by 55 : 35, the league's draw 10, each weighed by how far its
+        // nation is off its share: a pupil of a crowded nation is often from another one.
+        val boost = Nations.rebalance(counts, total)
+        val na = Nations.of(ia.nation)
+        val nb = Nations.of(ib.nation)
+        val wa = na?.let { 0.55 * minOf(1.0, boost(it)) } ?: 0.0
+        val wb = nb?.let { 0.35 * minOf(1.0, boost(it)) } ?: 0.0
+        val u = rng.nextDouble() * (wa + wb + 0.1)
         val nation = when {
-            u < 0.55 -> Nations.of(ia.nation)
-            u < 0.9 -> Nations.of(ib.nation)
-            else -> Nations.draw(rng, Nations.rebalance(counts, total))
+            u < wa -> na
+            u < wa + wb -> nb
+            else -> Nations.draw(rng, boost)
         } ?: Nations.KR
         val gender = if (rng.nextBoolean()) Gender.MALE else Gender.FEMALE
         val age = Profiles.ROOKIE_AGES.draw(rng).toInt()

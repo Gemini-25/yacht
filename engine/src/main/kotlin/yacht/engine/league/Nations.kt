@@ -1,6 +1,8 @@
 package yacht.engine.league
 
 import java.util.Random
+import kotlin.math.ln
+import kotlin.math.roundToInt
 
 /** A player's gender (성별): shown as 남/여; it changes nothing in play. */
 enum class Gender(val code: Char, val label: String) {
@@ -146,23 +148,29 @@ class Nation(
 }
 
 /**
- * The 28 nations. Weights follow the real populations, held between [MIN_WEIGHT] and
- * [MAX_WEIGHT] millions ([population]): China, India, the US, Brazil and Nigeria at the top
- * (about 7% each), Korea about 2.4%, the smallest about 1.4% (14 players in a league of 1000,
- * enough for a national team of 5). No nation is favoured beyond its people. The order and the
- * codes are fixed (saves keep the code; generated players draw by the list): only append.
+ * The 28 nations, of nearly the same size: the weights go up with the real populations but
+ * only from [MIN_WEIGHT] to [MAX_WEIGHT] ([population]), so in a league of 1000 every nation
+ * has 33 to 40 players (China and India the most, Sweden the fewest; Korea about 34). No nation
+ * is favoured. The order and the codes are fixed (saves keep the code; generated players draw
+ * by the list): only append.
  */
 object Nations {
-    /** A nation's draw weight: its population in millions, held between these (no nation more than 5 times another). */
-    const val MIN_WEIGHT = 30
-    const val MAX_WEIGHT = 150
+    /** Draw weights of the smallest and the most populous nation (no nation 1.2 times another). */
+    const val MIN_WEIGHT = 100
+    const val MAX_WEIGHT = 120
+
+    /** Populations (millions) at and beyond which a nation weighs [MIN_WEIGHT] and [MAX_WEIGHT]. */
+    private const val SMALL = 10.0
+    private const val LARGE = 1440.0
 
     /**
-     * The weight of a nation of [millions] people: as many players as its people, within
-     * [MIN_WEIGHT]..[MAX_WEIGHT] so the biggest do not swamp the league nor the smallest
-     * vanish from it (1000 players: 14 to 69 of each nation).
+     * The weight of a nation of [millions] people: [MIN_WEIGHT] to [MAX_WEIGHT] by the logarithm
+     * of its people, so a bigger nation has a few more players and none has many more.
      */
-    private fun population(millions: Int): Int = millions.coerceIn(MIN_WEIGHT, MAX_WEIGHT)
+    private fun population(millions: Int): Int {
+        val t = (ln(millions.toDouble()) - ln(SMALL)) / (ln(LARGE) - ln(SMALL))
+        return MIN_WEIGHT + (t.coerceIn(0.0, 1.0) * (MAX_WEIGHT - MIN_WEIGHT)).roundToInt()
+    }
 
     val KR = Nation(
         "KR", "대한민국", "한국", "🇰🇷", population(52), NameOrder.FAMILY_GIVEN,
@@ -630,17 +638,23 @@ object Nations {
     }
 
     /**
-     * Rookie intake boost that keeps the league's mix near the weights: a nation below its share
-     * gets up to twice its weight, one above it down to half. [counts] are the alive players by
+     * Rookie intake boost that brings the league's mix to the weights: a nation below its share
+     * gets up to [MAX_BOOST] times its weight, one above it down to 1/[MAX_BOOST] (an older
+     * league of uneven nations evens out over its seasons). [counts] are the alive players by
      * nation code, [total] all of them.
      */
     fun rebalance(counts: Map<String, Int>, total: Int): (Nation) -> Double = { n ->
         if (total <= 0) 1.0 else {
             val want = n.weight.toDouble() / TOTAL * total
             val have = (counts[n.code] ?: 0).toDouble()
-            (want / maxOf(have, 0.5)).coerceIn(0.5, 2.0)
+            val r = want / maxOf(have, 0.5)
+            // Squared: a nation at half its share gets four times the rookies.
+            (r * r).coerceIn(1.0 / MAX_BOOST, MAX_BOOST)
         }
     }
+
+    /** The most a rookie draw favours (or the least it gives) a nation off its share. */
+    const val MAX_BOOST = 6.0
 }
 
 /**
