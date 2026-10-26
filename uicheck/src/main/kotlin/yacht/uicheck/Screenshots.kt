@@ -211,7 +211,7 @@ private fun run(args: Array<String>) {
     c.league.recordsMode = 0
     c.league.tab = 0
     // A generated player's page (the best ranked), then two players side by side.
-    val top = c.league.view?.rows?.filter { it.rank != null && !it.isMe }?.sortedBy { it.rank } ?: emptyList()
+    val top = c.league.view?.rows?.filter { it.rank != null && !it.isMe && it.origin != yacht.engine.league.Origin.BASE }?.sortedBy { it.rank } ?: emptyList()
     c.league.detail = top.firstOrNull()?.key ?: "win"
     c.league.detail?.let { c.league.loadProfile(it) }
     waitFor("profile") { c.league.profile?.key == c.league.detail }

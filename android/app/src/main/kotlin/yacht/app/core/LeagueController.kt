@@ -1843,7 +1843,7 @@ class LeagueController(
         val ranking = l.ranking().filter { it != Ladder.ME || l.entry(it)!!.games > 0 }
         val ids = world?.players?.alive?.associate { it.key to it.identity }.orEmpty()
         val season = s?.number ?: 1
-        val rows = ranking.mapNotNull { k ->
+        val all = ranking.mapNotNull { k ->
             val me = k == Ladder.ME
             val ai = byKey[k]
             if (ai == null && !me) return@mapNotNull null
@@ -1862,6 +1862,13 @@ class LeagueController(
                 ids[k]?.nation ?: "", ids[k]?.let { Nations.of(it.nation)?.flag } ?: "", ids[k]?.let { id -> world?.players?.get(k)?.let { p -> id.age(season, p.born) } },
                 divisionLabel = s?.league?.let { league -> league.divisionOf(k)?.let { league.tiers.label(it) } },
             )
+        }
+        // A league of generated players only: the hand-made AIs (still there for ranked games
+        // and the lab) are ranked apart, and the league's players among themselves.
+        val rows = if (config.baseAis) all else {
+            var league = 0
+            var founders = 0
+            all.map { r -> if (r.rank == null) r else r.copy(rank = if (r.origin == Origin.BASE) ++founders else ++league) }
         }
         val curves = world?.live
         val feed = l.feed.take(FEED).map { m ->

@@ -125,7 +125,9 @@ fun LeagueScreen(c: AppController) {
                     Column {
                         Text("AI 리그", fontWeight = FontWeight.Bold)
                         Text(
-                            "${lg.size}개 AI" + (v?.let { " · 총 ${"%,d".format(it.matches)}경기 (${"%,d".format(it.games)}판)" } ?: ""),
+                            // A league of generated players: its players (the hand-made AIs left it).
+                            (if (lg.config.baseAis) "${lg.size}개 AI" else "선수 ${"%,d".format(v?.rows?.count { !it.isMe && it.origin != yacht.engine.league.Origin.BASE } ?: 0)}명") +
+                                (v?.let { " · 총 ${"%,d".format(it.matches)}경기" } ?: ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = cs.onSurfaceVariant,
                         )
@@ -335,7 +337,9 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
     val q = query.trim()
     val byName = nationsMatching(q)
     val rows = v.rows.filter {
-        (family == null || it.family == family) && (!onlyFavourites || it.key in favs) && (origin == null || it.origin == origin) &&
+        // A league of generated players only shows the hand-made AIs under their own chip.
+        (family == null || it.family == family) && (!onlyFavourites || it.key in favs) &&
+            (if (origin == null) lg.config.baseAis || it.origin != yacht.engine.league.Origin.BASE else it.origin == origin) &&
             (nation == null || it.nation == nation) && (q.isEmpty() || it.name.contains(q, ignoreCase = true) || it.nation in byName)
     }.let { r ->
         when (sort) {
