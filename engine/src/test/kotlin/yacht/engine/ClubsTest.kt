@@ -488,5 +488,93 @@ class ClubsTest {
         assertEquals(emptyList(), m.club("c99")!!.squad)
         assertFailsWith<IllegalArgumentException> { ClubBook.decode("hello") }
         assertFailsWith<IllegalStateException> { ClubBook.decode("clubs 1\n") }
+        // A meta line without the last plan seed (the first files) still reads, and a repeat is still a repeat.
+        val old = text.lines().joinToString("\n") { l -> if (l.startsWith("meta ")) l.split(' ').take(4).joinToString(" ") else l }
+        val oldBook = ClubBook.decode(old)
+        assertEquals(book.clubs, oldBook.clubs)
+        val news = book.offseason(1, emptyList(), emptyList(), rating, emptySet(), 8, 6, 5L)
+        assertTrue(news.isNotEmpty())
+        assertEquals(news, oldBook.offseason(1, emptyList(), emptyList(), rating, emptySet(), 8, 6, 77L))
+        assertEquals(book.clubs, oldBook.clubs)
+    }
+
+    @Test
+    fun aLeagueThatStartsOverDoesNotFreezeTheClubs() {
+        // Regression: the off-season ran once per season number only, so a book from season 3
+        // skipped every off-season of a league that started over at season 1 (a new league, or
+        // a season file that could not be read) until season 4: no retirements, no money, no draft.
+        val ranking = keys(100)
+        val rating = { k: String -> 1500.0 - k.filter { it.isDigit() }.toInt() }
+        val alive = ranking.toSet()
+        val book = ClubBook.create(ranking, 8, 6, 1L, cities)
+        for (s in 1..3) book.offseason(s, book.clubs.map { it.id }, emptyList(), rating, alive, 8, 6, 100L + s)
+        assertEquals(3, book.season)
+        assertTrue(book.history.any { it.season == 3 })
+        // The same season and plan seed again (a rollover replayed after a kill): nothing changes, also after saving.
+        val text = book.encode()
+        val again = book.offseason(3, book.clubs.map { it.id }, emptyList(), rating, alive, 8, 6, 103L)
+        assertEquals(text, book.encode())
+        assertEquals(again, ClubBook.decode(text).offseason(3, book.clubs.map { it.id }, emptyList(), rating, alive, 8, 6, 103L))
+        // A new league at season 1: applied to the clubs as they are; the old timeline's moves go.
+        val member = book.club("c01")!!.squad.first()
+        val budgets = book.clubs.sumOf { it.budget }
+        val news = book.offseason(1, book.clubs.map { it.id }, emptyList(), rating, alive - member, 8, 6, 999L)
+        assertEquals(1, book.season)
+        assertNull(book.clubOf(member))
+        assertTrue(book.history.all { it.season == 1 }, book.history.toString())
+        assertTrue(book.history.any { it.kind == ClubMoveKind.RETIRED && it.ai == member })
+        val spent = news.filter { it.kind == "transfer" && it.keys[1] == "-" }.sumOf { it.args[0].toInt() }
+        assertEquals(budgets + (1..8).sumOf { ClubBook.prize(it) } - spent, book.clubs.sumOf { it.budget })
+        assertWhole(book, alive - member, 6)
+        // That one is a repeat now; the same number with yet another seed (read back from the file) is not.
+        val saved = book.encode()
+        assertEquals(news, book.offseason(1, book.clubs.map { it.id }, emptyList(), rating, alive - member, 8, 6, 999L))
+        assertEquals(saved, book.encode())
+        val back = ClubBook.decode(saved)
+        val before = back.clubs.sumOf { it.budget }
+        val other = back.offseason(1, back.clubs.map { it.id }, emptyList(), rating, alive - member, 8, 6, 5L)
+        val spentAgain = other.filter { it.kind == "transfer" && it.keys[1] == "-" }.sumOf { it.args[0].toInt() }
+        assertEquals(before + (1..8).sumOf { ClubBook.prize(it) } - spentAgain, back.clubs.sumOf { it.budget })
+        assertTrue(back.history.all { it.season == 1 })
+        assertWhole(back, alive - member, 6)
+    }
+
+    @Test
+    fun pricesNeverOverflow() {
+        // Regression: 13 * value overflowed Int for huge values, giving a negative fee.
+        assertEquals(Int.MAX_VALUE, ClubBook.fee(Int.MAX_VALUE))
+        assertEquals(Int.MAX_VALUE, ClubBook.fee(ClubBook.value(Double.POSITIVE_INFINITY)))
+        assertTrue(ClubBook.fee(200_000_000) > 200_000_000)
+        assertEquals(1, ClubBook.value(Double.NEGATIVE_INFINITY))
+        // An absurdly rated member is never sold at a negative price.
+        val ranking = keys(60)
+        val book = ClubBook.create(ranking, 8, 6, 1L, cities)
+        val star = book.club("c02")!!.squad.first()
+        val rating = { k: String -> if (k == star) 2e9 else 1500.0 - k.filter { it.isDigit() }.toInt() }
+        book.offseason(1, emptyList(), emptyList(), rating, ranking.toSet(), 8, 6, 1L)
+        assertEquals("c02", book.clubOf(star))
+        assertWhole(book, ranking.toSet(), 6)
+    }
+
+    @Test
+    fun anOddClubCountRestsOneClubPerRound() {
+        val lineups = linkedMapOf(
+            "c01" to (1..5).map { "a$it" },
+            "c02" to (1..5).map { "b$it" },
+            "c03" to (1..3).map { "c$it" },
+            "c04" to (1..5).map { "d$it" },
+            "c05" to (1..5).map { "e$it" },
+        )
+        val lg = ClubLeague.start(1, 9L, lineups)
+        assertEquals(5, lg.rounds)
+        assertEquals(10, lg.fixturesTotal)
+        for (c in lineups.keys) assertEquals(4, lg.matches().count { it.a == c || it.b == c })
+        for (r in 0 until 5) assertEquals(2, lg.matches().count { it.round == r })
+        // Only the boards that play keep a fixture waiting: c01's 4th and 5th sit out against c03.
+        val vs03 = lg.matches().first { (it.a == "c01" && it.b == "c03") || (it.a == "c03" && it.b == "c01") }
+        val f = assertNotNull(lg.next(1.0, setOf("a4", "a5") + lineups.keys.filter { it != "c01" && it != "c03" }.flatMap { lineups.getValue(it) }))
+        assertEquals(vs03.id, f.id)
+        assertEquals(3, f.lineupA.size)
+        assertNull(lg.next(1.0, setOf("a1") + lineups.keys.filter { it != "c01" }.flatMap { lineups.getValue(it) }))
     }
 }

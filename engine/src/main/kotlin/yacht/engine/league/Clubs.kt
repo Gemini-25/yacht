@@ -132,6 +132,13 @@ class ClubBook private constructor(
     var season: Int = 0
         private set
 
+    /**
+     * The seed of the plan whose off-season was applied last (null before any, or from a file
+     * without it): with [season] it tells a repeated rollover from another league's season of
+     * the same number.
+     */
+    private var lastSeed: Long? = null
+
     /** Every club, by id. */
     val clubs: List<Club> get() = entries.map { it.snapshot() }
 
@@ -171,8 +178,11 @@ class ClubBook private constructor(
 
     /**
      * The clubs' off-season after season [season] (spec section 5 step 4), once: a repeated call
-     * for the same season (a rollover replayed after a kill) changes nothing and returns the
-     * same news from the history.
+     * for the same season and [seed] (a rollover replayed after a kill) changes nothing and
+     * returns the same news from the history. An older season, or the same season with another
+     * seed, means the league started over (a new league, or a season file that could not be
+     * read): the off-season is applied to the clubs as they are, and the moves of that season
+     * and later ones (an abandoned timeline) leave the history.
      *
      * In order: prize money by [table] (the club league's final order, best first; empty when it
      * did not run) of [prize] per place, and money for the cup and CL places of [honours] to the
@@ -209,8 +219,10 @@ class ClubBook private constructor(
         squad: Int,
         seed: Long,
     ): List<LeagueEvent> {
-        if (season <= this.season) return replay(season)
-        for ((i, id) in table.distinct().withIndex()) entry(id)?.let { it.budget += prize(i + 1) }
+        if (season == this.season && (lastSeed == null || lastSeed == seed)) return replay(season)
+        if (season <= this.season) moves.removeAll { it.season >= season }
+        val final = table.distinct()
+        for ((i, id) in final.withIndex()) entry(id)?.let { it.budget += prize(i + 1) }
         for (h in honours) {
             if (h.season != season) continue
             if (h.kind == "CLUB") entry(h.key)?.let { it.honours++ }
@@ -226,12 +238,13 @@ class ClubBook private constructor(
         val events = ArrayList<LeagueEvent>()
         if (clubs > 0) {
             val order = ratingOrder(rating)
-            val place = table.withIndex().associate { it.value to it.index }
+            val place = final.withIndex().associate { it.value to it.index }
             resize(season, place, clubs.coerceAtMost(MAX_CLUBS), squad, order)
             window(season, rating, order, alive, squad, seed, events)
             draft(season, place, order, alive, squad, events)
         }
         this.season = season
+        lastSeed = seed
         trim()
         return events
     }
@@ -353,10 +366,13 @@ class ClubBook private constructor(
 
     // ---- saving ----------------------------------------------------------------------------------
 
-    /** league/clubs.txt: a header, the meta line, one line per club and per history move. */
+    /**
+     * league/clubs.txt: a header, the meta line (seed, last season, cities, the last season's
+     * plan seed), one line per club and per history move.
+     */
     fun encode(): String = buildString {
         append("$HEADER\n")
-        append("meta $seed $season ${if (cities.isEmpty()) "-" else cities.joinToString(",") { esc(it) }}\n")
+        append("meta $seed $season ${if (cities.isEmpty()) "-" else cities.joinToString(",") { esc(it) }} ${lastSeed ?: "-"}\n")
         for (e in entries) {
             val id = e.identity
             val em = id.emblem
@@ -388,8 +404,8 @@ class ClubBook private constructor(
         /** An AI's transfer value: `max(1, (rating - 1100) / 10)`, whole units. */
         fun value(rating: Double): Int = if (rating.isNaN()) 1 else maxOf(1, ((rating - 1100) / 10).toInt())
 
-        /** Price of a player bought from another club: 1.3 times its [value], rounded up. */
-        fun fee(value: Int): Int = (13 * value + 9) / 10
+        /** Price of a player bought from another club: 1.3 times its [value], rounded up (no overflow). */
+        fun fee(value: Int): Int = ((13L * value + 9) / 10).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
 
         /** Prize money for final place [position] (1 = champion): `40 - 2 * position`, never below 0. */
         fun prize(position: Int): Int = maxOf(0, 40 - 2 * position)
@@ -436,16 +452,17 @@ class ClubBook private constructor(
         fun decode(text: String): ClubBook {
             val lines = text.lines()
             require(lines.firstOrNull()?.trim() == HEADER) { "not a clubs file" }
-            val meta = lines.firstNotNullOfOrNull { l ->
+            val book = lines.firstNotNullOfOrNull { l ->
                 runCatching {
                     val f = l.trim().split(' ')
                     if (f[0] != "meta") return@runCatching null
                     val cities = if (f.getOrNull(3).let { it == null || it == "-" }) emptyList() else f[3].split(',').map { unesc(it) }
-                    Triple(f[1].toLong(), f[2].toInt(), cities)
+                    ClubBook(f[1].toLong(), cities).apply {
+                        season = f[2].toInt()
+                        lastSeed = f.getOrNull(4)?.toLongOrNull()
+                    }
                 }.getOrNull()
             } ?: error("no meta line in the clubs file")
-            val book = ClubBook(meta.first, meta.third)
-            book.season = meta.second
             val seen = HashSet<String>()
             for (l in lines) {
                 runCatching {

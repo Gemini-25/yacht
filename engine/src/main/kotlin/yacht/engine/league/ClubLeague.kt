@@ -65,20 +65,30 @@ class ClubLeague private constructor(
         val open = openRounds(p)
         for (f in fixtures) {
             if (f.round >= open) break
-            if (f.id in results || f.id in taken) continue
-            val job = job(f)
-            if (job.players.any { it in busy }) continue
+            if (f.id in results || f.id in taken || blocked(f, busy)) continue
             taken += f.id
-            return job
+            return job(f)
         }
         return null
+    }
+
+    /** Boards of a fixture between lineups [la] and [lb]: the shorter one's size, at most [ClubBook.BOARDS]. */
+    private fun boards(la: List<String>, lb: List<String>) = minOf(ClubBook.BOARDS, la.size, lb.size)
+
+    /** True when an AI of [f]'s boards is in [busy] (checked without building the job: [next] runs per job). */
+    private fun blocked(f: ClubMatch, busy: Set<String>): Boolean {
+        if (busy.isEmpty()) return false
+        val la = lineups[f.a].orEmpty()
+        val lb = lineups[f.b].orEmpty()
+        for (i in 0 until boards(la, lb)) if (la[i] in busy || lb[i] in busy) return true
+        return false
     }
 
     /** The fixture as a job: boards for the shorter lineup (at most [ClubBook.BOARDS]). */
     fun job(f: ClubMatch): Fixture {
         val la = lineups[f.a].orEmpty()
         val lb = lineups[f.b].orEmpty()
-        val n = minOf(ClubBook.BOARDS, la.size, lb.size)
+        val n = boards(la, lb)
         return Fixture(
             Comp.CLUB, f.id, f.a, f.b, DiceStream.mix(seed, Comp.CLUB.code.code.toLong(), f.id.toLong()), JobKind.TEAM,
             lineupA = la.take(n), lineupB = lb.take(n), rated = true, label = "${f.round + 1}라운드",
