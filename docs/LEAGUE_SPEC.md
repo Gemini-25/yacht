@@ -31,6 +31,20 @@ Ground rules for all code:
   - **Style** (`PlayStyles.kt`): one of 25 recipes with an intensity, an optional second
     recipe (blend) and an overlay (gambler, locker, panic, streaky, chameleon). The app shows
     it as five two-ended tendency bars (`Tendencies`).
+  - **Style genes v2** (`PlayGene.V2`, `play=` token, generated players and pupils from 생성 다양화
+    v2 on; saved players keep their older genes and play exactly as before): rescaled intensities
+    for the recipes whose k hardly mattered (k 0.7 against 1.7 now changes ≥5% of decisions; the
+    same style at k = 1), 예측력 to the hundredth (`Profiles.future2`: 0.7..1, or 1..1.15 for the
+    30% that err on the far side), a second style 40% (TOP tier: none that brings a rule along), a
+    taste vector (`Taste`: FH/4K/Choice/Yacht/straight likes, upper-box snob, favourite face, bonus,
+    zero, fill-order habit, sacrifice box, throw cost; each ~1/3 of the time, cheaper ranges for
+    TOP), a score reading (8..20 points ahead/behind → a `Lean`) 35% and a late phase (3..6 boxes
+    left → a `Lean`) 30%. All are `tag:value` parts older decoders skip. No newcomer is born with an
+    alive player's genes (tastes redrawn), and plain max expectation always has a taste that
+    changes ≥3% of its decisions. Pupils take a mentor's main style and k exactly 80% of the time,
+    always with mutated tastes, and a main style takes at most 10% of a season's pupils. Measured
+    (noise-free choices on 1188 decisions, complete linkage at 2%): 1000 players → 1000 styles, 0
+    twins (533 and 91 before); 3000 → 2991 (1233); strength p90 183.1 (183.8 before).
   - **Schools** (`Schools.kt`): each nation favours some recipes and an overlay (×2.5) and
     tilts abilities by a few points; every style and level still comes from every nation.
     A world champion's style comes into fashion for newcomers (fades ×0.6 a season).

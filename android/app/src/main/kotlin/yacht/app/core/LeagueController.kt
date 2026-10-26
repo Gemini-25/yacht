@@ -2010,6 +2010,8 @@ class LeagueController(
                 yacht.engine.league.PlayStyles.recipe(g.primary)?.let { add(it.desc) }
                 g.secondary?.let { s -> yacht.engine.league.PlayStyles.recipe(s)?.let { add("+${it.name}: ${it.desc}") } }
                 g.overlay?.let { o -> yacht.engine.league.PlayStyles.overlay(o)?.let { add("${it.name}: ${it.desc}") } }
+                // Its own tastes and situational habits (generator v2; none for older genes).
+                addAll(g.notes())
             }
         }
         val cap = w.nations.cap(key)

@@ -27,7 +27,7 @@ data class Abilities(val judgement: Int, val foresight: Int, val sense: Int, val
         val LABELS = listOf("판단력", "예측력", "승부 감각", "멘탈")
         val HELP = listOf(
             "수를 얼마나 정확히 고르는지예요. 높을수록 실수가 적어요.",
-            "남은 판을 얼마나 멀리 내다보는지예요. 낮으면 눈앞의 점수에 끌려요.",
+            "남은 판을 얼마나 정확히 내다보는지예요. 낮으면 눈앞의 점수에 끌리거나, 남은 판을 너무 크게 쳐요.",
             "막판에 점수 차를 보고 이길 확률이 높은 칸을 고르는 감각이에요.",
             "흔들리지 않는 힘이에요. 낮으면 초반에 몸이 덜 풀리거나, 0점을 쓴 뒤 무너지거나, 막판에 지치거나, 판마다 기복이 커요.",
         )
@@ -75,9 +75,11 @@ data class Tendencies(val bold: Int, val side: Int, val yacht: Int, val zero: In
             val noScratch = s.box == BoxRule.NO_SCRATCH
             val bold = -4 * s.rerollCost + 0.35 * y + 0.15 * ls - 2 * s.zero + keepBold - (if (noScratch) 15.0 else 0.0)
             val small = s.hold.take(3).sum()
-            val side = s.bonusLove + 5 * s.par + 20 * s.bonus + 5 * small
-            val yacht = 0.6 * y - 3 * (s.zeroLike[Category.YACHT] ?: 0.0)
-            val zero = 4 * s.zero + (if (noScratch) 25.0 else 0.0) - 1.5 * s.zeroLike.values.sum()
+            // A fill-order habit leans to the side it starts from ('1' or '6' first: 상단; 요트 or the lower boxes first: 족보).
+            val habit = if (s.fill < 0) 0.0 else if (s.fill == 0 || s.fill == 3) 4 * s.fillBias else -4 * s.fillBias
+            val side = s.bonusLove + 5 * s.par + 20 * s.bonus + 5 * small + 5 * s.snob + 2 * s.three.sum() + habit
+            val yacht = 0.6 * y - 3 * ((s.zeroLike[Category.YACHT] ?: 0.0) + (s.scrap[Category.YACHT] ?: 0.0))
+            val zero = 4 * s.zero + (if (noScratch) 25.0 else 0.0) - 1.5 * (s.zeroLike.values.sum() + s.scrap.values.sum())
             val persist = -5 * s.rerollCost
             return Tendencies(bar(bold), bar(side), bar(yacht), bar(zero), bar(persist))
         }
@@ -190,6 +192,16 @@ object Profiles {
     /** How far from 1 the `future` gene is at 예측력 [f]: 0 at 99, 0.6 at 1 (quadratic: average players are only a little short-sighted). */
     fun future(f: Int): Double = PlayerGenerator.twentieths((1 - 0.6 * ((99 - f) / 98.0).pow(2)).coerceIn(0.4, 1.0))
 
+    /**
+     * The `future` gene of a [PlayGene.V2] player at 예측력 [f], to the hundredth: 1 at 99 and
+     * quadratic below, down to 0.7 for the short-sighted, or up to 1.15 for one that errs on the
+     * far side ([far]: it counts too much of the rest of the game). Either end costs about as much.
+     */
+    fun future2(f: Int, far: Boolean): Double {
+        val x = ((99 - f) / 98.0).pow(2)
+        return PlayerGenerator.round((if (far) 1 + 0.25 * x else 1 - 0.5 * x).coerceIn(0.7, 1.15), 2)
+    }
+
     /** 예측력 of a `future` gene (1 and above read as 99..). */
     fun foresightOf(future: Double): Int =
         if (future >= 1.0) 99 else (99 - 98 * Math.sqrt(((1 - future) / 0.6).coerceIn(0.0, 1.0))).roundToInt().coerceIn(1, 98)
@@ -211,7 +223,8 @@ object Profiles {
             else -> CustomMistake.SLIP to slipFor(d)
         }
         val strength = temperStrength(a.mental)
-        val play = (spec.play ?: PlayGene("ev")).copy(future = future(a.foresight), sense = sense(a.sense))
+        val gene = spec.play ?: PlayGene("ev")
+        val play = gene.copy(future = if (gene.v >= PlayGene.V2) future2(a.foresight, gene.far) else future(a.foresight), sense = sense(a.sense))
         return spec.copy(
             mistake = mistake, amount = amount, play = play,
             temper = if (strength == 0.0) Temper.NONE else id.temperKind, temperStrength = if (strength == 0.0) 1.0 else strength,

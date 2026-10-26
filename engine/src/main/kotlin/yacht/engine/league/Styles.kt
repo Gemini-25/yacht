@@ -102,6 +102,15 @@ data class Style(
     val tau: Double = 0.0,
     /** Counts the taste of liked boxes still open (see [HIT]); false = only when written. */
     val hope: Boolean = true,
+    /** Extra points for three or more of a face written in its upper box (index 0 = face 1): a favourite face. */
+    val three: List<Double> = emptyList(),
+    /** A fill-order habit: [fillBias] points for writing the first open box of [FILL_ORDERS][[fill]] (-1 = none). */
+    val fill: Int = -1,
+    val fillBias: Double = 0.0,
+    /** Extra points for a 0 in a box all game long (positive = its sacrifice box, negative = never sacrificed). */
+    val scrap: Map<Category, Double> = emptyMap(),
+    /** Points lost for an upper box written with fewer than three of its face (a 0 included). */
+    val snob: Double = 0.0,
 ) {
     /** The style as a short gene string (only fields that differ from the default), read back by [parse]. */
     fun encode(): String {
@@ -129,6 +138,11 @@ data class Style(
         put("slip", slip, d.slip)
         put("tau", tau, d.tau)
         put("hope", hope, d.hope)
+        three.forEachIndexed { f, v -> if (v != 0.0) out += "three.${f + 1}=$v" }
+        put("fill", fill, d.fill)
+        put("fillBias", fillBias, d.fillBias)
+        for ((c, v) in scrap) out += "scrap.${c.name}=$v"
+        put("snob", snob, d.snob)
         return out.joinToString(",")
     }
 
@@ -147,6 +161,7 @@ data class Style(
     }
     internal val likeArr: DoubleArray by lazy { DoubleArray(Category.COUNT) { like[Category.of(it)] ?: 0.0 } }
     internal val zeroArr: DoubleArray by lazy { DoubleArray(Category.COUNT) { zeroLike[Category.of(it)] ?: 0.0 } }
+    internal val scrapArr: DoubleArray? by lazy { if (scrap.isEmpty()) null else DoubleArray(Category.COUNT) { scrap[Category.of(it)] ?: 0.0 } }
 
     companion object {
         fun parse(spec: String): Style {
@@ -154,10 +169,17 @@ data class Style(
             val like = HashMap<Category, Double>()
             val zl = HashMap<Category, Double>()
             val hold = DoubleArray(6)
+            val three = DoubleArray(6)
+            val scrap = HashMap<Category, Double>()
             for (part in spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
                 val (k, v) = part.split('=', limit = 2)
                 when {
                     k.startsWith("like.") -> like[Category.valueOf(k.removePrefix("like."))] = v.toDouble()
+                    k.startsWith("three.") -> three[k.removePrefix("three.").toInt() - 1] = v.toDouble()
+                    k.startsWith("scrap.") -> scrap[Category.valueOf(k.removePrefix("scrap."))] = v.toDouble()
+                    k == "fill" -> s = s.copy(fill = v.toInt())
+                    k == "fillBias" -> s = s.copy(fillBias = v.toDouble())
+                    k == "snob" -> s = s.copy(snob = v.toDouble())
                     k.startsWith("zero.") -> zl[Category.valueOf(k.removePrefix("zero."))] = v.toDouble()
                     k.startsWith("hold.") -> hold[k.removePrefix("hold.").toInt() - 1] = v.toDouble()
                     k == "future" -> s = s.copy(future = v.toDouble())
@@ -181,7 +203,10 @@ data class Style(
                     else -> Unit // a gene of a newer version: ignored
                 }
             }
-            return s.copy(like = like, zeroLike = zl, hold = if (hold.any { it != 0.0 }) hold.toList() else emptyList())
+            return s.copy(
+                like = like, zeroLike = zl, hold = if (hold.any { it != 0.0 }) hold.toList() else emptyList(),
+                three = if (three.any { it != 0.0 }) three.toList() else emptyList(), scrap = scrap,
+            )
         }
 
         /**
@@ -198,6 +223,9 @@ data class Style(
 
         val ORDER_TOP: List<Int> = (0 until Category.COUNT).toList()
         val ORDER_BOTTOM: List<Int> = ORDER_TOP.reversed()
+
+        /** The fill-order habits ([fill]): '1' first, 요트 first, the lower boxes first, '6' down to '1' first. */
+        val FILL_ORDERS: List<List<Int>> = listOf(ORDER_TOP, ORDER_BOTTOM, (6 until 12) + (0 until 6), (5 downTo 0) + (6 until 12))
     }
 }
 
@@ -225,6 +253,9 @@ class StylePlan(val me: Board, opp: Board, val style: Style, ev: EvTable, bonusT
         val early = me.filledCount < style.zeroUntil
         val like = style.likeArr
         val zl = style.zeroArr
+        val three = style.three
+        val scrap = style.scrapArr
+        val firstOfFill = if (style.fill in Style.FILL_ORDERS.indices && style.fillBias != 0.0) Style.FILL_ORDERS[style.fill].first { it in open } else -1
         // Hope: a liked box still open is worth its taste times the chance of making it in the
         // turns left after this one (the real table knows nothing of the taste).
         val left = Category.COUNT - me.filledCount - 1
@@ -261,6 +292,7 @@ class StylePlan(val me: Board, opp: Board, val style: Style, ev: EvTable, bonusT
                 if (s > 0 || seen > 0) v += like[c] else {
                     v -= style.zero
                     if (early) v += zl[c]
+                    if (scrap != null) v += scrap[c]
                 }
                 if (style.bonusLove != 0.0 && bonusTable != null && u < cap) {
                     val m2 = me.mask or (1 shl c)
@@ -269,7 +301,9 @@ class StylePlan(val me: Board, opp: Board, val style: Style, ev: EvTable, bonusT
                 if (c < 6) {
                     v += style.bonus * (u2 - u)
                     if (s > 0 && style.par != 0.0) v -= style.par * maxOf(0, 3 - s / (c + 1))
+                    if (s < 3 * (c + 1)) v -= style.snob else if (c < three.size) v += three[c]
                 }
+                if (c == firstOfFill) v += style.fillBias
                 if (style.copy != 0.0 && opp.isFilled(Category.of(c))) v += style.copy
                 catValue[r * Category.COUNT + c] = v
                 if (v > best) {
