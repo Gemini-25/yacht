@@ -304,7 +304,14 @@ private fun WeekNews(news: List<Article>, c: ClockView, w: Int) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("📰 이 주의 소식", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
             if (top.isEmpty()) {
-                Text(if (w > c.week && !c.over) "아직 열리지 않은 주예요." else "남아 있는 소식이 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                Text(
+                    when {
+                        c.over || w < c.week -> "남아 있는 소식이 없어요."
+                        w == c.week -> "아직 이 주의 소식이 없어요."
+                        else -> "아직 열리지 않은 주예요."
+                    },
+                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                )
             }
             for (a in top) {
                 Text(

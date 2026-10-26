@@ -151,7 +151,8 @@ private fun StageStrip(stages: List<WeekStage>, c: ClockView) {
                         s.week <= c.week -> " ●"
                         else -> ""
                     }
-                    "${s.label} ${if (s.week > weeks) "PO ${s.week - weeks}주" else "${s.week}주"}$mark"
+                    // No-break spaces keep each stage on one line when the list wraps.
+                    "${s.label} ${if (s.week > weeks) "PO ${s.week - weeks}주" else "${s.week}주"}$mark".replace(' ', '\u00A0')
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = cs.onSurfaceVariant,
@@ -211,6 +212,10 @@ private fun BracketCard(b: CompetitionView.Bracket, label: (String) -> String, o
 private fun RoundTies(round: BracketRound, label: (String) -> String, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val byes = round.ties.count { it.winner != null && !it.played && (it.a == null || it.b == null) }
+    if (round.ties.all { it.a == null && it.b == null }) {
+        Text("앞 단계가 끝나면 대진이 정해져요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         if (byes > 0) Text("부전승 ${byes}팀", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         for (t in round.ties) {
