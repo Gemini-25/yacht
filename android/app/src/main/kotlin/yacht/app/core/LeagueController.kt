@@ -552,6 +552,8 @@ class LeagueController(
                 world = w
                 pendingPlayers = null
                 configureWorld(w)
+                legendAis.clear()
+                oddsNow = null
             }
             loaded.complete(Unit)
             // A restore may have brought the rules and the favourites too.
@@ -894,14 +896,17 @@ class LeagueController(
     private var oddsNow: OddsTable? = null
 
     private fun refreshOdds(force: Boolean = false) {
+        var seed = 0L
         val input = synchronized(lock) {
             val w = world ?: return
             val p = w.plan ?: return
             val o = oddsNow
             if (!force && o != null && !o.stale(p.league)) return
+            // From the season's seed and progress: the same league gives the same odds.
+            seed = p.seed xor p.league.fixturesPlayed.toLong()
             Odds.input(p, { k -> w.rating(k) })
         }
-        val table = runCatching { Odds.run(input, seed = System.nanoTime()) }.getOrNull() ?: return
+        val table = runCatching { Odds.run(input, seed = seed) }.getOrNull() ?: return
         oddsNow = table
         publish()
     }
@@ -1009,16 +1014,18 @@ class LeagueController(
                 // Fresh generated players too (the evolved ones go).
                 val players = PlayerBook(baseRoster.map { it.name }).apply { ensureGenerated(config.generated) }
                 synchronized(lock) {
-                    world?.let { w ->
-                        w.players = players
-                        w.plan = null
-                        w.honours = HonourBook()
-                        w.events.clear()
-                    }
+                    // A new world: clubs, stats, archive, news, highlights and the lab go too.
+                    world = null
+                    pendingPlayers = players
                     rebuildRoster()
-                    world?.let { w -> w.ladder = Ladder(ladderKeys()) }
+                    val w = LeagueWorld(Ladder(ladderKeys()), config).also { it.players = players }
+                    world = w
+                    pendingPlayers = null
+                    configureWorld(w)
                     lastDelta.clear()
                     startRanks = emptyMap()
+                    legendAis.clear()
+                    oddsNow = null
                 }
             }
             withContext(fileWrites) {
