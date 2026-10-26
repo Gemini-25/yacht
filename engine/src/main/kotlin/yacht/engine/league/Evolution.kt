@@ -51,7 +51,8 @@ object Evolution {
      * a year older ([played]: its share of a full season's games). Then new players bring the book
      * back to [population]: [childShare] of the free places go to pupils of mentors drawn by
      * tournament from the top half of the ratings (a pupil [accept] refuses is drawn again, up to
-     * [TRIES] times), the rest to rookies ([meta] tilts their styles). A pupil is
+     * [TRIES] times), the rest to rookies. [fashion] is a style that comes into fashion (a
+     * world champion's: newcomers take it up more often, fading over the seasons). A pupil is
      * `e<season>_<n>`, a rookie the next g-key; all debut in season + 1. Deterministic from [seed]
      * and the inputs.
      */
@@ -67,10 +68,12 @@ object Evolution {
         childShare: Double = CHILD_SHARE,
         played: (String) -> Double = { 1.0 },
         accept: (CustomAiSpec) -> Boolean = { true },
-        meta: Map<String, Double> = emptyMap(),
+        fashion: String? = null,
         aging: Boolean = true,
     ): EvolutionResult {
         if (season <= book.evolvedSeason) return replay(book, season)
+        book.fashion(fashion)
+        val meta = book.meta
         var reformed = 0
         for (p in book.alive) if (p.spec.play == null) {
             book.update(Profiles.reform(p, season))

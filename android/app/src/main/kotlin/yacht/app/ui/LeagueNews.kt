@@ -42,6 +42,7 @@ import yacht.app.core.AppController
 import yacht.app.core.ClockView
 import yacht.app.core.LeagueView
 import yacht.app.core.Screen
+import yacht.engine.league.byTeams
 import yacht.engine.league.Article
 import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
@@ -238,7 +239,7 @@ private fun LiveCard(c: AppController, f: LiveFrame) {
     val cs = MaterialTheme.colorScheme
     val fx = f.fixture
     val team = fx.kind == JobKind.TEAM
-    fun side(k: String) = if (team && (fx.comp == yacht.engine.league.Comp.ALL_STAR || fx.comp == yacht.engine.league.Comp.FAMILY)) Competitions.teamLabel(k) else lg.name(k)
+    fun side(k: String) = if (team && fx.comp.byTeams) Competitions.teamLabel(k) else lg.name(k)
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (f.finished) cs.surface else cs.secondaryContainer.copy(alpha = 0.35f))) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

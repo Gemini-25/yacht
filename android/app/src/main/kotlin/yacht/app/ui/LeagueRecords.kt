@@ -58,6 +58,17 @@ fun honourLabel(kind: String): String {
         "MIP" -> "기량발전상"
         "YACHT" -> "최다 요트상"
         "SCORER" -> "득점왕"
+        "WC" -> "요트 월드컵 우승"
+        "WC2" -> "요트 월드컵 준우승"
+        "WC4" -> "요트 월드컵 4강"
+        "WCW" -> "요트 월드컵 우승 멤버"
+        "WCMVP" -> "월드컵 MVP"
+        "WCTOP" -> "월드컵 득점왕"
+        "WCH" -> "요트 월드컵 개최"
+        "CC" -> "대륙컵 우승"
+        "CC2" -> "대륙컵 준우승"
+        "CCW" -> "대륙컵 우승 멤버"
+        "NSQ" -> "국가대표 선발"
         else -> kind
     }
 }
@@ -67,11 +78,12 @@ private fun division(kind: String, prefix: String): Int? =
 
 /** Honours worth a trophy icon (titles and awards, not moves or call-ups). */
 private fun trophy(kind: String): String? = when {
-    kind.startsWith("UP") || kind.startsWith("DOWN") || kind.startsWith("STAY") || kind == "FSQ" -> null
+    kind.startsWith("UP") || kind.startsWith("DOWN") || kind.startsWith("STAY") || kind == "FSQ" || kind == "NSQ" || kind == "WCH" -> null
     kind == "L0" -> "👑"
     division(kind, "L") != null -> "🥇"
-    kind in setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB") -> "🏆"
-    kind in setOf("MVP", "ROOKIE", "MIP", "YACHT", "SCORER", "REG") -> "🏅"
+    kind in setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "WCW", "CC", "CCW") -> "🏆"
+    kind in setOf("MVP", "ROOKIE", "MIP", "YACHT", "SCORER", "REG", "WCMVP", "WCTOP") -> "🏅"
+    kind == "WC4" -> "🥉"
     kind.endsWith("2") || kind == "L0R" -> "🥈"
     else -> null
 }

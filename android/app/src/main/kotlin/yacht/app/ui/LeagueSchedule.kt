@@ -58,6 +58,7 @@ fun compShort(c: Comp): String = when (c) {
     Comp.CHAMPIONS -> "챔스"
     Comp.CLUB -> "클럽"
     Comp.FAMILY -> "계열전"
+    Comp.WORLD_CUP -> "월드컵"
     Comp.TITLE_PLAYOFF -> "우승 PO"
     Comp.PROMOTION_PLAYOFF -> "승강 PO"
     else -> c.label

@@ -420,6 +420,21 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         return added
     }
 
+    /**
+     * Styles in fashion (a world champion's): extra weight for rookies and pupils taking them
+     * up, fading each season ([fashion]).
+     */
+    var meta: Map<String, Double> = emptyMap()
+        private set
+
+    /** A season passes: fashions fade to 60%, and [style] (a world champion's) comes into fashion. */
+    fun fashion(style: String?) {
+        val next = HashMap<String, Double>()
+        for ((k, v) in meta) if (v * 0.6 >= 0.05) next[k] = PlayerGenerator.round(v * 0.6, 2)
+        style?.let { next[it] = minOf(1.5, (next[it] ?: 0.0) + 0.6) }
+        meta = next
+    }
+
     /** The season its players saved before styles took one (the league's reform), 0 when it never had any. */
     var reformed: Int = 0
         internal set
@@ -547,6 +562,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         append("gone ${gone.joinToString(",").ifEmpty { "-" }}\n")
         append("next $next\n")
         if (reformed > 0) append("reformed $reformed\n")
+        if (meta.isNotEmpty()) append("meta ${meta.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }}\n")
         // Identity and style are name=value tokens after the fields older versions read.
         for (p in byKey.values) {
             append("ai ${p.key} ${esc(p.name)} ${esc(p.hometown)} ${p.origin.name} ${p.born} ${p.parentA ?: "-"} ${p.parentB ?: "-"} ")
@@ -621,6 +637,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             "gone" -> if (f[1] != "-") gone += f[1].split(',').map { it.toInt() }.onEach { if (it >= next) next = it + 1 }
             "next" -> next = maxOf(next, f[1].toInt())
             "reformed" -> reformed = f[1].toInt()
+            "meta" -> meta = f[1].split(',').associate { it.substringBefore(':') to it.substringAfter(':').toDouble() }
             "ai" -> {
                 // key name town origin born parentA parentB, the genes, the peak, then tokens.
                 require(f.size >= 8 + G + 1)

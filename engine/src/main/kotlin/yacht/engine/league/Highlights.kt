@@ -171,7 +171,7 @@ object Drama {
     }
 
     /** A knockout final: the "결승" round of a bracket, or the one tie of the super cup. */
-    fun isFinal(f: Fixture): Boolean = f.label == "결승" || f.comp == Comp.SUPER
+    fun isFinal(f: Fixture): Boolean = f.label == "결승" || f.label.endsWith("컵 결승") || f.comp == Comp.SUPER
 
     /**
      * True when [f] is a title-race game: a title playoff tie, or a 1st-division league fixture

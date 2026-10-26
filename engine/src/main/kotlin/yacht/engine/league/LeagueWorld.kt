@@ -43,6 +43,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     /** AI 연구소: the current two-AI experiment and the newest results (league/lab.txt). */
     var lab = LabBook()
 
+    /** The national teams' history (league/nations.txt). */
+    var nations = NationBook()
+
     /** News events, oldest first (the newest [EVENTS] are kept). */
     val events = ArrayDeque<LeagueEvent>()
 
@@ -69,7 +72,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     private fun context(historyBefore: Int): Offseason.Context = Offseason.Context(
         members, ::rating, family, ::hometown, config, factories(),
-        honours.all.filter { it.season < historyBefore }, closingGone,
+        honours.all.filter { it.season < historyBefore }, closingGone, { k -> players[k]?.identity?.nation },
     )
 
     /** Every competition of a season: the cups and playoffs, and the club league (making the clubs the first time). */
@@ -230,6 +233,17 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             } ?: continue
             if (!announced(e.kind, x.key)) out += e
         }
+        // The season's national cups go into the records, and a world champion's favourite style
+        // comes into fashion (newcomers take it up more often for a few seasons).
+        val cups = p.comps.filterIsInstance<NationCup>().filter { it.finished }.mapNotNull { runCatching { it.summary() }.getOrNull() }
+        runCatching { nations.close(p.number, cups) { k -> players[k] != null || players.legend(k) != null } }
+        val fashion = cups.firstOrNull { it.comp == Comp.WORLD_CUP }?.let { wc ->
+            val champion = wc.podiums.firstOrNull()?.winner ?: return@let null
+            val styles = wc.squads[champion].orEmpty().mapNotNull { k -> players[k]?.spec?.play?.primary }
+            val style = styles.groupingBy { it }.eachCount().maxByOrNull { (k, n) -> n * 10 - styles.indexOf(k) }?.key ?: return@let null
+            out += LeagueEvent("style_trend", p.number, listOf(champion), listOf(style), Comp.WORLD_CUP)
+            style
+        }
         // The hand-made AIs' last season when the league is for generated players only: they
         // leave it as its founders (their records stay; the app leaves them out of the members).
         if (!config.baseAis) {
@@ -247,8 +261,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val most = standings.values.maxOfOrNull { it.played }?.coerceAtLeast(1) ?: 1
         val r = Evolution.run(
             players, p.number, { k -> if (k in standings) ladder.rating(k) else Double.NaN }, honours::titles, p.seed, config.generated,
-            { honours.of(it) }, childShare = config.childShare / 100.0, played = { k -> (standings[k]?.played ?: 0).toDouble() / most },
-            accept = { s -> !config.onlyFlawed || s.flawed }, aging = config.aging,
+            // A national call-up alone does not make a legend (every edition calls up a hundred).
+            { honours.of(it) }, hasHonour = { k -> honours.of(k).any { Evolution.isHonour(it.kind) && it.kind != "NSQ" } },
+            childShare = config.childShare / 100.0, played = { k -> (standings[k]?.played ?: 0).toDouble() / most },
+            accept = { s -> !config.onlyFlawed || s.flawed }, fashion = fashion, aging = config.aging,
         )
         out += r.events
         val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
@@ -281,7 +297,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         for (x in e) events.addLast(x)
         while (events.size > EVENTS) events.removeFirst()
         runCatching {
-            news.add(News.articles(e, name, { id -> clubs?.club(id)?.name ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }))
+            news.add(News.articles(e, { k -> Nations.flagged(k) ?: name(k) }, { id -> clubs?.club(id)?.name ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }))
         }
     }
 
@@ -306,6 +322,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
         put(LAB, lab.encode())
+        put(NATIONS, nations.encode())
         put(LADDER, ladder.encode())
         put(SEASON, plan?.encode() ?: "")
     }
@@ -321,9 +338,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val HIGHLIGHTS = HighlightBook.FILE
         const val NEWS = NewsBook.FILE
         const val LAB = LabBook.FILE
+        const val NATIONS = NationBook.FILE
 
         /** Files [encodeFiles] writes. */
-        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB)
+        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS)
 
         /** Readers of every competition in season.txt. */
         val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec)
@@ -354,6 +372,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             w.highlights = files[HIGHLIGHTS]?.let { t -> runCatching { HighlightBook.decode(t) }.getOrNull() } ?: HighlightBook()
             w.news = files[NEWS]?.let { t -> runCatching { NewsBook.decode(t) }.getOrNull() } ?: NewsBook()
             w.lab = files[LAB]?.let { t -> runCatching { LabBook.decode(t) }.getOrNull() } ?: LabBook()
+            w.nations = files[NATIONS]?.let { t -> runCatching { NationBook.decode(t) }.getOrNull() } ?: NationBook()
             // A season in progress that the stats do not know (stats.txt is newer than the
             // season, or was lost): start ratings and rookies from now, so its awards are made.
             w.plan?.let { p ->

@@ -198,6 +198,16 @@ class Knockout(
         taken -= id
     }
 
+    /** Players of the open ties at progress [p] not in play yet ([make] builds their fixtures). */
+    fun waiting(p: Double, make: (KnockoutTie) -> Fixture): Set<String> {
+        val out = HashSet<String>()
+        for ((r, round) in rounds.withIndex()) {
+            if (!opened(p, opensAt(r))) continue
+            for (t in round) if (t.ready && t.id !in taken) out += make(t).players
+        }
+        return out
+    }
+
     /**
      * Records tie [id] played between [a] and [b] (side A as the fixture had it). A level score
      * sends the better seed (side A) through. Null when the tie is not open or its sides differ
@@ -339,6 +349,9 @@ class GroupStage(
     private val teams: Boolean,
     private val opensAt: (round: Int) -> Double,
 ) {
+    /** Group names ("A조" by default). */
+    var label: ((group: Int) -> String)? = null
+
     /** A group match; [a] moves first in its first game (or is the home team). */
     class Match internal constructor(val id: Int, val group: Int, val round: Int, val a: String, val b: String) {
         var result: TieScore? = null
@@ -396,7 +409,7 @@ class GroupStage(
 
     operator fun contains(id: Int): Boolean = id in byId
 
-    fun groupLabel(g: Int): String = "${'A' + g}조"
+    fun groupLabel(g: Int): String = label?.invoke(g) ?: "${'A' + g}조"
 
     fun matchLabel(m: Match): String = "${groupLabel(m.group)} ${m.round + 1}차전"
 

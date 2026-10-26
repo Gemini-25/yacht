@@ -40,7 +40,10 @@ import yacht.app.core.ClockView
 import yacht.app.core.LeagueController
 import yacht.engine.league.BracketRound
 import yacht.engine.league.Comp
+import yacht.engine.league.CompetitionNotes
 import yacht.engine.league.CompetitionView
+import yacht.engine.league.Confed
+import yacht.engine.league.Nations
 import yacht.engine.league.Competitions
 import yacht.engine.league.GroupTable
 import yacht.engine.league.WeekStage
@@ -52,7 +55,7 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
     if (comps.isEmpty()) {
         CenterText(
             "이번 시즌에는 열린 대회가 없어요.\n리그가 시작되면 요트컵·챔피언스 리그·올스타전이 열리고, 시즌 2부터 슈퍼컵, " +
-                "3시즌마다 계열 대항전이 열려요. 리그가 끝나면 우승·승강 플레이오프를 치러요. (규칙에서 끄고 켤 수 있어요)",
+                "시즌 3부터 홀수 시즌마다 국가대항전(요트 월드컵·대륙컵 번갈아)이 열려요. 리그가 끝나면 우승·승강 플레이오프를 치러요. (규칙에서 끄고 켤 수 있어요)",
         )
         return
     }
@@ -67,6 +70,13 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
     val label: (String) -> String = remember(lg) { { k -> if (squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) } }
     // A team (all-star side, family) has no page of its own: its squad is listed below.
     val open: (String) -> Unit = remember { { k -> if (!squads.containsKey(k)) openAi(k) } }
+    // The continental cups: one tournament shown at a time.
+    var part by remember(shown.first) { mutableStateOf(0) }
+    val notes = when (val v = shown.second) {
+        is CompetitionView.Groups -> v.notes
+        is CompetitionView.Sections -> v.notes
+        else -> null
+    }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -83,19 +93,39 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
         when (val v = shown.second) {
             is CompetitionView.Bracket -> item { BracketCard(v, label, open, roundWeeks(shown.first, mine, v.rounds.size, clock?.leagueWeeks ?: Int.MAX_VALUE)) }
             is CompetitionView.Groups -> {
+                notes?.let { n -> item { NotesCard(n, label, lg::name, open) } }
                 items(v.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, open) }
                 v.knockout?.let { k -> item { BracketCard(k, label, open, roundWeeks(shown.first, mine, k.rounds.size, clock?.leagueWeeks ?: Int.MAX_VALUE)) } }
             }
+            is CompetitionView.Sections -> {
+                val sel = part.coerceIn(0, maxOf(0, v.parts.size - 1))
+                item {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for ((i, p) in v.parts.withIndex()) {
+                            FilterChip(selected = i == sel, onClick = { part = i }, label = { Text(sectionIcon(p.title) + " " + p.title, fontSize = 12.sp) })
+                        }
+                    }
+                }
+                notes?.let { n -> item { NotesCard(n, label, lg::name, open) } }
+                v.parts.getOrNull(sel)?.let { p ->
+                    items(p.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, open) }
+                    p.knockout?.let { k -> item { BracketCard(k, label, open, roundWeeks(shown.first, mine, k.rounds.size, clock?.leagueWeeks ?: Int.MAX_VALUE)) } }
+                }
+            }
         }
-        val squads = shown.second.squads
+        val squads = when (val v = shown.second) {
+            is CompetitionView.Sections -> v.parts.getOrNull(part.coerceIn(0, maxOf(0, v.parts.size - 1)))?.squads ?: v.squads
+            else -> shown.second.squads
+        }
+        val captains = notes?.captains.orEmpty()
         if (squads.isNotEmpty()) {
-            item { Text("명단 (1번 보드가 에이스)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
+            item { Text(if (captains.isEmpty()) "명단 (1번 보드가 에이스)" else "대표 명단 (1번 보드가 에이스 · ⓒ 주장)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
             items(squads.entries.toList(), key = { "s-${it.key}" }) { (team, members) ->
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(Competitions.teamLabel(team), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            members.mapIndexed { i, k -> "${i + 1}. ${lg.name(k)}" }.joinToString("  "),
+                            members.mapIndexed { i, k -> "${i + 1}. ${lg.name(k)}" + if (captains[team] == k) " ⓒ" else "" }.joinToString("  "),
                             style = MaterialTheme.typography.labelSmall,
                             color = cs.onSurfaceVariant,
                         )
@@ -169,7 +199,9 @@ fun compIcon(c: Comp): String = when (c) {
     Comp.CHAMPIONS -> "⭐"
     Comp.SUPER -> "🥇"
     Comp.ALL_STAR -> "🌟"
-    Comp.FAMILY -> "🌏"
+    Comp.FAMILY -> "🧬"
+    Comp.WORLD_CUP -> "🌍"
+    Comp.CONTINENTAL -> "🗺"
     Comp.CLUB -> "🛡"
     Comp.TITLE_PLAYOFF -> "👑"
     Comp.PROMOTION_PLAYOFF -> "↕"
@@ -178,6 +210,51 @@ fun compIcon(c: Comp): String = when (c) {
     Comp.FRIENDLY -> "🤝"
     Comp.LEAGUE -> "📋"
 }
+
+/** The icon of a continental tournament by its name ("아시아컵" 🌏). */
+private fun sectionIcon(title: String): String = Confed.entries.firstOrNull { it.cup == title }?.icon ?: "🗺"
+
+/**
+ * A national cup's extras: the host, the nations that sit out, and the MVP (boards won) and
+ * scorer (average score) races.
+ */
+@Composable
+private fun NotesCard(n: CompetitionNotes, label: (String) -> String, name: (String) -> String, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            n.host?.let { Text("개최국 ${label(it)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall) }
+            Text("나라마다 레이팅 상위 5명이 대표로 나서요. 1번 보드가 에이스예요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            if (n.absent.isNotEmpty()) {
+                val shown = n.absent.take(8).joinToString(" · ") { (c, k) -> "${label(c)} (${k}명)" }
+                val more = if (n.absent.size > 8) " 외 ${n.absent.size - 8}개국" else ""
+                Text("선수가 5명이 안 되거나 대륙 팀이 모자라 불참: $shown$more", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+            if (n.mvpRace.isNotEmpty()) {
+                Text("MVP 경쟁 (보드 승점)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                for ((i, l) in n.mvpRace.withIndex()) {
+                    Text(
+                        "${i + 1}. ${name(l.key)} ${flagOf(l.team)} · ${points(l.boardPoints)}점 (${l.matches}경기)",
+                        style = MaterialTheme.typography.labelSmall, modifier = Modifier.clickable { onOpen(l.key) },
+                    )
+                }
+            }
+            if (n.scorerRace.isNotEmpty()) {
+                Text("득점왕 경쟁 (평균 점수)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                for ((i, l) in n.scorerRace.withIndex()) {
+                    Text(
+                        "${i + 1}. ${name(l.key)} ${flagOf(l.team)} · 평균 ${String.format(java.util.Locale.ROOT, "%.1f", l.average)}점 · ${l.matches}경기",
+                        style = MaterialTheme.typography.labelSmall, modifier = Modifier.clickable { onOpen(l.key) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun flagOf(code: String): String = Nations.of(code)?.flag ?: ""
+
+private fun points(x: Double): String = if (x == Math.floor(x)) x.toInt().toString() else String.format(java.util.Locale.ROOT, "%.1f", x)
 
 /** A bracket, one round at a time (a 256-team cup has 128 ties in its first round). */
 @Composable

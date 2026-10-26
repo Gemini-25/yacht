@@ -72,6 +72,7 @@ import yacht.app.core.SeasonHistoryItem
 import yacht.app.core.SeasonRow
 import yacht.app.core.SeasonView
 import yacht.engine.explain.Ko
+import yacht.engine.league.byTeams
 import yacht.engine.league.Comp
 import yacht.engine.league.Family
 import yacht.engine.league.Ladder
@@ -561,7 +562,7 @@ private fun FeedList(lg: LeagueController, v: LeagueView) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("⚔️ 지금 경기 중", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer, style = MaterialTheme.typography.labelLarge)
                         for (m in v.live) {
-                            val team = m.comp == Comp.ALL_STAR || m.comp == Comp.FAMILY
+                            val team = m.comp.byTeams
                             fun side(k: String) = if (team) yacht.engine.league.Competitions.teamLabel(k) else lg.name(k)
                             Text(
                                 "${stageName(m.comp, m.label, short = true)}  ${side(m.a)}  vs  ${side(m.b)}",

@@ -120,6 +120,6 @@ class SeasonCalendar private constructor(
         }
 
         /** Who gets a week first when two stages want the same one. */
-        private val PRIORITY = listOf(Comp.SUPER, Comp.CHAMPIONS, Comp.CUP, Comp.FAMILY, Comp.ALL_STAR)
+        private val PRIORITY = listOf(Comp.SUPER, Comp.WORLD_CUP, Comp.CHAMPIONS, Comp.CUP, Comp.CONTINENTAL, Comp.FAMILY, Comp.ALL_STAR)
     }
 }

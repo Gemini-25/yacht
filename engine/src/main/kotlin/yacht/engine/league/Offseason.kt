@@ -23,6 +23,8 @@ object Offseason {
         val history: List<Honour> = emptyList(),
         /** AIs of the closing season that left the league during it (deleted): they place nowhere. */
         val gone: Set<String> = emptySet(),
+        /** Each AI's nation code (generated and evolved players; null for the others). */
+        val nation: (String) -> String? = { null },
     )
 
     /** Seed of season [number] from the league's own seed. */
@@ -150,7 +152,7 @@ object Offseason {
     ): SeasonPlan {
         val league = Season.start(number, seed, divisions, ctx.config.doubleRoundRobin)
         val ranking = ctx.keys.sortedByDescending { ctx.rating(it) }
-        val start = SeasonStart(number, seed, ctx.config, ranking, ctx.rating, divisions, lastTables, lastHonours, ctx.family, ctx.hometown, ctx.history + lastHonours)
+        val start = SeasonStart(number, seed, ctx.config, ranking, ctx.rating, divisions, lastTables, lastHonours, ctx.family, ctx.hometown, ctx.history + lastHonours, ctx.nation)
         val comps = ctx.factories.mapNotNull { f -> runCatching { f(start) }.getOrNull() }.toMutableList()
         return SeasonPlan(league, ctx.config, comps)
     }

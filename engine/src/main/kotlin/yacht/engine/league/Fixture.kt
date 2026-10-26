@@ -8,6 +8,8 @@ enum class Comp(val code: Char, val label: String) {
     SUPER('S', "슈퍼컵"),
     ALL_STAR('A', "올스타전"),
     FAMILY('W', "계열 대항전"),
+    WORLD_CUP('N', "요트 월드컵"),
+    CONTINENTAL('R', "대륙컵"),
     CLUB('K', "클럽 리그"),
     TITLE_PLAYOFF('P', "우승 플레이오프"),
     PROMOTION_PLAYOFF('Q', "승강 플레이오프"),
@@ -20,6 +22,9 @@ enum class Comp(val code: Char, val label: String) {
         fun of(code: Char): Comp? = entries.firstOrNull { it.code == code }
     }
 }
+
+/** True for a competition between teams (all-star sides, families, nations): its keys are team ids. */
+val Comp.byTeams: Boolean get() = this == Comp.ALL_STAR || this == Comp.FAMILY || this == Comp.WORLD_CUP || this == Comp.CONTINENTAL
 
 /** What a job plays: one match, a knockout tie (legs and deciders), or a team match (boards). */
 enum class JobKind { MATCH, TIE, TEAM }

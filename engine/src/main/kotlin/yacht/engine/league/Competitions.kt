@@ -22,6 +22,15 @@ sealed class CompetitionView {
         val groups: List<GroupTable>,
         val knockout: Bracket?,
         override val squads: Map<String, List<String>> = emptyMap(),
+        val notes: CompetitionNotes? = null,
+    ) : CompetitionView()
+
+    /** Several tournaments played side by side (the continental cups), each with its own groups and bracket. */
+    data class Sections(
+        override val title: String,
+        val parts: List<Groups>,
+        override val squads: Map<String, List<String>> = emptyMap(),
+        val notes: CompetitionNotes? = null,
     ) : CompetitionView()
 }
 
@@ -71,7 +80,7 @@ interface ViewableCompetition : Competition {
 object Competitions {
     /** Builders of a season's competitions, champions league first (it gets the cup slots first). */
     fun factories(): List<(SeasonStart) -> Competition?> =
-        listOf(ChampionsLeague::create, Cup::create, SuperCup::create, AllStar::create, FamilyCup::create)
+        listOf(ChampionsLeague::create, Cup::create, SuperCup::create, AllStar::create, FamilyCup::create, NationCup::world, NationCup::continental)
 
     /** Builders of the post-season: the title playoff, then the promotion playoffs. */
     fun postFactories(): List<(SeasonPlan) -> Competition?> = listOf(TitlePlayoff::create, PromotionPlayoff::create)
@@ -82,6 +91,8 @@ object Competitions {
         Comp.SUPER to SuperCup.codec,
         Comp.ALL_STAR to AllStar.codec,
         Comp.FAMILY to FamilyCup.codec,
+        Comp.WORLD_CUP to NationCup.worldCodec,
+        Comp.CONTINENTAL to NationCup.continentalCodec,
         Comp.TITLE_PLAYOFF to TitlePlayoff.codec,
         Comp.PROMOTION_PLAYOFF to PromotionPlayoff.codec,
     )
@@ -97,6 +108,6 @@ object Competitions {
     fun teamLabel(id: String): String = when (id) {
         AllStar.TOP -> AllStar.TOP_LABEL
         AllStar.CHALLENGER -> AllStar.CHALLENGER_LABEL
-        else -> Family.entries.firstOrNull { it.name == id }?.label ?: id
+        else -> Family.entries.firstOrNull { it.name == id }?.label ?: Nations.flagged(id) ?: id
     }
 }

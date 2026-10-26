@@ -32,6 +32,9 @@ class AllStar private constructor(
 
     override fun release(f: Fixture) = bracket.release(f.id)
 
+    // Ten of the best players at once: the other team competitions wait for it.
+    override fun waiting(p: Double): Set<String> = bracket.waiting(p) { t -> Fixture(comp, t.id, TOP, CHALLENGER, 0L, JobKind.TEAM, lineupA = top, lineupB = challenger) }
+
     override fun stages(): List<Stage> = bracket.stages()
 
     override fun stageOf(f: Fixture): Int = bracket.roundOf(f.id)
@@ -284,7 +287,8 @@ class FamilyCup private constructor(
 
         /** This season's family cup; null when off, not due, or with fewer than 4 teams. */
         fun create(start: SeasonStart): FamilyCup? {
-            if (!start.config.familyCup || !due(start.number)) return null
+            // A league of generated players only: their families are styles, not teams.
+            if (!start.config.familyCup || !due(start.number) || start.ranking.none { Origin.of(it) == Origin.BASE }) return null
             val teams = teams(start)
             if (teams.size < MIN_TEAMS) return null
             val entries = teams.mapIndexed { i, t -> DrawEntry(t.id, i + 1, t.strength) }

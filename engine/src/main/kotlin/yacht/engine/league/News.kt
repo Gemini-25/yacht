@@ -86,9 +86,13 @@ object News {
         "upset", "comeback", "record", "milestone", "title", "promoted", "relegated", "cup_round", "eliminated",
         "qualified", "final", "transfer", "draft", "born", "retired", "award", "callup", "dropped", "title_race",
         "retirements", "rookies", "debut", "breakout", "decline", "learned_rule", "league_reform", "founders_farewell",
+        "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend",
         "hall_of_fame", "dynasty", "legend_match", "draw_cup", "draw_cl", "draw_super", "draw_allstar",
         "draw_family", "season_review",
     )
+
+    /** Titles of cups held every few seasons: a run of them is counted in editions (대회). */
+    private val EDITION_KINDS = setOf("WC", "WCW", "CC", "CCW", "FAMILY")
 
     /** Headline of the plain article for a kind without templates (or an event missing its keys). */
     const val PLAIN_HEADLINE = "리그 소식"
@@ -135,10 +139,13 @@ object News {
         val v = HashMap<String, String>()
         v["season"] = e.season.toString()
         v["comp"] = e.comp?.label ?: Comp.LEAGUE.label
+        // A continental cup's events name their tournament ("@아시아컵", the last argument).
+        e.args.lastOrNull()?.takeIf { it.startsWith("@") }?.let { v["comp"] = it.drop(1) }
         // Keys are AIs, or club and team ids in the club and team competitions (and the clubs of a
         // transfer or draft): an id the club or team names do not know is an AI's.
         val clubKeys = e.comp == Comp.CLUB
-        val teamKeys = e.comp == Comp.FAMILY || e.comp == Comp.ALL_STAR
+        val teamKeys = e.comp == Comp.FAMILY || e.comp == Comp.ALL_STAR ||
+            (e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL) && e.kind != "nation_squad" && e.kind != "nation_awards"
         fun who(i: Int, k: String): String {
             if (k == "-") return ""
             if (clubKeys || (i > 0 && (e.kind == "transfer" || e.kind == "draft"))) club(k).takeIf { it != k }?.let { return it }
@@ -152,7 +159,7 @@ object News {
         v["count"] = listed.size.toString()
         val arg = { i: Int -> e.args.getOrNull(i)?.takeIf { it.isNotBlank() && it != "-" } }
 
-        val (list, importance) = templates(e, v, arg, club, team, rating, upsetGap)
+        val (list, importance) = templates(e, v, arg, club, team, rating, upsetGap, name)
         val chosen = pick(list, v, e)
         val t = chosen ?: T(PLAIN_HEADLINE, "[[{seeds}의 ]]새 소식이 들어왔어요. 자세한 내용은 피드에서 볼 수 있어요.")
         return Article(e.season, e.kind, fill(t.headline, v), fill(t.body, v), e.keys, e.comp, (if (chosen == null) 1 else importance).coerceIn(1, 5), e.week)
@@ -227,6 +234,7 @@ object News {
         team: (String) -> String,
         rating: ((String) -> Double)?,
         upsetGap: Double?,
+        name: (String) -> String,
     ): Pair<List<T>, Int> = when (e.kind) {
         "upset" -> {
             arg(0)?.let { v["gap"] = it }
@@ -270,12 +278,16 @@ object News {
             }
             val importance = when {
                 e.comp == Comp.LEAGUE || e.comp == Comp.TITLE_PLAYOFF -> if (division == 0) 5 else 3
-                e.comp == Comp.CHAMPIONS -> 5
+                e.comp == Comp.CHAMPIONS || e.comp == Comp.WORLD_CUP -> 5
+                e.comp == Comp.CONTINENTAL -> 4
                 e.comp == Comp.CUP || e.comp == Comp.FAMILY || e.comp == Comp.CLUB -> 4
                 e.comp == Comp.ALL_STAR -> 2
                 else -> 3
             }
-            listOf(
+            if (arg(1) == "first") listOf(
+                T("{a}, 사상 첫 {t} 우승!", "{a|이} 사상 처음으로 {t} 정상에 올랐어요. 대표 5명 모두 나라의 역사를 새로 썼어요."),
+                T("{a}의 첫 {t} 트로피", "{a|이} 오랜 기다림 끝에 첫 {t} 우승을 차지했어요. 시즌 {season}은 그 나라에 잊지 못할 해가 됐어요."),
+            ) to importance else listOf(
                 T("{a}, {t} 우승!", "{a|이} 시즌 {season}의 {t} 정상에 올랐어요. 시즌 내내 이어 온 노력이 결실을 맺었어요."),
                 T("{t}의 주인은 {a}", "시즌 {season}의 {t} 우승 트로피는 {a}에게 돌아갔어요. 축하 인사가 쏟아지고 있어요."),
                 T("정상 등극: {a}, {t} 제패", "{a|이} {t|을} 제패했어요. 이번 우승으로 리그 역사에 이름을 한 번 더 새겼어요."),
@@ -312,6 +324,10 @@ object News {
                 if (w == null || l == null) null else (r(l) - r(w)).takeIf { !it.isNaN() && it >= Drama.UPSET_GAP }
             }
             when {
+                e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL -> listOf(
+                    T("{comp} {round}: {a}, {b} 꺾고 진출", "{a|이} {comp} {round}에서 {b|을}[[ 보드 {score|으로}]] 물리쳤어요. 대표팀의 도전이 다음 라운드로 이어져요."),
+                    T("{b}, {comp} {round}에서 탈락", "{b|은} {a}에게[[ 보드 {score|으로}]] 져 이번 {comp|을} 마쳤어요. {a|은} 다음 라운드로 향해요."),
+                ) to if (e.comp == Comp.WORLD_CUP) 3 else 2
                 e.comp == Comp.PROMOTION_PLAYOFF -> listOf(
                     T("{round}: {a}의 승리", "{a|이} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. 다음 시즌 어느 부에서 뛸지가 이 승부로 갈렸어요."),
                     T("{round}, 웃은 쪽은 {a}", "{a|과} {b|이} 맞붙은 {round}에서 {a|이} 이겼어요. {b|은} 아쉬움을 삼켰어요."),
@@ -352,6 +368,10 @@ object News {
                     T("{a}, 슈퍼컵 들어 올려", "{a|이} 슈퍼컵에서 {b|을}[[ {score|으로}]] 꺾었어요. 새 시즌 첫 트로피의 주인공이에요."),
                     T("슈퍼컵 승자는 {a}", "{a|과} {b}의 슈퍼컵 맞대결에서 {a|이} 이겼어요. 기분 좋게 새 시즌을 시작해요."),
                 ) to 3
+                Comp.WORLD_CUP -> listOf(
+                    T("{a}, 요트 월드컵 정상!", "{a|이} 결승에서 {b|을}[[ 보드 {score|으로}]] 꺾고 시즌 {season} 요트 월드컵 챔피언이 됐어요. 대표 5명 모두 우승 멤버로 이름을 남겨요."),
+                    T("월드컵 결승: {a}, {b} 제압", "결승에서 {a|과} {b|이} 맞붙었고, {a|이} 웃었어요.[[ 보드 스코어는 {score|이에요}.]] {b|은} 준우승에 만족해야 했어요."),
+                ) to 5
                 Comp.ALL_STAR -> listOf(
                     T("올스타전: {a}, {b}에 승리", "{a|이} 올스타전에서 {b|을}[[ {score|으로}]] 꺾었어요. 리그 반환점을 수놓은 축제였어요."),
                     T("별들의 잔치, 웃은 쪽은 {a}", "올스타전에서 {a|이} {b|을} 눌렀어요. 승패를 떠나 팬들에게는 즐거운 무대였어요."),
@@ -544,9 +564,11 @@ object News {
                 "unbeaten" -> listOf(T("{a}, 무패 우승", "{a|이} 한 경기도 지지 않고 리그 정상에 섰어요. 완벽한 시즌이에요."))
                 else -> {
                     v["dyn"] = honourLabel(kind) ?: e.comp?.label ?: Comp.LEAGUE.label
+                    // Cups held every few seasons count editions, not seasons.
+                    v["unit"] = if (kind.uppercase(Locale.ROOT) in EDITION_KINDS) "대회" else "시즌"
                     listOf(
-                        T("{a}, {dyn} {count}연속 우승", "{a|이} {dyn}에서 {count}시즌 연속 정상에 올랐어요. 왕조가 시작된 걸까요?"),
-                        T("{a} 왕조, {dyn} {count}연속 제패", "{dyn|은} 이번에도 {a}의 차지였어요. 벌써 {count}시즌 연속이에요."),
+                        T("{a}, {dyn} {count}연속 우승", "{a|이} {dyn}에서 {count}{unit} 연속 정상에 올랐어요. 왕조가 시작된 걸까요?"),
+                        T("{a} 왕조, {dyn} {count}연속 제패", "{dyn|은} 이번에도 {a}의 차지였어요. 벌써 {count}{unit} 연속이에요."),
                     )
                 }
             } to 4
@@ -608,6 +630,82 @@ object News {
                 T("계열 대항전 {group} 편성", "{group}에서 {seeds|이} 맞붙어요. 각 계열은 레이팅 상위 5명으로 대표팀을 꾸려요."),
                 T("계열 대항전 개막, {group}에 {seeds}", "계열의 자존심을 건 대항전이 시작돼요. {group}에서는 {seeds|이} 경쟁해요."),
             ) to 2
+        }
+        "wc_open" -> {
+            arg(0)?.let { v["n"] = it }
+            listOf(
+                T("시즌 {season} 요트 월드컵, {n}개국 출전", "{n}개국 대표팀이 시즌 {season} 요트 월드컵에 나서요.[[ 개최국은 {a|이에요}.]] 나라마다 레이팅 상위 5명이 대표로 뽑혀요."),
+                T("요트 월드컵의 해가 왔어요", "4시즌마다 열리는 요트 월드컵이 시즌 {season}에 돌아와요.[[ 개최국 {a|을} 포함해 ]]{n}개국이 우승컵을 다퉈요."),
+            ) to 3
+        }
+        "cc_open" -> {
+            arg(0)?.let { v["cups"] = it }
+            listOf(
+                T("시즌 {season} 대륙컵 개막", "{cups|이} 한꺼번에 열려요. 대륙마다 최강의 대표팀을 가려요."),
+                T("대륙 챔피언을 가리는 시즌", "시즌 {season}에는 {cups|이} 열려요. 2시즌 뒤에는 요트 월드컵이 기다려요."),
+            ) to 2
+        }
+        "draw_wc" -> {
+            arg(0)?.let { v["group"] = it }
+            arg(1)?.let { v["ko"] = it }
+            e.args.getOrNull(2)?.let { team(it).takeIf { t -> t != it }?.let { t -> v["host"] = t } }
+            listOf(
+                T("요트 월드컵 {group} 편성", "{group}에서 {seeds|이} {ko} 티켓을 다퉈요.[[ 개최국 {host|은} {group} 1번 시드로 나서요.]]"),
+                T("월드컵 {group}: {seeds}", "시즌 {season} 요트 월드컵 {group} 추첨이 끝났어요. {a|이} 1번 시드로 조 1위를 노려요."),
+            ) to 2
+        }
+        "draw_cc" -> {
+            arg(0)?.let { v["group"] = it }
+            listOf(
+                T("{comp} {group} 편성", "{comp} {group}에서 {seeds|이} 맞붙어요. 대륙 챔피언을 향한 첫걸음이에요."),
+                T("{comp} 대진: {seeds}", "{comp} {group} 추첨이 끝났어요. 1번 시드 {a|이} 정상을 노려요."),
+            ) to 2
+        }
+        "nation_squad" -> {
+            // [new players..., dropped players...] (nation, cup, new count)
+            val nNew = arg(2)?.toIntOrNull() ?: 0
+            arg(0)?.let { v["nat"] = team(it) }
+            arg(1)?.let { v["cup"] = it }
+            val all = e.keys.map { name(it) }
+            all.take(nNew).joinToString("·").takeIf { it.isNotEmpty() }?.let { v["new"] = it }
+            all.drop(nNew).joinToString("·").takeIf { it.isNotEmpty() }?.let { v["out"] = it }
+            listOf(
+                T("{nat} 대표팀 명단 발표", "{cup}에 나설 {nat} 대표 5명이 정해졌어요.[[ 새로 뽑힌 선수는 {new|이에요}.]][[ {out|은} 이번에는 명단에서 빠졌어요.]]"),
+                T("{nat}, {cup} 명단에 변화", "[[{new|이} 새로 {nat} 유니폼을 입어요. ]][[{out|은} 레이팅 순 자동 선발에서 밀려났어요.]]"),
+            ) to 1
+        }
+        "ko_set" -> {
+            arg(0)?.let { v["round"] = it }
+            listOf(
+                T("{comp} {round} 대진 확정", "조별 리그가 끝나고 {count}개국이 {round}에 올랐어요. 1번 시드 {a|과} {b}·{c} 등이 우승 후보로 꼽혀요."),
+                T("{comp}, 이제부터 토너먼트", "{count}개국이 {comp} {round}에 진출했어요. 지면 끝나는 승부가 시작돼요."),
+            ) to 3
+        }
+        "rivalry" -> {
+            arg(0)?.let { v["label"] = it }
+            arg(1)?.let { v["score"] = it }
+            arg(2)?.let { v["stage"] = it }
+            listOf(
+                T("{label}: {a}, {b}에 승리", "{comp} {stage}에서 열린 {label}에서 {a|이} {b|을}[[ 보드 {score|으로}]] 꺾었어요. 자존심이 걸린 맞대결이었어요."),
+                T("{label}의 승자는 {a}", "{a|과} {b}의 {label|은} {a}의 승리로 끝났어요.[[ 보드 스코어는 {score|이에요}.]] 다음 맞대결이 벌써 기다려져요."),
+            ) to 3
+        }
+        "style_trend" -> {
+            arg(0)?.let { k -> PlayStyles.recipe(k)?.let { v["style"] = it.name } }
+            listOf(
+                T("월드컵 우승 효과: '{style}' 유행", "{a|이} 요트 월드컵을 들어 올리자 '{style}' 스타일이 유행이에요. 앞으로 몇 시즌 동안 이 스타일로 두는 신인이 늘어날 거예요."),
+                T("{a}처럼 두고 싶어요", "월드컵 챔피언 {a}의 주무기 '{style}'에 신인들이 빠져들었어요. 리그의 흐름이 바뀔지 지켜봐요."),
+            ) to 3
+        }
+        "nation_awards" -> {
+            // [mvp, top scorer] (cup, mvp's board points, top scorer's average)
+            arg(0)?.let { v["cup"] = it }
+            arg(1)?.let { v["pts"] = it }
+            arg(2)?.let { v["avg"] = it }
+            listOf(
+                T("{cup} MVP는 {a}", "{a|이} 보드 승점 {pts}점으로 {cup} MVP에 뽑혔어요.[[ 득점왕은 평균 {avg}점의 {b|이에요}.]]"),
+                T("{cup} 개인상: MVP {a}, 득점왕 {b}", "대회 최우수 선수는 {a}, 평균 점수가 가장 높은 득점왕은 {b|이에요}. 두 선수 모두 대회 내내 빛났어요."),
+            ) to 3
         }
         "season_review" -> {
             // [league champion, cup winner] (either may be "-").
@@ -674,6 +772,8 @@ object News {
         kind == "FAMILY" -> Comp.FAMILY.label
         kind == "CLUB" -> Comp.CLUB.label
         kind == "ALLSTAR" -> Comp.ALL_STAR.label
+        kind == "WC" || kind == "WCW" -> Comp.WORLD_CUP.label
+        kind == "CC" || kind == "CCW" -> Comp.CONTINENTAL.label
         kind.isNotEmpty() && kind.any { it in '가'..'힣' } -> kind
         else -> null
     }

@@ -2044,7 +2044,7 @@ class LeagueController(
 
     /** An honour's winner: a club, a family or an all-star side by its label, else the AI's name. */
     private fun teamOrName(kind: String, key: String): String = when (kind) {
-        "FAMILY", "ALLSTAR" -> Competitions.teamLabel(key)
+        "FAMILY", "ALLSTAR", "WC", "WC2", "WC4", "CC", "CC2" -> Competitions.teamLabel(key)
         else -> name(key)
     }
 
@@ -2063,7 +2063,7 @@ class LeagueController(
         private val DIVISION = Regex("L\\d")
 
         /** Honours the season history lists after the division champions, in this order. */
-        val SHOWN_TITLES = listOf("REG", "L0R", "CL", "CL2", "CUP", "CUP2", "SUPER", "CLUB", "FAMILY", "ALLSTAR", "MVP", "ROOKIE", "MIP")
+        val SHOWN_TITLES = listOf("REG", "L0R", "CL", "CL2", "CUP", "CUP2", "SUPER", "CLUB", "FAMILY", "ALLSTAR", "WC", "WC2", "CC", "WCMVP", "MVP", "ROOKIE", "MIP")
 
         /** League files a backup restores (when this phone's league has no games yet). */
         val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")

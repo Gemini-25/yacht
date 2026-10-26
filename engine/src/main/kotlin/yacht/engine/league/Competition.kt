@@ -60,6 +60,8 @@ class SeasonStart(
     val hometown: (String) -> String,
     /** Every season's honours so far (oldest first), e.g. for the family cup's last squads. */
     val history: List<Honour> = emptyList(),
+    /** Each AI's nation code (generated and evolved players; null for the others). */
+    val nation: (String) -> String? = { null },
 )
 
 /**
@@ -88,6 +90,12 @@ interface Competition {
      * (not in [busy]); it is then taken until [record] or [release]. Null when none now.
      */
     fun next(p: Double, busy: Set<String>): Fixture?
+
+    /**
+     * Players of fixtures open at progress [p] that wait only for busy players: other team
+     * competitions leave them alone so a one-off match (the all-star game) is not starved.
+     */
+    fun waiting(p: Double): Set<String> = emptySet()
 
     /** A fixture taken by [next] that was not played (stopped): playable again. */
     fun release(f: Fixture)

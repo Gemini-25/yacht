@@ -122,6 +122,21 @@ class SeasonPlan(
     /** What competition [i] of [comps] is open to from [o] (a competition off the calendar goes by league progress). */
     private fun open(o: DoubleArray, i: Int): Double = if (league.finished) 1.0 else o[i].let { if (it.isNaN()) progress else it }
 
+    /**
+     * The next team fixture, in the competitions' order; a competition whose open match waits
+     * for busy players keeps them from the ones after it ([Competition.waiting]).
+     */
+    private fun teams(o: DoubleArray, busy: Set<String>): Fixture? {
+        var blocked: MutableSet<String>? = null
+        for ((i, c) in comps.withIndex()) {
+            if (!isTeam(c.comp)) continue
+            c.next(open(o, i), blocked ?: busy)?.let { return stamp(c, it) }
+            val w = c.waiting(open(o, i))
+            if (w.isNotEmpty()) blocked = (blocked ?: busy.toMutableSet()).apply { addAll(w) }
+        }
+        return null
+    }
+
     /** [f] with the week of its stage. */
     private fun stamp(c: Competition, f: Fixture): Fixture {
         val w = calendar.week(c.comp, runCatching { c.stageOf(f) }.getOrDefault(-1))
@@ -143,9 +158,9 @@ class SeasonPlan(
         }
         // One team fixture at a time ahead of the league, so the club league and the family cup
         // play their rounds as they open instead of all after the league.
-        if (teamsInFlight < 1) for ((i, c) in comps.withIndex()) if (isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
+        if (teamsInFlight < 1) teams(o, busy)?.let { return it }
         league.next(busy, cost)?.let { return league.job(it) }
-        for ((i, c) in comps.withIndex()) if (isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
+        teams(o, busy)?.let { return it }
         // Cup fixtures are not capped when nothing else is left to do.
         for ((i, c) in comps.withIndex()) if (!isTeam(c.comp)) c.next(open(o, i), busy)?.let { return stamp(c, it) }
         if (!league.finished) {
@@ -197,7 +212,7 @@ class SeasonPlan(
     private fun owner(f: Fixture): Competition? = comps.firstOrNull { it.comp == f.comp } ?: post.firstOrNull { it.comp == f.comp }
 
     /** True for team competitions: they run with the league; cups and groups take the cup slots. */
-    fun isTeam(c: Comp) = c == Comp.CLUB || c == Comp.ALL_STAR || c == Comp.FAMILY
+    fun isTeam(c: Comp) = c == Comp.CLUB || c == Comp.ALL_STAR || c == Comp.FAMILY || c == Comp.WORLD_CUP || c == Comp.CONTINENTAL
 
     // ---- saving --------------------------------------------------------------------------------
 

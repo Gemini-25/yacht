@@ -35,7 +35,7 @@ class HonourBook {
 
     companion object {
         const val MAX_SEASONS = 100
-        val TITLES = setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB")
+        val TITLES = setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "CC", "WCW")
         private val DIVISION = Regex("L\\d")
 
         fun decode(text: String): HonourBook {

@@ -57,8 +57,8 @@ object Awards {
     /** Awards announced as news. */
     val ANNOUNCED = KINDS + setOf("SCORER", "YACHT")
     private val DIVISION = Regex("L\\d")
-    private val AI_TITLES = setOf("CUP", "CL", "SUPER")
-    private val TEAM_TITLES = setOf("ALLSTAR", "FAMILY", "CLUB")
+    private val AI_TITLES = setOf("CUP", "CL", "SUPER", "WCW")
+    private val TEAM_TITLES = setOf("ALLSTAR", "FAMILY", "CLUB", "WC", "CC")
 
     /** A title an AI wins: a division, the cup, the champions league, the super cup. */
     fun isAiTitle(kind: String): Boolean = kind in AI_TITLES || DIVISION.matches(kind)
@@ -67,7 +67,8 @@ object Awards {
     fun isTitle(kind: String): Boolean = isAiTitle(kind) || kind in TEAM_TITLES
 
     /** What a season summary keeps: titles, runners-up, the regular season and the awards (not moves or squads). */
-    fun inSummary(kind: String): Boolean = isTitle(kind) || kind == "REG" || kind == "CUP2" || kind == "CL2" || kind in ANNOUNCED
+    fun inSummary(kind: String): Boolean =
+        (isTitle(kind) && kind != "WCW") || kind == "REG" || kind == "CUP2" || kind == "CL2" || kind == "WC2" || kind == "WCMVP" || kind == "WCTOP" || kind in ANNOUNCED
 
     /**
      * MVP: the best average match rating in division 1 among AIs that played at least
