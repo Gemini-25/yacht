@@ -855,6 +855,9 @@ class LeagueController(
         // The rules saved during the season apply from here (evolution, generated players).
         configureWorld(w)
         w.ladder.fit()
+        // The finished season on disk first: killed while the close is saved, the league reads
+        // the finished season again and closes it the same way (not a checkpoint from before).
+        saveAsync()
         val closing = w.closeSeason()
         if (closing.rosterChanged) rebuildRoster()
         configureWorld(w)
@@ -1134,8 +1137,9 @@ class LeagueController(
 
     /** Views loaded on request (records, legends, a profile, ...) after the league was replaced: read again or dropped. */
     private fun clearLoadedViews() {
-        profile = null
-        h2h = null
+        // An open profile or matrix is read again from the new league (its screen does not ask twice).
+        profile?.key?.let { loadProfile(it) }
+        lastMatrix?.let { (title, groups, labels) -> loadMatrix(title, groups, labels) }
         calendar = null
         preview = null
         loadRecords()
@@ -1642,7 +1646,11 @@ class LeagueController(
     fun loadH2h(title: String, keys: List<String>) = loadMatrix(title, keys.map { listOf(it) }, keys.map { name(it) })
 
     /** Loads the matrix between these groups of AIs (e.g. families) into [h2h]. */
+    /** The matrix asked for last (read again when the league is replaced). */
+    private var lastMatrix: Triple<String, List<List<String>>, List<String>>? = null
+
     fun loadMatrix(title: String, groups: List<List<String>>, labels: List<String>) {
+        lastMatrix = Triple(title, groups, labels)
         scope.launch(Dispatchers.Default) {
             val m = synchronized(lock) {
                 val l = ladder ?: return@synchronized null

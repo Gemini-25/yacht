@@ -624,7 +624,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (m in SeasonMode.entries) {
-                    FilterChip(selected = mode == m, onClick = { mode = m; if (m == SeasonMode.CALENDAR) lg.loadCalendar(d) }, label = { Text(m.label, fontSize = 12.sp) })
+                    FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
                 }
             }
         }

@@ -732,10 +732,15 @@ class StatsBook(
         val events = ArrayList<LeagueEvent>()
 
         val awards = ArrayList<Honour>()
-        val awardKeys = keys.filter { it !in gone }
-        Awards.mvp(plan) { if (it in gone) null else seasonStats[it] }?.let { awards += Honour(n, "MVP", it) }
-        Awards.rookie(awardKeys, isRookie ?: { it in rookieKeys }, rating)?.let { awards += Honour(n, "ROOKIE", it) }
-        Awards.mip(awardKeys, { startRating(it) }, rating)?.let { awards += Honour(n, "MIP", it) }
+        // A season closed before (the app was killed while saving it) keeps the awards it was given.
+        val given = honours.of(n).filter { it.kind in Awards.KINDS }
+        if (given.isNotEmpty()) awards += given
+        else {
+            val awardKeys = keys.filter { it !in gone }
+            Awards.mvp(plan) { if (it in gone) null else seasonStats[it] }?.let { awards += Honour(n, "MVP", it) }
+            Awards.rookie(awardKeys, isRookie ?: { it in rookieKeys }, rating)?.let { awards += Honour(n, "ROOKIE", it) }
+            Awards.mip(awardKeys, { startRating(it) }, rating)?.let { awards += Honour(n, "MIP", it) }
+        }
         // The season's titles as Offseason gave them (or as already added to the book).
         val titles = seasonHonours.filter { it.season == n }.ifEmpty { honours.of(n).filter { it.kind !in Awards.KINDS } }
         val won = titles + awards

@@ -259,4 +259,32 @@ class LeagueWorldTest {
             assertEquals(s.avgScore, back.standings.getValue(s.key).avgScore, 1e-9)
         }
     }
+
+    @Test
+    fun aCloseReplayedAfterAKillGivesTheSameHonours() {
+        val config = LeagueConfig(divisions = 3, generated = 30, evolution = 6, clubs = 0)
+        for (seed in listOf(21L, 22L, 23L)) {
+            val w = world(config)
+            w.openFirstSeason(seed)
+            season(w)
+            rollover(w)
+            season(w)
+            w.ladder.fit()
+            // Killed while the close was saved: the finished season, with the new honours and
+            // roster already written (they come first).
+            val before = w.encodeFiles()
+            val first = w.closeSeason()
+            val after = w.encodeFiles()
+            val mixed = before + mapOf(LeagueWorld.HONOURS to after.getValue(LeagueWorld.HONOURS), LeagueWorld.ROSTER to after.getValue(LeagueWorld.ROSTER))
+            val players = yacht.engine.league.PlayerBook.decode(after.getValue(LeagueWorld.ROSTER), emptyList())
+            val keys = base + players.alive.map { it.key } + Ladder.ME
+            val back = LeagueWorld.decode(mixed, keys, emptyList())
+            back.config = config
+            back.family = w.family
+            back.members = base + back.players.alive.map { it.key }
+            back.present = { it in keys }
+            val again = back.closeSeason()
+            assertEquals(first.honours.sortedBy { it.kind + it.key }, again.honours.sortedBy { it.kind + it.key }, "seed $seed")
+        }
+    }
 }

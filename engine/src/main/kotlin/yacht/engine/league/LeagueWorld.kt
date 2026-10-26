@@ -192,7 +192,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         // Awards, records, hall of fame, dynasties and the season's archive, from the book as it
         // was before this season; then the season's honours go in once, awards included.
         val end = runCatching {
-            stats.endSeason(p, h, honours, archive, ::rating, family, name, null, ::traits, gone)
+            // The ladder's own ratings: an AI off the ladder (retired by this close, read again
+            // after a kill) has none, rather than a made-up starting one that would win awards.
+            stats.endSeason(p, h, honours, archive, { k -> ladder.rating(k) }, family, name, null, ::traits, gone)
         }.getOrNull()
         honours.add(h + end?.awards.orEmpty())
         val out = ArrayList<LeagueEvent>()
@@ -279,8 +281,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * guard makes that a replay). No season or clubs: empty files, so an older one is not read.
      */
     fun encodeFiles(): Map<String, String> = buildMap {
-        put(ROSTER, players.encode())
+        // The honours before the roster: once the roster has moved on, the book holds the close's awards.
         put(HONOURS, honours.encode())
+        put(ROSTER, players.encode())
         put(CLUBS, clubs?.encode() ?: "")
         // The archive before the stats: once stats.txt says a season ended, its summary is kept.
         put(ARCHIVE, archive.encode())
