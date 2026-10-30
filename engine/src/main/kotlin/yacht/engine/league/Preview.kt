@@ -188,7 +188,7 @@ object Preview {
             val f = season.fixture(id)
             if (f.a != a && f.b != a && f.a != b && f.b != b) continue
             val games = season.result(id) ?: continue
-            val r = TieRule.match(games)
+            val r = TieRule.match(games, season.format)
             fun mark(side: Int) = when (r * side) {
                 1 -> 'W'
                 0 -> 'D'
@@ -277,11 +277,17 @@ object Preview {
     /** The competition and round of a fixture outside the league. */
     private fun roundLine(f: Fixture): String? {
         val label = f.label.trim()
-        val final = label == "결승"
+        val final = label == "결승" || label == Knockout.GRAND_LABEL || label.endsWith(" " + Knockout.GRAND_LABEL)
+        // Double elimination: a loss on the winners' side drops to the losers' side, not out.
+        val winnersSide = label.contains("승자조")
+        val series = if (f.firstTo > 0) " ${f.firstTo}판을 먼저 이기는 쪽이 올라가요." else ""
         return when (f.comp) {
             Comp.LEAGUE, Comp.FRIENDLY, Comp.LAB -> null
-            Comp.TITLE_PLAYOFF ->
-                if (final) "우승 플레이오프 결승이에요. 이기는 쪽이 1부 챔피언이 돼요." else "우승 플레이오프 ${Ko.ieyo(label.ifEmpty { "4강" })}. 지는 쪽은 우승 도전이 끝나요."
+            Comp.TITLE_PLAYOFF -> when {
+                final -> "우승 플레이오프 결승이에요. 이기는 쪽이 1부 챔피언이 돼요.$series"
+                winnersSide -> "우승 플레이오프 ${Ko.ieyo(label)}. 지는 쪽은 패자조로 내려가 한 번 더 기회가 있어요.$series"
+                else -> "우승 플레이오프 ${Ko.ieyo(label.ifEmpty { "4강" })}. 지는 쪽은 우승 도전이 끝나요.$series"
+            }
             Comp.PROMOTION_PLAYOFF -> {
                 // "1·2부 승강전": the winner plays in the upper of the two next season.
                 val upper = UPPER.find(label)?.groupValues?.get(1)?.let { "${it}부" } ?: "상위 부"
@@ -292,9 +298,10 @@ object Preview {
                 val what = if (label.isEmpty() || label == f.comp.label) f.comp.label else "${f.comp.label} $label"
                 when {
                     f.kind != JobKind.TIE -> "${Ko.ieyo(what)}."
-                    final -> "${f.comp.label} 결승이에요. 이기는 쪽이 우승해요."
-                    what == f.comp.label -> "${Ko.ieyo(what)}. 이기는 쪽이 우승해요."
-                    else -> "${Ko.ieyo(what)}. 지는 쪽은 바로 탈락해요."
+                    final -> "${f.comp.label} 결승이에요. 이기는 쪽이 우승해요.$series"
+                    what == f.comp.label -> "${Ko.ieyo(what)}. 이기는 쪽이 우승해요.$series"
+                    winnersSide -> "${Ko.ieyo(what)}. 지는 쪽은 패자조로 내려가요.$series"
+                    else -> "${Ko.ieyo(what)}. 지는 쪽은 바로 탈락해요.$series"
                 }
             }
         }

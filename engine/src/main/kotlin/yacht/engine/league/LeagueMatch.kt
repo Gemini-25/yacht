@@ -76,10 +76,42 @@ object LeagueMatch {
         cancelled: () -> Boolean = { false },
         /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
         scout: (String) -> OppModel? = NO_SCOUT,
+        /**
+         * A series (선승제) when above 0: pairs of games on the same dice, dealt as the legs'
+         * matches (pair j as leg j, A first in its first game), until a side has this many games
+         * won (a drawn game half each) and more than the other; at most [legs] pairs.
+         */
+        firstTo: Int = 0,
     ): BoardResult {
         val games = ArrayList<GameScore>()
         val facts = ArrayList<GameFacts>()
-        for (leg in 0 until legs) {
+        if (firstTo > 0) {
+            var wonA = 0.0
+            var wonB = 0.0
+            fun count(g: GameScore) {
+                games += g
+                if (g.a > g.b) wonA += 1.0 else if (g.a < g.b) wonB += 1.0 else {
+                    wonA += 0.5
+                    wonB += 0.5
+                }
+            }
+            fun over() = (wonA >= firstTo || wonB >= firstTo) && wonA != wonB
+            series@ for (pair in 0 until legs) {
+                // As [playMatch] deals leg [pair]: its two streams, A first in its first game.
+                val s = DiceStream.mix(seed, 100L + pair)
+                val first = DiceStream(DiceStream.mix(s, 0))
+                val second = DiceStream(DiceStream.mix(s, 1))
+                fun rng(game: Int, seat: Int) = Random(DiceStream.mix(s, 7, game.toLong(), seat.toLong()))
+                val g1 = game(rules, a.player(rng(0, 0), scout(b.key)), b.player(rng(0, 1), scout(a.key)), first, second, estimate, cancelled)
+                count(score(g1.first, g1.second))
+                g1.facts?.let { facts += it }
+                if (over()) break@series
+                val g2 = game(rules, b.player(rng(1, 0), scout(a.key)), a.player(rng(1, 1), scout(b.key)), first, second, estimate, cancelled)
+                count(score(g2.second, g2.first))
+                g2.facts?.let { facts += it }
+                if (over()) break@series
+            }
+        } else for (leg in 0 until legs) {
             val m = playMatch(rules, a, b, DiceStream.mix(seed, 100L + leg), if (format == MatchFormat.BEST_OF_3) MatchFormat.MIRRORED else format, estimate, cancelled, scout)
             games += m.games
             facts += m.facts
@@ -127,12 +159,12 @@ object LeagueMatch {
                 val y = ai(job.b) ?: return null
                 val r = playMatch(rules, x, y, job.seed, format, estimate, cancelled, scout)
                 boards = listOf(r)
-                winner = TieRule.match(r.games)
+                winner = TieRule.match(r.games, format)
             }
             JobKind.TIE -> {
                 val x = ai(job.a) ?: return null
                 val y = ai(job.b) ?: return null
-                val r = playTie(rules, x, y, job.seed, job.legs, format, estimate, cancelled = cancelled, scout = scout)
+                val r = playTie(rules, x, y, job.seed, job.legs, format, estimate, cancelled = cancelled, scout = scout, firstTo = job.firstTo)
                 boards = listOf(r)
                 // Level after every decider: side A (the higher seed by convention) goes through.
                 winner = TieRule.match(r.games).let { if (it == 0) 1 else it }
@@ -141,10 +173,10 @@ object LeagueMatch {
                 val xs = job.lineupA.map { ai(it) ?: return null }
                 val ys = job.lineupB.map { ai(it) ?: return null }
                 boards = playTeam(rules, xs, ys, job.seed, format, estimate, cancelled, scout)
-                winner = TieRule.team(boards)
+                winner = TieRule.team(boards, format)
             }
         }
-        return JobResult(job, boards, winner, System.nanoTime() - t0)
+        return JobResult(job, boards, winner, System.nanoTime() - t0, format)
     }
 
     /**

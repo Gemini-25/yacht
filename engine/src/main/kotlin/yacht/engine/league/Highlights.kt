@@ -62,6 +62,8 @@ internal object MediaText {
  * before the deciders are the tie's legs (or the one match) times this.
  */
 internal fun gamesPerMatch(job: Fixture, board: BoardResult): Int {
+    // A series is pairs of games (its last pair may stop after one).
+    if (job.kind == JobKind.TIE && job.firstTo > 0) return 2
     val legs = if (job.kind == JobKind.TIE) maxOf(1, job.legs) else 1
     return ((board.games.size - board.deciders) / legs).coerceIn(1, 2)
 }
@@ -170,8 +172,12 @@ object Drama {
         return DramaScore(s * mult, tags)
     }
 
-    /** A knockout final: the "결승" round of a bracket, or the one tie of the super cup. */
-    fun isFinal(f: Fixture): Boolean = f.label == "결승" || f.label.endsWith("컵 결승") || f.comp == Comp.SUPER
+    /**
+     * A knockout final: the "결승" round of a bracket (a double elimination's "최종 결승", not its
+     * winners' or losers' final), or the one tie of the super cup.
+     */
+    fun isFinal(f: Fixture): Boolean =
+        f.label == "결승" || f.label.endsWith("컵 결승") || f.label == Knockout.GRAND_LABEL || f.label.endsWith(" " + Knockout.GRAND_LABEL) || f.comp == Comp.SUPER
 
     /**
      * True when [f] is a title-race game: a title playoff tie, or a 1st-division league fixture
@@ -184,11 +190,13 @@ object Drama {
         if (league.divisionOf(f.a) != 0) return false
         val table = league.table(0)
         val top = table.firstOrNull()?.points ?: return false
-        val contenders = table.takeWhile { top - it.points <= RACE_POINTS }.map { it.key }
+        // One win: 3 points, 4 with 판 승점제's sweep bonus.
+        val race = RACE_POINTS + if (league.format.sweepBonus) 1 else 0
+        val contenders = table.takeWhile { top - it.points <= race }.map { it.key }
         return contenders.size >= 2 && (f.a in contenders || f.b in contenders)
     }
 
-    /** League points from the leader that still count as in the title race (one win). */
+    /** League points from the leader that still count as in the title race (one win; one more with the sweep bonus). */
     const val RACE_POINTS = 3
     const val RACE_FROM = 0.6
 }

@@ -102,27 +102,49 @@ class NationCup private constructor(
     /** Nations that won this cup before (a first title is news). */
     private val winnersBefore: Set<String>,
     private val announced: List<LeagueEvent>,
+    /** Knockouts of 4 or more are double elimination (패자부활); saved. */
+    private val double: Boolean = false,
 ) : ViewableCompetition {
     private val world = comp == Comp.WORLD_CUP
     private val byId = teams.associateBy { it.id }
     private val sectionOfGroup = IntArray(groups.size).also { a -> for ((s, sec) in sections.withIndex()) for (g in sec.groups) a[g] = s }
-    private val stage = GroupStage(groups, double = false, teams = true, ::groupOpens).also { it.label = ::groupLabel }
+    private val stage = GroupStage(groups, double = false, teams = true, opensAt = ::groupOpens).also { it.label = ::groupLabel }
     private val brackets = arrayOfNulls<Knockout>(sections.size)
 
     /** Every squad member's line in this cup. */
     val lines: Map<String, CupLine> = LinkedHashMap<String, CupLine>().also { m -> for (t in teams) for (k in t.squad) m[k] = CupLine(k, t.id) }
 
-    /** The knockout stages of the widest tournament (16강, 8강, 4강, 결승). */
-    private val koLabels: List<String> = KO_NAMES.takeLast(log2(sections.maxOf { it.knockout }))
-
     private fun rounds(s: Int) = log2(sections[s].knockout)
 
-    /** Index in [koLabels] of round [r] of tournament [s]: smaller brackets play the last stages. */
-    private fun koIndex(s: Int, r: Int) = koLabels.size - rounds(s) + r
+    /** Winners' round [r] of tournament [s] by its name (16강, 8강, 4강, 결승). */
+    private fun roundName(s: Int, r: Int) = KO_NAMES.takeLast(rounds(s))[r]
+
+    /** Stages of tournament [s]'s knockout (twice its rounds with double elimination). */
+    private fun koStages(s: Int) = Knockout.stagesFor(sections[s].knockout, double)
+
+    /** The widest tournament: its knockout's stages are the cup's. */
+    private val widest = sections.indices.maxBy { koStages(it) }
+
+    /**
+     * The knockout stages of the widest tournament (16강, 8강, 4강, 결승; with the losers' rounds).
+     * Continental cups of different sizes share the stages from the end: then plain stage names
+     * (a smaller cup's 4강 would sit under a wider one's losers' round).
+     */
+    private val koLabels: List<String> = if (double && sections.map { it.knockout }.distinct().size > 1) {
+        val n = koStages(widest)
+        List(n) { st -> if (st == n - 1) Knockout.GRAND_LABEL else "토너먼트 ${st + 1}단계" }
+    } else {
+        Knockout.stageLabels(sections[widest].knockout / 2, double) { r -> roundName(widest, r) }
+    }
+
+    /** Index in [koLabels] of stage [st] of tournament [s]: smaller brackets play the last stages. */
+    private fun koIndex(s: Int, st: Int) = koLabels.size - koStages(s) + st
 
     private fun groupTarget(k: Int) = GROUP_FIRST + GROUP_STEP * k
     private fun groupOpens(k: Int) = groupTarget(k) - EARLY
-    private fun koTarget(j: Int) = groupTarget(stage.rounds - 1) + KO_GAP * (j + 1)
+
+    // The knockout keeps the span it had with single elimination (KO_GAP a round): more stages are closer together.
+    private fun koTarget(j: Int) = groupTarget(stage.rounds - 1) + KO_GAP * log2(sections[widest].knockout) * (j + 1) / koLabels.size
 
     fun groupLabel(g: Int): String {
         val sec = sections[sectionOfGroup[g]]
@@ -143,7 +165,7 @@ class NationCup private constructor(
         stage.next(p, busy) { m -> fixture(m.id, m.a, m.b, stage.matchLabel(m)) }?.let { return it }
         for ((s, k) in brackets.withIndex()) {
             k ?: continue
-            k.next(p, busy) { t -> fixture(t.id, t.a!!.key, t.b!!.key, (if (world) "" else sections[s].title + " ") + k.label(t.round)) }?.let { return it }
+            k.next(p, busy) { t -> fixture(t.id, t.a!!.key, t.b!!.key, (if (world) "" else sections[s].title + " ") + k.label(t)) }?.let { return it }
         }
         return null
     }
@@ -168,7 +190,7 @@ class NationCup private constructor(
         val total = IntArray(koLabels.size)
         for (s in sections.indices) {
             val k = brackets[s]
-            val counts = k?.counts() ?: List(rounds(s)) { r -> StageCount(0, sections[s].knockout shr (r + 1)) }
+            val counts = k?.counts() ?: Knockout.stageSizes(sections[s].knockout / 2, double).map { StageCount(0, it) }
             for ((r, c) in counts.withIndex()) {
                 played[koIndex(s, r)] += c.played
                 total[koIndex(s, r)] += c.total
@@ -178,12 +200,12 @@ class NationCup private constructor(
     }
 
     override fun record(r: JobResult): List<LeagueEvent> =
-        if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r), r.boards) else emptyList()
+        if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r), r.boards, r.format) else emptyList()
 
-    /** Board lines of a team match between [a] and [b] (lineup A's player first on each board). */
-    private fun count(boards: List<BoardResult>) {
+    /** Board lines of a team match between [a] and [b] (lineup A's player first on each board), each board decided by [format]. */
+    private fun count(boards: List<BoardResult>, format: MatchFormat) {
         for (bd in boards) {
-            val res = TieRule.match(bd.games)
+            val res = TieRule.match(bd.games, format)
             for ((key, sign) in listOf(bd.a to 1, bd.b to -1)) {
                 val l = lines[key] ?: continue
                 l.matches++
@@ -202,11 +224,11 @@ class NationCup private constructor(
         }
     }
 
-    private fun put(id: Int, a: String, b: String, s: TieScore, boards: List<BoardResult>?): List<LeagueEvent> {
+    private fun put(id: Int, a: String, b: String, s: TieScore, boards: List<BoardResult>?, format: MatchFormat = MatchFormat.MIRRORED): List<LeagueEvent> {
         val out = ArrayList<LeagueEvent>()
         if (id in stage) {
             val m = stage.record(id, a, b, s) ?: return emptyList()
-            boards?.let(::count)
+            boards?.let { count(it, format) }
             val sec = sectionOfGroup[m.group]
             matchNews(a, b, s, stage.matchLabel(m), sec, out)
             if (brackets[sec] == null && stage.matches.all { sectionOfGroup[it.group] != sec || it.result != null }) out += drawKnockout(sec)
@@ -215,19 +237,19 @@ class NationCup private constructor(
         val sec = (id - KO_BASE) / KO_STEP
         val k = brackets.getOrNull(sec) ?: return emptyList()
         val t = k.record(id, a, b, s) ?: return emptyList()
-        boards?.let(::count)
+        boards?.let { count(it, format) }
         val w = t.winner!!.key
         val l = t.loser!!.key
-        if (t.round == k.rounds.size - 1) {
+        if (k.isFinal(t)) {
             out += LeagueEvent("final", season, listOf(w, l), listOf(t.result!!.text()) + cupTag(sec), comp)
             val title = sections[sec].title
             out += LeagueEvent("title", season, listOf(w), listOfNotNull(title, if (w !in winnersBefore) "first" else null), comp)
             if (world) awardsNews()?.let { out += it }
         } else {
-            out += LeagueEvent("cup_round", season, listOf(w, l), listOf(k.label(t.round), t.result!!.text()) + cupTag(sec), comp)
+            out += LeagueEvent("cup_round", season, listOf(w, l), listOf(k.label(t), t.result!!.text()) + cupTag(sec), comp)
         }
         KnockoutNews.upset(season, comp, t.winner!!, t.loser!!)?.let { out += it.copy(args = it.args + cupTag(sec)) }
-        Nations.rivalry(w, l)?.let { out += LeagueEvent("rivalry", season, listOf(w, l), listOf(it, t.result!!.text(), k.label(t.round)) + cupTag(sec), comp) }
+        Nations.rivalry(w, l)?.let { out += LeagueEvent("rivalry", season, listOf(w, l), listOf(it, t.result!!.text(), k.label(t)) + cupTag(sec), comp) }
         return out
     }
 
@@ -272,9 +294,9 @@ class NationCup private constructor(
             ties[other][1] = b
         }
         val pairs = ties.map { (x, y) -> seeds.getOrNull(x) to seeds.getOrNull(y) }
-        brackets[s] = Knockout(pairs, { 1 }, { r -> koLabels[koIndex(s, r)] }, { r -> koTarget(koIndex(s, r)) - EARLY }, idBase = KO_BASE + KO_STEP * s)
+        brackets[s] = Knockout(pairs, { 1 }, { r -> roundName(s, r) }, { st -> koTarget(koIndex(s, st)) - EARLY }, idBase = KO_BASE + KO_STEP * s, double = double)
         val out = ArrayList<LeagueEvent>()
-        out += LeagueEvent("ko_set", season, seeds.map { it.key }, listOf(koLabels[koIndex(s, 0)]) + cupTag(s), comp)
+        out += LeagueEvent("ko_set", season, seeds.map { it.key }, listOf(brackets[s]!!.label(0)) + cupTag(s), comp)
         // Pot-1 teams (each group's first) that went out: a shock.
         val qualified = seeds.map { it.key }.toSet()
         for (g in sec.groups) groups[g].firstOrNull()?.takeIf { it.key !in qualified }?.let { e ->
@@ -284,9 +306,10 @@ class NationCup private constructor(
     }
 
     override val finished: Boolean get() = brackets.all { it?.finished == true }
-    override val fixturesTotal: Int get() = stage.fixturesTotal + sections.sumOf { it.knockout - 1 }
+    private fun koTies(s: Int) = Knockout.stageSizes(sections[s].knockout / 2, double).sum()
+    override val fixturesTotal: Int get() = stage.fixturesTotal + sections.indices.sumOf { s -> brackets[s]?.fixturesTotal ?: koTies(s) }
     override val fixturesLeft: Int
-        get() = stage.fixturesLeft + sections.indices.sumOf { s -> brackets[s]?.fixturesLeft ?: (sections[s].knockout - 1) }
+        get() = stage.fixturesLeft + sections.indices.sumOf { s -> brackets[s]?.fixturesLeft ?: koTies(s) }
 
     /** How far each team went: 0 champion, 1 runner-up, 2 semi-finals, ...; past the bracket for group exits. */
     private fun finish(): Map<String, Int> {
@@ -294,8 +317,7 @@ class NationCup private constructor(
         for ((s, k) in brackets.withIndex()) {
             for (t in teams) if (sections[s].groups.any { g -> groups[g].any { it.key == t.id } }) out[t.id] = rounds(s) + 1
             k ?: continue
-            for ((r, round) in k.rounds.withIndex()) for (t in round) t.loser?.let { out[it.key] = k.rounds.size - r }
-            k.champion?.let { out[it.key] = 0 }
+            out += k.places()
         }
         return out
     }
@@ -320,10 +342,10 @@ class NationCup private constructor(
             y[3] += Math.round(2 * s.scoreB).toInt(); y[4] += Math.round(2 * s.scoreA).toInt()
         }
         for (m in stage.matches) m.result?.let { count(m.a, m.b, it) }
-        for (k in brackets) k?.rounds?.forEach { round -> round.forEach { t -> val r = t.result; val a = t.a; val b = t.b; if (r != null && a != null && b != null && !t.bye) count(a.key, b.key, r) } }
+        for (k in brackets) k?.all?.forEach { t -> val r = t.result; val a = t.a; val b = t.b; if (r != null && a != null && b != null && !t.bye) count(a.key, b.key, r) }
         val podiums = sections.indices.map { s ->
             val k = brackets[s]
-            val semis = if (k != null && k.rounds.size >= 2) k.rounds[k.rounds.size - 2].mapNotNull { it.loser?.key } else emptyList()
+            val semis = k?.lastFour()?.map { it.key }.orEmpty()
             CupSummary.Podium(sections[s].confed, k?.champion?.key, k?.runnerUp?.key, semis)
         }
         return CupSummary(
@@ -358,7 +380,7 @@ class NationCup private constructor(
             val tag = if (world) "WC" else "CC"
             out += Honour(season, tag, w.key)
             k.runnerUp?.let { out += Honour(season, tag + "2", it.key) }
-            if (world && k.rounds.size >= 2) for (t in k.rounds[k.rounds.size - 2]) t.loser?.let { out += Honour(season, "WC4", it.key) }
+            if (world) for (e in k.lastFour()) out += Honour(season, "WC4", e.key)
             for (p in byId.getValue(w.key).squad) out += Honour(season, tag + "W", p)
             if (s == 0 && world) {
                 mvp()?.let { out += Honour(season, "WCMVP", it.key) }
@@ -379,6 +401,7 @@ class NationCup private constructor(
         for ((c, n) in absent) out.append("x $c $n\n")
         for ((t, k) in captains) out.append("c $t $k\n")
         for (w in winnersBefore.sorted()) out.append("w $w\n")
+        if (double) out.append(KnockoutLength.DOUBLE_LINE).append('\n')
         for ((i, s) in sections.withIndex()) out.append("s $i ${s.confed?.name ?: "-"} ${s.firstGroup} ${s.groupCount} ${s.knockout}\n")
         for ((g, members) in groups.withIndex()) for (e in members) out.append("g $g ${e.key}\n")
         for (l in lines.values) if (l.matches > 0) out.append(l.encode()).append('\n')
@@ -400,7 +423,7 @@ class NationCup private constructor(
         fun part(s: Int): CompetitionView.Groups {
             val sec = sections[s]
             val k = brackets[s]
-            val bracket = CompetitionView.Bracket(sec.title, k?.view() ?: Knockout.placeholder(sec.knockout / 2, { koLabels[koIndex(s, it)] }, { 1 }))
+            val bracket = CompetitionView.Bracket(sec.title, k?.view() ?: Knockout.placeholder(sec.knockout / 2, { roundName(s, it) }, { 1 }, double))
             val ids = sec.groups.flatMap { g -> groups[g].map { it.key } }.toSet()
             return CompetitionView.Groups(sec.title, sec.groups.map { stage.view(it) }, bracket, teams.filter { it.id in ids }.associate { it.id to it.squad }, notes)
         }
@@ -532,7 +555,7 @@ class NationCup private constructor(
                 }
             }
             news += squadNews(start, teams, if (comp == Comp.WORLD_CUP) comp.label else null, sections)
-            return NationCup(comp, n, start.seed, host, teams, sections, groups, absent, captains, winners, news)
+            return NationCup(comp, n, start.seed, host, teams, sections, groups, absent, captains, winners, news, start.config.doubleElimination)
         }
 
         /**
@@ -627,7 +650,7 @@ class NationCup private constructor(
             val titled = sections.map { s -> NationSection(s.confed, s.confed?.cup ?: comp.label, s.firstGroup, s.groupCount, s.knockout) }
             val inGroups = groups.flatten().map { it.key }.toSet()
             val squads = entries.filter { it.first.key in inGroups }.map { (e, squad) -> NationTeam(e.key, squad, e.rating) }
-            NationCup(comp, season, seed, host, squads, titled, groups, absent, captains, winners, emptyList()).also { c ->
+            NationCup(comp, season, seed, host, squads, titled, groups, absent, captains, winners, emptyList(), KnockoutLength.double(lines)).also { c ->
                 for (r in TieScore.Saved.parse(lines)) c.put(r.id, r.a, r.b, r.score, null)
                 for (f in saved) {
                     val l = c.lines[f[1]] ?: continue

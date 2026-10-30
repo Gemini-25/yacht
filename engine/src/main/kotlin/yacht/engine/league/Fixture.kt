@@ -41,7 +41,10 @@ data class Fixture(
     val b: String,
     val seed: Long,
     val kind: JobKind = JobKind.MATCH,
-    /** Matches in a knockout tie (two legs = two mirrored matches). */
+    /**
+     * Matches in a knockout tie (two legs = two mirrored matches); for a series ([firstTo] > 0)
+     * the most pairs of games it can take before deciders.
+     */
     val legs: Int = 1,
     val lineupA: List<String> = emptyList(),
     val lineupB: List<String> = emptyList(),
@@ -51,6 +54,11 @@ data class Fixture(
     val label: String = "",
     /** The week of the season it belongs to ([SeasonCalendar]); metadata only, never in the deal. */
     val week: Int = SeasonCalendar.NONE,
+    /**
+     * A knockout tie played as a series (선승제): the first to this many games won goes through
+     * (a drawn game half each); 0 for legs of whole matches.
+     */
+    val firstTo: Int = 0,
 ) {
     /** Every AI this job keeps busy. */
     val players: List<String> get() = if (kind == JobKind.TEAM) lineupA + lineupB else listOf(a, b)
@@ -79,28 +87,38 @@ class JobResult(
     val winner: Int,
     /** Time spent playing (for the cost meter). */
     val nanos: Long,
+    /** How its matches were decided (a board, a group or a club match is read by it). */
+    val format: MatchFormat = MatchFormat.MIRRORED,
 )
 
 /** How matches, ties and team matches are decided. */
 object TieRule {
     /**
      * A match: more games won; level on games, the higher total over the games (both sides had
-     * the same dice); still level, a draw.
+     * the same dice) unless the format decides on games alone ([MatchFormat.totals], 판 승점제);
+     * still level, a draw.
      */
-    fun match(games: List<GameScore>): Int {
+    fun match(games: List<GameScore>, format: MatchFormat = MatchFormat.MIRRORED): Int {
         val won = games.sumOf { if (it.a > it.b) 1.0 else if (it.a == it.b) 0.5 else 0.0 }
         val lost = games.size - won
         if (won != lost) return if (won > lost) 1 else -1
+        if (!format.totals) return 0
         val d = games.sumOf { it.a - it.b }
         return d.coerceIn(-1, 1)
     }
 
-    /** A team match: boards won (a level board is half), then points over all boards. */
-    fun team(boards: List<BoardResult>): Int {
+    /** True for a 2-0 sweep by side A (every game won), worth the bonus point under [MatchFormat.sweepBonus]. */
+    fun sweptByA(games: List<GameScore>): Boolean = games.size >= 2 && games.all { it.a > it.b }
+
+    /** True for a 2-0 sweep by side B. */
+    fun sweptByB(games: List<GameScore>): Boolean = games.size >= 2 && games.all { it.b > it.a }
+
+    /** A team match: boards won (a level board is half, each board by [format]), then points over all boards. */
+    fun team(boards: List<BoardResult>, format: MatchFormat = MatchFormat.MIRRORED): Int {
         var a = 0.0
         var b = 0.0
         for (bd in boards) {
-            when (match(bd.games)) {
+            when (match(bd.games, format)) {
                 1 -> a += 1.0
                 -1 -> b += 1.0
                 else -> {
@@ -110,6 +128,8 @@ object TieRule {
             }
         }
         if (a != b) return if (a > b) 1 else -1
+        // 판 승점제: level on boards is a draw (a knockout then goes by the totals, see Knockout.record).
+        if (!format.totals) return 0
         val d = boards.sumOf { it.totalA - it.totalB }
         return d.coerceIn(-1, 1)
     }

@@ -33,6 +33,11 @@ class SeasonPlan(
     val number: Int get() = league.number
     val seed: Long get() = league.seed
 
+    init {
+        // The league's matches are decided by the rules the season began with.
+        league.format = config.matchFormat
+    }
+
     /** League progress, 0..1: competitions open their rounds by it. */
     val progress: Double get() = league.progress
 
@@ -88,7 +93,9 @@ class SeasonPlan(
     /** The playoffs the rules call for, before the league is over (the calendar shows them ahead). */
     private fun expectedPost(): List<Pair<Comp, List<Stage>>> {
         val out = ArrayList<Pair<Comp, List<Stage>>>()
-        if (config.titlePlayoff && league.divisions.firstOrNull().orEmpty().size >= 4) out += Comp.TITLE_PLAYOFF to listOf(Stage("4강", 0.0), Stage("결승", 0.0))
+        if (config.titlePlayoff && league.divisions.firstOrNull().orEmpty().size >= 4) {
+            out += Comp.TITLE_PLAYOFF to Knockout.stageLabels(2, config.doubleElimination) { if (it == 0) "4강" else "결승" }.map { Stage(it, 0.0) }
+        }
         if (config.promotionPlayoff && league.divisions.size >= 2) out += Comp.PROMOTION_PLAYOFF to listOf(Stage(PromotionPlayoff.STAGE, 0.0))
         return out
     }

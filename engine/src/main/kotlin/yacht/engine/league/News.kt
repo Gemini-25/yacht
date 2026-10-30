@@ -326,7 +326,24 @@ object News {
                 val l = e.keys.getOrNull(1)
                 if (w == null || l == null) null else (r(l) - r(w)).takeIf { !it.isNaN() && it >= Drama.UPSET_GAP }
             }
+            // 패자부활: a winners'-side loser drops to the losers' side, it is not out.
+            val drop = arg(0)?.contains("승자조") == true
             when {
+                drop && (e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL) -> listOf(
+                    T("{comp} {round}: {a}, {b} 꺾어", "{a|이} {comp} {round}에서 {b|을}[[ 보드 {score|으로}]] 물리쳤어요. {b|은} 패자조로 내려가 다시 도전해요."),
+                    T("{a}, {comp} {round} 승리", "{a|이} {b|과} 맞붙은 {round}에서[[ 보드 {score|으로}]] 이겼어요. 진 {b|은} 패자조에서 한 번 더 기회를 노려요."),
+                ) to if (e.comp == Comp.WORLD_CUP) 3 else 2
+                drop && gap != null -> {
+                    v["gap"] = Math.round(gap).toString()
+                    listOf(
+                        T("자이언트 킬링! {a}, {b} 잡아", "레이팅이 {gap}점 낮은 {a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. {b|은} 패자조로 떨어졌어요."),
+                        T("{comp}의 이변: 강호 {b}, 패자조로", "강호 {b|이} {round}에서 {a}에게[[ {score|으로}]] 졌어요. 패자조에서 다시 올라올 수 있을지 관심이 모여요."),
+                    ) to 3
+                }
+                drop -> listOf(
+                    T("{comp} {round}: {a}, {b} 꺾어", "{a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 물리쳤어요. {b|은} 패자조에서 한 번 더 기회를 노려요."),
+                    T("{a}, {round} 관문 통과", "{a|이} {b|과} 맞붙은 {comp} {round}에서[[ {score|으로}]] 이겼어요. {b|은} 패자조로 내려갔어요."),
+                ) to 2
                 e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL -> listOf(
                     T("{comp} {round}: {a}, {b} 꺾고 진출", "{a|이} {comp} {round}에서 {b|을}[[ 보드 {score|으로}]] 물리쳤어요. 대표팀의 도전이 다음 라운드로 이어져요."),
                     T("{b}, {comp} {round}에서 탈락", "{b|은} {a}에[[ 보드 {score|으로}]] 져 이번 {comp|을} 마쳤어요. {a|은} 다음 라운드로 향해요."),
@@ -360,7 +377,11 @@ object News {
             arg(0)?.let { v["stage"] = it }
             arg(1)?.let { v["place"] = it }
             listOf(
-                T("{a}, {comp} {stage} 진출", "{a|이}[[ {place|으로}]] {comp} {stage}에 올랐어요. 이제부터는 지면 끝나는 토너먼트예요."),
+                if (arg(0)?.contains("승자조") == true) {
+                    T("{a}, {comp} {stage} 진출", "{a|이}[[ {place|으로}]] {comp} {stage}에 올랐어요. 이제부터는 두 번 지면 끝나는 패자부활 토너먼트예요.")
+                } else {
+                    T("{a}, {comp} {stage} 진출", "{a|이}[[ {place|으로}]] {comp} {stage}에 올랐어요. 이제부터는 지면 끝나는 토너먼트예요.")
+                },
                 T("{stage} 티켓을 손에 넣은 {a}", "{a|이} {comp} {stage} 진출을 확정했어요.[[ 조별 리그를 {place|으로} 마쳤어요.]] 우승을 향한 도전이 이어져요."),
             ) to 2
         }
@@ -695,7 +716,11 @@ object News {
             arg(0)?.let { v["round"] = it }
             listOf(
                 T("{comp} {round} 대진 확정", "조별 리그가 끝나고 {count}개국이 {round}에 올랐어요. 1번 시드 {a|과} {b}·{c} 등이 우승 후보로 꼽혀요."),
-                T("{comp}, 이제부터 토너먼트", "{count}개국이 {comp} {round}에 진출했어요. 지면 끝나는 승부가 시작돼요."),
+                if (arg(0)?.contains("승자조") == true) {
+                    T("{comp}, 이제부터 토너먼트", "{count}개국이 {comp} {round}에 진출했어요. 두 번 지면 끝나는 패자부활 토너먼트가 시작돼요.")
+                } else {
+                    T("{comp}, 이제부터 토너먼트", "{count}개국이 {comp} {round}에 진출했어요. 지면 끝나는 승부가 시작돼요.")
+                },
             ) to 3
         }
         "rivalry" -> {

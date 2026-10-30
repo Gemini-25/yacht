@@ -10,8 +10,11 @@ class Standing(val key: String) {
     var draws = 0
     var losses = 0
 
-    /** League points: 3 for a won match, 1 for a drawn one. */
+    /** League points: 3 for a won match, 1 for a drawn one, 1 more for a 2-0 sweep under 판 승점제. */
     var points = 0
+
+    /** 2-0 sweeps that earned the bonus point (완승 보너스, [MatchFormat.sweepBonus]). */
+    var sweeps = 0
 
     /** Total of its game scores, and of its opponents'. */
     var scored = 0
@@ -49,6 +52,13 @@ class Season private constructor(
     val tiers: Tiers = Tiers.linear(divisions.size),
 ) {
     val standings = HashMap<String, Standing>()
+
+    /**
+     * How the season's matches are decided ([SeasonPlan] sets it from its config; a season read
+     * on its own is the two-game total, as before 판 승점제).
+     */
+    var format: MatchFormat = MatchFormat.MIRRORED
+        internal set
     private val fixtures = ArrayList<LeagueFixture>()
 
     /** Each fixture's two standings (by id), so [next] reads no map. */
@@ -166,7 +176,7 @@ class Season private constructor(
             if (f.matchday !in days) continue
             val games = results[f.id] ?: continue
             if (games.isEmpty()) continue
-            val res = TieRule.match(games)
+            val res = TieRule.match(games, format)
             if (res == 0) continue
             val (w, l) = if (res > 0) f.a to f.b else f.b to f.a
             if (w in excluded) continue
@@ -283,16 +293,24 @@ class Season private constructor(
         b.played++
         a.games += games.size
         b.games += games.size
-        when (TieRule.match(games)) {
+        when (TieRule.match(games, format)) {
             1 -> {
                 a.wins++
                 b.losses++
                 a.points += 3
+                if (format.sweepBonus && TieRule.sweptByA(games)) {
+                    a.points++
+                    a.sweeps++
+                }
             }
             -1 -> {
                 b.wins++
                 a.losses++
                 b.points += 3
+                if (format.sweepBonus && TieRule.sweptByB(games)) {
+                    b.points++
+                    b.sweeps++
+                }
             }
             else -> {
                 a.draws++
@@ -343,7 +361,7 @@ class Season private constructor(
             append('\n')
         }
         for (s in standings.values) {
-            append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts} ${s.aggPoints} ${s.games}\n")
+            append("standing ${s.key} ${s.played} ${s.wins} ${s.draws} ${s.losses} ${s.points} ${s.scored} ${s.conceded} ${s.yachts} ${s.aggPoints} ${s.games} ${s.sweeps}\n")
         }
         for ((d, list) in positions.withIndex()) for ((k, p) in list.withIndex()) append("pos $d $k ${p.joinToString(",")}\n")
     }
@@ -472,6 +490,7 @@ class Season private constructor(
                         yachts = f[9].toInt()
                         aggPoints = f.getOrNull(10)?.toInt() ?: 0
                         games = f.getOrNull(11)?.toInt() ?: 0.also { noGames += key }
+                        sweeps = f.getOrNull(12)?.toIntOrNull() ?: 0
                     }
                     // Older files kept places as signed bytes: 128..255 came out negative.
                     "pos" -> {

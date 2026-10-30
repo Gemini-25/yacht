@@ -132,11 +132,18 @@ class FamilyCup private constructor(
     /** The groups, each in pot order. */
     val groups: List<List<DrawEntry>>,
     private val announced: List<LeagueEvent>,
+    /** The knockout is double elimination (패자부활); saved. */
+    private val double: Boolean = false,
 ) : ViewableCompetition {
     override val comp: Comp get() = Comp.FAMILY
 
+    /** The knockout's stages: semis and final, or with the losers' bracket six ties in four stages. */
+    private val koOpens: List<Double> = if (double) Knockout.spread(4, KO_OPENS.first(), KO_OPENS.last()) else KO_OPENS
+    private val koTargets: List<Double> = if (double) Knockout.spread(4, KO_TARGETS.first(), KO_TARGETS.last()) else KO_TARGETS
+    private val koSizes: List<Int> = Knockout.stageSizes(2, double)
+
     private val byId = teams.associateBy { it.id }
-    private val stage = GroupStage(groups, double = false, teams = true, ::groupOpens)
+    private val stage = GroupStage(groups, double = false, teams = true, opensAt = ::groupOpens)
 
     /** The semi-finals and final, drawn once every group match is played. */
     private var bracket: Knockout? = null
@@ -154,7 +161,7 @@ class FamilyCup private constructor(
 
     override fun next(p: Double, busy: Set<String>): Fixture? =
         stage.next(p, busy) { m -> fixture(m.id, m.a, m.b, stage.matchLabel(m)) }
-            ?: bracket?.let { k -> k.next(p, busy) { t -> fixture(t.id, t.a!!.key, t.b!!.key, k.label(t.round)) } }
+            ?: bracket?.let { k -> k.next(p, busy) { t -> fixture(t.id, t.a!!.key, t.b!!.key, k.label(t)) } }
 
     override fun release(f: Fixture) {
         if (f.id in stage) stage.release(f.id) else bracket?.release(f.id)
@@ -164,7 +171,10 @@ class FamilyCup private constructor(
         List(stage.rounds) { k ->
             val t = if (stage.rounds <= 1) GROUP_TARGET else GROUP_TARGET + (GROUP_TARGET_LAST - GROUP_TARGET) * k / (stage.rounds - 1)
             Stage("조별 ${k + 1}차전", groupOpens(k), t)
-        } + KO_LABELS.indices.map { r -> Stage(KO_LABELS[r], KO_OPENS[r], KO_TARGETS[r]) }
+        } + koOpens.indices.map { st -> Stage(bracket?.stageLabel(st) ?: koLabel(st), koOpens[st], koTargets[st]) }
+
+    /** A knockout stage's label before the draw. */
+    private fun koLabel(st: Int): String = if (!double) KO_LABELS[st] else DOUBLE_LABELS[st]
 
     override fun stageOf(f: Fixture): Int {
         if (f.id in stage) return stage.roundOf(f.id)
@@ -172,7 +182,7 @@ class FamilyCup private constructor(
         return if (r < 0) -1 else stage.rounds + r
     }
 
-    override fun stageCounts(): List<StageCount> = stage.counts() + (bracket?.counts() ?: listOf(StageCount(0, 2), StageCount(0, 1)))
+    override fun stageCounts(): List<StageCount> = stage.counts() + (bracket?.counts() ?: koSizes.map { StageCount(0, it) })
 
     override fun record(r: JobResult): List<LeagueEvent> =
         if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
@@ -184,7 +194,7 @@ class FamilyCup private constructor(
         }
         val k = bracket ?: return emptyList()
         val t = k.record(id, a, b, s) ?: return emptyList()
-        return if (t.round == k.rounds.size - 1) KnockoutNews.final(season, comp, t, comp.label) else listOf(KnockoutNews.round(season, comp, t, k.label(t.round)))
+        return if (k.isFinal(t)) KnockoutNews.final(season, comp, t, comp.label) else listOf(KnockoutNews.round(season, comp, t, k.label(t)))
     }
 
     /** Semi-finalists from the group tables; returns the qualification news. */
@@ -207,16 +217,16 @@ class FamilyCup private constructor(
         // 1v4 and 2v3, unless 1 and 4 come from the same group and 1v3, 2v4 avoids both rematches.
         val swap = group.size == SEMIS && group[0] == group[3] && group[0] != group[2] && group[1] != group[3]
         val pairs = if (swap) listOf(seeds[0] to seeds[2], seeds[1] to seeds[3]) else listOf(seeds[0] to seeds.getOrNull(3), seeds[1] to seeds.getOrNull(2))
-        bracket = Knockout(pairs, { 1 }, { KO_LABELS[it] }, { KO_OPENS[it] }, idBase = KO_BASE)
+        bracket = Knockout(pairs, { 1 }, { KO_LABELS[it] }, { koOpens[it] }, idBase = KO_BASE, double = double)
         return picked.map { (row, g) ->
             val place = tables[g].indexOf(row) + 1
-            LeagueEvent("qualified", season, listOf(row.entry.key), listOf(KO_LABELS[0], "${stage.groupLabel(g)} ${place}위"), comp)
+            LeagueEvent("qualified", season, listOf(row.entry.key), listOf(bracket!!.label(0), "${stage.groupLabel(g)} ${place}위"), comp)
         }
     }
 
     override val finished: Boolean get() = bracket?.finished == true
-    override val fixturesTotal: Int get() = stage.fixturesTotal + KO_TIES
-    override val fixturesLeft: Int get() = stage.fixturesLeft + (bracket?.fixturesLeft ?: KO_TIES)
+    override val fixturesTotal: Int get() = stage.fixturesTotal + (bracket?.fixturesTotal ?: koSizes.sum())
+    override val fixturesLeft: Int get() = stage.fixturesLeft + (bracket?.fixturesLeft ?: koSizes.sum())
 
     override fun honours(): List<Honour> {
         val w = bracket?.champion ?: return emptyList()
@@ -227,6 +237,7 @@ class FamilyCup private constructor(
 
     override fun encode(out: StringBuilder) {
         out.append(HEADER).append('\n')
+        if (double) out.append(KnockoutLength.DOUBLE_LINE).append('\n')
         for ((i, t) in teams.withIndex()) out.append("t ").append(DrawEntry(t.id, i + 1, t.strength).encode()).append(' ').append(t.squad.joinToString(",")).append('\n')
         for ((g, members) in groups.withIndex()) for (e in members) out.append("g $g ${e.key}\n")
         stage.encode(out)
@@ -236,7 +247,7 @@ class FamilyCup private constructor(
     override fun view(): CompetitionView = CompetitionView.Groups(
         comp.label,
         groups.indices.map { stage.view(it) },
-        CompetitionView.Bracket(comp.label, bracket?.view() ?: Knockout.placeholder(2, { KO_LABELS[it] }, { 1 })),
+        CompetitionView.Bracket(comp.label, bracket?.view() ?: Knockout.placeholder(2, { KO_LABELS[it] }, { 1 }, double)),
         teams.associate { it.id to it.squad },
     )
 
@@ -252,8 +263,8 @@ class FamilyCup private constructor(
         private const val GROUP_FIRST = 0.1
         private const val GROUP_LAST = 0.6
         private const val KO_BASE = 100
-        private const val KO_TIES = 3
         private val KO_LABELS = listOf("4강", "결승")
+        private val DOUBLE_LABELS = listOf("승자조 4강", "승자조 결승 · 패자조 1R", "패자조 결승", Knockout.GRAND_LABEL)
         private val KO_OPENS = listOf(0.75, 0.9)
         private const val GROUP_TARGET = 0.12
         private const val GROUP_TARGET_LAST = 0.56
@@ -296,7 +307,7 @@ class FamilyCup private constructor(
             val news = ArrayList<LeagueEvent>()
             for ((g, members) in groups.withIndex()) news += LeagueEvent("draw_family", start.number, members.map { it.key }, listOf("${'A' + g}조"), Comp.FAMILY)
             news += squadNews(start, teams)
-            return FamilyCup(start.number, start.seed, teams, groups, news)
+            return FamilyCup(start.number, start.seed, teams, groups, news, start.config.doubleElimination)
         }
 
         /** `callup` and `dropped` [ai] (family label) against the latest earlier squads ("FSQ" honours). */
@@ -336,7 +347,7 @@ class FamilyCup private constructor(
             require(groups.isNotEmpty() && groups.all { it.isNotEmpty() } && groups.sumOf { it.size } >= MIN_TEAMS) { "unusable family cup groups" }
             val inGroups = groups.flatten().map { it.key }.toSet()
             val squads = entries.filter { it.first.key in inGroups }.map { (e, squad) -> FamilyTeam(e.key, squad, e.rating) }
-            FamilyCup(season, seed, squads, groups, emptyList()).also { c ->
+            FamilyCup(season, seed, squads, groups, emptyList(), KnockoutLength.double(lines)).also { c ->
                 for (r in TieScore.Saved.parse(lines)) c.put(r.id, r.a, r.b, r.score)
             }
         }

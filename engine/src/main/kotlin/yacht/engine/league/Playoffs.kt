@@ -3,20 +3,32 @@ package yacht.engine.league
 /**
  * 우승 플레이오프 (docs/LEAGUE_SPEC.md 2.1), after the league stage: the 1st division's top 4 play
  * semi-finals 1v4 and 2v3 over two legs and a one-match final (3 and 4 matches with
- * [LeagueConfig.longKnockouts]); the better league place is side A.
+ * [LeagueConfig.longKnockouts]); the better league place is side A. With series (선승제) the
+ * semis are first to 3 and the final first to 4; with double elimination (패자부활) the semis'
+ * losers play on, the winners' final's loser meets the losers' survivor, and the grand final ends it.
  * Honours "L0" (the champion, which [Offseason.honours] takes over the table's leader) and "L0R"
  * (the runner-up).
  *
  * News: `cup_round` [winner, loser] (4강, score) for the semis, `final` and `title` [winner] ("0",
  * the division) for the final.
  */
-class TitlePlayoff private constructor(season: Int, seed: Long, entries: List<DrawEntry>, override val long: Boolean) :
-    BracketCompetition(Comp.TITLE_PLAYOFF, season, seed, entries) {
+class TitlePlayoff private constructor(
+    season: Int,
+    seed: Long,
+    entries: List<DrawEntry>,
+    override val long: Boolean,
+    override val series: Boolean = false,
+    override val double: Boolean = false,
+) : BracketCompetition(Comp.TITLE_PLAYOFF, season, seed, entries) {
     override val header: String get() = HEADER
-    override val bracket = Knockout(Knockout.pairings(entries), { KnockoutLength.legs(4 shr it, if (it == 0) 2 else 1, long) }, { if (it == 0) "4강" else "결승" }, { 0.0 })
+    override val bracket = Knockout(
+        Knockout.pairings(entries), { KnockoutLength.legs(4 shr it, if (it == 0) 2 else 1, long) }, { if (it == 0) "4강" else "결승" }, { 0.0 },
+        winsOf = if (series) { r -> KnockoutLength.wins(4 shr r, long, grandAfter = double) } else null,
+        double = double, losersWins = { KnockoutLength.losersWins(it, long) }, grandWins = KnockoutLength.grandWins(long),
+    )
 
     override fun news(t: KnockoutTie): List<LeagueEvent> =
-        if (t.round == 0) listOf(KnockoutNews.round(season, comp, t, bracket.label(0))) else KnockoutNews.final(season, comp, t, "0")
+        if (bracket.isFinal(t)) KnockoutNews.final(season, comp, t, "0") else listOf(KnockoutNews.round(season, comp, t, bracket.label(t)))
 
     override fun honours(): List<Honour> {
         val w = champion ?: return emptyList()
@@ -32,13 +44,14 @@ class TitlePlayoff private constructor(season: Int, seed: Long, entries: List<Dr
             val top = plan.league.table(0).take(4).map { it.key }
             if (top.size < 4) return null
             // Seeds are the league places; ratings are not known here, so no upsets are called.
-            return TitlePlayoff(plan.number, plan.seed, top.mapIndexed { i, k -> DrawEntry(k, i + 1, Double.NaN) }, plan.config.longKnockouts)
+            val c = plan.config
+            return TitlePlayoff(plan.number, plan.seed, top.mapIndexed { i, k -> DrawEntry(k, i + 1, Double.NaN) }, c.longKnockouts, c.seriesKnockouts, c.doubleElimination)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
             val (entries, results) = read(lines, HEADER)
             require(entries.size == 4) { "a title playoff has 4 entries" }
-            TitlePlayoff(season, seed, entries, KnockoutLength.saved(lines)).also { it.restore(results) }
+            TitlePlayoff(season, seed, entries, KnockoutLength.saved(lines), KnockoutLength.series(lines), KnockoutLength.double(lines)).also { it.restore(results) }
         }
     }
 }
@@ -62,6 +75,9 @@ class PromotionPlayoff private constructor(
     val spots: List<Spot>,
     /** The league is a pyramid (several ties a boundary). */
     val grouped: Boolean = false,
+    /** Each tie is a series (선승제: first to 3, or 2 when not long); saved. */
+    private val series: Boolean = false,
+    private val long: Boolean = true,
 ) : ViewableCompetition {
     /** A tie of boundary [division]/[division]+1 (tiers), its bracket ids from [slot] (a linear league's: the boundary). */
     data class Spot(val division: Int, val upper: String, val lower: String, val slot: Int = division)
@@ -70,11 +86,14 @@ class PromotionPlayoff private constructor(
 
     // One single-tie bracket per tie, its ids from the tie's slot.
     private val brackets = spots.map { s ->
-        Knockout(listOf(DrawEntry(s.upper, 1, Double.NaN) to DrawEntry(s.lower, 2, Double.NaN)), { 2 }, { label(s.division) }, { 0.0 }, idBase = s.slot)
+        Knockout(
+            listOf(DrawEntry(s.upper, 1, Double.NaN) to DrawEntry(s.lower, 2, Double.NaN)), { 2 }, { label(s.division) }, { 0.0 }, idBase = s.slot,
+            winsOf = if (series) { _ -> if (long) SERIES_WINS else 2 } else null,
+        )
     }
 
     override fun next(p: Double, busy: Set<String>): Fixture? = brackets.firstNotNullOfOrNull { k ->
-        k.next(p, busy) { t -> Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = k.label(0)) }
+        k.next(p, busy) { t -> Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = k.label(0), firstTo = t.firstTo) }
     }
 
     override fun release(f: Fixture) {
@@ -122,6 +141,8 @@ class PromotionPlayoff private constructor(
     override fun encode(out: StringBuilder) {
         out.append(HEADER).append('\n')
         if (grouped) out.append("grouped\n")
+        if (series) out.append(KnockoutLength.SERIES_LINE).append('\n')
+        if (series && !long) out.append(SHORT_LINE).append('\n')
         for (s in spots) out.append("t ${s.division} ${s.upper} ${s.lower}").append(if (s.slot != s.division) " ${s.slot}" else "").append('\n')
         for (k in brackets) k.encode(out)
     }
@@ -131,6 +152,12 @@ class PromotionPlayoff private constructor(
     companion object {
         const val HEADER = "promopo 1"
         const val STAGE = "승강전"
+
+        /** Games to win a promotion series (2 when knockouts are short). */
+        private const val SERIES_WINS = 3
+
+        /** Saved when a series promotion playoff was drawn short. */
+        private const val SHORT_LINE = "short 1"
 
         /** In a pyramid, the boundaries below 1부 to 3부 make news (0-based). */
         const val NEWS_BOUNDARIES = 1
@@ -162,7 +189,7 @@ class PromotionPlayoff private constructor(
                 }
             }
             if (spots.isEmpty()) return null
-            return PromotionPlayoff(plan.number, plan.seed, spots, grouped)
+            return PromotionPlayoff(plan.number, plan.seed, spots, grouped, cfg.seriesKnockouts, cfg.longKnockouts)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
@@ -173,7 +200,7 @@ class PromotionPlayoff private constructor(
                 }.getOrNull()
             }.distinctBy { it.slot }.sortedBy { it.slot }
             require(spots.isNotEmpty()) { "no ties in the promotion playoff section" }
-            PromotionPlayoff(season, seed, spots, lines.any { it.trim() == "grouped" }).also { p ->
+            PromotionPlayoff(season, seed, spots, lines.any { it.trim() == "grouped" }, KnockoutLength.series(lines), lines.none { it.trim() == SHORT_LINE }).also { p ->
                 for (r in TieScore.Saved.parse(lines)) p.brackets.firstOrNull { r.id in it }?.record(r.id, r.a, r.b, r.score)
             }
         }

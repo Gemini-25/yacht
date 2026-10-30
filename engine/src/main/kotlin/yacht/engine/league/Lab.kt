@@ -74,7 +74,8 @@ class LabStats {
             scoreHistogramA[(g.a / SCORE_BIN).coerceIn(0, SCORE_BINS - 1)]++
             scoreHistogramB[(g.b / SCORE_BIN).coerceIn(0, SCORE_BINS - 1)]++
         }
-        when (TieRule.match(games)) {
+        // The lab plays the two-game total, whatever the league's matches (its statistics assume it).
+        when (TieRule.match(games, MatchFormat.MIRRORED)) {
             1 -> matchWins++
             0 -> matchDraws++
         }

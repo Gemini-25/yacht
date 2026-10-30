@@ -34,8 +34,14 @@ sealed class CompetitionView {
     ) : CompetitionView()
 }
 
-/** One round of a bracket ("16강", "결승"). */
-data class BracketRound(val label: String, val ties: List<TieView>)
+/** One round of a bracket ("16강", "결승"; "패자조 2R", "최종 결승" with double elimination). */
+data class BracketRound(
+    val label: String,
+    val ties: List<TieView>,
+    val side: BracketSide = BracketSide.WINNERS,
+    /** Its stage in the competition's bracket stages (the calendar's), -1 when unknown. */
+    val stage: Int = -1,
+)
 
 /**
  * One tie on screen. [a] is the better seed; a null side is not known yet, or a bye when the
@@ -49,8 +55,10 @@ data class TieView(
     val scoreB: Double,
     val winner: String?,
     val played: Boolean,
-    /** Matches in the tie (two legs = 2). */
+    /** Matches in the tie (two legs = 2); for a series, the most pairs of games. */
     val legs: Int,
+    /** A series tie: first to this many games won (0: legs of matches). */
+    val firstTo: Int = 0,
 )
 
 /** A group table, best first. */

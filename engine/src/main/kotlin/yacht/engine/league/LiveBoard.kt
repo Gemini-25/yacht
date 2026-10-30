@@ -48,6 +48,8 @@ class LiveFixture(
     /** +1 side A, -1 side B, 0 level (as [JobResult.winner]). */
     val winner: Int,
     val boards: List<LiveBoardGames>,
+    /** How its boards were decided (as [JobResult.format]). */
+    val format: MatchFormat = MatchFormat.MIRRORED,
 ) {
     /** Games of its longest board: they are replayed one after the other, boards side by side. */
     val length: Int get() = boards.maxOf { it.games.size }
@@ -161,7 +163,7 @@ class LiveBoard {
         }
         if (boards.isEmpty()) return
         seq++
-        kept.addFirst(LiveFixture(n, f, nowMs, r.winner, boards))
+        kept.addFirst(LiveFixture(n, f, nowMs, r.winner, boards, r.format))
         while (kept.size > FIXTURES) kept.removeLast()
         for (g in games) feed.addFirst(g)
         while (feed.size > CURVES) feed.removeLast()
@@ -221,7 +223,7 @@ class LiveBoard {
             var y = 0.0
             for ((i, bf) in boards.withIndex()) {
                 if (!bf.done) continue
-                when (TieRule.match(fx.boards[i].games.map { GameScore(it.scoreA, it.scoreB) })) {
+                when (TieRule.match(fx.boards[i].games.map { GameScore(it.scoreA, it.scoreB) }, fx.format)) {
                     1 -> x += 1.0
                     -1 -> y += 1.0
                     else -> {

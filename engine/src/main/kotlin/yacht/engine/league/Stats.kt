@@ -565,7 +565,7 @@ class StatsBook(
         val ms = if (jobGames == 0 || r.nanos <= 0) Double.NaN else r.nanos / 1e6 / jobGames / 2
         for (b in r.boards) {
             if (b.games.isEmpty()) continue
-            val result = if (f.kind != JobKind.TEAM && r.boards.size == 1) r.winner else TieRule.match(b.games)
+            val result = if (f.kind != JobKind.TEAM && r.boards.size == 1) r.winner else TieRule.match(b.games, r.format)
             val ra = ctx.rating(b.a)
             val rb = ctx.rating(b.b)
             val town = ctx.hometown(b.a)
@@ -573,7 +573,7 @@ class StatsBook(
             val nd = b.games.size - b.deciders
             var agg = 0
             for (i in 0 until nd) agg += b.games[i].a - b.games[i].b
-            val (sideA, sideB) = sides(b)
+            val (sideA, sideB) = sides(b, pairs = f.kind == JobKind.TIE && f.firstTo > 0)
             val sa = if (official) seasonStats.getOrPut(b.a) { AiStats() } else null
             val sb = if (official) seasonStats.getOrPut(b.b) { AiStats() } else null
             val ca = careerStats.getOrPut(b.a) { AiStats() }
@@ -626,13 +626,15 @@ class StatsBook(
                 // One match (경기) at a time: each leg of a knockout tie, without its single
                 // deciders; a match (best of three included) or a board whole.
                 val played = if (f.kind == JobKind.TIE) nd else b.games.size
-                val legs = if (f.kind == JobKind.TIE && f.legs > 1 && played % f.legs == 0) f.legs else 1
-                val per = played / legs
+                // A series: each pair of games on the same dice is a match (the last may be one game).
+                val series = f.kind == JobKind.TIE && f.firstTo > 0
+                val legs = if (series) (played + 1) / 2 else if (f.kind == JobKind.TIE && f.legs > 1 && played % f.legs == 0) f.legs else 1
+                val per = if (series) 2 else played / legs
                 if (per > 0) {
                     for (leg in 0 until legs) {
                         var ya = 0
                         var yb = 0
-                        for (i in leg * per until (leg + 1) * per) {
+                        for (i in leg * per until minOf(played, (leg + 1) * per)) {
                             if (b.games[i].aYacht) ya++
                             if (b.games[i].bYacht) yb++
                         }
@@ -1026,8 +1028,8 @@ class StatsBook(
          * totals, and for level games from the seat order [LeagueMatch] plays (mirrored games
          * alternate from A, single games all have A first, deciders alternate from A).
          */
-        internal fun sides(b: BoardResult): Pair<List<SideGame>, List<SideGame>> {
-            val first = seats(b)
+        internal fun sides(b: BoardResult, pairs: Boolean = false): Pair<List<SideGame>, List<SideGame>> {
+            val first = seats(b, pairs)
             val nd = b.games.size - b.deciders
             val xs = ArrayList<SideGame>(b.games.size)
             val ys = ArrayList<SideGame>(b.games.size)
@@ -1061,12 +1063,12 @@ class StatsBook(
         }
 
         /** True where A moved first in game i of [b]. */
-        internal fun seats(b: BoardResult): BooleanArray {
+        internal fun seats(b: BoardResult, pairs: Boolean = false): BooleanArray {
             val nd = b.games.size - b.deciders
             // Mirrored matches have an even number of games; single-game legs may too, so a game
-            // whose totals differ tells them apart.
-            var single = nd % 2 == 1
-            if (!single) {
+            // whose totals differ tells them apart. A series is pairs whatever its count ([pairs]).
+            var single = !pairs && nd % 2 == 1
+            if (!single && !pairs) {
                 for (i in 1 until minOf(nd, b.facts.size) step 2) {
                     val g = b.games[i]
                     if (g.a == g.b) continue

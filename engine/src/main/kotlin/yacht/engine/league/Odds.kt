@@ -114,6 +114,10 @@ class OddsInput internal constructor(
     internal val finalists: IntArray?,
     /** Every AI by rating, best first: the entrants' rule fills its last places from it. */
     internal val byRating: IntArray,
+    /** Share of decided matches that are 2-0 sweeps worth a point more (0 without 판 승점제's bonus). */
+    internal val sweep: Double = 0.0,
+    /** The title playoff is double elimination (패자부활). */
+    internal val titleDouble: Boolean = false,
 ) {
     /** Fixtures the runs play. */
     val fixtures: Int get() = fa.size
@@ -156,6 +160,9 @@ object Odds {
 
     /** Draw share assumed before any match is played, and its weight in matches. */
     const val DRAW_PRIOR = 0.02
+
+    /** Share of decided matches that are 2-0 sweeps before any is played (판 승점제). */
+    const val SWEEP_PRIOR = 0.5
     const val PRIOR_WEIGHT = 20.0
 
     /** Champions league places of division 1 and 2 (one division: both from it). */
@@ -172,13 +179,31 @@ object Odds {
      * The share of drawn matches among the played ones, pulled towards [prior] by [weight]
      * matches (no draw in the first few matches does not mean there are none).
      */
+    /**
+     * The share of 2-0 sweeps among the decided matches (판 승점제's bonus point; 0 without it),
+     * pulled towards [SWEEP_PRIOR] by [weight] matches.
+     */
+    fun sweepRate(season: Season, weight: Double = PRIOR_WEIGHT): Double {
+        if (!season.format.sweepBonus) return 0.0
+        var sweeps = 0
+        var decided = 0
+        for (id in 0 until season.fixturesTotal) {
+            val g = season.result(id) ?: continue
+            val r = TieRule.match(g, season.format)
+            if (r == 0) continue
+            decided++
+            if (if (r > 0) TieRule.sweptByA(g) else TieRule.sweptByB(g)) sweeps++
+        }
+        return ((sweeps + SWEEP_PRIOR * weight) / (decided + weight)).coerceIn(0.0, 1.0)
+    }
+
     fun drawRate(season: Season, prior: Double = DRAW_PRIOR, weight: Double = PRIOR_WEIGHT): Double {
         var draws = 0
         var played = 0
         for (id in 0 until season.fixturesTotal) {
             val g = season.result(id) ?: continue
             played++
-            if (TieRule.match(g) == 0) draws++
+            if (TieRule.match(g, season.format) == 0) draws++
         }
         return ((draws + prior * weight) / (played + weight)).coerceIn(0.0, 1.0)
     }
@@ -308,7 +333,8 @@ object Odds {
         return OddsInput(
             season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, baseScored, strength,
             fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), tierOf, if (season.double) 2 else 1, swapBelow, downBelow, playoffBelow, clPlaces,
-            config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating,
+            config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating, sweepRate(season),
+            config.doubleElimination,
         )
     }
 
@@ -322,6 +348,35 @@ object Odds {
      */
     fun runsFor(fixturesLeft: Int): Int = (1e8 / maxOf(1, fixturesLeft)).toInt().coerceIn(200, RUNS)
 
+    /**
+     * Each of four's chance to win a double-elimination playoff of [t1]-[t4] (1v4 and 2v3, the
+     * winners' final, the semis' losers, the losers' final against the winners' final's loser, the
+     * grand final), [e] the chance of the first beating the second: every one of the 32 outcomes.
+     */
+    internal fun doubleTitle(t1: Int, t2: Int, t3: Int, t4: Int, e: (Int, Int) -> Double, add: (Int, Double) -> Unit) {
+        fun side(x: Int, y: Int, first: Boolean) = if (first) x to y else y to x
+        fun p(x: Int, y: Int, first: Boolean) = if (first) e(x, y) else 1 - e(x, y)
+        for (a in listOf(true, false)) for (b in listOf(true, false)) {
+            val (wa, la) = side(t1, t4, a)
+            val (wb, lb) = side(t2, t3, b)
+            val pab = p(t1, t4, a) * p(t2, t3, b)
+            for (c in listOf(true, false)) {
+                val (wc, lc) = side(wa, wb, c)
+                val pc = pab * p(wa, wb, c)
+                for (d in listOf(true, false)) {
+                    val (wd, _) = side(la, lb, d)
+                    val pd = pc * p(la, lb, d)
+                    for (f in listOf(true, false)) {
+                        val (wf, _) = side(wd, lc, f)
+                        val pf = pd * p(wd, lc, f)
+                        add(wc, pf * e(wc, wf))
+                        add(wf, pf * (1 - e(wc, wf)))
+                    }
+                }
+            }
+        }
+    }
+
     /** [fixturesLeft] of [input]: its league fixtures still to play. */
     fun left(input: OddsInput): Int = input.total - input.played
 
@@ -333,6 +388,7 @@ object Odds {
         val fb = input.fb
         val win = input.win
         val notLose = input.notLose
+        val sweep = input.sweep
         val strength = input.strength
         val tierOf = input.tierOf
         val nt = if (nd == 0) 0 else tierOf[nd - 1] + 1
@@ -391,15 +447,17 @@ object Odds {
                 val u = (z ushr 11) * 1.1102230246251565E-16
                 val a = fa[i]
                 val b = fb[i]
+                // A win is a 2-0 sweep (a point more) the [sweep] share of the time: the low end
+                // of A's wins, the high end of B's.
                 if (u < win[i]) {
-                    points[a] += 3
+                    points[a] += if (u < win[i] * sweep) 4 else 3
                     diff[a] += WIN_DIFF
                     diff[b] -= WIN_DIFF
                 } else if (u < notLose[i]) {
                     points[a]++
                     points[b]++
                 } else {
-                    points[b] += 3
+                    points[b] += if (u >= 1 - (1 - notLose[i]) * sweep) 4 else 3
                     diff[b] += WIN_DIFF
                     diff[a] -= WIN_DIFF
                 }
@@ -462,12 +520,16 @@ object Odds {
                 val t2 = (sorted[1] and rankMask).toInt()
                 val t3 = (sorted[2] and rankMask).toInt()
                 val t4 = (sorted[3] and rankMask).toInt()
-                val s1 = e(t1, t4)
-                val s2 = e(t2, t3)
-                title[t1] += s1 * (s2 * e(t1, t2) + (1 - s2) * e(t1, t3))
-                title[t4] += (1 - s1) * (s2 * e(t4, t2) + (1 - s2) * e(t4, t3))
-                title[t2] += s2 * (s1 * e(t2, t1) + (1 - s1) * e(t2, t4))
-                title[t3] += (1 - s2) * (s1 * e(t3, t1) + (1 - s1) * e(t3, t4))
+                if (input.titleDouble) {
+                    doubleTitle(t1, t2, t3, t4, ::e) { k, p -> title[k] += p }
+                } else {
+                    val s1 = e(t1, t4)
+                    val s2 = e(t2, t3)
+                    title[t1] += s1 * (s2 * e(t1, t2) + (1 - s2) * e(t1, t3))
+                    title[t4] += (1 - s1) * (s2 * e(t4, t2) + (1 - s2) * e(t4, t3))
+                    title[t2] += s2 * (s1 * e(t2, t1) + (1 - s1) * e(t2, t4))
+                    title[t3] += (1 - s2) * (s1 * e(t3, t1) + (1 - s1) * e(t3, t4))
+                }
             }
             // A linear league's ties: the next place on each side.
             for (t in 0 until nt - 1) {

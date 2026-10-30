@@ -2,40 +2,57 @@ package yacht.engine.league
 
 /**
  * 요트컵 (docs/LEAGUE_SPEC.md 2.3): every AI of the league in one knockout bracket seeded by
- * rating, the next power of two with byes for the best seeds. Round r opens at league progress
- * 0.05 + 0.1 r (spread to end by 0.95 when there are more than ten rounds), so the final comes
- * last; each tie is one match with deciders when level (longer from the last 16 on with
- * [LeagueConfig.longKnockouts], see [KnockoutLength]). Honours CUP and CUP2.
+ * rating, the next power of two with byes for the best seeds. Stage s of the play order opens at
+ * league progress 0.05 + 0.1 s (spread to end by 0.95 when there are more than ten stages), so
+ * the final comes last. Each tie is a series (선승제, [KnockoutLength.wins]: first to 2, from the
+ * 8강 3, the final 4; with [LeagueConfig.seriesKnockouts]) or, as before, one match with deciders;
+ * with [LeagueConfig.doubleElimination] (패자부활) a loss drops a side to the losers' bracket and
+ * the two brackets' winners meet in the final. Honours CUP and CUP2.
  *
  * News: `cup_round` [winner, loser] (round, score) from the last 16 on and for every giant
  * killing before, `upset`, `eliminated` [ai] (round) when a top-4 seed goes out, `final` and
  * `title` [winner] (요트컵) at the end.
  */
-class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>, override val long: Boolean) :
-    BracketCompetition(Comp.CUP, season, seed, entries) {
+class Cup private constructor(
+    season: Int,
+    seed: Long,
+    entries: List<DrawEntry>,
+    override val long: Boolean,
+    override val series: Boolean = false,
+    override val double: Boolean = false,
+) : BracketCompetition(Comp.CUP, season, seed, entries) {
     override val header: String get() = HEADER
     private val size = Knockout.size(maxOf(2, entries.maxOf { it.seed }))
-    private val roundCount = Integer.numberOfTrailingZeros(size)
-    override val bracket = Knockout(Knockout.pairings(entries), { KnockoutLength.legs(size shr it, 1, long) }, { label(size, it) }, ::opensAt)
+    private val stageCount = Knockout.stagesFor(size, double)
+    override val bracket = Knockout(
+        Knockout.pairings(entries), { KnockoutLength.legs(size shr it, 1, long) }, { label(size, it) }, ::opensAt,
+        winsOf = if (series) { r -> KnockoutLength.wins(size shr r, long, grandAfter = double && size >= 4) } else null,
+        double = double, losersWins = { KnockoutLength.losersWins(it, long) }, grandWins = KnockoutLength.grandWins(long),
+    )
 
-    private fun opensAt(r: Int): Double =
-        if (roundCount <= 10) 0.05 + 0.1 * r else 0.05 + 0.9 * r / (roundCount - 1)
+    private fun opensAt(st: Int): Double =
+        if (stageCount <= 10) 0.05 + 0.1 * st else 0.05 + 0.9 * st / (stageCount - 1)
 
-    /** On the calendar the rounds spread from 4% to 88% of the season, the final some weeks before the end. */
-    override fun target(round: Int): Double = if (roundCount <= 1) FIRST_TARGET else FIRST_TARGET + (LAST_TARGET - FIRST_TARGET) * round / (roundCount - 1)
+    /** On the calendar the stages spread from 4% to 88% of the season, the final some weeks before the end. */
+    override fun target(round: Int): Double = if (stageCount <= 1) FIRST_TARGET else FIRST_TARGET + (LAST_TARGET - FIRST_TARGET) * round / (stageCount - 1)
 
     override fun news(t: KnockoutTie): List<LeagueEvent> {
         val w = t.winner!!
         val l = t.loser!!
-        val label = bracket.label(t.round)
+        val label = bracket.label(t)
         val out = ArrayList<LeagueEvent>()
-        if (t.round == roundCount - 1) {
+        if (bracket.isFinal(t)) {
             out += KnockoutNews.final(season, comp, t, comp.label)
         } else {
             // Early rounds are many: only the giant killings make the news there.
-            val late = bracket.rounds[t.round].size <= 8
+            val late = when (t.side) {
+                BracketSide.WINNERS -> bracket.rounds[t.round].size <= 8
+                else -> bracket.losers[t.round].size <= 2
+            }
             if (late || KnockoutNews.giantKilling(w, l)) out += KnockoutNews.round(season, comp, t, label)
-            if (l.seed <= 4) out += LeagueEvent("eliminated", season, listOf(l.key), listOf(label), comp)
+            // Out of the cup: a loss on the losers' side (or any loss without one).
+            val out1 = !bracket.double || t.side != BracketSide.WINNERS
+            if (out1 && l.seed <= 4) out += LeagueEvent("eliminated", season, listOf(l.key), listOf(label), comp)
         }
         KnockoutNews.upset(season, comp, w, l)?.let { out += it }
         return out
@@ -72,12 +89,13 @@ class Cup private constructor(season: Int, seed: Long, entries: List<DrawEntry>,
         fun create(start: SeasonStart): Cup? {
             if (!start.config.cup || start.ranking.size < MIN_AIS) return null
             val entries = start.ranking.mapIndexed { i, k -> DrawEntry(k, i + 1, start.rating(k)) }
-            return Cup(start.number, start.seed, entries, start.config.longKnockouts)
+            val c = start.config
+            return Cup(start.number, start.seed, entries, c.longKnockouts, c.seriesKnockouts, c.doubleElimination)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
             val (entries, results) = read(lines, HEADER)
-            Cup(season, seed, entries, KnockoutLength.saved(lines)).also { it.restore(results) }
+            Cup(season, seed, entries, KnockoutLength.saved(lines), KnockoutLength.series(lines), KnockoutLength.double(lines)).also { it.restore(results) }
         }
     }
 }

@@ -25,13 +25,25 @@ class ChampionsLeague private constructor(
     val groups: List<List<DrawEntry>>,
     /** Longer knockout ties ([KnockoutLength]: 8강 2, 4강 3, 결승 4); saved. */
     private val long: Boolean,
+    /** Knockout ties are series (선승제); saved. */
+    private val series: Boolean = false,
+    /** The knockout is double elimination (패자부활); saved. */
+    private val double: Boolean = false,
+    /** Group tables give a 2-0 sweep a bonus point (판 승점제); saved. */
+    private val bonus: Boolean = false,
 ) : ViewableCompetition {
     override val comp: Comp get() = Comp.CHAMPIONS
 
     /** Every entrant in entry order (its seed). */
     val entries: List<DrawEntry> = groups.flatten().sortedBy { it.seed }
 
-    private val stage = GroupStage(groups, double = true, teams = false) { md -> GROUP_OPENS + GROUP_STEP * md }
+    private val stage = GroupStage(groups, double = true, teams = false, bonus = bonus) { md -> GROUP_OPENS + GROUP_STEP * md }
+
+    /** The knockout's stages: as single elimination, or twice as many with the losers' bracket. */
+    private val koOpens: List<Double> get() = if (double) KO_OPENS_DOUBLE else KO_OPENS
+    private val koTargets: List<Double> get() = if (double) KO_TARGETS_DOUBLE else KO_TARGETS
+    private val koSizes: List<Int> get() = if (double) KO_SIZES_DOUBLE else KO_SIZES
+    private val koTies: Int get() = koSizes.sum()
 
     /** The knockout stage, drawn once every group match is played. */
     private var bracket: Knockout? = null
@@ -39,7 +51,7 @@ class ChampionsLeague private constructor(
     override fun next(p: Double, busy: Set<String>): Fixture? =
         stage.next(p, busy) { m -> Fixture(comp, m.id, m.a, m.b, Knockout.fixtureSeed(seed, comp, m.id), JobKind.MATCH, label = stage.matchLabel(m)) }
             ?: bracket?.let { k ->
-                k.next(p, busy) { t -> Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = k.label(t.round)) }
+                k.next(p, busy) { t -> Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = k.label(t), firstTo = t.firstTo) }
             }
 
     override fun release(f: Fixture) {
@@ -48,7 +60,10 @@ class ChampionsLeague private constructor(
 
     override fun stages(): List<Stage> =
         List(stage.rounds) { k -> Stage("조별 ${k + 1}차전", GROUP_OPENS + GROUP_STEP * k, GROUP_TARGET + GROUP_TARGET_STEP * k) } +
-            KO_LABELS.indices.map { r -> Stage(KO_LABELS[r], KO_OPENS[r], KO_TARGETS[r]) }
+            koOpens.indices.map { st -> Stage(bracket?.stageLabel(st) ?: koStageLabel(st), koOpens[st], koTargets[st]) }
+
+    /** A knockout stage's label before the draw. */
+    private fun koStageLabel(st: Int): String = if (!double) KO_LABELS[st] else KO_STAGE_LABELS_DOUBLE[st]
 
     override fun stageOf(f: Fixture): Int {
         if (f.id in stage) return stage.roundOf(f.id)
@@ -56,7 +71,7 @@ class ChampionsLeague private constructor(
         return if (r < 0) -1 else stage.rounds + r
     }
 
-    override fun stageCounts(): List<StageCount> = stage.counts() + (bracket?.counts() ?: KO_SIZES.map { StageCount(0, it) })
+    override fun stageCounts(): List<StageCount> = stage.counts() + (bracket?.counts() ?: koSizes.map { StageCount(0, it) })
 
     override fun record(r: JobResult): List<LeagueEvent> =
         if (Knockout.current(seed, comp, r)) put(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
@@ -77,8 +92,8 @@ class ChampionsLeague private constructor(
         val k = bracket ?: return emptyList()
         val t = k.record(id, a, b, s) ?: return emptyList()
         val out = ArrayList<LeagueEvent>()
-        if (t.round == k.rounds.size - 1) out += KnockoutNews.final(season, comp, t, comp.label)
-        else out += KnockoutNews.round(season, comp, t, k.label(t.round))
+        if (k.isFinal(t)) out += KnockoutNews.final(season, comp, t, comp.label)
+        else out += KnockoutNews.round(season, comp, t, k.label(t))
         KnockoutNews.upset(season, comp, t.winner!!, t.loser!!)?.let { out += it }
         return out
     }
@@ -90,18 +105,22 @@ class ChampionsLeague private constructor(
         val first = tables.mapIndexed { g, t -> t[0].entry.let { DrawEntry(it.key, g + 1, it.rating) } }
         val second = tables.mapIndexed { g, t -> t[1].entry.let { DrawEntry(it.key, g + 5, it.rating) } }
         val pairs = listOf(first[0] to second[1], first[1] to second[0], first[2] to second[3], first[3] to second[2])
-        bracket = Knockout(pairs, ::legs, { KO_LABELS[it] }, { KO_OPENS[it] }, idBase = KO_BASE)
+        bracket = Knockout(
+            pairs, ::legs, { KO_LABELS[it] }, { koOpens[it] }, idBase = KO_BASE,
+            winsOf = if (series) { r -> KnockoutLength.wins(8 shr r, long, grandAfter = double) } else null,
+            double = double, losersWins = { KnockoutLength.losersWins(it, long) }, grandWins = KnockoutLength.grandWins(long),
+        )
         val out = ArrayList<LeagueEvent>()
         for ((g, t) in tables.withIndex()) {
-            for (place in 0..1) out += LeagueEvent("qualified", season, listOf(t[place].entry.key), listOf(KO_LABELS[0], "${stage.groupLabel(g)} ${place + 1}위"), comp)
+            for (place in 0..1) out += LeagueEvent("qualified", season, listOf(t[place].entry.key), listOf(bracket!!.label(0), "${stage.groupLabel(g)} ${place + 1}위"), comp)
             for (row in t.drop(2)) if (row.entry.seed <= POT) out += LeagueEvent("eliminated", season, listOf(row.entry.key), listOf("조별 리그"), comp)
         }
         return out
     }
 
     override val finished: Boolean get() = bracket?.finished == true
-    override val fixturesTotal: Int get() = stage.fixturesTotal + KO_TIES
-    override val fixturesLeft: Int get() = stage.fixturesLeft + (bracket?.fixturesLeft ?: KO_TIES)
+    override val fixturesTotal: Int get() = stage.fixturesTotal + (bracket?.fixturesTotal ?: koTies)
+    override val fixturesLeft: Int get() = stage.fixturesLeft + (bracket?.fixturesLeft ?: koTies)
 
     override fun honours(): List<Honour> {
         val w = bracket?.champion ?: return emptyList()
@@ -117,6 +136,9 @@ class ChampionsLeague private constructor(
     override fun encode(out: StringBuilder) {
         out.append(HEADER).append('\n')
         if (long) out.append(KnockoutLength.LINE).append('\n')
+        if (series) out.append(KnockoutLength.SERIES_LINE).append('\n')
+        if (double) out.append(KnockoutLength.DOUBLE_LINE).append('\n')
+        if (bonus) out.append(GroupStage.BONUS_LINE).append('\n')
         for ((g, members) in groups.withIndex()) for (e in members) out.append("g $g ").append(e.encode()).append('\n')
         stage.encode(out)
         bracket?.encode(out)
@@ -127,7 +149,11 @@ class ChampionsLeague private constructor(
         groups.indices.map { stage.view(it) },
         CompetitionView.Bracket(
             comp.label,
-            bracket?.view() ?: Knockout.placeholder(4, { KO_LABELS[it] }, ::legs),
+            bracket?.view() ?: Knockout.placeholder(
+                4, { KO_LABELS[it] }, ::legs, double,
+                firstTo = { r -> if (series) KnockoutLength.wins(8 shr r, long, grandAfter = double) else 0 },
+                losersFirstTo = { if (series) KnockoutLength.losersWins(it, long) else 0 }, grandFirstTo = if (series) KnockoutLength.grandWins(long) else 0,
+            ),
         ),
     )
 
@@ -140,16 +166,21 @@ class ChampionsLeague private constructor(
         private const val GROUP_OPENS = 0.05
         private const val GROUP_STEP = 0.11
         private const val KO_BASE = 100
-        private const val KO_TIES = 7
         private val KO_LABELS = listOf("8강", "4강", "결승")
         private val KO_OPENS = listOf(0.7, 0.8, 0.9)
         private val KO_SIZES = listOf(4, 2, 1)
+
+        // With the losers' bracket: W 8강; W 4강 + L1; L2; W 결승 + L3; L 결승; 최종 결승.
+        private val KO_OPENS_DOUBLE = listOf(0.62, 0.67, 0.72, 0.78, 0.84, 0.9)
+        private val KO_SIZES_DOUBLE = listOf(4, 4, 2, 2, 1, 1)
+        private val KO_STAGE_LABELS_DOUBLE = listOf("승자조 8강", "승자조 4강 · 패자조 1R", "패자조 2R", "승자조 결승 · 패자조 3R", "패자조 결승", Knockout.GRAND_LABEL)
 
         // Calendar targets: matchdays from 8% of the season, a stage about every four weeks;
         // the final close to the end.
         private const val GROUP_TARGET = 0.08
         private const val GROUP_TARGET_STEP = 0.08
         private val KO_TARGETS = listOf(0.60, 0.72, 0.94)
+        private val KO_TARGETS_DOUBLE = listOf(0.58, 0.63, 0.69, 0.76, 0.84, 0.93)
 
         /** Places for 2부's best: its top 2, or each group's top 2 / [groups] (at least its winner) in a pyramid. */
         fun secondPlaces(groups: Int): Int = if (groups <= 0) 0 else maxOf(1, SECOND / groups)
@@ -191,7 +222,8 @@ class ChampionsLeague private constructor(
                 val drawn = entries.subList(pot * POT, pot * POT + POT).shuffled(rng)
                 for (g in 0 until 4) groups[g] += drawn[g]
             }
-            return ChampionsLeague(start.number, start.seed, groups, start.config.longKnockouts)
+            val c = start.config
+            return ChampionsLeague(start.number, start.seed, groups, c.longKnockouts, c.seriesKnockouts, c.doubleElimination, c.matchFormat.sweepBonus)
         }
 
         val codec = CompetitionCodec { lines, season, seed ->
@@ -204,7 +236,10 @@ class ChampionsLeague private constructor(
                 }
             }
             require(groups.all { it.size == POT }) { "incomplete champions league groups" }
-            ChampionsLeague(season, seed, groups.map { g -> g.sortedBy { it.seed } }, KnockoutLength.saved(lines)).also { c ->
+            ChampionsLeague(
+                season, seed, groups.map { g -> g.sortedBy { it.seed } }, KnockoutLength.saved(lines), KnockoutLength.series(lines), KnockoutLength.double(lines),
+                GroupStage.bonus(lines),
+            ).also { c ->
                 for (r in TieScore.Saved.parse(lines)) c.put(r.id, r.a, r.b, r.score)
             }
         }

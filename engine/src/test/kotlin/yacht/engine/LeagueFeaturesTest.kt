@@ -23,6 +23,7 @@ import yacht.engine.league.BoardResult
 import yacht.engine.league.Comp
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.MatchFormat
 import yacht.engine.league.Offseason
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.TieRule
@@ -89,13 +90,20 @@ class LeagueFeaturesTest {
         assertTrue("newbie" in next.league.divisions[1])
         assertEquals(season.table(0).first().key, honours.first { it.kind == "L0" }.key)
         assertEquals(2, next.number)
-        // A 1-1 match goes to the two-game total; equal totals draw.
-        val one = Offseason.first(5L, Offseason.Context(listOf("a", "b"), { 1500.0 }, { null }, { "서울" }, LeagueConfig(divisions = 1)))
+        // 합계제: a 1-1 match goes to the two-game total; equal totals draw.
+        val one = Offseason.first(5L, Offseason.Context(listOf("a", "b"), { 1500.0 }, { null }, { "서울" }, LeagueConfig(divisions = 1, matchFormat = MatchFormat.MIRRORED)))
         val f = one.next(emptySet(), 0, 1)!!
         val g = listOf(GameScore(200, 150), GameScore(170, 190))
         one.record(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g), 0))
         assertEquals(3, one.league.standings.getValue(f.a).points)
         assertEquals(3, one.league.standings.getValue(f.a).aggPoints)
+        // 판 승점제 (the default): the same 1-1 is a draw, the total only for 운 보정 승점.
+        val two = Offseason.first(5L, Offseason.Context(listOf("a", "b"), { 1500.0 }, { null }, { "서울" }, LeagueConfig(divisions = 1)))
+        val f2 = two.next(emptySet(), 0, 1)!!
+        two.record(JobResult(f2, listOf(BoardResult(f2.a, f2.b, g, emptyList())), TieRule.match(g, MatchFormat.GAMES), 0, MatchFormat.GAMES))
+        assertEquals(1, two.league.standings.getValue(f2.a).points)
+        assertEquals(1, two.league.standings.getValue(f2.b).points)
+        assertEquals(3, two.league.standings.getValue(f2.a).aggPoints)
     }
 
     @Test

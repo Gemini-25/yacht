@@ -411,8 +411,9 @@ class StatsTest {
         assertTrue(s3.events.any { it.kind == "dynasty" && it.keys == listOf("ai1") && it.args == listOf(Awards.RUN, "3", "L0") })
         assertTrue(s1.dynasties.none { it.kind == Awards.RUN })
         // Season records (the 11-AI division of season 2 gave ai9 one more win) and the most titles.
-        assertEquals(Triple("ai9", 30.0, 2), lg.book.records[RecordKind.SEASON_POINTS]!!.let { Triple(it.holder, it.value, it.season) })
-        assertTrue(s2.events.any { it.kind == "record" && it.args == listOf("SEASON_POINTS", "30", "27") })
+        // Ten 2-0 wins: 3 points each and the sweep bonus (판 승점제).
+        assertEquals(Triple("ai9", 40.0, 2), lg.book.records[RecordKind.SEASON_POINTS]!!.let { Triple(it.holder, it.value, it.season) })
+        assertTrue(s2.events.any { it.kind == "record" && it.args.take(2) == listOf("SEASON_POINTS", "40") }, s2.events.filter { it.kind == "record" }.toString())
         assertTrue(s1.events.none { it.kind == "record" })
         assertEquals("ai1" to 3.0, lg.book.records[RecordKind.TITLES]!!.let { it.holder to it.value })
         assertTrue(s3.events.any { it.kind == "record" && it.args.take(2) == listOf("TITLES", "3") })
@@ -443,7 +444,7 @@ class StatsTest {
         assertTrue(review.sentences.any { it == "1부 상위 5위 중 5자리를 기대점수형 계열이 차지했어요." }, review.sentences.toString())
         // A record broken: its value in brackets after the record's name, not after the verb.
         val said = s2.review!!.sentences
-        assertTrue("선수9가 한 시즌 최다 승점 기록(승점 30)을 새로 썼어요." in said, said.toString())
+        assertTrue("선수9가 한 시즌 최다 승점 기록(승점 40)을 새로 썼어요." in said, said.toString())
         // 최다 승점, 최다 우승 and 최다 MVP (ai1's second).
         assertTrue("이번 시즌 깨진 리그 기록은 모두 3개예요." in said, said.toString())
         assertEquals(RatingMove("ai15", 1665.0, 1705.0), review.risers.single())

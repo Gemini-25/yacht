@@ -124,7 +124,7 @@ class ClubLeague private constructor(
         var lost = 0
         var level = 0
         for (bd in r.boards) {
-            when (TieRule.match(bd.games)) {
+            when (TieRule.match(bd.games, r.format)) {
                 1 -> won++
                 -1 -> lost++
                 else -> level++

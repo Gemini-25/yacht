@@ -1,15 +1,35 @@
 package yacht.engine.league
 
-/** How many games make a match. */
+/** How many games make a match, and how they decide it. */
 enum class MatchFormat(val label: String) {
     /** One game: quick, but the deal decides more. */
     SINGLE("단판"),
 
-    /** Two games on the same dice with the seats swapped (the default). */
-    MIRRORED("같은 주사위 두 판"),
+    /**
+     * Two games on the same dice with the seats swapped, decided by the games alone (판 승점제,
+     * the default): both won (or one won, one drawn) a win, one each (or both drawn) a draw. A
+     * 2-0 sweep earns a bonus point in league and group tables ([sweepBonus]).
+     */
+    GAMES("같은 주사위 두 판 · 판 승점"),
+
+    /**
+     * Two games on the same dice with the seats swapped, more games won, else the higher total:
+     * that is, the total over the two games (합계제, the default before 판 승점제).
+     */
+    MIRRORED("같은 주사위 두 판 · 합계"),
 
     /** Mirrored, plus a decider game when level. */
     BEST_OF_3("3판 2선승"),
+    ;
+
+    /** Two games on the same dice (the second with the seats swapped). */
+    val mirrored: Boolean get() = this != SINGLE
+
+    /** A level match on games goes to the totals (not for 판 승점제: a draw). */
+    val totals: Boolean get() = this != GAMES
+
+    /** A 2-0 sweep earns a bonus point in league and group tables (완승 보너스). */
+    val sweepBonus: Boolean get() = this == GAMES
 }
 
 /**
@@ -19,7 +39,7 @@ enum class MatchFormat(val label: String) {
 data class LeagueConfig(
     val divisions: Int = 4,
     val doubleRoundRobin: Boolean = false,
-    val matchFormat: MatchFormat = MatchFormat.MIRRORED,
+    val matchFormat: MatchFormat = MatchFormat.GAMES,
     /** Teams moving automatically between neighbouring divisions. */
     val autoSwap: Int = 2,
     /** The next place on each side plays a tie for the higher division. */
@@ -60,6 +80,18 @@ data class LeagueConfig(
      * tie is more matches (결승 4); off, one match a tie as before (two legs where it always was).
      */
     val longKnockouts: Boolean = true,
+    /**
+     * 선승제 시리즈: a knockout tie is a series, first to N games won ([KnockoutLength.wins]),
+     * played in pairs on the same dice; off, a tie is legs of two-game matches won on games then
+     * the total, as before.
+     */
+    val seriesKnockouts: Boolean = true,
+    /**
+     * 패자부활: a knockout of 4 or more is double elimination (a loser drops to the losers
+     * bracket, a second loss ends it, one final between the two brackets' winners); off, one loss
+     * ends it.
+     */
+    val doubleElimination: Boolean = true,
     /** Only AIs with mistakes (the "chaos" preset). */
     val onlyFlawed: Boolean = false,
     /** Only the strongest AIs by rating, 0 = everyone (the "elite" preset). */
@@ -78,7 +110,7 @@ data class LeagueConfig(
     }
 
     fun encode(): String = buildString {
-        append("config 1\n")
+        append("config $VERSION\n")
         append("divisions $divisions\n")
         append("double ${flag(doubleRoundRobin)}\n")
         append("format ${matchFormat.name}\n")
@@ -102,6 +134,8 @@ data class LeagueConfig(
         append("allStar ${flag(allStar)}\n")
         append("familyCup ${flag(familyCup)}\n")
         append("longKnockouts ${flag(longKnockouts)}\n")
+        append("series ${flag(seriesKnockouts)}\n")
+        append("doubleElim ${flag(doubleElimination)}\n")
         append("onlyFlawed ${flag(onlyFlawed)}\n")
         append("onlyTop $onlyTop\n")
     }
@@ -117,9 +151,25 @@ data class LeagueConfig(
         const val MIN_GROUP = 30
         const val MAX_GROUP = 80
 
-        /** Reads a saved config; missing or bad values keep the defaults. */
+        /**
+         * Version of [encode]'s rules: 2 brought 판 승점제 and the series and double-elimination
+         * knockouts (see [decode] for older ones).
+         */
+        const val VERSION = 2
+
+        /** The version of a saved config (1 before versions were counted). */
+        fun versionOf(text: String): Int =
+            text.lines().firstNotNullOfOrNull { l -> l.trim().split(' ').takeIf { it.size == 2 && it[0] == "config" }?.get(1)?.toIntOrNull() } ?: 1
+
+        /**
+         * Reads a saved config; missing or bad values keep the defaults. One saved before version 2
+         * keeps the rules it was played with where it says nothing: the two-game total
+         * ([MatchFormat.MIRRORED]) and knockouts of legs, one loss out (a season in progress, or
+         * one in the archive, plays on as it began; [migrated] moves a league's own settings on).
+         */
         fun decode(text: String): LeagueConfig {
             var c = LeagueConfig()
+            if (versionOf(text) < 2) c = c.copy(matchFormat = MatchFormat.MIRRORED, seriesKnockouts = false, doubleElimination = false)
             for (line in text.lines()) {
                 val f = line.trim().split(' ')
                 if (f.size < 2) continue
@@ -151,6 +201,8 @@ data class LeagueConfig(
                         "allStar" -> c.copy(allStar = v == "1")
                         "familyCup" -> c.copy(familyCup = v == "1")
                         "longKnockouts" -> c.copy(longKnockouts = v == "1")
+                        "series" -> c.copy(seriesKnockouts = v == "1")
+                        "doubleElim" -> c.copy(doubleElimination = v == "1")
                         "onlyFlawed" -> c.copy(onlyFlawed = v == "1")
                         "onlyTop" -> c.copy(onlyTop = v.toInt())
                         else -> c
@@ -158,6 +210,20 @@ data class LeagueConfig(
                 }.getOrDefault(c)
             }
             return c
+        }
+
+        /**
+         * A league's own settings saved before version 2, moved to version 2's rules: 판 승점제
+         * where it played the two-game total, series and double-elimination knockouts. The season
+         * in play keeps its own copy (SeasonPlan.config): these apply from the next season.
+         */
+        fun migrated(text: String): LeagueConfig {
+            val c = decode(text)
+            if (versionOf(text) >= 2) return c
+            return c.copy(
+                matchFormat = if (c.matchFormat == MatchFormat.MIRRORED) MatchFormat.GAMES else c.matchFormat,
+                seriesKnockouts = true, doubleElimination = true,
+            )
         }
     }
 }
@@ -169,8 +235,11 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
         LeagueConfig(),
     ),
     FAST(
-        "빠른 시즌", "단판 경기, 플레이오프·클럽 리그·국가대항전 없이 시즌이 빨리 돌아요 (선수가 적으면 2부까지)",
-        LeagueConfig(divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false, longKnockouts = false),
+        "빠른 시즌", "단판 경기, 한 번 지면 끝나는 토너먼트, 플레이오프·클럽 리그·국가대항전 없이 시즌이 빨리 돌아요 (선수가 적으면 2부까지)",
+        LeagueConfig(
+            divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false, longKnockouts = false,
+            seriesKnockouts = false, doubleElimination = false,
+        ),
     ),
     CHAOS(
         "대혼돈", "실수하는 선수만 남기고 제자 비율을 높여요: 이변이 쏟아져요",

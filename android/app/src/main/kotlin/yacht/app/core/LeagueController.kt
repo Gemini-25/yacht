@@ -69,6 +69,7 @@ import yacht.engine.league.AiOdds
 import yacht.engine.league.BoxProfile
 import yacht.engine.league.LabResult
 import yacht.engine.league.MatchFormat
+import yacht.engine.league.TieRule
 import yacht.engine.league.MatchPreview
 import yacht.engine.league.Odds
 import yacht.engine.league.OddsTable
@@ -255,6 +256,8 @@ data class SeasonRow(
     val aggPoints: Int = 0,
     /** 우승·승강 확률 (Monte Carlo over the rest of the season), null before the first estimate. */
     val odds: AiOdds? = null,
+    /** 2-0 sweeps that earned the bonus point (판 승점제's 완승 보너스), counted in [points]. */
+    val sweeps: Int = 0,
 )
 
 data class SeasonHistoryItem(
@@ -293,6 +296,8 @@ data class SeasonView(
     /** Which tier each division is in (a regional pyramid's groups), and how many go up from each lower group. */
     val tiers: yacht.engine.league.Tiers = yacht.engine.league.Tiers.linear(divisions.size),
     val swap: Int = 0,
+    /** How the season's matches are decided (판 승점제 gives a 2-0 sweep a bonus point). */
+    val format: MatchFormat = MatchFormat.MIRRORED,
 )
 
 /** One fixture in the calendar (일정표): its games once played, or whether it is being played. */
@@ -304,6 +309,8 @@ data class CalendarItem(
     val bName: String,
     val games: List<GameScore>?,
     val live: Boolean,
+    /** Once played: +1 A won, -1 B won, 0 a draw, by the season's rule. */
+    val result: Int? = null,
 )
 
 /**
@@ -757,12 +764,17 @@ class LeagueController(
     /**
      * The saved rules, or the defaults. Rules saved before the pyramid with the old default of
      * 200 players take today's default (a league of thousands): the players come in at the
-     * next season's close and the league becomes a pyramid.
+     * next season's close and the league becomes a pyramid. Rules saved before 판 승점제 move
+     * to it and to series and double-elimination knockouts ([LeagueConfig.migrated]) from the
+     * next season (the season in play keeps its own).
      */
     private fun readConfig(): LeagueConfig = runCatching {
         configFile.takeIf { it.exists() }?.readText()?.let { text ->
-            val c = LeagueConfig.decode(text)
-            if (!text.lines().any { it.startsWith("pyramid ") } && c.generated == OLD_DEFAULT_PLAYERS) c.copy(generated = LeagueConfig.DEFAULT_PLAYERS) else c
+            val m = LeagueConfig.migrated(text)
+            val c = if (!text.lines().any { it.startsWith("pyramid ") } && m.generated == OLD_DEFAULT_PLAYERS) m.copy(generated = LeagueConfig.DEFAULT_PLAYERS) else m
+            // Moved on once: saved as version 2 (the season in play keeps its own copy).
+            if (LeagueConfig.versionOf(text) < LeagueConfig.VERSION) runCatching { configFile.writeTextAtomically(c.encode()) }
+            c
         }
     }.getOrNull() ?: LeagueConfig()
 
@@ -2262,6 +2274,7 @@ class LeagueController(
                     zone[st.key] ?: 0,
                     st.aggPoints,
                     oddsNow?.takeIf { it.season == s.number }?.get(st.key),
+                    st.sweeps,
                 )
             }
         }
@@ -2270,7 +2283,7 @@ class LeagueController(
             // Next season's newcomers: members not in this season (the rules keep the rest out).
             s.number, s.fixturesPlayed, s.fixturesTotal, divisions, world?.members.orEmpty().filter { it !in inLeague }.map { name(it) },
             history(),
-            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap,
+            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap, s.format,
         )
     }
 
@@ -2742,7 +2755,8 @@ class LeagueController(
                 val d = division.coerceIn(0, s.divisions.size - 1)
                 val md = (matchday ?: s.currentMatchday).coerceIn(0, maxOf(0, s.matchdays - 1))
                 val items = s.matchday(md).filter { it.division == d }.map { f ->
-                    CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), s.result(f.id), !s.isPlayed(f.id) && live.containsKey(f.a to f.b))
+                    val games = s.result(f.id)
+                    CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), games, !s.isPlayed(f.id) && live.containsKey(f.a to f.b), games?.let { TieRule.match(it, s.format) })
                 }
                 CalendarView(d, md, s.matchdays, s.currentMatchday, items, s.number)
             }

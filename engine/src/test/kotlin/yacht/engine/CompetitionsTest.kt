@@ -20,6 +20,7 @@ import yacht.engine.league.Knockout
 import yacht.engine.league.KnockoutLength
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
+import yacht.engine.league.MatchFormat
 import yacht.engine.league.Offseason
 import yacht.engine.league.PromotionPlayoff
 import yacht.engine.league.Season
@@ -45,11 +46,14 @@ class CompetitionsTest {
     private val families = Family.entries.filter { it != Family.MINE }
     private fun family(k: String): Family? = families[(index(k) - 1) % families.size]
 
+    /** The rules before series and double elimination (the bracket tests below count their ties). */
+    private val legacy = LeagueConfig(matchFormat = MatchFormat.MIRRORED, seriesKnockouts = false, doubleElimination = false)
+
     private fun start(
         n: Int,
         number: Int = 1,
         divisions: Int = 2,
-        config: LeagueConfig = LeagueConfig(),
+        config: LeagueConfig = legacy,
         lastTables: List<List<String>> = emptyList(),
         lastHonours: List<Honour> = emptyList(),
         history: List<Honour> = emptyList(),
@@ -119,7 +123,7 @@ class CompetitionsTest {
     @Test
     fun theCupOpensByProgressGivesByesAndCrownsTheFavourite() {
         // One match a tie (긴 토너먼트 off); the long rounds have their own test.
-        val cup = assertNotNull(Cup.create(start(13, config = LeagueConfig(longKnockouts = false))))
+        val cup = assertNotNull(Cup.create(start(13, config = legacy.copy(longKnockouts = false))))
         assertEquals(12, cup.fixturesTotal)
         assertNull(cup.next(0.0, emptySet()), "the first round opens at 5%")
         val view = cup.view() as CompetitionView.Bracket
@@ -172,7 +176,7 @@ class CompetitionsTest {
         assertEquals(legs(cup), legs(Cup.codec.decode(lines(cup), 1, 100L)))
         assertEquals(List(6) { 1 }, legs(Cup.codec.decode(lines(cup).filter { it != KnockoutLength.LINE }, 1, 100L)).map { it.second })
         // Off: one match a tie everywhere.
-        val short = assertNotNull(Cup.create(start(40, config = LeagueConfig(longKnockouts = false))))
+        val short = assertNotNull(Cup.create(start(40, config = legacy.copy(longKnockouts = false))))
         assertEquals(List(6) { 1 }, legs(short).map { it.second })
         assertTrue(KnockoutLength.LINE !in lines(short))
         // The super cup: two matches; the champions league's bracket before the draw: 2, 3, 4.
@@ -181,7 +185,7 @@ class CompetitionsTest {
         val cl = assertNotNull(ChampionsLeague.create(start(20)))
         val ko = (cl.view() as CompetitionView.Groups).knockout!!.rounds.map { it.ties.first().legs }
         assertEquals(listOf(2, 3, 4), ko)
-        val clShort = assertNotNull(ChampionsLeague.create(start(20, config = LeagueConfig(longKnockouts = false))))
+        val clShort = assertNotNull(ChampionsLeague.create(start(20, config = legacy.copy(longKnockouts = false))))
         assertEquals(listOf(2, 2, 1), (clShort.view() as CompetitionView.Groups).knockout!!.rounds.map { it.ties.first().legs })
         // The rule itself: early rounds keep what they had.
         assertEquals(listOf(1, 1, 2, 2, 3, 4), listOf(128, 32, 16, 8, 4, 2).map { KnockoutLength.legs(it, 1, true) })
@@ -276,7 +280,7 @@ class CompetitionsTest {
     }
 
     /** A league stage of [n] AIs (24 in 2 divisions) played out by strength. */
-    private fun playedLeague(config: LeagueConfig = LeagueConfig(divisions = 2), n: Int = 24): SeasonPlan {
+    private fun playedLeague(config: LeagueConfig = legacy.copy(divisions = 2), n: Int = 24): SeasonPlan {
         val ctx = Offseason.Context((1..n).map(::key), ::rating, ::family, { "서울" }, config)
         val plan = Offseason.first(3L, ctx)
         while (true) plan.record(play(plan.next(emptySet(), 0, 1) ?: break))
@@ -327,7 +331,7 @@ class CompetitionsTest {
                 assertEquals(listOf(Honour(1, "UP0", "ai15")), po.honours())
                 assertTrue(Offseason.Move("ai15", 1, 0) in moves && Offseason.Move("ai10", 0, 1) in moves)
                 assertTrue(news.any { it.kind == "promoted" && it.keys == listOf("ai15") })
-                val (next, _) = Offseason.next(plan, Offseason.Context((1..24).map(::key), ::rating, ::family, { "서울" }, LeagueConfig(divisions = 2)))
+                val (next, _) = Offseason.next(plan, Offseason.Context((1..24).map(::key), ::rating, ::family, { "서울" }, legacy.copy(divisions = 2)))
                 assertTrue("ai15" in next.league.divisions[0] && "ai10" in next.league.divisions[1])
             } else {
                 assertEquals(listOf(Honour(1, "STAY0", "ai10")), po.honours())
