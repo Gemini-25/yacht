@@ -173,25 +173,30 @@ object Drama {
     }
 
     /**
-     * A knockout final: the "결승" round of a bracket (a double elimination's "최종 결승", not its
-     * winners' or losers' final), or the one tie of the super cup.
+     * A knockout final: the "결승" round of a bracket, named alone or after its tournament or
+     * league ("아시아컵 결승", "한국 결승", "아시아 결승"; a double elimination's "최종 결승", not its
+     * winners' or losers' final "승자조 결승"), or the one tie of the super cup.
      */
-    fun isFinal(f: Fixture): Boolean =
-        f.label == "결승" || f.label.endsWith("컵 결승") || f.label == Knockout.GRAND_LABEL || f.label.endsWith(" " + Knockout.GRAND_LABEL) || f.comp == Comp.SUPER
+    fun isFinal(f: Fixture): Boolean = isFinalLabel(f.label) || f.comp == Comp.SUPER
+
+    /** [isFinal]'s rule on a fixture label. */
+    fun isFinalLabel(label: String): Boolean =
+        label == "결승" || (label.endsWith(" 결승") && !label.endsWith("조 결승")) || label == Knockout.GRAND_LABEL || label.endsWith(" " + Knockout.GRAND_LABEL)
 
     /**
-     * True when [f] is a title-race game: a title playoff tie, or a 1st-division league fixture
-     * with at least 60% of the league played that involves an AI within [RACE_POINTS] of the
-     * leader while there are two or more such AIs.
+     * True when [f] is a title-race game: a title playoff tie, or a league fixture of a 1부 (any
+     * league's) with at least 60% of the league played that involves an AI within [RACE_POINTS]
+     * of the leader while there are two or more such AIs.
      */
     fun titleRace(league: Season, f: Fixture): Boolean {
         if (f.comp == Comp.TITLE_PLAYOFF) return true
         if (f.comp != Comp.LEAGUE || league.progress < RACE_FROM || league.divisions.isEmpty()) return false
-        if (league.divisionOf(f.a) != 0) return false
-        val table = league.table(0)
+        val d = league.divisionOf(f.a) ?: return false
+        if (league.leagues.tier(d) != 0) return false
+        val table = league.table(d)
         val top = table.firstOrNull()?.points ?: return false
-        // One win: 3 points, 4 with 판 승점제's sweep bonus.
-        val race = RACE_POINTS + if (league.format.sweepBonus) 1 else 0
+        // One win: 3 points, 4 with 판 승점제's sweep bonus (when the season's rules keep it).
+        val race = RACE_POINTS + if (league.bonus) 1 else 0
         val contenders = table.takeWhile { top - it.points <= race }.map { it.key }
         return contenders.size >= 2 && (f.a in contenders || f.b in contenders)
     }

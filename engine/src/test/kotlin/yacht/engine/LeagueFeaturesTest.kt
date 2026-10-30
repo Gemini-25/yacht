@@ -9,12 +9,16 @@ import yacht.engine.game.GameCodec
 import yacht.engine.game.GameState
 import yacht.engine.game.PlayStyle
 import yacht.engine.game.Side
+import yacht.engine.league.Awards
 import yacht.engine.league.CloneProfile
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.CustomAis
 import yacht.engine.league.CustomBase
 import yacht.engine.league.CustomMistake
 import yacht.engine.league.GameScore
+import yacht.engine.league.Honour
+import yacht.engine.league.HonourBook
+import yacht.engine.league.HonourKind
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueTables
@@ -25,6 +29,7 @@ import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.Offseason
+import yacht.engine.league.Records
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.TieRule
 import yacht.engine.league.WatchMatch
@@ -170,6 +175,29 @@ class LeagueFeaturesTest {
         ladder.record(Ladder.ME, "b", listOf(GameScore(150, 200)))
         assertNotNull(ladder.rankOf(Ladder.ME))
         assertNotNull(Matchmaker.opponentFor(ladder, ladder.rating(Ladder.ME), rng))
+    }
+
+    @Test
+    fun honourKindsCarryTheirLeagueAndTheOldOnesMeanWhatTheyDid() {
+        // The old single league's kinds: the titles, awards and summary as before national leagues.
+        val legacy = listOf("L0", "L1", "L5", "REG", "L0R", "UP1", "DOWN2", "STAY0", "CUP", "CUP2", "CL", "CL2", "SUPER", "ALLSTAR", "FAMILY", "CLUB", "WC", "WC2", "WCW", "WCMVP", "WCTOP", "CC", "MVP", "ROOKIE", "MIP", "SCORER", "YACHT", "POTW", "NSQ")
+        assertEquals(listOf("L0", "L1", "L5", "CUP", "CL", "SUPER", "WCW"), legacy.filter { Awards.isAiTitle(it) })
+        assertEquals(listOf("L0", "L1", "L5", "CUP", "CL", "SUPER", "ALLSTAR", "FAMILY", "CLUB", "WC", "WCW", "CC"), legacy.filter { Awards.isTitle(it) })
+        assertEquals(
+            listOf("L0", "L1", "L5", "REG", "CUP", "CUP2", "CL", "CL2", "SUPER", "ALLSTAR", "FAMILY", "CLUB", "WC", "WC2", "WCMVP", "WCTOP", "CC", "MVP", "ROOKIE", "MIP", "SCORER", "YACHT"),
+            legacy.filter { Awards.inSummary(it) },
+        )
+        assertEquals(listOf("L0", "L1", "L5", "CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "WCW", "CC"), legacy.filter { HonourBook.isTitle(it) })
+        // A national season's: the league after the dot, a confederation for 대륙 챔피언스.
+        val national = listOf("L0.KR", "L2.KR", "REG.KR", "L0R.KR", "LMVP.KR", "CCL.ASIA", "CCL2.ASIA", "CLUBCUP", "CLUBCUPW")
+        assertEquals(listOf("L0.KR", "L2.KR", "CCL.ASIA"), national.filter { Awards.isAiTitle(it) })
+        assertEquals(listOf("KR", "KR", "KR", "KR", "KR", null, null, null, null), national.map { HonourKind.leagueOf(it) })
+        // Every title, the records' most titles included.
+        val book = HonourBook().apply { add(listOf(Honour(1, "L0.KR", "a"), Honour(1, "CCL.ASIA", "a"), Honour(2, "L1.JP", "a"), Honour(2, "L0", "b"), Honour(3, "CUP", "b"))) }
+        assertEquals(3, book.titles("a"))
+        assertEquals("a" to 3.0, Records.mostTitles(book)!!.let { it.holder to it.value })
+        // The book keeps the dotted kinds through its file.
+        assertEquals(book.all, HonourBook.decode(book.encode()).all)
     }
 
     @Test

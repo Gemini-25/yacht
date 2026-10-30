@@ -542,7 +542,15 @@ class StatsTest {
         assertEquals(listOf(1, 3), back.map { it.season })
         assertEquals(SeasonLine(1, 2, 14, 9, 1, 12, 1488.0, 6.73), back[0])
         assertEquals(SeasonLine(3, 1, 2, 31, 0, 3, -60.0, 9.99), back[1])
-        for (n in 4..40) a.addLine("k", SeasonLine(n, 0, 1, 1, 1, 1, 1500.0, 7.0))
+        // The 13 digits of a line as before; its league and club apart (sx), from a national season on.
+        val packed = a.encode().lines().single { it.startsWith("sl k ") }
+        assertEquals("sl k 1 2" + "0e" + "09" + "01" + "0c", packed.take(16))
+        a.addLine("k", SeasonLine(4, 0, 1, 1, 1, 1, 1500.0, 7.0, "KR", "c12"))
+        assertEquals(packed.length + 13, a.encode().lines().single { it.startsWith("sl k ") }.length)
+        // Season 4, 한국 리그 (code 1), club 12 ("0c").
+        assertEquals("sx k 0410c", a.encode().lines().single { it.startsWith("sx ") })
+        assertEquals(SeasonLine(4, 0, 1, 1, 1, 1, 1500.0, 7.0, "KR", "c12"), Archive.decode(a.encode()).lines("k").last())
+        for (n in 5..40) a.addLine("k", SeasonLine(n, 0, 1, 1, 1, 1, 1500.0, 7.0))
         a.addLine("gone", SeasonLine(5, 0, 1, 1, 1, 1, 1500.0, 7.0))
         a.putSummary(SeasonSummary(40, emptyList(), null, Double.NaN, emptyList(), 0, Double.NaN))
         // The newest 30 league seasons: 11..40; an AI with none left goes.
@@ -855,20 +863,21 @@ class StatsTest {
     @Test
     fun aLegacyLeagueClosesAsBefore() {
         // Hashes taken from the code before national leagues reached the records (this test on it).
-        val pyramid = LegacyLeague(600, LeagueConfig(), 11L).apply { play(3) }
+        val pyramid = PlayedLeague(600, LeagueConfig(), 11L).apply { play(3) }
         assertEquals("a212e9d226257ac62f71853229fec00d932d24a6ed221f5b7ce5aa80ad2d49e6", pyramid.sha(pyramid.closes.toString()))
-        val linear = LegacyLeague(60, LeagueConfig(divisions = 3, matchFormat = MatchFormat.MIRRORED, doubleElimination = false, longKnockouts = false), 12L).apply { play(3) }
+        val linear = PlayedLeague(60, LeagueConfig(divisions = 3, matchFormat = MatchFormat.MIRRORED, doubleElimination = false, longKnockouts = false), 12L).apply { play(3) }
         assertEquals("fdd8a717bbcc00c5547298544cfb7a88395bcf60d3a34a9f0f28c2864b50c717", linear.sha(linear.closes.toString()))
     }
 }
 
 /**
- * A legacy league (one league: linear divisions or a pyramid) played with made-up games that
- * carry facts, every competition on, closed season by season as [LeagueWorld] closes it: what
- * the records, awards and media make of it is written into [closes] (the golden tests of a
- * legacy league's close and odds).
+ * A league (one legacy league: linear divisions or a pyramid; national leagues with a [nation]
+ * per player and `config.national`) played with made-up games that carry facts, every
+ * competition on, closed season by season as [LeagueWorld] closes it: what the records, awards
+ * and media make of it is written into [closes] (the golden tests of a legacy league's close and
+ * odds), each season's plan into [plans] and its close into [ends].
  */
-internal class LegacyLeague(players: Int, val config: LeagueConfig, val seed: Long) {
+internal class PlayedLeague(players: Int, val config: LeagueConfig, val seed: Long, private val nation: (String) -> String? = { null }) {
     private val rules = RuleSet()
     private fun index(k: String) = k.removePrefix("p").toInt()
     var keys: List<String> = (1..players).map { "p%04d".format(it) }
@@ -889,6 +898,16 @@ internal class LegacyLeague(players: Int, val config: LeagueConfig, val seed: Lo
 
     /** Called with every fixture before its result is recorded. */
     var onJob: (SeasonPlan, Fixture) -> Unit = { _, _ -> }
+
+    /** What the close is told: each player's club, and which league titles are major. */
+    var club: (String) -> String? = { null }
+    var major: (season: Int, league: String) -> Boolean = { _, _ -> true }
+
+    val plans = ArrayList<SeasonPlan>()
+    val ends = ArrayList<SeasonEnd>()
+
+    /** Each season's honours as the off-season gave them (titles, no awards). */
+    val seasonHonours = ArrayList<List<Honour>>()
 
     private val cards = HashMap<Int, Board>()
     private fun card(total: Int): Board = cards.getOrPut(total) { Board.of(rules, Category.ALL.map { if (it == Category.CHOICE) total else 0 }) }
@@ -944,7 +963,7 @@ internal class LegacyLeague(players: Int, val config: LeagueConfig, val seed: Lo
     private fun family(k: String): Family = Family.entries[index(k) % Family.entries.size]
 
     private fun context(): Offseason.Context =
-        Offseason.Context(keys, ::rating, ::family, { k -> "도시${index(k) % 7}" }, config, Competitions.factories(), honours.all)
+        Offseason.Context(keys, ::rating, ::family, { k -> "도시${index(k) % 7}" }, config, Competitions.factories(), honours.all, nation = nation)
 
     private fun line(s: String) = closes.append(s).append('\n')
 
@@ -952,6 +971,7 @@ internal class LegacyLeague(players: Int, val config: LeagueConfig, val seed: Lo
     fun play(seasons: Int) {
         var plan = Offseason.first(seed, context())
         repeat(seasons) { s ->
+            plans += plan
             book.startSeason(plan.number, keys.associateWith { rating(it) })
             val half = plan.league.fixturesTotal / 2
             var halfDone = false
@@ -979,7 +999,12 @@ internal class LegacyLeague(players: Int, val config: LeagueConfig, val seed: Lo
             val gone = setOf(keys[keys.size / 2])
             val moves = Offseason.moves(plan, gone)
             val h = Offseason.honours(plan, moves, gone)
-            val end = book.endSeason(plan, h, honours, archive, ::rating, ::family, { k -> "선수${index(k)}" }, traits = { k -> mapOf("버릇" to "${index(k) % 3}") }, gone = gone)
+            val end = book.endSeason(
+                plan, h, honours, archive, ::rating, ::family, { k -> "선수${index(k)}" }, traits = { k -> mapOf("버릇" to "${index(k) % 3}") }, gone = gone,
+                club = club, major = major,
+            )
+            ends += end
+            seasonHonours += h
             val picks = plan.league.playersOfWeek(0 until plan.league.matchdays, gone).values.sortedBy { it.matchday }.map { Honour(plan.number, "POTW", it.key) }
             honours.add(h + end.awards + picks)
             line("season ${plan.number}")

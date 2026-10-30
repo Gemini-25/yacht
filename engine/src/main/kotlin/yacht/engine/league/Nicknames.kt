@@ -37,20 +37,23 @@ object Nicknames {
 
     /**
      * The nickname of [r] in [season] with its [honours] (all seasons); null for a player with
-     * nothing to be known for yet.
+     * nothing to be known for yet. "리그의 제왕" takes three major league titles: the old single
+     * league's, or a national league's when [major] (season, league id) counts it
+     * ([HonourBook.majorTitles]).
      */
-    fun of(r: PlayerRecord, honours: List<Honour>, season: Int): String? {
+    fun of(r: PlayerRecord, honours: List<Honour>, season: Int, major: (season: Int, league: String) -> Boolean = { _, _ -> true }): String? {
         val id = r.identity
         val nation = id?.let { Nations.of(it.nation) }
         fun fill(s: String) = s.replace("{town}", r.hometown).replace("{nat}", nation?.short ?: "")
         val count = honours.groupingBy { it.kind }.eachCount()
-        val titles = honours.count { it.kind in HonourBook.TITLES || Regex("L\\d").matches(it.kind) }
+        val titles = honours.count { HonourBook.isTitle(it.kind) }
+        val kingdoms = honours.count { HonourKind.isTopTitle(it.kind) && HonourBook.isMajor(it, major) }
         val age = id?.age(season, r.born) ?: 0
         val a = id?.abilities
         val pick = Profiles.hash(r.key, 50, 2)
         return when {
             (count["WC"] ?: 0) > 0 || (count["WCW"] ?: 0) > 0 -> fill("{nat}의 월드컵 영웅")
-            (count["L0"] ?: 0) >= 3 -> "리그의 제왕"
+            kingdoms >= 3 -> "리그의 제왕"
             titles >= 5 -> "우승 청부사"
             (count["MVP"] ?: 0) >= 2 -> "MVP 단골"
             (count["WCMVP"] ?: 0) > 0 -> "월드컵의 별"

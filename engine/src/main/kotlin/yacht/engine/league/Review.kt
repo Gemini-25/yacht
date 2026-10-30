@@ -111,20 +111,27 @@ data class SeasonReview(
 
             fun of(kind: String) = honours.firstOrNull { it.kind == kind }?.key
             val say = ArrayList<String>()
-            val champ = of("L0")
-            val reg = of("REG")
-            if (champ != null) {
-                say += "${n}시즌 1부 우승은 ${Ko.ieyo(name(champ))}." + if (reg != null && reg != champ) " 정규리그 1위는 ${Ko.ieosseoyo(name(reg))}." else ""
-            }
-            val cup = of("CUP")
-            val cl = of("CL")
-            when {
-                champ != null && cup == champ && cl == champ -> say += "${Ko.eun(name(champ))} 리그·요트컵·챔피언스 리그를 모두 휩쓸어 트레블을 달성했어요."
-                champ != null && cup == champ -> say += "${Ko.eun(name(champ))} 요트컵까지 들어 올려 2관왕에 올랐어요." +
-                    (cl?.let { " 챔피언스 리그는 ${Ko.i(name(it))} 가져갔어요." } ?: "")
-                cup != null && cl != null -> say += "요트컵은 ${Ko.i(name(cup))}, 챔피언스 리그는 ${Ko.i(name(cl))} 가져갔어요."
-                cup != null -> say += "요트컵은 ${Ko.i(name(cup))} 들어 올렸어요."
-                cl != null -> say += "챔피언스 리그 우승은 ${Ko.ieyo(name(cl))}."
+            // A national season: the leagues in ranking order (the ones the ranking does not have
+            // by the strength of their best, as the competitions order them).
+            val national = plan.league.leagues.national
+            val order = if (national) leagueOrder(plan, rating) else emptyList()
+            if (national) say += nationalHeadline(n, honours, order, name)
+            else {
+                val champ = of("L0")
+                val reg = of("REG")
+                if (champ != null) {
+                    say += "${n}시즌 1부 우승은 ${Ko.ieyo(name(champ))}." + if (reg != null && reg != champ) " 정규리그 1위는 ${Ko.ieosseoyo(name(reg))}." else ""
+                }
+                val cup = of("CUP")
+                val cl = of("CL")
+                when {
+                    champ != null && cup == champ && cl == champ -> say += "${Ko.eun(name(champ))} 리그·요트컵·챔피언스 리그를 모두 휩쓸어 트레블을 달성했어요."
+                    champ != null && cup == champ -> say += "${Ko.eun(name(champ))} 요트컵까지 들어 올려 2관왕에 올랐어요." +
+                        (cl?.let { " 챔피언스 리그는 ${Ko.i(name(it))} 가져갔어요." } ?: "")
+                    cup != null && cl != null -> say += "요트컵은 ${Ko.i(name(cup))}, 챔피언스 리그는 ${Ko.i(name(cl))} 가져갔어요."
+                    cup != null -> say += "요트컵은 ${Ko.i(name(cup))} 들어 올렸어요."
+                    cl != null -> say += "챔피언스 리그 우승은 ${Ko.ieyo(name(cl))}."
+                }
             }
             of("MVP")?.let { m ->
                 val r = avgRating(m)
@@ -152,11 +159,62 @@ data class SeasonReview(
             meta.traits.filter { !it.change.isNaN() && abs(it.change) >= TRAIT_NEWS }.maxByOrNull { abs(it.change) }?.let { t ->
                 say += "상위권에서 ${t.trait} ‘${t.value}’ 비율이 ${(abs(t.change) * 100).roundToInt()}%p ${if (t.change > 0) "늘었어요" else "줄었어요"}."
             }
-            val top = plan.league.divisions.firstOrNull()?.let { plan.league.table(0).take(5).mapNotNull { s -> family(s.key) } }.orEmpty()
+            // The 1부 at the top: the league's, or the best-ranked national league's.
+            val first = if (national) order.firstOrNull()?.let { plan.league.leagues.byId(it)?.top } else plan.league.divisions.indices.firstOrNull()
+            val where = if (national) order.firstOrNull()?.let { "${LeagueIds.label(it)} 1부" } else "1부"
+            val top = first?.let { plan.league.table(it).take(5).mapNotNull { s -> family(s.key) } }.orEmpty()
             top.groupingBy { it }.eachCount().maxByOrNull { it.value }?.takeIf { it.value >= 3 }?.let { (fam, count) ->
-                say += "1부 상위 5위 중 ${count}자리를 ${fam.label} 계열이 차지했어요."
+                say += "$where 상위 5위 중 ${count}자리를 ${fam.label} 계열이 차지했어요."
             }
             return SeasonReview(n, champions, awards, risers, fallers, broken, changes, say)
+        }
+
+        /** Leagues the headline names: the champions of the best-ranked. */
+        private const val HEADLINE_LEAGUES = 4
+
+        /**
+         * A national season's national leagues best first: by [SeasonPlan.ranking], the ones it has
+         * no row for by the average rating of their best 5 ([Coefficients.order], as the
+         * international competitions order them).
+         */
+        private fun leagueOrder(plan: SeasonPlan, rating: (String) -> Double): List<String> {
+            val season = plan.league
+            val ids = season.leagues.list.filter { it.national }.map { it.id }
+            return Coefficients.order(ids, plan.ranking) { id ->
+                Coefficients.strength(season.leagues.byId(id)?.divisions?.flatMap { season.divisions[it] }.orEmpty(), rating)
+            }
+        }
+
+        /**
+         * The opening sentences of a national season's review: the champions league's winner, the
+         * champions of the [HEADLINE_LEAGUES] best leagues of [order], and a league champion's
+         * double (its league and the cup) or treble (and the champions league or a 대륙 챔피언스).
+         */
+        private fun nationalHeadline(n: Int, honours: List<Honour>, order: List<String>, name: (String) -> String): List<String> {
+            val say = ArrayList<String>()
+            fun of(kind: String) = honours.firstOrNull { it.kind == kind }?.key
+            of("CL")?.let { say += "${n}시즌 챔피언스 리그 우승은 ${Ko.ieyo(name(it))}." }
+            val champions = order.mapNotNull { id -> of(HonourKind.of("L0", id))?.let { id to it } }
+            champions.take(HEADLINE_LEAGUES).takeIf { it.isNotEmpty() }?.let { top ->
+                say += top.mapIndexed { i, (id, k) -> "${LeagueIds.label(id)} 우승은 " + if (i == top.lastIndex) Ko.ieyo(name(k)) else name(k) }.joinToString(", ") + "."
+            }
+            val cup = of("CUP")
+            val double = champions.firstOrNull { it.second == cup }
+            when {
+                double != null -> {
+                    val (id, k) = double
+                    val big = honours.firstOrNull { h -> h.key == k && (h.kind == "CL" || HonourKind.base(h.kind) == "CCL") }
+                    val third = when {
+                        big == null -> null
+                        big.kind == "CL" -> "챔피언스 리그"
+                        else -> HonourKind.qualifier(big.kind)?.let { c -> runCatching { ContinentalChampions.title(Confed.valueOf(c)) }.getOrNull() } ?: Comp.CONT_CHAMPIONS.label
+                    }
+                    say += if (third != null) "${Ko.eun(name(k))} ${LeagueIds.label(id)}·요트컵·${Ko.eul(third)} 모두 휩쓸어 트레블을 달성했어요."
+                    else "${Ko.eun(name(k))} ${LeagueIds.label(id)} 우승에 요트컵까지 들어 올려 2관왕에 올랐어요."
+                }
+                cup != null -> say += "요트컵은 ${Ko.i(name(cup))} 들어 올렸어요."
+            }
+            return say
         }
 
         /** The league average score, the boxes that moved most and the traits that moved most at the top. */

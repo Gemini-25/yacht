@@ -10,6 +10,7 @@ import yacht.engine.league.Cup
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.CustomBase
 import yacht.engine.league.CustomMistake
+import yacht.engine.league.Drama
 import yacht.engine.league.Family
 import yacht.engine.league.Fixture
 import yacht.engine.league.GameScore
@@ -20,6 +21,7 @@ import yacht.engine.league.LabSession
 import yacht.engine.league.LabStats
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.Leagues
 import yacht.engine.league.Odds
 import yacht.engine.league.OddsTable
 import yacht.engine.league.Offseason
@@ -27,6 +29,7 @@ import yacht.engine.league.Preview
 import yacht.engine.league.PromotionPlayoff
 import yacht.engine.league.Scouting
 import yacht.engine.league.Season
+import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.Temper
 import yacht.engine.league.TieRule
@@ -35,6 +38,7 @@ import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -286,15 +290,22 @@ class AnalysisTest {
         assertProbabilities(t)
     }
 
+    /** A row as the data class printed it before it had a tier and a league (the golden hashes are of that text). */
+    private fun legacyText(r: AiOdds): String =
+        "AiOdds(key=${r.key}, division=${r.division}, position=${r.position}, expectedPosition=${r.expectedPosition}, leader=${r.leader}, " +
+            "title=${r.title}, playoff=${r.playoff}, champions=${r.champions}, promotion=${r.promotion}, relegation=${r.relegation}, " +
+            "promotionPlayoff=${r.promotionPlayoff}, relegationPlayoff=${r.relegationPlayoff})"
+
     /** A legacy league's odds and previews halfway, at the end and through the post-season, written out. */
-    private fun legacyOdds(lg: LegacyLeague): String {
+    private fun legacyOdds(lg: PlayedLeague): String {
         val out = StringBuilder()
         var odds: OddsTable? = null
-        fun take(p: yacht.engine.league.SeasonPlan, at: String) {
+        fun take(p: SeasonPlan, at: String) {
             val t = Odds.compute(p, lg::rating, runs = 300, seed = p.seed)
             odds = t
             out.append("odds ${p.number} $at ${t.played} ${t.total} ${t.runs} ${t.drawRate}\n")
-            for (r in t.rows) out.append(" $r\n")
+            for (r in t.rows) out.append(" ${legacyText(r)}\n")
+            assertTrue(t.rows.all { it.league == "" && it.tier == p.league.leagues.tier(it.division) })
             // Previews of the 1부 top two, and of each division's top against the next one's.
             val d = p.league.divisions
             fun preview(a: String, b: String, f: Fixture? = null) =
@@ -314,7 +325,7 @@ class AnalysisTest {
             }
             if (p.league.finished && f.comp == Comp.TITLE_PLAYOFF) {
                 val t = Odds.compute(p, lg::rating, runs = 50, seed = 1L)
-                out.append(" po ${t.rows.take(6)}\n")
+                out.append(" po ${t.rows.take(6).joinToString(", ", "[", "]") { legacyText(it) }}\n")
             }
         }
         lg.play(2)
@@ -324,11 +335,11 @@ class AnalysisTest {
     @Test
     fun aLegacyLeaguesOddsAndPreviewsAreAsBefore() {
         // Hashes taken from the code before the odds became per league (this test on it).
-        val pyramid = LegacyLeague(600, LeagueConfig(), 21L)
+        val pyramid = PlayedLeague(600, LeagueConfig(), 21L)
         assertEquals("17860b739333f1a67e824d08a6d84686f7ab5520344f3b98329ee71f5e2da9d3", pyramid.sha(legacyOdds(pyramid)))
-        val linear = LegacyLeague(60, LeagueConfig(divisions = 3, matchFormat = yacht.engine.league.MatchFormat.MIRRORED, doubleElimination = false), 22L)
+        val linear = PlayedLeague(60, LeagueConfig(divisions = 3, matchFormat = yacht.engine.league.MatchFormat.MIRRORED, doubleElimination = false), 22L)
         assertEquals("fcbe542316dd78269bdcdd4ef72099d1e968827d0eee56db141acc3de6390b70", linear.sha(legacyOdds(linear)))
-        val double = LegacyLeague(48, LeagueConfig(divisions = 2), 23L)
+        val double = PlayedLeague(48, LeagueConfig(divisions = 2), 23L)
         assertEquals("d5e9e29cb5ac7c88d00a9137b92e369fdd6e0466fad8358cf5a49072832b2d37", double.sha(legacyOdds(double)))
     }
 
@@ -395,6 +406,56 @@ class AnalysisTest {
         val next = Season.start(2, 4L, listOf(keys))
         val old = Preview.of("ai03", "ai05", ladder, next, odds, null, null, null)
         assertTrue(old.stakes.none { it.contains("확률") }, old.stakes.toString())
+    }
+
+    @Test
+    fun aNationalLeaguesPreviewNamesItsLeague() {
+        // 한국 리그: 1부 ai01-ai06, 2부 ai07-ai12; 일본 리그: ai13-ai18.
+        val s = Season.start(1, 3L, listOf(keys(6), (7..12).map(::key), (13..18).map(::key)), true, Leagues.national(listOf("KR", "JP"), listOf(2, 1)))
+        SeasonPlan(s, LeagueConfig(national = true, doubleRoundRobin = true))
+        play(s, 30)
+        fun odds(key: String, division: Int, title: Double, playoff: Double, champions: Double, relegation: Double, league: String) =
+            AiOdds(key, division, 1, 1.5, title, title, playoff, champions, 0.3, relegation, 0.0, 0.0, s.leagues.tier(division), league)
+        val table = OddsTable(
+            1, s.fixturesPlayed, s.fixturesTotal, 100, 0.02,
+            listOf(odds("ai01", 0, 0.4, 0.9, 0.6, 0.15, "KR"), odds("ai02", 0, 0.3, 0.8, 0.5, 0.2, "KR"), odds("ai07", 1, 0.5, 0.0, 0.0, 0.0, "KR")), "KR",
+        )
+        val p = Preview.of("ai01", "ai02", null, s, table, null, null, null)
+        p.stakes.forEach(::println)
+        assertText(p.stakes)
+        assertTrue(p.stakes.any { it.startsWith("한국 1부 순위는 ai01 ") }, p.stakes.toString())
+        assertTrue("우승을 다투는 맞대결이에요. 한국 리그 우승 확률은 ai01 40%, ai02 30%예요." in p.stakes, p.stakes.toString())
+        assertTrue("ai01이 우승 플레이오프(한국 1부 4위 안)에 나갈 확률은 90%예요." in p.stakes, p.stakes.toString())
+        assertTrue("ai01의 다음 시즌 국제 무대 진출 확률은 60%예요." in p.stakes, p.stakes.toString())
+        val lower = Preview.of("ai01", "ai07", null, s, table, null, null, null, fixture = Fixture(Comp.CUP, 2, "ai01", "ai07", 1L, JobKind.TIE, label = "16강"))
+        assertTrue("ai07의 한국 2부 우승 확률은 50%예요." in lower.stakes, lower.stakes.toString())
+        // The playoffs say whose they are.
+        fun round(comp: Comp, a: String, b: String, label: String, season: Season = s) =
+            Preview.of(a, b, null, season, null, null, null, null, fixture = Fixture(comp, 1, a, b, 1L, JobKind.TIE, label = label)).stakes.first()
+        assertEquals("한국 리그 우승 플레이오프 결승이에요. 이기는 쪽이 한국 리그 챔피언이 돼요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai02", "한국 결승"))
+        assertEquals("한국 리그 우승 플레이오프 결승이에요. 이기는 쪽이 한국 리그 챔피언이 돼요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai02", "한국 최종 결승"))
+        assertEquals("한국 리그 우승 플레이오프 승자조 4강이에요. 지는 쪽은 패자조로 내려가 한 번 더 기회가 있어요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai04", "한국 승자조 4강"))
+        assertEquals("한국 리그 우승 플레이오프 4강이에요. 지는 쪽은 우승 도전이 끝나요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai04", "한국 4강"))
+        assertEquals("한국 1·2부 승강전이에요. 이기는 쪽이 다음 시즌 한국 1부에서 뛰어요.", round(Comp.PROMOTION_PLAYOFF, "ai05", "ai09", "한국 1·2부 승강전"))
+        assertEquals("대륙 챔피언스 아시아 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 결승"))
+        assertEquals("대륙 챔피언스 아시아 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 최종 결승"))
+        assertEquals("대륙 챔피언스 아시아 승자조 결승이에요. 지는 쪽은 패자조로 내려가요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 승자조 결승"))
+        // A legacy league's as before.
+        val legacy = Season.start(1, 3L, listOf(keys(6)))
+        assertEquals("우승 플레이오프 결승이에요. 이기는 쪽이 1부 챔피언이 돼요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai02", "결승", legacy))
+        assertEquals("1·2부 승강전이에요. 이기는 쪽이 다음 시즌 1부에서 뛰어요.", round(Comp.PROMOTION_PLAYOFF, "ai01", "ai02", "1·2부 승강전", legacy))
+        assertEquals("챔피언스 리그 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CHAMPIONS, "ai01", "ai02", "최종 결승", legacy))
+    }
+
+    @Test
+    fun aFinalIsNamedAloneOrAfterItsLeagueOrSection() {
+        for (l in listOf("결승", "최종 결승", "한국 결승", "한국 최종 결승", "아시아 결승", "아시아 최종 결승", "아시아컵 결승")) {
+            assertTrue(Drama.isFinal(Fixture(Comp.CUP, 1, "a", "b", 0, JobKind.TIE, label = l)), l)
+        }
+        for (l in listOf("4강", "한국 4강", "승자조 결승", "패자조 결승", "한국 승자조 결승", "아시아 패자조 결승", "아시아컵 승자조 결승", "1·2부 승강전", "A조 1차전")) {
+            assertFalse(Drama.isFinal(Fixture(Comp.CUP, 1, "a", "b", 0, JobKind.TIE, label = l)), l)
+        }
+        assertTrue(Drama.isFinal(Fixture(Comp.SUPER, 1, "a", "b", 0, JobKind.TIE, label = "슈퍼컵")))
     }
 
     @Test

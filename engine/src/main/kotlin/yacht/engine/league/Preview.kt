@@ -127,7 +127,8 @@ object Preview {
     /** Probabilities shown as a race: not yet decided either way. */
     private const val OPEN_LOW = 0.03
     private const val OPEN_HIGH = 0.97
-    private val UPPER = Regex("^(\\d+)·")
+    /** The upper tier of a promotion playoff's label ("1·2부 승강전", "한국 1·2부 승강전"). */
+    private val UPPER = Regex("(\\d+)·")
 
     /**
      * The preview of [a] against [b] ([a] first in the first game). Every source may be missing
@@ -251,7 +252,7 @@ object Preview {
 
     private fun stakes(a: String, b: String, na: String, nb: String, season: Season?, odds: OddsTable?, fixture: Fixture?): List<String> {
         val out = ArrayList<String>()
-        fixture?.let { roundLine(it)?.let { l -> out += l } }
+        fixture?.let { roundLine(it, season)?.let { l -> out += l } }
         if (season != null) {
             val da = season.divisionOf(a)
             val db = season.divisionOf(b)
@@ -262,7 +263,7 @@ object Preview {
                 val sa = season.standings.getValue(a)
                 val sb = season.standings.getValue(b)
                 if (sa.played + sb.played > 0) {
-                    out += "${season.tiers.label(da)} 순위는 $na ${pa}위(승점 ${sa.points}), $nb ${Ko.ieyo("${pb}위(승점 ${sb.points})")}."
+                    out += "${season.leagues.label(da)} 순위는 $na ${pa}위(승점 ${sa.points}), $nb ${Ko.ieyo("${pb}위(승점 ${sb.points})")}."
                 }
             }
         }
@@ -270,27 +271,40 @@ object Preview {
         val current = odds?.takeIf { season == null || it.season == season.number }
         val oa = current?.get(a)
         val ob = current?.get(b)
-        if (oa != null || ob != null) out += races(na, nb, oa, ob, season?.tiers)
+        if (oa != null || ob != null) out += races(na, nb, oa, ob, season?.leagues)
         return out
     }
 
-    /** The competition and round of a fixture outside the league. */
-    private fun roundLine(f: Fixture): String? {
+    /**
+     * The competition and round of a fixture outside the league. A national league's playoffs
+     * name it ("한국 결승" is the 한국 리그's title playoff final, its 1부 the upper side of "한국
+     * 1·2부 승강전"), from the label and the [season] it is played in.
+     */
+    private fun roundLine(f: Fixture, season: Season?): String? {
         val label = f.label.trim()
-        val final = label == "결승" || label == Knockout.GRAND_LABEL || label.endsWith(" " + Knockout.GRAND_LABEL)
+        val final = Drama.isFinalLabel(label)
+        // What a final is named after ("아시아" of "아시아 결승" and "아시아 최종 결승"); empty for "결승".
+        val finalOf = if (final) label.removeSuffix(Knockout.GRAND_LABEL).removeSuffix("결승").trim() else ""
         // Double elimination: a loss on the winners' side drops to the losers' side, not out.
         val winnersSide = label.contains("승자조")
         val series = if (f.firstTo > 0) " ${f.firstTo}판을 먼저 이기는 쪽이 올라가요." else ""
+        // The national league the playoff is of: its label starts with the league's short name.
+        val lg = season?.leagueOf(f.a)?.takeIf { it.national && label.startsWith(LeagueIds.short(it.id) + " ") }
         return when (f.comp) {
             Comp.LEAGUE, Comp.FRIENDLY, Comp.LAB -> null
-            Comp.TITLE_PLAYOFF -> when {
-                final -> "우승 플레이오프 결승이에요. 이기는 쪽이 1부 챔피언이 돼요.$series"
-                winnersSide -> "우승 플레이오프 ${Ko.ieyo(label)}. 지는 쪽은 패자조로 내려가 한 번 더 기회가 있어요.$series"
-                else -> "우승 플레이오프 ${Ko.ieyo(label.ifEmpty { "4강" })}. 지는 쪽은 우승 도전이 끝나요.$series"
+            Comp.TITLE_PLAYOFF -> {
+                val playoff = lg?.let { "${LeagueIds.label(it.id)} 우승 플레이오프" } ?: "우승 플레이오프"
+                val round = lg?.let { label.removePrefix(LeagueIds.short(it.id) + " ") } ?: label
+                val champion = lg?.let { "${LeagueIds.label(it.id)} 챔피언" } ?: "1부 챔피언"
+                when {
+                    final -> "$playoff 결승이에요. 이기는 쪽이 ${champion}이 돼요.$series"
+                    winnersSide -> "$playoff ${Ko.ieyo(round)}. 지는 쪽은 패자조로 내려가 한 번 더 기회가 있어요.$series"
+                    else -> "$playoff ${Ko.ieyo(round.ifEmpty { "4강" })}. 지는 쪽은 우승 도전이 끝나요.$series"
+                }
             }
             Comp.PROMOTION_PLAYOFF -> {
-                // "1·2부 승강전": the winner plays in the upper of the two next season.
-                val upper = UPPER.find(label)?.groupValues?.get(1)?.let { "${it}부" } ?: "상위 부"
+                // "1·2부 승강전" ("한국 1·2부 승강전"): the winner plays in the upper of the two next season.
+                val upper = UPPER.find(label)?.groupValues?.get(1)?.let { "${it}부" }?.let { t -> lg?.let { "${LeagueIds.short(it.id)} $t" } ?: t } ?: "상위 부"
                 "${Ko.ieyo(label.ifEmpty { "승강 플레이오프" })}. 이기는 쪽이 다음 시즌 ${upper}에서 뛰어요."
             }
             Comp.ALL_STAR, Comp.LEGEND -> "${Ko.ieyo(f.comp.label)}. 순위와 상관없는 이벤트 경기예요."
@@ -298,7 +312,7 @@ object Preview {
                 val what = if (label.isEmpty() || label == f.comp.label) f.comp.label else "${f.comp.label} $label"
                 when {
                     f.kind != JobKind.TIE -> "${Ko.ieyo(what)}."
-                    final -> "${f.comp.label} 결승이에요. 이기는 쪽이 우승해요.$series"
+                    final -> "${f.comp.label} ${if (finalOf.isEmpty()) "" else "$finalOf "}결승이에요. 이기는 쪽이 우승해요.$series"
                     what == f.comp.label -> "${Ko.ieyo(what)}. 이기는 쪽이 우승해요.$series"
                     winnersSide -> "${Ko.ieyo(what)}. 지는 쪽은 패자조로 내려가요.$series"
                     else -> "${Ko.ieyo(what)}. 지는 쪽은 바로 탈락해요.$series"
@@ -307,8 +321,11 @@ object Preview {
         }
     }
 
-    /** Title, playoff, champions league, promotion and relegation races still open for either side. */
-    private fun races(na: String, nb: String, oa: AiOdds?, ob: AiOdds?, tiers: Tiers?): List<String> {
+    /**
+     * Title, playoff, champions league (a national league's: its international places), promotion
+     * and relegation races still open for either side, each named after its league ([leagues]).
+     */
+    private fun races(na: String, nb: String, oa: AiOdds?, ob: AiOdds?, leagues: Leagues?): List<String> {
         val out = ArrayList<String>()
         fun pct(p: Double) = Ko.pct(p)
         fun both(label: String, intro: String, f: (AiOdds) -> Double): Boolean {
@@ -324,15 +341,22 @@ object Preview {
             val x = o?.let(f) ?: return
             if (open(x)) out += "${n}의 $label 확률은 ${Ko.ieyo(pct(x))}."
         }
-        // Each side's own division title (a cup tie may bring two divisions together).
-        fun titleLabel(o: AiOdds?) = o?.division?.takeIf { it > 0 }?.let { d -> (tiers?.takeIf { d < it.size }?.label(d) ?: "${d + 1}부") + " 우승" } ?: "우승"
+        // The national league of a side's odds, when the season has it.
+        fun league(o: AiOdds?): LeagueDef? = o?.takeIf { leagues != null && it.division < leagues.size }?.let { leagues!!.of(it.division) }?.takeIf { it.national }
+        // Each side's own division title (a cup tie may bring two divisions together): "2부 우승";
+        // a national league's "한국 리그 우승", "한국 2부 우승".
+        fun titleLabel(o: AiOdds?): String {
+            league(o)?.let { lg -> return if (o!!.tier == 0) "${LeagueIds.label(lg.id)} 우승" else "${leagues!!.label(o.division)} 우승" }
+            return o?.division?.takeIf { it > 0 }?.let { d -> (leagues?.takeIf { d < it.size }?.label(d) ?: "${d + 1}부") + " 우승" } ?: "우승"
+        }
         if (!both(titleLabel(oa ?: ob), "우승을 다투는 맞대결이에요.") { it.title }) {
             single(oa, na, titleLabel(oa)) { it.title }
             single(ob, nb, titleLabel(ob)) { it.title }
         }
         for ((o, n) in listOf(oa to na, ob to nb)) {
-            if (o == null || o.division != 0 || o.playoff <= 0.0) continue
-            if (open(o.playoff)) out += "${Ko.i(n)} 우승 플레이오프(1부 4위 안)에 나갈 확률은 ${Ko.ieyo(pct(o.playoff))}."
+            if (o == null || o.tier != 0 || o.playoff <= 0.0) continue
+            val top = league(o)?.let { "${LeagueIds.short(it.id)} 1부" } ?: "1부"
+            if (open(o.playoff)) out += "${Ko.i(n)} 우승 플레이오프($top 4위 안)에 나갈 확률은 ${Ko.ieyo(pct(o.playoff))}."
         }
         if (!both("승격", "승격을 다투는 맞대결이에요.") { it.promotion }) {
             single(oa, na, "승격") { it.promotion }
@@ -346,7 +370,9 @@ object Preview {
             if (o == null) continue
             val spot = o.promotionPlayoff + o.relegationPlayoff
             if (spot >= 0.1 && spot <= OPEN_HIGH) out += "${Ko.i(n)} 승강 플레이오프로 갈 확률은 ${Ko.ieyo(pct(spot))}."
-            if (o.champions in 0.05..0.95) out += "${n}의 다음 시즌 챔피언스 리그 진출 확률은 ${Ko.ieyo(pct(o.champions))}."
+            // A national league's places: its 대륙 챔피언스 places, or the champions league straight away.
+            val stage = if (league(o) != null) "국제 무대" else "챔피언스 리그"
+            if (o.champions in 0.05..0.95) out += "${n}의 다음 시즌 $stage 진출 확률은 ${Ko.ieyo(pct(o.champions))}."
         }
         return out
     }

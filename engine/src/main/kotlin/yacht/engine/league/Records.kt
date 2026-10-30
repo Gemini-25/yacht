@@ -18,7 +18,8 @@ enum class RecordGroup(val label: String) {
  * the season records, titles and awards from finished seasons. [lowerIsBetter]: the comeback (the
  * lowest P(win) a winner had, in percent), the lowest winning score, the youngest champion.
  * [running]: a count one holder keeps raising game by game (one break a season, not one a game).
- * YACHTS_MATCH counts one AI's Yachts in one match (경기).
+ * YACHTS_MATCH counts one AI's Yachts in one match (경기). The youngest and oldest champion are of
+ * any league's title ([HonourKind.isTopTitle]: the old single league's or a national league's).
  */
 enum class RecordKind(val label: String, val group: RecordGroup, val lowerIsBetter: Boolean = false, val running: Boolean = false) {
     BEST_GAME("한 판 최고 점수", RecordGroup.GAME),
@@ -152,9 +153,9 @@ class Records {
 
     companion object {
         /**
-         * The AI with the most titles in [honours] (division champions, cup, champions league,
-         * super cup), computed on demand; the earliest to reach the count when level (then the
-         * first key). Null before the first title.
+         * The AI with the most titles in [honours] (division champions of every tier and league,
+         * cup, champions league, 대륙 챔피언스, super cup: [Awards.isAiTitle]), computed on demand;
+         * the earliest to reach the count when level (then the first key). Null before the first title.
          */
         fun mostTitles(honours: HonourBook): LeagueRecord? {
             val count = HashMap<String, Int>()

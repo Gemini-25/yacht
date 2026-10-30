@@ -2,7 +2,12 @@ package yacht.engine.league
 
 import kotlin.math.roundToInt
 
-/** One AI's league season (성장 곡선): its division (0 = top; a pyramid's tier) and place, record, final rating and average match rating. */
+/**
+ * One AI's league season (성장 곡선): its [division] (its tier in its league, 0 = 1부; a pyramid's
+ * tier, the group not kept) and place, record, final rating and average match rating, the
+ * [league] it played in ([LeagueIds]; [LeagueIds.LEGACY] for the old single league) and its
+ * [club] then (null without one).
+ */
 data class SeasonLine(
     val season: Int,
     val division: Int,
@@ -12,6 +17,8 @@ data class SeasonLine(
     val losses: Int,
     val rating: Double,
     val avgRating: Double,
+    val league: String = LeagueIds.LEGACY,
+    val club: String? = null,
 ) {
     val points: Int get() = 3 * wins + draws
 }
@@ -36,7 +43,9 @@ data class SeasonSummary(
  * The league's history (league/archive.txt, docs/LEAGUE_SPEC.md section 3): season summaries
  * of the newest [MAX_SEASONS] seasons, every AI's season lines over the newest [LINE_SEASONS],
  * dynasties, the hall of fame, the highlights the media module keeps per season, and the newest
- * season review until it has been shown. Not thread-safe: callers synchronise.
+ * season review until it has been shown. The lines' leagues and clubs are kept on their own
+ * (`sx`, only where they change), so a version from before national leagues reads the file as
+ * it always did, every season line included. Not thread-safe: callers synchronise.
  */
 class Archive {
     private val summaryMap = java.util.TreeMap<Int, SeasonSummary>()
@@ -102,11 +111,17 @@ class Archive {
         }
     }
 
-    /** Adds [line] in the precision the file keeps (2 rating points, 0.01 of match rating), so a reload changes nothing. */
+    /**
+     * Adds [line] in the precision the file keeps (2 rating points, 0.01 of match rating; a
+     * league this version knows, a club id `c<n>` up to [MAX_CLUB]), so a reload changes nothing.
+     */
     internal fun addLine(key: String, line: SeasonLine) {
         val list = lineMap.getOrPut(key) { ArrayList() }
         list.removeAll { it.season == line.season }
-        list += line.copy(rating = ratingOf(ratingCode(line.rating)), avgRating = avgOf(avgCode(line.avgRating)))
+        list += line.copy(
+            rating = ratingOf(ratingCode(line.rating)), avgRating = avgOf(avgCode(line.avgRating)),
+            league = LeagueIds.ofCode(leagueCode(line.league)), club = clubOf(clubCode(line.club)),
+        )
         list.sortBy { it.season }
         while (list.size > LINE_SEASONS) list.removeAt(0)
     }
@@ -156,6 +171,12 @@ class Archive {
             append("sl ${Field.esc(k)} ${list.first().season} ")
             packLines(list, this)
             append('\n')
+            // League and club apart from the 13-digit lines, so an older version reads the file as before.
+            if (list.any { it.league != LeagueIds.LEGACY || it.club != null }) {
+                append("sx ${Field.esc(k)}")
+                packPlaces(list, this)
+                append('\n')
+            }
         }
         for (d in dynastyList) append("dyn ${Field.esc(d.key)} ${d.kind} ${d.title} ${d.count} ${d.from} ${d.to}\n")
         for (e in hof) append("hof ${Field.esc(e.key)} ${Field.esc(e.name)} ${e.season} ${e.reason} ${e.titles} ${e.games} ${Field.num(e.winRate, 3)}\n")
@@ -190,6 +211,56 @@ class Archive {
         private fun ratingOf(code: Int) = if (code == 0) Double.NaN else (2 * code - RATING_OFFSET).toDouble()
         private fun avgCode(a: Double) = if (a.isNaN()) NONE else (a * 100).roundToInt().coerceIn(0, NONE - 1)
         private fun avgOf(code: Int) = if (code == NONE) Double.NaN else code / 100.0
+
+        // A season line's league and club go into the key's one `sx` line: an entry of PLACE_WIDTH
+        // base-36 digits (season 2, league 1 [LeagueIds.code], club number 2, 00 = none) wherever
+        // they differ from the line before (before the first: the old single league, no club). A
+        // line takes the newest entry of its season or before. About 1.5 entries a career.
+        private const val PLACE_WIDTH = 5
+
+        /** The highest club number an `sx` entry holds (c1 ... c1295). */
+        const val MAX_CLUB = 36 * 36 - 1
+
+        /** [LeagueIds.code] of [id]; 0 (the old single league) for one this version does not know. */
+        private fun leagueCode(id: String) = runCatching { LeagueIds.code(id) }.getOrDefault(0)
+
+        /** The number of a club id `c<n>` ([ClubBook.idOf]); 0 for none or an id the archive cannot hold. */
+        private fun clubCode(id: String?): Int {
+            val digits = id?.takeIf { it.length > 1 && it[0] == 'c' }?.substring(1)?.takeIf { d -> d.all { it in '0'..'9' } } ?: return 0
+            return digits.toIntOrNull()?.takeIf { it in 1..MAX_CLUB } ?: 0
+        }
+
+        private fun clubOf(code: Int): String? = if (code == 0) null else ClubBook.idOf(code)
+
+        private fun packPlaces(list: List<SeasonLine>, out: StringBuilder) {
+            var league = 0
+            var club = 0
+            for (l in list) {
+                val lc = leagueCode(l.league)
+                val cc = clubCode(l.club)
+                if (lc == league && cc == club) continue
+                out.append(' ')
+                put(out, l.season, 2)
+                put(out, lc, 1)
+                put(out, cc, 2)
+                league = lc
+                club = cc
+            }
+        }
+
+        /** [list]'s lines (oldest first) with the league and club of [entries] (an `sx` line's fields); bad entries are left out. */
+        private fun placeLines(list: MutableList<SeasonLine>, entries: List<String>) {
+            val places = entries.mapNotNull { e ->
+                if (e.length != PLACE_WIDTH) return@mapNotNull null
+                runCatching { Triple(e.substring(0, 2).toInt(36), LeagueIds.ofCode(e.substring(2, 3).toInt(36)), clubOf(e.substring(3, 5).toInt(36))) }.getOrNull()
+            }.sortedBy { it.first }
+            if (places.isEmpty()) return
+            var at = -1
+            for ((i, l) in list.withIndex()) {
+                while (at + 1 < places.size && places[at + 1].first <= l.season) at++
+                if (at >= 0) list[i] = l.copy(league = places[at].second, club = places[at].third)
+            }
+        }
 
         private fun put(out: StringBuilder, v: Int, width: Int) {
             var max = 1
@@ -251,6 +322,7 @@ class Archive {
             val lines = if (text.endsWith('\n')) all else all.dropLast(1)
             val a = Archive()
             val review = ArrayList<String>()
+            val places = HashMap<String, List<String>>()
             for (line in lines) {
                 runCatching {
                     val f = line.split(' ')
@@ -268,6 +340,7 @@ class Archive {
                             val list = unpackLines(f[2].toInt(), f[3])
                             if (list.isNotEmpty()) a.lineMap[Field.unesc(f[1])] = ArrayList(list.takeLast(LINE_SEASONS))
                         }
+                        "sx" -> places[Field.unesc(f[1])] = f.drop(2)
                         "dyn" -> a.dynastyList += Dynasty(Field.unesc(f[1]), f[2], f[3], f[4].toInt(), f[5].toInt(), f[6].toInt())
                         "hof" -> a.hof += HallOfFameEntry(Field.unesc(f[1]), Field.unesc(f[2]), f[3].toInt(), f[4], f[5].toInt(), f[6].toInt(), Field.dbl(f[7]))
                         "hl" -> {
@@ -280,6 +353,7 @@ class Archive {
                     }
                 }
             }
+            for ((k, entries) in places) a.lineMap[k]?.let { placeLines(it, entries) }
             SeasonReview.decode(review)?.let { (r, seen) ->
                 a.review = r
                 a.reviewSeen = seen

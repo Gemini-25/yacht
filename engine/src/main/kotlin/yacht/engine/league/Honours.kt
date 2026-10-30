@@ -20,8 +20,17 @@ class HonourBook {
         trim()
     }
 
-    /** Titles of [key] (division champions and cups, not moves or awards). */
-    fun titles(key: String): Int = list.count { it.key == key && (it.kind in TITLES || DIVISION.matches(it.kind)) }
+    /** Titles of [key] (division champions of every tier and league, and cups; not moves or awards). */
+    fun titles(key: String): Int = list.count { it.key == key && isTitle(it.kind) }
+
+    /**
+     * Major titles of [key] (the hall of fame, "리그의 제왕", the evolution mentor): the cup, the
+     * champions league, a 대륙 챔피언스, the super cup, a world cup won with the squad, the old
+     * single league's title, and a national league's title ("L0.KR") when [major] says that
+     * league counted in that season (one of the best-ranked it was played under).
+     */
+    fun majorTitles(key: String, major: (season: Int, league: String) -> Boolean = { _, _ -> true }): Int =
+        list.count { it.key == key && isMajor(it, major) }
 
     private fun trim() {
         val keep = seasons.takeLast(MAX_SEASONS).toSet()
@@ -35,8 +44,25 @@ class HonourBook {
 
     companion object {
         const val MAX_SEASONS = 100
-        val TITLES = setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "CC", "WCW")
-        private val DIVISION = Regex("L\\d")
+
+        /** Title kinds besides the division titles, by [HonourKind.base] ("CCL.ASIA" is a "CCL"). */
+        val TITLES = setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "CC", "WCW", "CCL", "CLUBCUP", "CLUBCUPW")
+
+        /** Major title kinds besides the league titles, by [HonourKind.base] ([majorTitles]). */
+        val MAJOR = setOf("CUP", "CL", "CCL", "SUPER", "WCW")
+
+        /** A title: a division of any tier and league ("L3", "L1.KR") or a [TITLES] kind. */
+        fun isTitle(kind: String): Boolean = HonourKind.isDivision(kind) || HonourKind.base(kind) in TITLES
+
+        /**
+         * A major title ([majorTitles]): a [MAJOR] kind, the old single league's "L0", or a national
+         * league's "L0.<id>" when [major] (season, league id) says so.
+         */
+        fun isMajor(h: Honour, major: (season: Int, league: String) -> Boolean = { _, _ -> true }): Boolean {
+            if (!HonourKind.isTopTitle(h.kind)) return HonourKind.base(h.kind) in MAJOR
+            val league = HonourKind.leagueOf(h.kind) ?: return true
+            return major(h.season, league)
+        }
 
         fun decode(text: String): HonourBook {
             val b = HonourBook()

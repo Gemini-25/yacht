@@ -757,9 +757,10 @@ class StatsBook(
 
     /**
      * Records from the honours once season [season]'s are in [honours] (이 주의 선수 included):
-     * most 이 주의 선수, and the youngest and oldest 1부 champion by [ageAt] (a player's age in a
-     * season; null when unknown). Earlier seasons count too (an older league's champions are
-     * found the first time), without news; returns the news of this season's.
+     * most 이 주의 선수, and the youngest and oldest 1부 champion (of any league,
+     * [HonourKind.isTopTitle]) by [ageAt] (a player's age in a season; null when unknown).
+     * Earlier seasons count too (an older league's champions are found the first time), without
+     * news; returns the news of this season's.
      */
     fun honourRecords(honours: HonourBook, season: Int, ageAt: (String, Int) -> Int?): List<LeagueEvent> {
         val events = ArrayList<LeagueEvent>()
@@ -771,7 +772,7 @@ class StatsBook(
             .maxWithOrNull(compareBy<Map.Entry<String, Int>> { it.value }.thenByDescending { it.key })?.let {
                 offer(LeagueRecord(RecordKind.POTW, it.key, it.value.toDouble(), season), events, warm)
             }
-        for (h in honours.all.filter { it.kind == "L0" && (backfill || it.season == season) }.sortedBy { it.season }) {
+        for (h in honours.all.filter { HonourKind.isTopTitle(it.kind) && (backfill || it.season == season) }.sortedBy { it.season }) {
             val age = ageAt(h.key, h.season)?.takeIf { it > 0 } ?: continue
             val now = warm && h.season == season
             offer(LeagueRecord(RecordKind.YOUNGEST_CHAMPION, h.key, age.toDouble(), h.season), events, now)
@@ -788,6 +789,11 @@ class StatsBook(
      * season's honours it returned ([seasonHonours]) and add [SeasonEnd.awards] together with
      * them ([HonourBook.add] replaces a whole season). [honours] holds the earlier seasons (this
      * one may be in it already). Closing the same season again returns the saved awards only.
+     *
+     * A season of national leagues also names each league's MVP (LMVP.<league>, [Awards.leagueMvps])
+     * and its MVP among them ([Awards.mvp]); its hall of fame counts major titles
+     * ([HonourBook.majorTitles] by [major]: season, league id), its season lines carry their
+     * league and [club].
      */
     fun endSeason(
         plan: SeasonPlan,
@@ -801,31 +807,39 @@ class StatsBook(
         traits: (String) -> Map<String, String>? = { null },
         /** AIs deleted during the season: no award (the next AI gets it). */
         gone: Set<String> = emptySet(),
+        /** Each AI's club at the season's end, for its season line (null: none). */
+        club: (String) -> String? = { null },
+        /** Whether league [league]'s title of season [season] is a major one (one of the best-ranked leagues then). */
+        major: (season: Int, league: String) -> Boolean = { _, _ -> true },
     ): SeasonEnd {
         val n = plan.number
         if (n <= ended) {
-            // Closed already: the awards as kept (the book's, should the archive have missed the season).
-            val saved = archive.summary(n)?.honours?.filter { it.kind in Awards.KINDS }
-                ?: honours.of(n).filter { it.kind in Awards.KINDS }
+            // Closed already: the awards as kept (the book's, should the archive have missed the
+            // season; the league MVPs are only in the book).
+            val book = honours.of(n).filter { Awards.isAward(it.kind) }
+            val saved = archive.summary(n)?.honours?.filter { it.kind in Awards.KINDS }?.let { it + book.filter { h -> h.kind !in Awards.KINDS } } ?: book
             return SeasonEnd(n, saved, emptyList(), emptyList(), emptyList(), archive.review?.takeIf { it.season == n })
         }
         val league = plan.league
+        val national = league.leagues.national
         // Sorted, so that ties come out the same every time.
         val keys = league.standings.keys.sorted()
         val events = ArrayList<LeagueEvent>()
 
         val awards = ArrayList<Honour>()
         // A season closed before (the app was killed while saving it) keeps the awards it was given.
-        val given = honours.of(n).filter { it.kind in Awards.KINDS }
+        val given = honours.of(n).filter { Awards.isAward(it.kind) }
         if (given.isNotEmpty()) awards += given
         else {
             val awardKeys = keys.filter { it !in gone }
-            Awards.mvp(plan) { if (it in gone) null else seasonStats[it] }?.let { awards += Honour(n, "MVP", it) }
+            val stats = { k: String -> if (k in gone) null else seasonStats[k] }
+            Awards.mvp(plan, rating, stats)?.let { awards += Honour(n, "MVP", it) }
             Awards.rookie(awardKeys, isRookie ?: { it in rookieKeys }, rating)?.let { awards += Honour(n, "ROOKIE", it) }
             Awards.mip(awardKeys, { startRating(it) }, rating)?.let { awards += Honour(n, "MIP", it) }
+            for ((id, k) in Awards.leagueMvps(plan, stats)) awards += Honour(n, HonourKind.of(Awards.LMVP, id), k)
         }
         // The season's titles as Offseason gave them (or as already added to the book).
-        val titles = seasonHonours.filter { it.season == n }.ifEmpty { honours.of(n).filter { it.kind !in Awards.KINDS } }
+        val titles = seasonHonours.filter { it.season == n }.ifEmpty { honours.of(n).filter { !Awards.isAward(it.kind) } }
         val won = titles + awards
         for (h in won) if (h.kind in Awards.ANNOUNCED) events += LeagueEvent("award", n, listOf(h.key), listOf(h.kind))
 
@@ -894,6 +908,7 @@ class StatsBook(
 
         // Hall of fame (AIs only: team competitions' honours are keyed by the team). Sorted, so
         // that the order of the inducted (and of archive.txt) does not depend on the map's.
+        // National leagues: only major titles count (28 league titles a season would fill it).
         val inducted = ArrayList<HallOfFameEntry>()
         val candidates = java.util.TreeSet<String>().apply {
             addAll(keys)
@@ -902,7 +917,7 @@ class StatsBook(
         for (k in candidates) {
             if (archive.inHallOfFame(k)) continue
             val c = careerStats[k]
-            val titles = titlesOf(k)
+            val titles = if (national) book.majorTitles(k, major) else titlesOf(k)
             val mvps = maxOf(mvpCount[k] ?: 0, mvpCounts[k] ?: 0)
             val reason = Awards.hallOfFame(titles, mvps, c) ?: continue
             val e = HallOfFameEntry(k, name(k), n, reason, titles, c?.games ?: 0, c?.winRate ?: 0.0)
@@ -921,13 +936,16 @@ class StatsBook(
         }
 
         // Season lines (성장 곡선) and careers.
+        val leagues = league.leagues
         for (d in league.divisions.indices) {
+            val id = leagues.of(d).id
             for ((pos, s) in league.table(d).withIndex()) {
                 val st = seasonStats[s.key]
                 // No rating now (off the ladder): the line's rating as kept, else none.
                 val r = rating(s.key).takeIf { !it.isNaN() } ?: archive.lines(s.key).firstOrNull { it.season == n }?.rating ?: Double.NaN
-                // By tier: a pyramid's group is not kept (a season line packs its tier in one digit).
-                archive.addLine(s.key, SeasonLine(n, league.tiers.tier(d), pos + 1, s.wins, s.draws, s.losses, r, st?.avgRating ?: Double.NaN))
+                // By tier in its league: a pyramid's group is not kept (a season line packs its tier in one digit).
+                val line = SeasonLine(n, leagues.tier(d), pos + 1, s.wins, s.draws, s.losses, r, st?.avgRating ?: Double.NaN, id, club(s.key))
+                archive.addLine(s.key, line)
                 careerStats.getOrPut(s.key) { AiStats() }.seasons++
             }
         }
