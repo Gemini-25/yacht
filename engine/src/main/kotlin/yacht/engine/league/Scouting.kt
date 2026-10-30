@@ -151,7 +151,8 @@ object Scouting {
             else "크게 망하는 걸 싫어하는 신중형이에요(θ=${signed(theta)}). 무리하지 않고 점수를 지켜요."
         }
         if (spec != null) return when (spec.base) {
-            CustomBase.WIN -> "매 턴 승률을 직접 계산해서, 점수 차에 맞춰 안전하게도 과감하게도 둬요."
+            CustomBase.WIN -> "매 턴 승률을 직접 계산해서, 점수 차에 맞춰 안전하게도 과감하게도 둬요." +
+                if (spec.adapts) " 상대 기록이 쌓이면 그 상대가 실제로 내는 점수에 맞춰 계산해요." else ""
             CustomBase.EV, CustomBase.RISK -> "평균 점수를 최대화하는 정석을 바탕으로 둬요."
         }
         return when (family) {

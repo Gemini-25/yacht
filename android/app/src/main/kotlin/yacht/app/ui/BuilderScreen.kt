@@ -5,6 +5,7 @@ package yacht.app.ui
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -92,6 +94,24 @@ fun BuilderScreen(c: AppController) {
             )
             if (spec.base == CustomBase.RISK) {
                 Chips(LeagueRoster.THETAS.map { it to "θ=" + (if (it > 0) "+" else "") + it }, spec.theta) { spec = spec.copy(theta = it) }
+            }
+            if (spec.base == CustomBase.WIN) {
+                // 상대 맞춤: the opponent read from its record once it has one.
+                Row(Modifier.fillMaxWidth().clickable { spec = spec.copy(adapt = !spec.adapt) }, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("상대 맞춤", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (spec.adapt) {
+                                "상대 기록이 ${yacht.engine.OppModel.MIN_GAMES}판 이상 쌓이면 그 상대의 평균 점수와 기복으로 점수 분포를 추론해 승률을 계산해요. " +
+                                    "기록이 적은 상대에게는 기본 승률 계산과 똑같이 둬요."
+                            } else {
+                                "상대가 늘 기대점수 정석으로 둔다고 보고 승률을 계산해요."
+                            },
+                            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = spec.adapt, onCheckedChange = { spec = spec.copy(adapt = it) })
+                }
             }
             SectionTitle("실수")
             val mistakes = if (spec.base == CustomBase.EV) CustomMistake.entries else listOf(CustomMistake.NONE, CustomMistake.SLIP)

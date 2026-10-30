@@ -46,6 +46,7 @@ fun main(args: Array<String>) {
         "commentary" -> commentarySamples(opts)
         "ladder" -> ladderRun(opts)
         "cost" -> cost(opts)
+        "adapt" -> adapt(opts)
         "league" -> league(opts, loadTables(File(opts["tables"] ?: "tables")).withoutRisk())
         "league-report" -> {
             val t = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
@@ -75,6 +76,9 @@ fun main(args: Array<String>) {
                     two AIs against each other, each deal played twice with the seats swapped;
                     SPEC: ev | win | duel-X (end-game table vs a max-expectation opponent, <= X ops)
                     | aduel-X (end-game table vs an opponent playing to beat me)
+              adapt --tables DIR [--opps greedy,keeper,slip20,soft3,rule,ev] [--record N] [--games N] [--threads T] [--seed S]
+                    상대 맞춤 승률 AI vs the app's win AI on the same deals against each opponent,
+                    the opponent's model taken from its finals in N games against the max-expectation AI
               explain --tables DIR [--games N] [--seed S] [--stray P]
                     print the Korean explanations of whole games (P = chance of not following advice)
             """.trimIndent(),

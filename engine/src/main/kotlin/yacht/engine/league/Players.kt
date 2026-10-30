@@ -24,6 +24,9 @@ enum class Origin(val label: String) {
 
     /** A player the player made (선수 만들기): a league player like the generated ones. */
     CREATED("직접 만든"),
+
+    /** A hand-made AI invited to every league ([LeagueRoster.GUESTS]): the 상대 맞춤 승률 AI. */
+    GUEST("초청"),
     ;
 
     companion object {
@@ -37,6 +40,7 @@ enum class Origin(val label: String) {
             GENERATED_KEY.matches(key) -> GENERATED
             EVOLVED_KEY.matches(key) -> EVOLVED
             CREATED_KEY.matches(key) -> CREATED
+            key in LeagueRoster.GUESTS -> GUEST
             else -> BASE
         }
     }

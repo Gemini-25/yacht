@@ -57,6 +57,16 @@ Ground rules for all code:
 - **Base AIs**: the 103 hand-made AIs of `LeagueRoster`. With `baseAis` off they play one
   farewell season and leave the league as its founders (records kept; ranked games and the lab
   still use them).
+- **Guests** (`origin = GUEST` "초청", `LeagueRoster.GUESTS`, config `guests`, default on; off in
+  the 대혼돈 and 강자만 presets): hand-made AIs that play whatever `baseAis` says. The one guest is
+  the 상대 맞춤 승률 AI (`win-adapt`): the app's win AI (exact from 5 boxes) whose opponent model
+  is the opponent's record ([OppModel]: mean and sd of its finals against the max-expectation
+  player's 191.8 / 37.9, shrunk by n/(n+30), half points and 2% steps, none under 30 games). The
+  record is this season's official games once 30, else the career's rated games, read under the
+  lock when the job is taken (`LeagueWorld.oppModel`, passed to `LeagueMatch.playJob` as `scout`;
+  `LeagueAi.versus` builds the player). Ranked games read my ranked games' mean. A highlight
+  replay reads the records as they are then (a changed model plays another game: 다시 볼 수 없음).
+  The custom WIN base has the same switch (`CustomAiSpec.adapt`, a 17th field).
 - **Made players** (`origin = CREATED`, keys `u1`, `u2`, ... never given twice; `made N` line):
   선수 만들기 (`PlayerMaker`, `PlayerDraft`): name, gender, nation, hometown, age, abilities,
   potential, feel or slips, temper kind, style (recipe, k 0.7..1.7, second style, overlay; a

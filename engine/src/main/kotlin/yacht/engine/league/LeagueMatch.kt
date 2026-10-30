@@ -4,6 +4,7 @@ import yacht.engine.Board
 import yacht.engine.Category
 import yacht.engine.Dice
 import yacht.engine.DiceStream
+import yacht.engine.OppModel
 import yacht.engine.Player
 import yacht.engine.RuleSet
 import java.util.Random
@@ -15,6 +16,9 @@ import java.util.concurrent.CancellationException
  * matches (one match per board), with optional per-game facts for the statistics.
  */
 object LeagueMatch {
+    /** No opponent records known: every AI plays as it always does. */
+    val NO_SCOUT: (String) -> OppModel? = { null }
+
     /**
      * Plays [a] against [b] on the deal [seed]; [a] moves first in the first game. Throws
      * [CancellationException] between turns once [cancelled] says so.
@@ -31,23 +35,25 @@ object LeagueMatch {
         format: MatchFormat = MatchFormat.MIRRORED,
         estimate: WinEstimate? = null,
         cancelled: () -> Boolean = { false },
+        /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
+        scout: (String) -> OppModel? = NO_SCOUT,
     ): BoardResult {
         val games = ArrayList<GameScore>()
         val facts = ArrayList<GameFacts>()
         val first = DiceStream(DiceStream.mix(seed, 0))
         val second = DiceStream(DiceStream.mix(seed, 1))
         fun rng(game: Int, seat: Int) = Random(DiceStream.mix(seed, 7, game.toLong(), seat.toLong()))
-        val g1 = game(rules, a.make(rng(0, 0)), b.make(rng(0, 1)), first, second, estimate, cancelled)
+        val g1 = game(rules, a.player(rng(0, 0), scout(b.key)), b.player(rng(0, 1), scout(a.key)), first, second, estimate, cancelled)
         games += score(g1.first, g1.second)
         g1.facts?.let { facts += it }
         if (format != MatchFormat.SINGLE) {
-            val g2 = game(rules, b.make(rng(1, 0)), a.make(rng(1, 1)), first, second, estimate, cancelled)
+            val g2 = game(rules, b.player(rng(1, 0), scout(a.key)), a.player(rng(1, 1), scout(b.key)), first, second, estimate, cancelled)
             games += score(g2.second, g2.first)
             g2.facts?.let { facts += it }
         }
         var deciders = 0
         if (format == MatchFormat.BEST_OF_3 && games.sumOf { if (it.a > it.b) 1.0 else if (it.a == it.b) 0.5 else 0.0 } == 1.0) {
-            decider(rules, a, b, seed, 0, estimate, cancelled, games, facts)
+            decider(rules, a, b, seed, 0, estimate, cancelled, games, facts, scout)
             deciders = 1
         }
         return BoardResult(a.key, b.key, games, facts, deciders)
@@ -68,17 +74,19 @@ object LeagueMatch {
         estimate: WinEstimate? = null,
         maxDeciders: Int = 3,
         cancelled: () -> Boolean = { false },
+        /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
+        scout: (String) -> OppModel? = NO_SCOUT,
     ): BoardResult {
         val games = ArrayList<GameScore>()
         val facts = ArrayList<GameFacts>()
         for (leg in 0 until legs) {
-            val m = playMatch(rules, a, b, DiceStream.mix(seed, 100L + leg), if (format == MatchFormat.BEST_OF_3) MatchFormat.MIRRORED else format, estimate, cancelled)
+            val m = playMatch(rules, a, b, DiceStream.mix(seed, 100L + leg), if (format == MatchFormat.BEST_OF_3) MatchFormat.MIRRORED else format, estimate, cancelled, scout)
             games += m.games
             facts += m.facts
         }
         var deciders = 0
         while (deciders < maxDeciders && TieRule.match(games) == 0) {
-            decider(rules, a, b, seed, deciders, estimate, cancelled, games, facts)
+            decider(rules, a, b, seed, deciders, estimate, cancelled, games, facts, scout)
             deciders++
         }
         return BoardResult(a.key, b.key, games, facts, deciders)
@@ -93,8 +101,10 @@ object LeagueMatch {
         format: MatchFormat = MatchFormat.MIRRORED,
         estimate: WinEstimate? = null,
         cancelled: () -> Boolean = { false },
+        /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
+        scout: (String) -> OppModel? = NO_SCOUT,
     ): List<BoardResult> = lineupA.zip(lineupB).mapIndexed { i, (x, y) ->
-        playMatch(rules, x, y, DiceStream.mix(seed, 200L + i), format, estimate, cancelled)
+        playMatch(rules, x, y, DiceStream.mix(seed, 200L + i), format, estimate, cancelled, scout)
     }
 
     /** Plays a whole job; [ai] finds each AI (null: the job cannot be played). */
@@ -105,6 +115,8 @@ object LeagueMatch {
         format: MatchFormat = MatchFormat.MIRRORED,
         estimate: WinEstimate? = null,
         cancelled: () -> Boolean = { false },
+        /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
+        scout: (String) -> OppModel? = NO_SCOUT,
     ): JobResult? {
         val t0 = System.nanoTime()
         val boards: List<BoardResult>
@@ -113,14 +125,14 @@ object LeagueMatch {
             JobKind.MATCH -> {
                 val x = ai(job.a) ?: return null
                 val y = ai(job.b) ?: return null
-                val r = playMatch(rules, x, y, job.seed, format, estimate, cancelled)
+                val r = playMatch(rules, x, y, job.seed, format, estimate, cancelled, scout)
                 boards = listOf(r)
                 winner = TieRule.match(r.games)
             }
             JobKind.TIE -> {
                 val x = ai(job.a) ?: return null
                 val y = ai(job.b) ?: return null
-                val r = playTie(rules, x, y, job.seed, job.legs, format, estimate, cancelled = cancelled)
+                val r = playTie(rules, x, y, job.seed, job.legs, format, estimate, cancelled = cancelled, scout = scout)
                 boards = listOf(r)
                 // Level after every decider: side A (the higher seed by convention) goes through.
                 winner = TieRule.match(r.games).let { if (it == 0) 1 else it }
@@ -128,7 +140,7 @@ object LeagueMatch {
             JobKind.TEAM -> {
                 val xs = job.lineupA.map { ai(it) ?: return null }
                 val ys = job.lineupB.map { ai(it) ?: return null }
-                boards = playTeam(rules, xs, ys, job.seed, format, estimate, cancelled)
+                boards = playTeam(rules, xs, ys, job.seed, format, estimate, cancelled, scout)
                 winner = TieRule.team(boards)
             }
         }
@@ -172,10 +184,12 @@ object LeagueMatch {
         estimate: WinEstimate? = null,
         watch: Boolean = false,
         cancelled: () -> Boolean = { false },
+        /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
+        scout: (String) -> OppModel? = NO_SCOUT,
     ): SingleGame {
         val (x, y) = if (deal.aFirst) a to b else b to a
         val turns = if (watch) ArrayList<WatchTurn>(2 * Category.COUNT) else null
-        val g = game(rules, x.make(Random(deal.rng0)), y.make(Random(deal.rng1)), DiceStream(deal.dice0), DiceStream(deal.dice1), estimate, cancelled, turns)
+        val g = game(rules, x.player(Random(deal.rng0), scout(y.key)), y.player(Random(deal.rng1), scout(x.key)), DiceStream(deal.dice0), DiceStream(deal.dice1), estimate, cancelled, turns)
         val s = if (deal.aFirst) score(g.first, g.second) else score(g.second, g.first)
         return SingleGame(s, g.facts, turns.orEmpty())
     }
@@ -191,16 +205,17 @@ object LeagueMatch {
         cancelled: () -> Boolean,
         games: MutableList<GameScore>,
         facts: MutableList<GameFacts>,
+        scout: (String) -> OppModel?,
     ) {
         val s0 = DiceStream(DiceStream.mix(seed, 300L + k, 0))
         val s1 = DiceStream(DiceStream.mix(seed, 300L + k, 1))
         fun rng(seat: Int) = Random(DiceStream.mix(seed, 301L + k, seat.toLong()))
         if (k % 2 == 0) {
-            val g = game(rules, a.make(rng(0)), b.make(rng(1)), s0, s1, estimate, cancelled)
+            val g = game(rules, a.player(rng(0), scout(b.key)), b.player(rng(1), scout(a.key)), s0, s1, estimate, cancelled)
             games += score(g.first, g.second)
             g.facts?.let { facts += it }
         } else {
-            val g = game(rules, b.make(rng(0)), a.make(rng(1)), s0, s1, estimate, cancelled)
+            val g = game(rules, b.player(rng(0), scout(a.key)), a.player(rng(1), scout(b.key)), s0, s1, estimate, cancelled)
             games += score(g.second, g.first)
             g.facts?.let { facts += it }
         }

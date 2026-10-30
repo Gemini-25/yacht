@@ -16,6 +16,7 @@ import yacht.engine.Board
 import yacht.engine.Category
 import yacht.engine.EvTable
 import yacht.engine.Mode
+import yacht.engine.OppModel
 import yacht.engine.Player
 import yacht.engine.TableIO
 import yacht.engine.Tables
@@ -932,6 +933,8 @@ class LeagueController(
         val made = { k: String -> w.players[k]?.origin == Origin.CREATED }
         var keys = roster.filter { ai ->
             val player = w.players[ai.key]
+            // The invited AIs play when invited, whatever else the rules say.
+            if (ai.key in LeagueRoster.GUESTS) return@filter c.guests
             // No generated players asked for: the book's players sit out (they stay on the ladder).
             // The hand-made AIs play only when asked (they stay for ranked games and the lab).
             made(ai.key) || (player == null || c.generated > 0) && (c.baseAis || Origin.of(ai.key) != Origin.BASE) &&
@@ -1252,7 +1255,7 @@ class LeagueController(
         configureWorld(
             w,
             config.copy(
-                generated = rules.generated, aging = rules.aging, childShare = rules.childShare, baseAis = rules.baseAis,
+                generated = rules.generated, aging = rules.aging, childShare = rules.childShare, baseAis = rules.baseAis, guests = rules.guests,
                 onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
                 clubs = rules.clubs, squad = rules.squad,
             ),
@@ -1298,8 +1301,10 @@ class LeagueController(
     private suspend fun work(t: Tables, flag: AtomicBoolean, rng: Random) {
         while (!flag.get()) {
             var seasonFormat = config.matchFormat
+            // 상대 맞춤 AIs read their opponents' records as they stand when the job is taken.
+            var models: Map<String, OppModel?> = emptyMap()
             val job = try {
-                synchronized(lock) { takeJob(rng) { f -> seasonFormat = f } }
+                synchronized(lock) { takeJob(rng) { f -> seasonFormat = f }?.also { models = scoutFor(it, t) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -1319,7 +1324,7 @@ class LeagueController(
             try {
                 // The lab always plays mirrored matches (its statistics assume them).
                 val format = if (job.comp == Comp.LAB) MatchFormat.MIRRORED else seasonFormat
-                val played = LeagueMatch.playJob(t.rules, job, { aiOf(it) }, format, estimate) { flag.get() }
+                val played = LeagueMatch.playJob(t.rules, job, { aiOf(it) }, format, estimate, { flag.get() }, scout = { models[it] })
                 // A lab AI that is gone ends the experiment (a forfeit would count as a result).
                 if (played == null && job.comp == Comp.LAB) {
                     if (!flag.get()) {
@@ -1375,6 +1380,17 @@ class LeagueController(
             }
             publish()
         }
+    }
+
+    /**
+     * The opponent models a job's 상대 맞춤 AIs play by (under the lock): every side's record
+     * when one of them adapts, else none (the model is not worked out for nothing).
+     */
+    private fun scoutFor(job: Fixture, t: Tables): Map<String, OppModel?> {
+        val w = world ?: return emptyMap()
+        val keys = job.players
+        if (keys.none { aiOf(it)?.adapts == true }) return emptyMap()
+        return keys.associateWith { w.oppModel(t, it) }
     }
 
     /** The next job, marked as taken (under the lock); [format] gets the season's match format. */
@@ -1836,8 +1852,16 @@ class LeagueController(
         Matchmaker.opponentFor(l, r, rng, among) ?: among?.randomOrNull(kotlin.random.Random(rng.nextLong()))
     }
 
-    /** A fresh player for a ranked game against [key]. */
-    fun player(key: String, rng: Random): Player? = byKey[key]?.make?.invoke(rng)
+    /** A fresh player for a ranked game against [key] (a 상대 맞춤 AI reads me by my ranked games). */
+    fun player(key: String, rng: Random): Player? {
+        val ai = byKey[key] ?: return null
+        if (!ai.adapts) return ai.make(rng)
+        val t = tables ?: return ai.make(rng)
+        // My ranked games give my average only (no spread is kept for them).
+        val me = synchronized(lock) { ladder?.entry(Ladder.ME)?.let { it.games to it.scoreSum } }
+        val model = me?.let { (games, sum) -> if (games > 0) yacht.engine.OppModel.of(t, games, sum.toDouble() / games) else null }
+        return ai.player(rng, model)
+    }
 
     fun tierOf(key: String): Tier? = synchronized(lock) { ladder?.tier(key) }
 
@@ -1937,7 +1961,9 @@ class LeagueController(
             return
         }
         watchGame(h.first, h.second, pace, h.caption) {
-            val r = h.replay(t.rules, ::aiOf) ?: return@watchGame null
+            // The records as they stand now (a 상대 맞춤 AI may then play otherwise: said so).
+            val models = synchronized(lock) { world?.let { w -> listOf(h.first, h.second).associateWith { k -> w.oppModel(t, k) } } }.orEmpty()
+            val r = h.replay(t.rules, ::aiOf, scout = { models[it] }) ?: return@watchGame null
             if (!r.same) null.also { scope.launch { watch = watch?.copy(message = r.message, complete = true, playing = false) } } else r.turns
         }
     }

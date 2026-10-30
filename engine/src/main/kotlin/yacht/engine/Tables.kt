@@ -84,6 +84,23 @@ class DistTable(
         val l = lo(mask, u)
         return p.indices.sumOf { (l + it) * p[it] }
     }
+
+    /** Mean and variance of the remaining points from (mask, u). */
+    fun moments(mask: Int, u: Int): Pair<Double, Double> = moments(pmf(mask, u), lo(mask, u))
+
+    companion object {
+        /** Mean and variance of a pmf over [lo, lo + p.size). */
+        fun moments(p: DoubleArray, lo: Int): Pair<Double, Double> {
+            var m = 0.0
+            var q = 0.0
+            for (i in p.indices) {
+                val x = (lo + i).toDouble()
+                m += x * p[i]
+                q += x * x * p[i]
+            }
+            return m to maxOf(0.0, q - m * m)
+        }
+    }
 }
 
 /**

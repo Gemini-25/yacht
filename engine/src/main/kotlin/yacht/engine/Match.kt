@@ -24,6 +24,8 @@ class AdvisorPlayer(
     private val oppShift: Int = 0,
     /** With this many boxes left or fewer, search exactly to the end (0 = by [budgetOps]/[fixedDepth]). */
     private val exactAt: Int = 0,
+    /** The opponent as its record shows it (상대 맞춤; null = a max-expectation opponent). */
+    private val oppModel: OppModel? = null,
 ) : Player {
     private lateinit var turn: PlannedTurn
 
@@ -40,7 +42,7 @@ class AdvisorPlayer(
         }
         val left = Category.COUNT - me.filledCount
         val depth = if (left <= exactAt) left else fixedDepth
-        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = depth, table = table, tieValue = tieValue, oppShift = oppShift)
+        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = depth, table = table, tieValue = tieValue, oppShift = oppShift, oppModel = oppModel)
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)

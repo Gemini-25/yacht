@@ -4,6 +4,7 @@ import yacht.engine.Advisor
 import yacht.engine.Board
 import yacht.engine.Category
 import yacht.engine.EvTable
+import yacht.engine.OppModel
 import yacht.engine.PlanPlayer
 import yacht.engine.Player
 import yacht.engine.RuleSet
@@ -66,7 +67,15 @@ data class CustomAiSpec(
     val play: PlayGene? = null,
     /** How strongly the temper bites (1 = the tempers as they always were; 멘탈). */
     val temperStrength: Double = 1.0,
+    /**
+     * 상대 맞춤 (the WIN base): the opponent read from its record once it has one ([OppModel]),
+     * else a max-expectation opponent as the plain win search assumes.
+     */
+    val adapt: Boolean = false,
 ) {
+    /** True when it plays its opponent by its record (the WIN base with [adapt]). */
+    val adapts: Boolean get() = adapt && base == CustomBase.WIN && play == null
+
     val key: String get() = "custom-$id"
 
     /**
@@ -93,7 +102,7 @@ data class CustomAiSpec(
         }
         parts += when (base) {
             CustomBase.EV -> "기대점수 정석"
-            CustomBase.WIN -> "승률 계산"
+            CustomBase.WIN -> if (adapts) "승률 계산 · 상대 맞춤" else "승률 계산"
             CustomBase.RISK -> "위험 성향 θ=" + (if (theta > 0) "+" else "") + fmt(theta)
         }
         if (base == CustomBase.EV) {
@@ -122,9 +131,10 @@ data class CustomAiSpec(
         val fields = mutableListOf<Any>(
             id, name.replace('|', ' ').replace('\n', ' '), base.name, theta, mistake.name, amount, yacht, straight, bonus, zero, saveChoice, future,
         )
-        val styled = play != null || temperStrength != 1.0
+        val styled = play != null || temperStrength != 1.0 || adapt
         if (temper != Temper.NONE || belief != null || styled) fields.addAll(listOf(temper.name, belief ?: "-"))
         if (styled) fields.addAll(listOf(play?.encode() ?: "-", temperStrength))
+        if (adapt) fields.add(1)
         return fields.joinToString("|")
     }
 
@@ -164,6 +174,7 @@ data class CustomAiSpec(
                 f[6].toDouble(), f[7].toDouble(), f[8].toDouble(), f[9].toDouble(), f[10].toBoolean(), f[11].toDouble(),
                 temperOf(f.getOrNull(12)), beliefOf(f.getOrNull(13)),
                 f.getOrNull(14)?.takeIf { it != "-" }?.let { PlayGene.decode(it) }, f.getOrNull(15)?.toDoubleOrNull() ?: 1.0,
+                f.getOrNull(16) == "1",
             )
         }.getOrNull()
 
@@ -203,8 +214,9 @@ object CustomAis {
         val t = tables.withoutRisk()
         val ev = t.ev
         spec.play?.let { gene -> return styled(spec, gene, t, key, name, family, desc) }
+        val advisor = Advisor(t)
         val planner: (Board, Board) -> TurnPlan = when (spec.base) {
-            CustomBase.WIN -> winPlanner(Advisor(t), budget, LeagueRoster.EXACT_AT)
+            CustomBase.WIN -> winPlanner(advisor, budget, LeagueRoster.EXACT_AT)
             CustomBase.RISK -> { me, opp -> riskPlanner(extra.risk(spec.theta), spec.theta)(me, opp) }
             CustomBase.EV -> {
                 val taste: (Board, Category, Int, Int) -> Double = { me, c, p, u2 ->
@@ -229,15 +241,19 @@ object CustomAis {
         val mistake = spec.effectiveMistake
         val amount = spec.effectiveAmount
         // The player at a mistake level: level 1 is the spec as it is (the only level without a temper).
-        fun player(r: Random, level: Double): Player = when (mistake) {
-            CustomMistake.NONE -> Tempers.slip(0.0, level).let { p -> if (p <= 0.0) PlanPlayer(key, planner) else SlipPlayer(planner, p, r, key) }
-            CustomMistake.SLIP -> SlipPlayer(planner, Tempers.slip(amount, level), r, key)
-            CustomMistake.FEEL -> SoftmaxPlayer(planner, Tempers.feel(amount, level), r, key)
+        fun player(r: Random, level: Double, plan: (Board, Board) -> TurnPlan): Player = when (mistake) {
+            CustomMistake.NONE -> Tempers.slip(0.0, level).let { p -> if (p <= 0.0) PlanPlayer(key, plan) else SlipPlayer(plan, p, r, key) }
+            CustomMistake.SLIP -> SlipPlayer(plan, Tempers.slip(amount, level), r, key)
+            CustomMistake.FEEL -> SoftmaxPlayer(plan, Tempers.feel(amount, level), r, key)
         }
         val temper = spec.temper
-        return LeagueAi(key, name, family, desc, heavy = spec.base == CustomBase.WIN) { r ->
-            if (temper == Temper.NONE) player(r, 1.0) else TemperPlayer(key, Tempers.mood(temper, ev, r)) { player(r, it) }
+        fun make(r: Random, plan: (Board, Board) -> TurnPlan): Player =
+            if (temper == Temper.NONE) player(r, 1.0, plan) else TemperPlayer(key, Tempers.mood(temper, ev, r)) { player(r, it, plan) }
+        // 상대 맞춤: the same AI, its win search reading the opponent by its record when there is one.
+        val versus: ((Random, OppModel?) -> Player)? = if (!spec.adapts) null else { r, model ->
+            make(r, if (model == null) planner else winPlanner(advisor, budget, LeagueRoster.EXACT_AT, model))
         }
+        return LeagueAi(key, name, family, desc, heavy = spec.base == CustomBase.WIN, versus = versus) { r -> make(r, planner) }
     }
 
     /**

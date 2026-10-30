@@ -265,10 +265,16 @@ class Highlight(
      * turn by turn and recording nothing. Null when an AI is no longer in the league; check
      * [HighlightReplay.same] before showing it (an AI that changed plays a different game).
      */
-    fun replay(rules: RuleSet, ai: (String) -> LeagueAi?, cancelled: () -> Boolean = { false }): HighlightReplay? {
+    fun replay(
+        rules: RuleSet,
+        ai: (String) -> LeagueAi?,
+        cancelled: () -> Boolean = { false },
+        /** Opponent models as the records stand now (a 상대 맞춤 AI whose opponent's record changed plays differently). */
+        scout: (String) -> yacht.engine.OppModel? = LeagueMatch.NO_SCOUT,
+    ): HighlightReplay? {
         val x = ai(a) ?: return null
         val y = ai(b) ?: return null
-        return HighlightReplay(this, LeagueMatch.playGame(rules, deal, x, y, watch = true, cancelled = cancelled))
+        return HighlightReplay(this, LeagueMatch.playGame(rules, deal, x, y, watch = true, cancelled = cancelled, scout = scout))
     }
 
     /** One line of fields (no tag): highlights.txt and the archive store it. */

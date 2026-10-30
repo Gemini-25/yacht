@@ -15,6 +15,7 @@ import yacht.engine.LimitedThrowsPlayer
 import yacht.engine.Mode
 import yacht.engine.PhasePlayer
 import yacht.engine.PlanPlayer
+import yacht.engine.OppModel
 import yacht.engine.Player
 import yacht.engine.RandomPlayer
 import yacht.engine.RulePlayer
@@ -51,7 +52,8 @@ enum class Family(val label: String) {
 
 /**
  * One AI of the league. [make] builds a fresh player for one game from that game's random
- * source; [heavy] players run the win search (about a second per game on a phone).
+ * source; [heavy] players run the win search (about a second per game on a phone). [versus]
+ * builds one that plays its opponent as its record shows it (상대 맞춤, [OppModel]; null: as [make]).
  */
 class LeagueAi(
     val key: String,
@@ -59,8 +61,15 @@ class LeagueAi(
     val family: Family,
     val desc: String,
     val heavy: Boolean = false,
+    val versus: ((Random, OppModel?) -> Player)? = null,
     val make: (Random) -> Player,
-)
+) {
+    /** True when it plays its opponent by its record. */
+    val adapts: Boolean get() = versus != null
+
+    /** A player for one game against an opponent of model [opp] (null: no record to go by). */
+    fun player(r: Random, opp: OppModel?): Player = versus?.invoke(r, opp) ?: make(r)
+}
 
 /**
  * The extra expectation tables some AIs need, built on first use (a few seconds each on a
@@ -129,6 +138,15 @@ object LeagueRoster {
      */
     const val EXACT_AT = 4
 
+    /** The 상대 맞춤 승률 AI: a guest of every league (see [GUESTS]). */
+    const val ADAPTIVE = "win-adapt"
+
+    /**
+     * Hand-made AIs that play in the league even when the hand-made ones do not
+     * ([LeagueConfig.guests]); their origin is [Origin.GUEST], not the founders'.
+     */
+    val GUESTS = setOf(ADAPTIVE)
+
     /** Ops cap of the win-search AIs' searches. */
     const val BUDGET = 100_000_000L
 
@@ -150,16 +168,18 @@ object LeagueRoster {
         fun believer(key: String, belief: String, name: String, desc: String) =
             LeagueAi(key, name, Family.BELIEF, desc) { BeliefPlayer(beliefs.getValue(belief), extra.believed(belief, beliefs.getValue(belief)), key) }
         fun character(key: String, name: String, desc: String, heavy: Boolean = false, make: (Random) -> Player) =
-            LeagueAi(key, name, Family.CHARACTER, desc, heavy, make)
+            LeagueAi(key, name, Family.CHARACTER, desc, heavy, make = make)
         fun target(score: Int, name: String, desc: String) =
             LeagueAi("target$score", name, Family.TARGET, desc, heavy = true) { PlanPlayer("target$score", targetPlanner(plain, score, budget, EXACT_AT)) }
         fun winAi(key: String, name: String, desc: String, make: (Random) -> Player) = LeagueAi(key, name, Family.WIN, desc, heavy = true, make = make)
         // This turn only, exact to the end from EXACT_AT boxes (a fixed [depth] keeps its own).
-        fun winSearch(key: String, mode: Mode = Mode.WIN, depth: Int? = null, duel: Long = 0, tie: Double = 0.0, shift: Int = 0, adv: Advisor = plain, exactAt: Int = EXACT_AT) =
-            AdvisorPlayer(
-                adv, mode, budget, fixedDepth = depth ?: 1, name = key, duelOps = duel, tieValue = tie, oppShift = shift,
-                exactAt = if (depth == null) exactAt else 0,
-            )
+        fun winSearch(
+            key: String, mode: Mode = Mode.WIN, depth: Int? = null, duel: Long = 0, tie: Double = 0.0, shift: Int = 0, adv: Advisor = plain,
+            exactAt: Int = EXACT_AT, model: OppModel? = null,
+        ) = AdvisorPlayer(
+            adv, mode, budget, fixedDepth = depth ?: 1, name = key, duelOps = duel, tieValue = tie, oppShift = shift,
+            exactAt = if (depth == null) exactAt else 0, oppModel = model,
+        )
         fun shaped(key: String, name: String, desc: String, future: Double = 1.0, extra: (Board, Category, Int, Int) -> Double = { _, _, _, _ -> 0.0 }) =
             LeagueAi(key, name, Family.EV, desc) { PlanPlayer(key, shapedPlanner(ev, future, extra)) }
         fun riskAi(key: String, name: String, theta: Double, desc: String) =
@@ -174,6 +194,13 @@ object LeagueRoster {
         return listOf(
             // ---- win search -------------------------------------------------------------------
             winAi("win", "승률 AI (앱 기본)", "승률을 최대화. 이번 턴은 정확히, 막판 5칸부터는 끝까지 정확히 계산") { winSearch("win", exactAt = 5) },
+            // 상대 맞춤: the app's win AI, its opponent read from the opponent's record once it has one.
+            LeagueAi(
+                ADAPTIVE, "상대 맞춤 승률 AI", Family.WIN,
+                "앱 기본 승률 AI와 같지만, 상대 기록이 ${OppModel.MIN_GAMES}판 이상 쌓이면 그 평균 점수와 기복으로 상대 점수 분포를 추론해 승률을 계산",
+                heavy = true,
+                versus = { _, model -> winSearch(ADAPTIVE, exactAt = 5, model = model) },
+            ) { winSearch(ADAPTIVE, exactAt = 5) },
             winAi("win-d1", "승률 AI · 이번 턴만", "이번 턴만 정확히 풀고 이후는 기대점수 방식으로 근사") { winSearch("win-d1", depth = 1) },
             winAi("win-d2", "승률 AI · 2턴", "앞 2턴을 정확히 풀고 이후는 근사") { winSearch("win-d2", depth = 2) },
             winAi("duel", "승률 AI · 막판 대결표", "막판(약 5칸)부터 상대의 실제 결과에 대응하는 표로 끝까지 정확") { winSearch("duel", duel = duelOps) },

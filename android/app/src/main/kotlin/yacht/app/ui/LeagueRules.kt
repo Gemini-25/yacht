@@ -107,6 +107,11 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
                 if (cfg.aging) Stepper("빈자리 채우기: 제자 비율", cfg.childShare, 0..100, { "제자 ${it}% · 신인 ${100 - it}%" }, step = 10) { cfg = cfg.copy(childShare = it) }
+                Toggle("초청 AI 출전 (상대 맞춤 승률 AI)", cfg.guests) { cfg = cfg.copy(guests = it) }
+                Text(
+                    "상대 맞춤 승률 AI는 앱의 승률 AI와 같은 계산에, 상대 기록이 ${yacht.engine.OppModel.MIN_GAMES}판 이상 쌓이면 그 상대의 실제 점수 분포를 더해 둬요. 기본 AI와 달리 늘 리그에 나와요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
                 Toggle("기본 AI 103명도 리그에 출전", cfg.baseAis) { cfg = cfg.copy(baseAis = it) }
                 Text(
                     "끄면 기본 AI 103명은 리그에서 빠지고 랭크 게임과 AI 연구소 상대로만 남아요. 다음 시즌부터 적용돼요.",

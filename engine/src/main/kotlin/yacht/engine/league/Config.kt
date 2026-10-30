@@ -43,6 +43,8 @@ data class LeagueConfig(
     val childShare: Int = 40,
     /** The 103 hand-made AIs play in the league too (off: generated players only; they stay for ranked games and the lab). */
     val baseAis: Boolean = false,
+    /** The invited hand-made AIs ([LeagueRoster.GUESTS]: the 상대 맞춤 승률 AI) play in the league. */
+    val guests: Boolean = true,
     /** National teams play the 요트 월드컵 and the continental cups (국가대항전). */
     val nationCup: Boolean = true,
     /** Clubs in the club league (0 = no club league). */
@@ -90,6 +92,7 @@ data class LeagueConfig(
         append("aging ${flag(aging)}\n")
         append("childShare $childShare\n")
         append("baseAis ${flag(baseAis)}\n")
+        append("guests ${flag(guests)}\n")
         append("nationCup ${flag(nationCup)}\n")
         append("clubs $clubs\n")
         append("squad $squad\n")
@@ -138,6 +141,7 @@ data class LeagueConfig(
                         "aging" -> c.copy(aging = v == "1")
                         "childShare" -> c.copy(childShare = v.toInt())
                         "baseAis" -> c.copy(baseAis = v == "1")
+                        "guests" -> c.copy(guests = v == "1")
                         "nationCup" -> c.copy(nationCup = v == "1")
                         "clubs" -> c.copy(clubs = v.toInt())
                         "squad" -> c.copy(squad = v.toInt())
@@ -170,11 +174,11 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
     ),
     CHAOS(
         "대혼돈", "실수하는 선수만 남기고 제자 비율을 높여요: 이변이 쏟아져요",
-        LeagueConfig(onlyFlawed = true, childShare = 70),
+        LeagueConfig(onlyFlawed = true, childShare = 70, guests = false),
     ),
     ELITE(
         "강자만", "레이팅 상위 48명만 2개 부에서, 정상급 싸움만",
         // The same players season after season: rookies would never get the rating to be picked.
-        LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false, aging = false),
+        LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false, aging = false, guests = false),
     ),
 }

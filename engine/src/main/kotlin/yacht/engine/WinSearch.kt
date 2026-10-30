@@ -19,11 +19,15 @@ object WinCurve {
      */
     class Curve(val values: DoubleArray, val oppMin: Int, val oppMax: Int, val ties: DoubleArray = DoubleArray(values.size))
 
-    /** [oppShift]: points added to every opponent final (a player that misjudges the opponent's strength). */
-    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0, oppShift: Int = 0): Curve {
+    /**
+     * [oppShift]: points added to every opponent final (a player that misjudges the opponent's
+     * strength). [model]: the opponent as its record shows it ([OppModel]) instead of a
+     * max-expectation player; a finished opponent is its total either way.
+     */
+    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0, oppShift: Int = 0, model: OppModel? = null): Curve {
         val base = opp.total + oppShift
-        val pmf: DoubleArray
-        val lo: Int
+        var pmf: DoubleArray
+        var lo: Int
         if (opp.isComplete) {
             pmf = doubleArrayOf(1.0)
             lo = 0
@@ -31,6 +35,11 @@ object WinCurve {
             val dist = requireNotNull(tables.dist) { "win mode needs the distribution table" }
             pmf = dist.pmf(opp.mask, opp.u)
             lo = dist.lo(opp.mask, opp.u)
+            if (model != null) {
+                val (p2, lo2) = model.reshape(tables, opp, pmf, lo)
+                pmf = p2
+                lo = lo2
+            }
         }
         val mass = pmf.sum()
         val curve = DoubleArray(SIZE)
@@ -44,6 +53,106 @@ object WinCurve {
             below += p
         }
         return Curve(curve, base + lo, base + lo + pmf.size - 1, ties)
+    }
+}
+
+/**
+ * An opponent as its record shows it (상대 맞춤), for the win search: its finals average [shift]
+ * points above the max-expectation player's (negative: weaker) and spread [spread] times as
+ * wide. From any of its states the remaining points of the max-expectation player are read so:
+ * the mean moved by [shift] times the share of the game's points still to come, the spread
+ * scaled toward [spread] by the share of the game's variance still to come (so a lumpy end game,
+ * a Yacht or nothing, keeps its shape), points kept within what can still be scored. Made from
+ * a record by [of]: null (the plain max-expectation opponent) with too few games, or when the
+ * record is that of a max-expectation player.
+ */
+class OppModel(val shift: Double, val spread: Double = 1.0) {
+    /** [pmf] over [lo, lo + pmf.size) of [opp]'s remaining points, reshaped; returns the new pmf and its lo. */
+    fun reshape(tables: Tables, opp: Board, pmf: DoubleArray, lo: Int): Pair<DoubleArray, Int> {
+        val dist = tables.dist ?: return pmf to lo
+        val (rootMean, rootVar) = root(tables)
+        val (m, v) = DistTable.moments(pmf, lo)
+        if (rootMean <= 0.0) return pmf to lo
+        val target = m + shift * (m / rootMean)
+        val rho = maxOf(0.0, 1.0 + (spread - 1.0) * (if (rootVar > 0) v / rootVar else 0.0))
+        val most = maxRemaining(tables, opp)
+        val ys = DoubleArray(pmf.size) { i -> (target + rho * (lo + i - m)).coerceIn(0.0, most.toDouble()) }
+        var minY = Int.MAX_VALUE
+        var maxY = Int.MIN_VALUE
+        for (y in ys) {
+            minY = minOf(minY, Math.floor(y).toInt())
+            maxY = maxOf(maxY, Math.ceil(y).toInt())
+        }
+        val out = DoubleArray(maxY - minY + 1)
+        for (i in pmf.indices) {
+            val y = ys[i]
+            val f = Math.floor(y).toInt()
+            val frac = y - f
+            out[f - minY] += pmf[i] * (1 - frac)
+            if (frac > 0) out[f + 1 - minY] += pmf[i] * frac
+        }
+        val sum = out.sum()
+        if (!(sum > 0)) return pmf to lo
+        for (i in out.indices) out[i] /= sum
+        // Mass lost to rounding at the ends: the support starts and ends where there is some.
+        var a = 0
+        var b = out.size - 1
+        while (a < b && out[a] < 1e-12) a++
+        while (b > a && out[b] < 1e-12) b--
+        return out.copyOfRange(a, b + 1) to minY + a
+    }
+
+    override fun equals(other: Any?): Boolean = other is OppModel && other.shift == shift && other.spread == spread
+    override fun hashCode(): Int = shift.hashCode() * 31 + spread.hashCode()
+    override fun toString(): String = "OppModel(shift=$shift, spread=$spread)"
+
+    companion object {
+        /** Games of an opponent before its record is used (fewer: the plain opponent). */
+        const val MIN_GAMES = 30
+
+        /** Games a record is weighed against (its mean and spread are shrunk toward max expectation by n / (n + this)). */
+        const val PRIOR_GAMES = 30
+
+        /** Smallest difference worth a model: half a point of mean, 2% of spread. */
+        private const val MIN_SHIFT = 0.5
+        private const val MIN_SPREAD = 0.02
+
+        /**
+         * The model of an opponent with [games] finals averaging [mean] with deviation [sd] (NaN:
+         * the mean only), against [tables]' max-expectation player; null when it would say nothing
+         * (a difference within chance: two standard errors). Rounded (half points, 2% of spread)
+         * so that small changes of a record do not change it.
+         */
+        fun of(tables: Tables, games: Int, mean: Double, sd: Double = Double.NaN): OppModel? {
+            if (tables.dist == null || games < MIN_GAMES || mean.isNaN()) return null
+            val (rootMean, rootVar) = root(tables)
+            val w = games.toDouble() / (games + PRIOR_GAMES)
+            val rootSd = Math.sqrt(rootVar)
+            // Only a difference beyond chance: two standard errors of the mean (sd/√n) and of the
+            // deviation (about sd/√(2n)); a max-expectation player's record wanders that much.
+            val diff = (mean - rootMean).takeIf { Math.abs(it) > 2 * rootSd / Math.sqrt(games.toDouble()) } ?: 0.0
+            val shift = Math.round(diff * w * 2) / 2.0
+            val r0 = if (sd.isNaN() || sd <= 0 || rootSd <= 0) 1.0 else sd / rootSd
+            val ratio = if (Math.abs(r0 - 1.0) > 2 / Math.sqrt(2.0 * games)) 1.0 + (r0 - 1.0) * w else 1.0
+            val spread = Math.round(ratio.coerceIn(0.5, 2.0) * 50) / 50.0
+            if (Math.abs(shift) < MIN_SHIFT && Math.abs(spread - 1.0) < MIN_SPREAD) return null
+            return OppModel(shift, spread)
+        }
+
+        /** The max-expectation player's whole game: mean and variance of its final (cached per tables). */
+        fun root(tables: Tables): Pair<Double, Double> = synchronized(roots) {
+            roots.getOrPut(tables.dist ?: return 0.0 to 0.0) { tables.dist.moments(0, 0) }
+        }
+
+        private val roots = java.util.WeakHashMap<DistTable, Pair<Double, Double>>()
+
+        /** Most points [b] can still score (bonus included while still open). */
+        fun maxRemaining(tables: Tables, b: Board): Int {
+            var g = 0
+            for (c in 0 until Category.COUNT) if (b.mask and (1 shl c) == 0) g += tables.scores.maxPoints[c]
+            if (!WinSearch.bonusDecided(b)) g += b.rules.bonusPoints
+            return g
+        }
     }
 }
 

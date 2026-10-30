@@ -219,6 +219,16 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         if (f.comp == Comp.LAB) lab.release(f) else plan?.release(f)
     }
 
+    /**
+     * What [key]'s record says of it to a 상대 맞춤 AI ([OppModel]; null: too few games, or it
+     * plays like max expectation): this season's official games once there are enough (it may
+     * have changed with its age), else every rated game of its career.
+     */
+    fun oppModel(tables: yacht.engine.Tables, key: String): yacht.engine.OppModel? {
+        val s = stats.season(key)?.takeIf { it.games >= yacht.engine.OppModel.MIN_GAMES } ?: stats.career(key) ?: return null
+        return yacht.engine.OppModel.of(tables, s.games, s.avgScore, s.scoreSd)
+    }
+
     /** [key]'s age in [season] (alive, retired or a legend); null when it has none (a hand-made AI). */
     internal fun ageAt(key: String, season: Int): Int? {
         players[key]?.let { r -> return r.identity?.age(season, r.born) }

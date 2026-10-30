@@ -361,9 +361,9 @@ class RandomPlayer(private val rng: Random, override val name: String = "random"
     override fun chooseCategory(r: Int): Category = me.openCategories[rng.nextInt(me.openCategories.size)]
 }
 
-/** The win search's plan, for [SlipPlayer] (a win AI that sometimes slips). */
-fun winPlanner(advisor: Advisor, budgetOps: Long, exactAt: Int = 0): (Board, Board) -> TurnPlan = { me, opp ->
-    advisor.planTurn(me, opp, Mode.WIN, budgetOps, depth = quickDepth(me, exactAt)).active
+/** The win search's plan, for [SlipPlayer] (a win AI that sometimes slips); [model]: 상대 맞춤. */
+fun winPlanner(advisor: Advisor, budgetOps: Long, exactAt: Int = 0, model: OppModel? = null): (Board, Board) -> TurnPlan = { me, opp ->
+    advisor.planTurn(me, opp, Mode.WIN, budgetOps, depth = quickDepth(me, exactAt), oppModel = model).active
 }
 
 /**
