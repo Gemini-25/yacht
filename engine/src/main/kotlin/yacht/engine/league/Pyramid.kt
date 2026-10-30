@@ -257,7 +257,7 @@ object Pyramid {
      * first; any one further down when it is empty) who were not [relegated] this season; a tier
      * with too many sends its worst down, those [promoted] into it last (a player announced as
      * promoted keeps its place unless nobody else is left). [NationalLeagues.next] fills each
-     * national league's ladder with it.
+     * national league's ladder with it, by [oldTier] (see [lift]).
      */
     internal fun fill(
         lists: MutableList<MutableList<String>>,
@@ -265,6 +265,7 @@ object Pyramid {
         shape: List<Int>,
         relegated: Set<String>,
         promoted: Map<String, Int>,
+        oldTier: ((String) -> Int)? = null,
     ): Pair<List<List<String>>, Tiers> {
         val n = lists.sumOf { it.size }
         val sizes = sizes(n, shape)
@@ -296,8 +297,7 @@ object Pyramid {
                     u++
                     continue
                 }
-                val i = below.indexOfFirst { it !in relegated }.takeIf { it >= 0 } ?: 0
-                cur += below.removeAt(i)
+                cur += below.removeAt(lift(below, relegated, oldTier))
             }
         }
         val divisions = ArrayList<List<String>>()
@@ -312,6 +312,20 @@ object Pyramid {
             }
         }
         return divisions to Tiers.of(shape, names)
+    }
+
+    /**
+     * Which of [below] goes up into the short tier above: the first not [relegated] (the first
+     * of all when every one was). With [oldTier] (a national ladder, whose lower tiers can hold
+     * several of last season's tiers one after another), a relegated player before it goes
+     * first when its old tier is the better: it is passed only by those of its own old tier, so
+     * nobody of a lower old tier goes up past it.
+     */
+    private fun lift(below: List<String>, relegated: Set<String>, oldTier: ((String) -> Int)?): Int {
+        val i = below.indexOfFirst { it !in relegated }
+        if (i <= 0 || oldTier == null) return maxOf(i, 0)
+        val t = oldTier(below[i])
+        return (0 until i).filter { oldTier(below[it]) < t }.minByOrNull { oldTier(below[it]) } ?: i
     }
 
     /** [members] cut into groups of [sizes] in region order: confederation, nation, hometown. */

@@ -124,7 +124,8 @@ object NationalLeagues {
      *    at least its median, else the middle of the 2부 (not protected either way);
      * 6. every other newcomer joins the last tier, best rated first;
      * 7. each ladder is brought to its sizes from the top ([Pyramid.fill]: promoted players
-     *    keep their tier, relegated ones do not go straight back up).
+     *    keep their tier, relegated ones do not go straight back up; a tier short of players
+     *    takes them by old tier, so only those of their own old tier pass the relegated ones).
      */
     fun next(plan: SeasonPlan, moves: List<Offseason.Move>, ctx: Offseason.Context): Pair<List<List<String>>, Leagues> {
         val season = plan.league
@@ -146,7 +147,10 @@ object NationalLeagues {
         for ((c, n) in counts) members.merge(formed.getValue(c), n, Int::plus)
         val lists = members.mapValues { (_, n) -> MutableList<MutableList<String>>(tierCount(n, ctx.config.divisionSize)) { ArrayList() } }
         // Old tiers in order; one old league a source, merged place by place where two meet.
+        // Each member's old tier (the tier it joined, for those from outside) keeps the order
+        // when the ladders are filled.
         val placed = HashSet<String>()
+        val oldTier = HashMap<String, Int>()
         val better = Pyramid.worse(season).reversed()
         for (t in 0 until (old.maxOfOrNull { it.size } ?: 0)) {
             val sources = LinkedHashMap<String, MutableList<List<String>>>()
@@ -154,6 +158,7 @@ object NationalLeagues {
                 val tier = tiers.getOrNull(t) ?: continue
                 // Each member once (one the moves left in two lists stays in the first).
                 val fresh = tier.filter { placed.add(it) }
+                for (k in fresh) oldTier[k] = t
                 for ((id, ks) in fresh.groupBy(::leagueOf)) sources.getOrPut(id) { ArrayList() } += ks
             }
             for ((id, src) in sources) {
@@ -168,6 +173,7 @@ object NationalLeagues {
         for (k in best(ctx.transfersIn)) {
             lists.getValue(leagueOf(k))[0] += k
             promoted[k] = 0
+            oldTier[k] = 0
             placed += k
         }
         // The median of each 1부 before anyone comes home. Into the middle of the tier: a full
@@ -177,12 +183,14 @@ object NationalLeagues {
             val id = leagueOf(k)
             val ladder = lists.getValue(id)
             val m = median.getValue(id)
-            val tier = ladder[if (ladder.size == 1 || m == null || ctx.rating(k) >= m) 0 else 1]
-            tier.add(tier.size / 2, k)
+            val at = if (ladder.size == 1 || m == null || ctx.rating(k) >= m) 0 else 1
+            ladder[at].add(ladder[at].size / 2, k)
+            oldTier[k] = at
             placed += k
         }
         for (k in best(keys)) lists.getValue(leagueOf(k)).last() += k
-        val ladders = lists.mapValues { (_, l) -> Pyramid.fill(l, ctx, List(l.size) { 1 }, relegated, promoted).first }
+        val rank = { k: String -> oldTier[k] ?: Int.MAX_VALUE }
+        val ladders = lists.mapValues { (_, l) -> Pyramid.fill(l, ctx, List(l.size) { 1 }, relegated, promoted, rank).first }
         return divisions(ladders, worldConfed(formed, counts))
     }
 

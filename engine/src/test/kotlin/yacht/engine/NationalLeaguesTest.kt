@@ -245,13 +245,18 @@ class NationalLeaguesTest {
 
     @Test
     fun aLegacyPyramidMigratesByOldTierThenPlace() {
-        val w = World(1200)
-        // Three of Korea's players are among the best (so in the old 1부).
-        for (k in w.keys.filter { w.nation(it) == "KR" }.take(3)) w.ratings[k] = 2500.0
-        // Groups of 30: a pyramid six tiers deep.
-        val legacy = LeagueConfig(groupSize = 30)
-        val plan = Offseason.first(6L, ctx(w, legacy))
-        assertEquals(6, plan.league.leagues.list.single().tiers.count)
+        // Groups of 30: a pyramid six tiers deep; three of Korea's players among the best (so in
+        // the old 1부).
+        migrates(World(1200).also { w -> for (k in w.keys.filter { w.nation(it) == "KR" }.take(3)) w.ratings[k] = 2500.0 }, LeagueConfig(groupSize = 30), 6, 6L)
+        // Today's rules at 1000 players (five tiers): the small nations' 1부 reaches deep into
+        // the old tiers, past the players just relegated into the old 2부 and 3부.
+        migrates(World(1000), LeagueConfig(), 5, 6L)
+    }
+
+    /** [w] in a legacy pyramid of [tiers] tiers under [legacy], one season played, then national leagues. */
+    private fun migrates(w: World, legacy: LeagueConfig, tiers: Int, seed: Long) {
+        val plan = Offseason.first(seed, ctx(w, legacy))
+        assertEquals(tiers, plan.league.leagues.list.single().tiers.count)
         drive(plan, w, Random(2))
         val moves = Offseason.moves(plan)
         val honours = Offseason.honours(plan, moves)
@@ -260,6 +265,7 @@ class NationalLeaguesTest {
         for ((d, ks) in plan.league.divisions.withIndex()) for (k in ks) oldTier[k] = plan.league.leagues.tier(d)
         for (m in moves) oldTier[m.key] = m.to
         val relegated = moves.filter { it.to > it.from }.map { it.key }.toSet()
+        assertTrue(relegated.isNotEmpty())
         val (next, _) = Offseason.next(plan, ctx(w, national))
         val s = next.league
         assertTrue(s.leagues.national)
@@ -271,15 +277,15 @@ class NationalLeaguesTest {
         assertTrue(oldTop.isNotEmpty())
         assertTrue(oldTop.all { it in s.divisions[kr.top] }, oldTop.toString())
         for (lg in s.leagues.list) {
-            // Down each ladder the old tiers never go back up (those just relegated aside: they
-            // are not lifted straight back).
-            val ladder = lg.divisions.flatMap { s.divisions[it] }.filter { it !in relegated }
-            val tiers = ladder.map { oldTier.getValue(it) }
-            assertEquals(tiers.sorted(), tiers, "${lg.id}: $tiers")
-            // No 6부 champion above any of the league's old 2부 players.
-            val sixth = honours.filter { it.kind == "L5" }.map { it.key }.filter { s.leagueOf(it) == lg }
-            val second = lg.divisions.flatMap { s.divisions[it] }.filter { oldTier[it] == 1 }
-            for (a in sixth) for (b in second) assertTrue(s.tierOf(a)!! >= s.tierOf(b)!!, "${lg.id}: $a above $b")
+            // Down each ladder the old tiers never go back up, those just relegated included:
+            // only players of their own old tier pass them.
+            val ladder = lg.divisions.flatMap { s.divisions[it] }
+            val order = ladder.map { oldTier.getValue(it) }
+            assertEquals(order.sorted(), order, "${lg.id}: $order")
+            // No last-tier champion above any of the league's old 2부 players.
+            val bottom = honours.filter { it.kind == "L${tiers - 1}" }.map { it.key }.filter { s.leagueOf(it) == lg }
+            val second = ladder.filter { oldTier[it] == 1 }
+            for (a in bottom) for (b in second) assertTrue(s.tierOf(a)!! >= s.tierOf(b)!!, "${lg.id}: $a above $b")
         }
         assertTrue(Leagues.decode(s.encode().lines().filter { it.startsWith("league ") }, s.divisions.size) == s.leagues)
     }
