@@ -7,6 +7,7 @@ import yacht.engine.Category
 import yacht.engine.Dice
 import yacht.engine.DiceStream
 import yacht.engine.Mode
+import yacht.engine.OppModel
 import yacht.engine.Player
 import yacht.engine.RuleSet
 import yacht.engine.Stakes
@@ -38,20 +39,33 @@ fun stakes(opts: Map<String, String>) {
     val matches = opts["games"]?.toInt() ?: 1000
     val seed = opts["seed"]?.toLong() ?: 2028L
     val tie = opts["tie"]?.toDouble() ?: (1.0 / 3)
+    // The dice come back: in the second game the opponent plays my first game's dice and I its,
+    // so a first-game margin partly returns. [rho]: the share that does, for "back".
+    val rho = opts["rho"]?.toDouble() ?: 0.7
     val threads = opts["threads"]?.toInt() ?: Runtime.getRuntime().availableProcessors()
     val pool = Executors.newFixedThreadPool(threads)
     val advisor = Advisor(tables)
     val first = Stakes.firstOfTwo(tables)
     // As the league's "win" (LeagueRoster.winSearch with exactAt 5), with the match's stakes.
-    fun win(stakes: Stakes?) = AdvisorPlayer(
+    fun win(stakes: Stakes?, back: OppModel? = null) = AdvisorPlayer(
         advisor, Mode.WIN, LeagueRoster.BUDGET, fixedDepth = 1, name = "win", exactAt = 5,
-        tieValue = if (stakes == null) 0.0 else tie, stakes = stakes,
+        tieValue = if (stakes == null) 0.0 else tie, oppModel = back, stakes = stakes,
     )
-    val variants = listOf<Pair<String, (Int, Int?) -> Player>>(
+    // A player keeps its turn's plan: one per game.
+    fun ev() = AdvisorPlayer(advisor, Mode.EXPECTED_SCORE, name = "ev")
+    val all = listOf<Pair<String, (Int, Int?) -> Player>>(
         "plain" to { _, _ -> win(null) },
         "last" to { game, carry -> if (game == 0) win(null) else win(Stakes.last(carry!!)) },
         "both" to { game, carry -> if (game == 0) win(first) else win(Stakes.last(carry!!)) },
+        // The first game for points (max expectation: its board is mostly luck that comes back).
+        "ev1" to { game, carry -> if (game == 0) ev() else win(Stakes.last(carry!!)) },
+        // And the second reading the opponent [rho] of my first-game margin stronger, by the share
+        // of the game left (the luck that comes back has not come yet).
+        "back" to { game, carry -> if (game == 0) ev() else win(Stakes.last(carry!!), OppModel(rho * carry!!, 1.0)) },
+        "ev" to { _, _ -> ev() },
     )
+    val chosen = (opts["variants"] ?: "plain,last,both,ev1,back,ev").split(',').toSet()
+    val variants = all.filter { it.first == "plain" || it.first in chosen }
     println("tie value of a level match: %.3f; rest of the match in game 1: %d values from %d".format(tie, first.rest.size, first.restLo))
     println("opponent | variant | match points | match share | game share | gain in points, match, games (95%)")
     for (key in opps) {
@@ -81,13 +95,23 @@ fun stakes(opts: Map<String, String>) {
             }
             println("%s | %s | %.1f%% | %.1f%% | %.1f%% | %s".format(key, name, 100 * mean(pts), 100 * mean(share), 100 * mean(games), gain))
         }
-        println("   [$matches matches each, %.0fs]".format(secs))
+        // How much of the first game's margin the second gives back (plain win AI on both sides of it).
+        val d1 = rows.map { it[0].d1.toDouble() }
+        val d2 = rows.map { it[0].d2.toDouble() }
+        val m1 = d1.average()
+        val m2 = d2.average()
+        val cov = d1.indices.sumOf { (d1[it] - m1) * (d2[it] - m2) }
+        val v1 = d1.sumOf { (it - m1) * (it - m1) }
+        val v2 = d2.sumOf { (it - m2) * (it - m2) }
+        println("   [$matches matches each, %.0fs; plain: corr(d1, d2) %.2f, slope %.2f, sd of d1+d2 %.1f]".format(
+            secs, cov / sqrt(v1 * v2), cov / v1, sqrt(d1.indices.sumOf { val t = d1[it] + d2[it] - m1 - m2; t * t } / (d1.size - 1)),
+        ))
     }
     pool.shutdown()
 }
 
 /** One match from my side: league points (3/1/0), match share (a draw half), share of games. */
-private class MatchOutcome(val points: Int, val share: Double, val games: Double)
+private class MatchOutcome(val points: Int, val share: Double, val games: Double, val d1: Int, val d2: Int)
 
 /**
  * A mirrored league match on deal [seed], dealt as [yacht.engine.league.LeagueMatch.playMatch]
@@ -105,7 +129,7 @@ private fun match(rules: RuleSet, make: (Int, Int?) -> Player, opp: LeagueAi, se
     val games = listOf(g1, g2)
     val result = TieRule.match(games)
     fun s(g: GameScore) = if (g.a > g.b) 1.0 else if (g.a == g.b) 0.5 else 0.0
-    return MatchOutcome(TieRule.points(result), (result + 1) / 2.0, (s(g1) + s(g2)) / 2)
+    return MatchOutcome(TieRule.points(result), (result + 1) / 2.0, (s(g1) + s(g2)) / 2, g1.a - g1.b, g2.a - g2.b)
 }
 
 /** One game: [first] on [d0], [second] on [d1]; the two final cards. */
