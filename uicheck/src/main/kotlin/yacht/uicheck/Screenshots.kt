@@ -3,6 +3,24 @@ package yacht.uicheck
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import yacht.app.ui.BracketCard
+import yacht.app.ui.GroupCard
+import yacht.engine.league.BracketSide
+import yacht.engine.league.CompetitionView
+import yacht.engine.league.DrawEntry
+import yacht.engine.league.GroupRow
+import yacht.engine.league.GroupTable
+import yacht.engine.league.Knockout
+import yacht.engine.league.KnockoutLength
+import yacht.engine.league.TieScore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -188,6 +206,14 @@ private fun run(args: Array<String>) {
     shot(c, out, "16b_league_season", heightDp = 1500)
     c.league.tab = 3
     shot(c, out, "16c_league_comps", heightDp = 1500)
+    // The cup's own bracket (승자조/패자조 chips, N선승 ties), then the rules dialog.
+    c.league.compFocus = yacht.engine.league.Comp.CUP
+    shot(c, out, "16g_league_cup", heightDp = 1500)
+    c.league.compFocus = null
+    c.league.rulesOpen = true
+    shot(c, out, "16h_league_rules", heightDp = 2600)
+    c.league.rulesOpen = false
+    bracketShots(c, out)
     c.league.tab = 4
     shot(c, out, "16d_league_clubs", heightDp = 1500)
     c.league.tab = 5
@@ -333,14 +359,68 @@ private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean)
     }
 }
 
+/**
+ * A double-elimination bracket played out by hand (deterministic, whatever the league did):
+ * the losers' side and the grand final, and a group table under the 완승 bonus.
+ */
+private fun bracketShots(c: AppController, out: File) {
+    val keys = c.league.view?.rows?.filter { it.rank != null }?.sortedBy { it.rank }?.map { it.key }?.take(8) ?: emptyList()
+    if (keys.size < 8) return
+    val entries = keys.mapIndexed { i, k -> DrawEntry(k, i + 1, 1500.0 - 20 * i) }
+    val labels = listOf("8강", "4강", "결승")
+    val k = Knockout(
+        Knockout.pairings(entries), { 1 }, { labels[it] }, { 0.0 },
+        winsOf = { r -> KnockoutLength.wins(8 shr r, true, grandAfter = true) },
+        double = true,
+        losersWins = { KnockoutLength.losersWins(it, true) },
+        grandWins = KnockoutLength.grandWins(true),
+    )
+    // Wins of the winner side by tie, upsets every third tie, one series with a drawn game.
+    var n = 0
+    while (true) {
+        val t = k.all.firstOrNull { it.ready } ?: break
+        val need = t.firstTo.coerceAtLeast(1).toDouble()
+        val upset = n % 3 == 1
+        val other = if (n == 4) need - 0.5 else (n % (need.toInt())).toDouble().coerceAtMost(need - 1)
+        val score = if (upset) TieScore(other, need, 230 * 3, 245 * 3, -1) else TieScore(need, other, 250 * 3, 228 * 3, 1)
+        k.record(t.id, t.a!!.key, t.b!!.key, score)
+        n++
+    }
+    val bracket = CompetitionView.Bracket("요트컵 (예시)", k.view())
+    shotOf(out, "16i_bracket_losers", 1100) { BracketCard(bracket, c.league::name, {}, start = BracketSide.LOSERS) }
+    shotOf(out, "16j_bracket_grand", 900) { BracketCard(bracket, c.league::name, {}, start = BracketSide.GRAND) }
+    shotOf(out, "16j_bracket_grand_dark", 900, dark = true) { BracketCard(bracket, c.league::name, {}, start = BracketSide.GRAND) }
+    val rows = keys.take(4).mapIndexed { i, key ->
+        val w = 3 - i
+        val d = if (i == 1) 1 else 0
+        val sw = maxOf(0, 2 - i)
+        GroupRow(key, played = 4, wins = w, draws = d, losses = 4 - w - d, points = 3 * w + d + sw, diff = 60 - 40 * i, sweeps = sw)
+    }
+    shotOf(out, "16k_group_bonus", 500) { GroupCard(GroupTable("A조", rows, bonus = true), c.league::name, {}) }
+}
+
+/** Renders [content] alone (a card of the league screens) like [shot]. */
 @OptIn(ExperimentalComposeUiApi::class)
+private fun shotOf(out: File, name: String, heightDp: Int, dark: Boolean = false, content: @Composable () -> Unit) {
+    render(out, name, heightDp, settleMs = 0, what = name) {
+        YachtTheme(dark = dark) {
+            Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.padding(12.dp)) { content() }
+            }
+        }
+    }
+}
+
 /** [settleMs]: real time for a screen that loads its data off the main thread before the picture. */
 private fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850, settleMs: Long = 0) {
     Thread.sleep(200)
+    render(out, name, heightDp, settleMs, "$name, screen=${c.screen}") { YachtTheme(dark = dark) { AppRoot(c) } }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+private fun render(out: File, name: String, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
     val density = 2f
-    val scene = ImageComposeScene(width = (392 * density).toInt(), height = (heightDp * density).toInt(), density = Density(density)) {
-        YachtTheme(dark = dark) { AppRoot(c) }
-    }
+    val scene = ImageComposeScene(width = (392 * density).toInt(), height = (heightDp * density).toInt(), density = Density(density), content = content)
     scene.render(0)
     if (settleMs > 0) {
         Thread.sleep(settleMs)
@@ -358,5 +438,5 @@ private fun shot(c: AppController, out: File, name: String, dark: Boolean = fals
         b64.chunked(2000).forEach { println("SHOT|$it") }
         println("SHOT-END $name")
     }
-    println("wrote $name (${jpeg.size / 1024} KiB, screen=${c.screen})")
+    println("wrote $what (${jpeg.size / 1024} KiB)")
 }
