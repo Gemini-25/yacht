@@ -421,7 +421,7 @@ class Knockout(
             BracketSide.LOSERS -> if (t.round % 2 == 1) t.bottom?.key else null
             BracketSide.WINNERS -> null
         }
-        return TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs, t.firstTo, fromWinners)
+        return TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs, t.firstTo, fromWinners, t.bye)
     }
 
     /**

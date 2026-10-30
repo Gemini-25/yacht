@@ -48,6 +48,7 @@ import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
 import yacht.engine.league.Highlight
 import yacht.engine.league.JobKind
+import yacht.engine.league.LiveBoard
 import yacht.engine.league.LiveFrame
 import yacht.engine.league.SeasonCalendar
 
@@ -277,7 +278,9 @@ private fun LiveCard(c: AppController, f: LiveFrame) {
                     }
                 }
             }
-            LinearProgressIndicator(progress = { f.progress.toFloat() }, modifier = Modifier.fillMaxWidth())
+            // A series' bar runs over the game in play: over the whole tie it would tell the length too.
+            val bar = if (series && !f.finished) ((f.boards.firstOrNull()?.halfTurn ?: 0) / (LiveBoard.GAME_STEPS - 1).toFloat()).coerceIn(0f, 1f) else f.progress.toFloat()
+            LinearProgressIndicator(progress = { bar }, modifier = Modifier.fillMaxWidth())
         }
     }
 }

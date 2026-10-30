@@ -165,6 +165,20 @@ class NewRulesTest {
     }
 
     @Test
+    fun aLosersTieFedByTwoByesShowsAsABye() {
+        // 20 entries in 32 slots: 12 byes, so some neighbouring first-round ties are both byes and
+        // the losers' tie they feed has no one in it. The screen must not wait for it.
+        val k = Knockout(Knockout.pairings(entries(20)), { 1 }, { Cup.label(32, it) }, { 0.0 }, double = true)
+        val empty = k.view().filter { it.side == BracketSide.LOSERS }.flatMap { it.ties }.filter { it.a == null && it.b == null && it.bye }
+        assertEquals(4, empty.size, "empty losers' ties")
+        assertTrue(empty.all { it.winner == null && !it.played })
+        drive(k)
+        for (round in k.view()) for (t in round.ties) assertTrue(t.played || t.bye, "${round.label}: a tie neither played nor a bye")
+        // A bye with a side still names it as the winner.
+        assertTrue(k.view().first().ties.any { it.bye && it.a != null && it.winner == it.a })
+    }
+
+    @Test
     fun tiesAreHandedOutInPlayOrderAndReadBackInIdOrder() {
         val k = Knockout(Knockout.pairings(entries(8)), { 1 }, { Cup.label(8, it) }, { st -> 0.1 * st }, double = true)
         // At progress 0 only the first stage (the winners' first round) is open.

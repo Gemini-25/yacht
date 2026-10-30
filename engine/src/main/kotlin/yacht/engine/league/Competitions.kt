@@ -65,6 +65,11 @@ data class TieView(
      * winners' champion. Null elsewhere or while unknown.
      */
     val fromWinners: String? = null,
+    /**
+     * Decided without a match: a bye with its side as [a] and [winner], or (with double
+     * elimination) an empty losers' tie both of whose feeders were byes, with no side at all.
+     */
+    val bye: Boolean = false,
 )
 
 /** A group table, best first. */

@@ -136,8 +136,15 @@ fun ClubsTab(lg: LeagueController, v: ClubsView?, format: MatchFormat? = null, o
                 else {
                     item {
                         val played = v.matches.count { it.result != null }
-                        val board = if (format == MatchFormat.GAMES) " (판 승점: 1승 1패면 그 보드는 무승부)" else ""
-                        Text("단체전: 보드마다 같은 주사위 두 판$board, 이긴 보드가 많은 클럽이 승리 (승 3·무 1). $played/${v.matches.size}경기", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        // Each board is a match under the season's rule; level boards go to the totals unless 판 승점제.
+                        val board = when (format) {
+                            MatchFormat.SINGLE -> "보드마다 한 판"
+                            MatchFormat.BEST_OF_3 -> "보드마다 같은 주사위 두 판 (비기면 세 번째 판)"
+                            MatchFormat.GAMES -> "보드마다 같은 주사위 두 판 (판 승점: 1승 1패면 그 보드는 무승부)"
+                            else -> "보드마다 같은 주사위 두 판"
+                        }
+                        val level = if (format?.totals == true) ", 이긴 보드 수가 같으면 합계 점수로" else ""
+                        Text("단체전: $board, 이긴 보드가 많은 클럽이 승리$level (승 3·무 1). $played/${v.matches.size}경기", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                     }
                     itemsIndexed(v.table, key = { _, r -> "ct-${r.club}" }) { i, r ->
                         val club = byId[r.club]

@@ -189,7 +189,7 @@ fun LeagueScreen(c: AppController) {
                         },
                     )
                     LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
-                    LeagueTab.COMPS -> CompsTab(lg, v.comps, v.clock) { lg.detail = it }
+                    LeagueTab.COMPS -> CompsTab(lg, v.comps, v.clock, v.season?.format) { lg.detail = it }
                     LeagueTab.CLUBS -> ClubsTab(lg, v.clubs, v.season?.format) { lg.detail = it }
                     LeagueTab.NEWS -> NewsTab(c, v) { FeedList(lg, v) }
                     LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
