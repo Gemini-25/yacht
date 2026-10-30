@@ -22,10 +22,9 @@ object WinCurve {
     /**
      * [oppShift]: points added to every opponent final (a player that misjudges the opponent's
      * strength). [model]: the opponent as its record shows it ([OppModel]) instead of a
-     * max-expectation player; a finished opponent is its total either way. [stakes]: this game
-     * is one of a match decided on the total over its games ([Stakes]): the curve is then the
-     * value of the match (a level match counts [tieValue]), the opponent's final read as
-     * outscoring me by what I am ahead and by what the games still to come may bring.
+     * max-expectation player; a finished opponent is its total either way. [stakes]: what this
+     * game is worth to the match it is part of, by my margin ([Stakes]; its own value of a level
+     * match, [tieValue] unused): the curve is then the match's worth.
      */
     fun against(tables: Tables, opp: Board, tieValue: Double = 0.0, oppShift: Int = 0, model: OppModel? = null, stakes: Stakes? = null): Curve {
         val base = opp.total + oppShift
@@ -44,15 +43,11 @@ object WinCurve {
                 lo = lo2
             }
         }
-        if (stakes != null) {
-            val (p2, lo2) = stakes.apply(pmf, lo)
-            pmf = p2
-            lo = lo2
-        }
         val mass = pmf.sum()
         val curve = DoubleArray(SIZE)
         val ties = DoubleArray(SIZE)
-        // Finals below 0 (a match I lead by more than the opponent can score): won from any final.
+        if (stakes != null) return stakes.curve(pmf, base + lo, mass)
+        // Finals shifted below 0: beaten by any final of mine.
         var below = 0.0
         for (x in pmf.indices) if (base + lo + x < 0) below += pmf[x] / mass
         for (f in 0 until SIZE) {
@@ -67,56 +62,87 @@ object WinCurve {
 }
 
 /**
- * A game that is one of several deciding a match on the total over them. A league match is two
- * games on the same dice, won by more games won, else by the higher total: that is the same as
- * the higher total over the two games (a won game and a lost one leave the totals to decide; two
- * won games, or a won and a drawn one, are a higher total too). [carry]: my margin in the games
- * already played (mine minus the opponent's); [rest]: the distribution of my margin in the games
- * still to come, over [restLo, restLo + rest.size) (a single 0: this is the last game). The
- * match is won when the margins add up above zero: against an opponent final o, as if it were
- * o - carry - (what is still to come).
+ * What a game is worth to the match it is part of, by my margin in it (my final minus the
+ * opponent's): [value] over margins [lo, lo + value.size), nothing below, everything above (so
+ * scaled: maximising it maximises the match's worth). A game alone is a step at 0 (a level game
+ * worth its tie value). A league match of two games on the same dice is won by more games won,
+ * else by the higher total: that is the higher total over the two games (a won game and a lost
+ * one leave the totals to decide; two won games, or a won and a drawn one, are a higher total
+ * too), so its second game is a step at minus my first-game margin ([last]), and its first is
+ * smooth: the second game's margin still to come ([firstOfTwo]).
  */
-class Stakes(val carry: Int, val rest: DoubleArray = LAST, val restLo: Int = 0) {
+class Stakes(val lo: Int, val value: DoubleArray) {
     init {
-        require(rest.isNotEmpty())
+        require(value.isNotEmpty() && value.all { it in 0.0..1.0 })
     }
 
-    /** True for the last game of the match (nothing still to come). */
-    val last: Boolean get() = rest.size == 1 && restLo == 0
-
-    /** The opponent's remaining points [pmf] over [lo, ...) read as the match sees them. */
-    fun apply(pmf: DoubleArray, lo: Int): Pair<DoubleArray, Int> {
-        // o - carry - r: the rest's support reversed, added to the opponent's.
-        val out = DoubleArray(pmf.size + rest.size - 1)
-        val top = rest.size - 1
-        for (i in pmf.indices) {
-            val p = pmf[i]
-            if (p == 0.0) continue
-            for (j in rest.indices) out[i + top - j] += p * rest[j]
+    /** The curve over my final against an opponent final over [oppLo, ...) of [pmf] (summing to [mass]). */
+    internal fun curve(pmf: DoubleArray, oppLo: Int, mass: Double): WinCurve.Curve {
+        val size = WinCurve.SIZE
+        val curve = DoubleArray(size)
+        val ties = DoubleArray(size)
+        // Prefix sums of the opponent's pmf: P(o < x) for the margins past the top (won).
+        val cum = DoubleArray(pmf.size + 1)
+        for (i in pmf.indices) cum[i + 1] = cum[i] + pmf[i] / mass
+        fun below(x: Int) = cum[(x - oppLo).coerceIn(0, pmf.size)]
+        val top = lo + value.size
+        for (f in 0 until size) {
+            // Margins f - o >= top: won; within [lo, top): their worth.
+            var v = below(f - top + 1)
+            for (j in value.indices) {
+                val x = f - lo - j - oppLo
+                if (x in pmf.indices) v += value[j] * pmf[x] / mass
+            }
+            curve[f] = v + WinCurve.SCORE_WEIGHT * f
+            val t = f - oppLo
+            ties[f] = if (t in pmf.indices) pmf[t] / mass else 0.0
         }
-        return out to lo - carry - restLo - top
+        // Worth nothing below the first margin that counts, everything past the last.
+        return WinCurve.Curve(curve, oppLo + lo, oppLo + pmf.size - 1 + top - 1, ties)
     }
 
-    override fun equals(other: Any?): Boolean = other is Stakes && other.carry == carry && other.restLo == restLo && other.rest.contentEquals(rest)
-    override fun hashCode(): Int = (carry * 31 + restLo) * 31 + rest.contentHashCode()
-    override fun toString(): String = if (last) "Stakes(carry=$carry, last)" else "Stakes(carry=$carry, rest=${rest.size})"
+    override fun equals(other: Any?): Boolean = other is Stakes && other.lo == lo && other.value.contentEquals(value)
+    override fun hashCode(): Int = lo * 31 + value.contentHashCode()
+    override fun toString(): String = "Stakes(lo=$lo, ${value.size} values)"
 
     companion object {
-        private val LAST = doubleArrayOf(1.0)
-
-        /** The last game of a match, [carry] ahead (behind when negative). */
-        fun last(carry: Int) = Stakes(carry)
+        /** A game alone (or the one deciding a match): won above 0, a level game worth [tie]. */
+        fun alone(tie: Double) = Stakes(0, doubleArrayOf(tie))
 
         /**
-         * The first of two games: my margin in the second is read as that of two
-         * max-expectation players (one's final minus the other's: symmetric, about 54 points of
-         * deviation). Cached per tables.
+         * The last game of a match decided on the total, [carry] ahead (behind when negative): a
+         * margin above -carry wins it, -carry levels it (worth [tie]).
          */
-        fun firstOfTwo(tables: Tables): Stakes = synchronized(firsts) {
+        fun last(carry: Int, tie: Double) = Stakes(-carry, doubleArrayOf(tie))
+
+        /**
+         * The first of two games decided on the total: the second game's margin read as that of
+         * two max-expectation players (one's final minus the other's: symmetric, about 54
+         * points of deviation), a level match worth [tie].
+         */
+        fun firstOfTwo(tables: Tables, tie: Double): Stakes {
+            val (rest, restLo) = oneGame(tables)
+            // Worth of a first-game margin d: P(d + r > 0) + tie * P(d + r = 0), r the second's.
+            val n = rest.size
+            val above = DoubleArray(n + 1)
+            for (i in n - 1 downTo 0) above[i] = above[i + 1] + rest[i]
+            // d from -(restLo + n - 1) (only the best second game levels) to -restLo (only the worst).
+            val lo = -(restLo + n - 1)
+            return Stakes(lo, DoubleArray(n) { k ->
+                val d = lo + k
+                val i = -d - restLo // the second-game margin that levels
+                (above[i + 1] + tie * rest[i]).coerceIn(0.0, 1.0)
+            })
+        }
+
+        /**
+         * My margin in one more game between two max-expectation players (X - Y, X and Y their
+         * finals): its pmf and lowest margin. Cached per tables.
+         */
+        fun oneGame(tables: Tables): Pair<DoubleArray, Int> = synchronized(margins) {
             val dist = requireNotNull(tables.dist) { "the match needs the distribution table" }
-            firsts.getOrPut(dist) {
+            margins.getOrPut(dist) {
                 val p = dist.pmf(0, 0)
-                // P(X - Y = d) for X, Y independent finals over [lo, lo + n): d over [-(n-1), n-1].
                 val n = p.size
                 val d = DoubleArray(2 * n - 1)
                 for (x in 0 until n) for (y in 0 until n) d[x - y + n - 1] += p[x] * p[y]
@@ -126,11 +152,11 @@ class Stakes(val carry: Int, val rest: DoubleArray = LAST, val restLo: Int = 0) 
                 while (a < b && d[a] < 1e-12) a++
                 while (b > a && d[b] < 1e-12) b--
                 val sum = (a..b).sumOf { d[it] }
-                Stakes(0, DoubleArray(b - a + 1) { d[a + it] / sum }, a - (n - 1))
+                DoubleArray(b - a + 1) { d[a + it] / sum } to a - (n - 1)
             }
         }
 
-        private val firsts = java.util.WeakHashMap<DistTable, Stakes>()
+        private val margins = java.util.WeakHashMap<DistTable, Pair<DoubleArray, Int>>()
     }
 }
 

@@ -45,7 +45,7 @@ fun stakes(opts: Map<String, String>) {
     val threads = opts["threads"]?.toInt() ?: Runtime.getRuntime().availableProcessors()
     val pool = Executors.newFixedThreadPool(threads)
     val advisor = Advisor(tables)
-    val first = Stakes.firstOfTwo(tables)
+    val first = Stakes.firstOfTwo(tables, tie)
     // As the league's "win" (LeagueRoster.winSearch with exactAt 5), with the match's stakes.
     fun win(stakes: Stakes?, back: OppModel? = null) = AdvisorPlayer(
         advisor, Mode.WIN, LeagueRoster.BUDGET, fixedDepth = 1, name = "win", exactAt = 5,
@@ -55,18 +55,18 @@ fun stakes(opts: Map<String, String>) {
     fun ev() = AdvisorPlayer(advisor, Mode.EXPECTED_SCORE, name = "ev")
     val all = listOf<Pair<String, (Int, Int?) -> Player>>(
         "plain" to { _, _ -> win(null) },
-        "last" to { game, carry -> if (game == 0) win(null) else win(Stakes.last(carry!!)) },
-        "both" to { game, carry -> if (game == 0) win(first) else win(Stakes.last(carry!!)) },
+        "last" to { game, carry -> if (game == 0) win(null) else win(Stakes.last(carry!!, tie)) },
+        "both" to { game, carry -> if (game == 0) win(first) else win(Stakes.last(carry!!, tie)) },
         // The first game for points (max expectation: its board is mostly luck that comes back).
-        "ev1" to { game, carry -> if (game == 0) ev() else win(Stakes.last(carry!!)) },
+        "ev1" to { game, carry -> if (game == 0) ev() else win(Stakes.last(carry!!, tie)) },
         // And the second reading the opponent [rho] of my first-game margin stronger, by the share
         // of the game left (the luck that comes back has not come yet).
-        "back" to { game, carry -> if (game == 0) ev() else win(Stakes.last(carry!!), OppModel(rho * carry!!, 1.0)) },
+        "back" to { game, carry -> if (game == 0) ev() else win(Stakes.last(carry!!, tie), OppModel(rho * carry!!, 1.0)) },
         "ev" to { _, _ -> ev() },
     )
     val chosen = (opts["variants"] ?: "plain,last,both,ev1,back,ev").split(',').toSet()
     val variants = all.filter { it.first == "plain" || it.first in chosen }
-    println("tie value of a level match: %.3f; rest of the match in game 1: %d values from %d".format(tie, first.rest.size, first.restLo))
+    println("tie value of a level match: %.3f; worth of a first-game margin over %d values from %d".format(tie, first.value.size, first.lo))
     println("opponent | variant | match points | match share | game share | gain in points, match, games (95%)")
     for (key in opps) {
         val opp = roster[key] ?: run { println("$key: no such AI"); null } ?: continue
