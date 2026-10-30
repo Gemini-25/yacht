@@ -1,11 +1,15 @@
 package yacht.engine
 
 import yacht.engine.league.BoardResult
+import yacht.engine.league.ClubBook
+import yacht.engine.league.ClubLeague
 import yacht.engine.league.Comp
 import yacht.engine.league.Competition
+import yacht.engine.league.Competitions
 import yacht.engine.league.Family
 import yacht.engine.league.Fixture
 import yacht.engine.league.GameScore
+import yacht.engine.league.Hometowns
 import yacht.engine.league.Honour
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
@@ -13,9 +17,13 @@ import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.MatchFormat
+import yacht.engine.league.Nations
 import yacht.engine.league.NewsBook
+import yacht.engine.league.Offseason
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonPlan
+import yacht.engine.league.SeasonStart
 import yacht.engine.league.Stage
 import yacht.engine.league.TieRule
 import kotlin.test.Test
@@ -307,6 +315,51 @@ class SeasonCalendarTest {
         }
     }
 
+    // ---- legacy plans keep their weeks -----------------------------------------------------------
+
+    /**
+     * A legacy plan of [n] players for season [number] with every competition the factories make
+     * and the club league, as if last season's tables were this season's divisions.
+     */
+    private fun legacyPlan(n: Int, number: Int, config: LeagueConfig): SeasonPlan {
+        val keys = (1..n).map { "p%04d".format(it) }
+        fun rating(k: String) = 2000.0 - k.drop(1).toInt()
+        val nations = Nations.ALL.map { it.code }
+        val nation = { k: String -> nations[k.drop(1).toInt() % nations.size] }
+        val family = { k: String -> families[k.drop(1).toInt() % families.size] }
+        val ctx = Offseason.Context(keys, ::rating, family, { "서울" }, config, nation = nation)
+        val league = Offseason.first(31L, ctx, number).league
+        val last = number - 1
+        val honours = listOf(Honour(last, "L0", keys[2]), Honour(last, "CUP", keys[5]), Honour(last, "CUP2", keys[7]), Honour(last, "MVP", keys[1]))
+        val tiers = league.leagues.list.single().tiers
+        val start = SeasonStart(number, league.seed, config, keys, ::rating, league.divisions, league.divisions, honours, family, { "서울" }, honours, nation, tiers, tiers)
+        val factories = Competitions.factories() + ClubLeague.factory({ null }, { s -> ClubBook.create(s.ranking, s.config.clubs, s.config.squad, s.seed, Hometowns.ALL) })
+        return SeasonPlan(league, config, factories.mapNotNull { it(start) }.toMutableList())
+    }
+
+    /** Every stage of [p] on its week, and the season's length. */
+    private fun weeks(p: SeasonPlan): String = buildString {
+        val cal = p.calendar
+        append("${cal.leagueWeeks} ${cal.postWeeks} ${cal.lastWeek}\n")
+        for (s in p.schedule()) append("${s.comp.code} ${s.stage} ${s.label} ${s.week} ${s.total} ${s.final} ${s.set}\n")
+    }
+
+    @Test
+    fun aLegacyPlanKeepsItsWeeks() {
+        val rules = listOf("default" to LeagueConfig(), "single" to LeagueConfig(matchFormat = MatchFormat.MIRRORED, seriesKnockouts = false, doubleElimination = false))
+        val got = LinkedHashMap<String, String>()
+        for ((name, config) in rules) for (n in listOf(60, 200, 1000)) for (number in listOf(2, 3, 5, 6)) {
+            val p = legacyPlan(n, number, config)
+            if (n == 1000 && number == 5) {
+                assertEquals(listOf(Comp.CHAMPIONS, Comp.CUP, Comp.SUPER, Comp.ALL_STAR, Comp.FAMILY, Comp.CONTINENTAL, Comp.CLUB), p.comps.map { it.comp })
+            }
+            got["$name $n $number"] = print.sha(weeks(p))
+        }
+        assertEquals(LEGACY_WEEKS, got)
+    }
+
+    private val print = CompetitionPrint { 0.0 }
+
     @Test
     fun weeksAreSavedWithTheNewsAndTheFeedAndOldLinesStillRead() {
         val w = world(LeagueConfig(divisions = 2, generated = 0, clubs = 0, familyCup = false))
@@ -343,5 +396,35 @@ class SeasonCalendarTest {
         assertEquals(e, LeagueEvent.decode(e.encode()))
         assertEquals(e.copy(week = SeasonCalendar.NONE), LeagueEvent.decode(e.encode().substringBeforeLast('|')))
         assertNotEquals(e.encode(), e.copy(week = SeasonCalendar.NONE).encode())
+    }
+
+    companion object {
+        /** [aLegacyPlanKeepsItsWeeks]' hashes, taken from the code before the national lanes. */
+        private val LEGACY_WEEKS = mapOf(
+            "default 60 2" to "0c9383e539d13d59b1a8d261aa13256c39432ca7a52736608e66676ef11361de",
+            "default 60 3" to "2c2fc2ab298583a0ff0baf986c43b215a2cfb51509e3e681f0a531aae2011ac5",
+            "default 60 5" to "0c9383e539d13d59b1a8d261aa13256c39432ca7a52736608e66676ef11361de",
+            "default 60 6" to "2c2fc2ab298583a0ff0baf986c43b215a2cfb51509e3e681f0a531aae2011ac5",
+            "default 200 2" to "d6fae3a5bb931b4eb1c5dc40c680401b5fa6acdace85baccba0bfa98f4aa183f",
+            "default 200 3" to "461da8fe3d7a80b71ff739ddf80a06db1b9fb81494d3cee6f9062637821d8b52",
+            "default 200 5" to "85fe85b8268a8b0f04fa8695e291013276a32cc806cd851185357772ec027594",
+            "default 200 6" to "c509ccb2146d569c0d6c56ffeb612af8fab787da3be6ff51cbb631bb931b86f3",
+            "default 1000 2" to "908d0e5dc9e26d706398d05b6f41f7cb941a01a57f65829c19196981db95badc",
+            "default 1000 3" to "d827c1cd0afc55a499896faf4e84af7c644e7de724998a30488cfe7c7d90a1a8",
+            "default 1000 5" to "9e10ea23df252064da6aa2e7300595ecdb4ecd82524f42652c1ff58b4b05d0fa",
+            "default 1000 6" to "c7a2983a90f3ede080322677b5d5fc403210bdfb39d909737b5ceadb4867ba30",
+            "single 60 2" to "c7d3657bd44eb211e3c35fb67725b871503373bd3df81140ff54215cd74e5a24",
+            "single 60 3" to "1ca4667a009e495f44ab36811ddb1f7bb775819c46ddea436e366432c51e2770",
+            "single 60 5" to "c7d3657bd44eb211e3c35fb67725b871503373bd3df81140ff54215cd74e5a24",
+            "single 60 6" to "1ca4667a009e495f44ab36811ddb1f7bb775819c46ddea436e366432c51e2770",
+            "single 200 2" to "b51c30790b798dfa0f24d1631e4f85199afd98f7f4133309eed1554f07eb8f13",
+            "single 200 3" to "5c9003b3de02915aecda3f4319df5fcf8dcdd815a98b1e7c923a8e3d35461f18",
+            "single 200 5" to "01f7eb7f54fa85fbfbfccb52b2e47acd5e6f5f0a4d4ff830127992b4759ea682",
+            "single 200 6" to "8f0692b21468f64bc17e5f490694ba97be7d386682088df593cf7b17e30207e2",
+            "single 1000 2" to "0c5028e2a8b0e2041afda5416a67b0343d89d540ea3a4fdd16e880c41bacf4c2",
+            "single 1000 3" to "bb7a0280d88e2a6784692ba1b1458ef934bbb24ef9db93dd6b3d0c3fd4d06566",
+            "single 1000 5" to "fa0b05e66db43c7ab5326f589b9d52549e4e57bb09a5c3e18928a181b926c8dd",
+            "single 1000 6" to "ab5a5399a49127b78e44c2c6d9a94147dc3dad41fbe291e0d7670a9c081e7c3d",
+        )
     }
 }
