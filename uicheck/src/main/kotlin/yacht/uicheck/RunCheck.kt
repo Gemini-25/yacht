@@ -3,10 +3,12 @@ package yacht.uicheck
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.LeagueRunMode
 import yacht.app.core.LeagueSpeed
+import yacht.app.core.MatchCenter
 import yacht.app.core.Screen
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
@@ -14,6 +16,7 @@ import yacht.engine.Tables
 import yacht.engine.league.PlayerMaker
 import java.io.File
 import java.io.RandomAccessFile
+import java.lang.management.ManagementFactory
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import kotlin.system.exitProcess
@@ -22,12 +25,19 @@ import kotlin.system.exitProcess
  * Runs the app's real league controller (no UI) and says how it goes, to catch a league that
  * stops or stalls by itself.
  *
- * Usage: runcheck <tables dir> <minutes> [ECO|NORMAL|FULL] [seed|new] [make|week]
+ * Usage: runcheck <tables dir> <minutes> [ECO|NORMAL|FULL] [seed|new] [make|week|size]
  * - every 5 s: running, matches, season and week, matches in flight, why it stopped;
  * - `seed` starts from the shipped seed league; `make` adds three made players while it runs;
  * - `week` presses ▶ in 1주씩 sixty times (each run must stop by itself one week on, with
  *   nothing left over), then plays on in 계속; `week lab` the same with an AI lab experiment
  *   running alongside (its games must not cut a week short).
+ * - `size [record|check] [players...]` (minutes and seed are not read): new leagues of 200 and
+ *   1000 players (or the ones given) from a fixed seed play [SIZE_SEASONS] seasons; it prints
+ *   every file's bytes after each season, the CPU seconds each season took and a reference
+ *   workload's (the machine's speed). `record` writes them to
+ *   uicheck/src/main/resources/size_baseline.txt (run from the repository); `check` fails when the
+ *   folder, its 30-season projection or the CPU per season (by more than 5%, in seconds and per
+ *   reference) is above that baseline (beyond the run-to-run noise, see [SIZE_MARGIN]).
  * Exits 1 when a check fails.
  */
 fun main(args: Array<String>) {
@@ -44,6 +54,7 @@ fun main(args: Array<String>) {
 
 private fun run(args: Array<String>) {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
+    if (args.getOrElse(4) { "" } == "size") return sizes(tablesDir, LeagueSpeed.valueOf(args.getOrElse(2) { "FULL" }), args.drop(5))
     val minutes = args.getOrElse(1) { "5" }.toDouble()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val c = AppController(
@@ -152,6 +163,273 @@ private fun weeks(c: AppController, lab: Boolean) {
     println("계속: $from -> ${lg.view?.clock?.let { it.season to it.week }}")
     check(lg.running) { "계속 stopped: ${lg.stopReason}" }
     lg.stop()
+}
+
+// ---- size: the league folder and CPU per season ---------------------------------------------------
+
+/** Seasons a size run plays, the seed of its league (the same league each time), and the most it may take. */
+private const val SIZE_SEASONS = 3
+private const val SIZE_SEED = 20261030L
+private const val SIZE_MINUTES = 60L
+private const val BASELINE = "size_baseline.txt"
+private val BASELINE_SOURCE = File("uicheck/src/main/resources", BASELINE)
+
+/** The files that grow every season and keep growing (the projection's 30 seasons). */
+private val GROWING = listOf("archive.txt", "honours.txt", MatchCenter.LOGS)
+
+/**
+ * How far above the baseline a run may be and pass. The same tree measured again differed by up
+ * to 0.5% in the folder and 2% in the projection (30 times one season's growth), so a strict
+ * comparison fails by chance; the CPU per season differed by 1% at 1000 players but by up to 10%
+ * at 200 (its share of placement friendlies varies), which the 5% margin does not cover. On the
+ * shared build server the same run also took up to 45% more CPU seconds an hour later, so CPU
+ * fails only when it is above both in seconds and in units of [referenceCpu] measured alongside
+ * (whose own noise was up to 10%).
+ */
+private const val SIZE_MARGIN = 1.01
+private const val PROJECTION_MARGIN = 1.03
+private const val CPU_MARGIN = 1.05
+
+/**
+ * One measured league: [files] its folder after each season (bytes by name), [cpu] the CPU
+ * seconds each season took, [ref] the machine's [referenceCpu] then (0: not measured).
+ */
+private data class SizeRun(val players: Int, val files: List<Map<String, Long>>, val cpu: List<Double>, val ref: Double = 0.0) {
+    fun total(seasons: Int = files.size): Long = files[seasons - 1].values.sum()
+
+    /** The folder after its seasons plus 30 more seasons of the last one's growth of [GROWING]. */
+    val projected: Long
+        get() = total() + 30 * GROWING.sumOf { (files.last()[it] ?: 0L) - (files.getOrNull(files.size - 2)?.get(it) ?: 0L) }
+
+    val cpuPerSeason: Double get() = cpu.average()
+
+    /** [cpuPerSeason] in units of [ref] (null without it). */
+    val cpuRelative: Double? get() = if (ref > 0) cpuPerSeason / ref else null
+
+    fun encode(): String = buildString {
+        append("league $players\n")
+        for ((i, f) in files.withIndex()) append("files ${i + 1} " + f.entries.joinToString(" ") { "${it.key}=${it.value}" } + "\n")
+        for (i in files.indices) append("total ${i + 1} ${total(i + 1)}\n")
+        append("projected $projected\n")
+        for ((i, x) in cpu.withIndex()) append("cpu ${i + 1} ${"%.2f".format(java.util.Locale.ROOT, x)}\n")
+        if (ref > 0) append("ref ${"%.2f".format(java.util.Locale.ROOT, ref)}\n")
+    }
+
+    companion object {
+        fun decode(text: String): List<SizeRun> {
+            val runs = ArrayList<SizeRun>()
+            var players = -1
+            val files = ArrayList<Map<String, Long>>()
+            val cpu = ArrayList<Double>()
+            var ref = 0.0
+            fun flush() {
+                if (players >= 0) runs += SizeRun(players, files.toList(), cpu.toList(), ref)
+                files.clear()
+                cpu.clear()
+                ref = 0.0
+            }
+            for (line in text.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }) {
+                val f = line.split(' ')
+                when (f[0]) {
+                    "league" -> {
+                        flush()
+                        players = f[1].toInt()
+                    }
+                    "files" -> files += f.drop(2).associate { kv -> kv.substringBefore('=') to kv.substringAfter('=').toLong() }
+                    "cpu" -> cpu += f[2].toDouble()
+                    "ref" -> ref = f[1].toDouble()
+                }
+            }
+            flush()
+            return runs
+        }
+    }
+}
+
+/** `size`: measures each league, then prints, records or checks against the baseline. */
+private fun sizes(tablesDir: File, speed: LeagueSpeed, args: List<String>) {
+    val mode = args.firstOrNull()?.takeIf { it == "record" || it == "check" }
+    val players = args.drop(if (mode == null) 0 else 1).map { it.toInt() }.ifEmpty { listOf(200, 1000) }
+    var cache: File? = null
+    val dirs = ArrayList<File>()
+    val runs = players.map { n ->
+        val (run, folder) = measure(tablesDir, speed, n, cache)
+        cache = folder
+        dirs += folder.parentFile
+        println(run.encode())
+        run
+    }
+    for (d in dirs) d.deleteRecursively()
+    when (mode) {
+        "record" -> {
+            BASELINE_SOURCE.parentFile.mkdirs()
+            BASELINE_SOURCE.writeText(
+                "# RunCheck size: new leagues under the app's default rules, from the seed $SIZE_SEED, at $speed, $SIZE_SEASONS seasons each.\n" +
+                    "# files n: every file of the league folder after season n's close and its saves, in bytes (the hand-made AIs' table caches, *.bin, not counted).\n" +
+                    "# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of ${GROWING.joinToString()}.\n" +
+                    "# cpu n: the CPU seconds of the whole process in season n, from its start to the stop right after its close (the first from its first match on).\n" +
+                    "# ref: the CPU seconds of a fixed workload on as many threads (the machine's speed: the median of before, between the seasons and after).\n" +
+                    runs.joinToString("") { it.encode() },
+            )
+            println("recorded $BASELINE_SOURCE")
+        }
+        "check" -> check(runs)
+    }
+}
+
+/** Fails when a measured league is above the baseline (its folder, the 30-season projection, or the CPU per season by more than 5% in seconds and per reference) beyond the noise. */
+private fun check(runs: List<SizeRun>) {
+    // The source file when run from the repository (a baseline just recorded), else the one built in.
+    val text = BASELINE_SOURCE.takeIf { it.exists() }?.readText() ?: object {}.javaClass.getResource("/$BASELINE")?.readText() ?: error("no $BASELINE")
+    val baseline = SizeRun.decode(text).associateBy { it.players }
+    val failed = ArrayList<String>()
+    for (r in runs) {
+        val b = baseline[r.players] ?: error("no baseline for ${r.players} players")
+        println("${r.players} players, after ${r.files.size} seasons (baseline -> now):")
+        for (name in (b.files.last().keys + r.files.last().keys).sorted()) {
+            val was = b.files.last()[name] ?: 0L
+            val now = r.files.last()[name] ?: 0L
+            println("  %-16s %,10d -> %,10d (%+,d)".format(name, was, now, now - was))
+        }
+        println("  %-16s %,10d -> %,10d (%+,d)".format("total", b.total(), r.total(), r.total() - b.total()))
+        println("  %-16s %,10d -> %,10d (%+,d)".format("30 seasons", b.projected, r.projected, r.projected - b.projected))
+        println("  %-16s %10.1f -> %10.1f s".format("CPU a season", b.cpuPerSeason, r.cpuPerSeason))
+        val was = b.cpuRelative
+        val now = r.cpuRelative
+        if (was != null && now != null) println("  %-16s %10.2f -> %10.2f (ref %.2f -> %.2f s)".format("CPU per ref", was, now, b.ref, r.ref))
+        if (r.total() > b.total() * SIZE_MARGIN) failed += "${r.players} players: folder ${r.total()} > ${b.total()} + 1%"
+        if (r.projected > b.projected * PROJECTION_MARGIN) failed += "${r.players} players: 30 seasons ${r.projected} > ${b.projected} + 3%"
+        // Above in seconds and, when both have it, per reference too: a slower machine raises only
+        // the first, the reference's own noise only the second, more work both.
+        if (r.cpuPerSeason > b.cpuPerSeason * CPU_MARGIN && (was == null || now == null || now > was * CPU_MARGIN)) {
+            failed += "${r.players} players: CPU a season ${"%.1f".format(r.cpuPerSeason)} > ${"%.1f".format(b.cpuPerSeason)} + 5%" +
+                if (was != null && now != null) " (per ref ${"%.2f".format(now)} > ${"%.2f".format(was)} + 5%)" else ""
+        }
+    }
+    check(failed.isEmpty()) { failed.joinToString("; ") }
+    println("size: within the baseline")
+}
+
+/** The whole process's CPU seconds (every thread). */
+private fun cpuSeconds(): Double = (ManagementFactory.getOperatingSystemMXBean() as com.sun.management.OperatingSystemMXBean).processCpuTime / 1e9
+
+/** Random reads a [referenceCpu] thread makes, and its table's size (64 MB, beyond the caches as the AIs' tables are). */
+private const val REF_READS = 40_000_000
+private const val REF_TABLE = 1 shl 24
+
+/**
+ * The CPU seconds a fixed workload takes on [threads] threads: random reads in a 64 MB table, as
+ * the AIs' table lookups are, measured with nothing else running. It does not use the engine, so
+ * it stays the same whatever the stages change: it tells how fast the machine is right now.
+ */
+private fun referenceCpu(threads: Int): Double {
+    val table = IntArray(REF_TABLE) { it * -0x61c88647 }
+    val sums = LongArray(threads)
+    val c0 = cpuSeconds()
+    val workers = (0 until threads).map { t ->
+        Thread {
+            var x = t + 1L
+            var sum = 0L
+            repeat(REF_READS) {
+                x = x * 6364136223846793005L + 1442695040888963407L
+                sum += table[(x ushr 40).toInt() and (REF_TABLE - 1)]
+            }
+            sums[t] = sum
+        }
+    }
+    workers.forEach { it.start() }
+    workers.forEach { it.join() }
+    val cpu = cpuSeconds() - c0
+    check(sums.all { it != 0L })
+    return cpu
+}
+
+/** The league folder's files, by name, without the table caches and unfinished saves. */
+private fun folderSizes(folder: File): Map<String, Long> =
+    folder.listFiles().orEmpty().filter { f -> f.isFile && !f.name.startsWith(".") && (!f.name.endsWith(".bin") || f.name == MatchCenter.LOGS) }
+        .sortedBy { it.name }.associate { it.name to it.length() }
+
+/** [folder]'s files (as [folderSizes]) once its saves have landed: none under way and nothing changed for two seconds. */
+private fun settled(folder: File): Map<String, Long> {
+    fun state() = folder.listFiles().orEmpty().map { Triple(it.name, it.length(), it.lastModified()) }.sortedBy { it.first }
+    val end = System.currentTimeMillis() + 60_000
+    var last = state()
+    var still = 0
+    while (still < 2) {
+        Thread.sleep(1_000)
+        val now = state()
+        still = if (now == last && now.none { it.first.startsWith(".") && it.first.endsWith(".tmp") }) still + 1 else 0
+        check(System.currentTimeMillis() < end) { "the league's files did not settle" }
+        last = now
+    }
+    return folderSizes(folder)
+}
+
+/**
+ * A new league of [players] (and the hand-made AIs, which sit out by default) under the app's
+ * default rules, from [SIZE_SEED], played [SIZE_SEASONS] seasons at [speed] by the real
+ * controller; [cache] a folder whose table caches it starts with (they are built at the first
+ * start). Returns the run and its folder.
+ */
+private fun measure(tablesDir: File, speed: LeagueSpeed, players: Int, cache: File?): Pair<SizeRun, File> {
+    val threads = speed.threads(Runtime.getRuntime().availableProcessors())
+    // The machine's speed before, between the seasons and after (the median of them).
+    val refs = arrayListOf(referenceCpu(threads))
+    val dir = Files.createTempDirectory("yacht-size").toFile()
+    val folder = File(dir, "league").apply { mkdirs() }
+    cache?.listFiles()?.filter { it.name.endsWith(".bin") && it.name != MatchCenter.LOGS }?.forEach { it.copyTo(File(folder, it.name)) }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // No seed ladder: a league from zero.
+    val c = AppController(scope, GameStorage(dir), loadTables = { load(tablesDir) }, loadAsset = { null })
+    val lg = c.league
+    // The rules a new league gets (read before the league is), with this many players.
+    File(folder, "config.txt").writeText(lg.config.copy(generated = players).encode())
+    lg.leagueSeed = { SIZE_SEED }
+    c.start()
+    while (c.tables == null) Thread.sleep(50)
+    c.screen = Screen.LEAGUE
+    while (lg.view == null) Thread.sleep(50)
+    lg.changeSpeed(speed)
+    lg.start()
+    // The tables of the AIs' rule beliefs come first (built once, then cached): not counted.
+    while (!(lg.running && lg.preparing == null && lg.view?.clock != null)) {
+        check(lg.stopReason == null) { "stopped: ${lg.stopReason}" }
+        Thread.sleep(50)
+    }
+    val deadline = System.currentTimeMillis() + SIZE_MINUTES * 60_000
+    fun waitUntil(what: String, cond: () -> Boolean) {
+        while (!cond()) {
+            check(lg.stopReason == null) { "$players players: stopped: ${lg.stopReason}" }
+            check(System.currentTimeMillis() < deadline) { "$players players: $what, not in $SIZE_MINUTES minutes" }
+            Thread.sleep(50)
+        }
+    }
+    val files = ArrayList<Map<String, Long>>()
+    val cpu = ArrayList<Double>()
+    // Season by season: the run stops by itself right after the season's close, nothing of the
+    // next season played, and the folder is read once that close's saves have landed (read while
+    // the league plays on, it could still hold the finished season's save); then the next starts.
+    for (season in 1..SIZE_SEASONS) {
+        val t0 = System.currentTimeMillis()
+        val cpu0 = cpuSeconds()
+        val m0 = lg.view?.matches ?: 0L
+        if (season > 1) lg.start()
+        // The run sets its own week goal before its first match: moved only after that.
+        waitUntil("season $season started") { lg.running && (lg.view?.matches ?: 0L) > m0 }
+        lg.stopAfterSeason(season)
+        waitUntil("season $season played") { !lg.running }
+        cpu += cpuSeconds() - cpu0
+        waitUntil("season $season closed") { (lg.view?.clock?.season ?: 0) > season }
+        files += settled(folder)
+        refs += referenceCpu(threads)
+        println("$players players: season $season in ${(System.currentTimeMillis() - t0) / 1000} s, CPU ${"%.1f".format(cpu.last())} s, folder ${files.last().values.sum()} B")
+    }
+    c.shutdown()?.let { j -> kotlinx.coroutines.runBlocking { j.join() } }
+    scope.cancel()
+    refs += referenceCpu(threads)
+    val ref = refs.sorted()[refs.size / 2]
+    println("$players players: reference ${refs.joinToString(" ") { "%.2f".format(it) }} s")
+    return SizeRun(players, files, cpu, ref) to folder
 }
 
 private fun load(dir: File): Tables {

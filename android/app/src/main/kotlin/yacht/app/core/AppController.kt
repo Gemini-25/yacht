@@ -217,6 +217,10 @@ class AppController(
     }
 
     var screen by mutableStateOf(Screen.HOME)
+
+    /** Where the game in play was started from when that was the league (back and its result card return there). */
+    var rankedFrom by mutableStateOf<Screen?>(null)
+        private set
     var tables by mutableStateOf<Tables?>(null)
         private set
     var loadError by mutableStateOf<String?>(null)
@@ -743,6 +747,7 @@ class AppController(
             saveSettings()
         }
         resetForNewGame()
+        rankedFrom = null
         state = GameState.new(source, first, t.rules, nextStyle, if (source == DiceSource.MANUAL) tag else null)
         screen = Screen.GAME
         onStateChanged()
@@ -777,6 +782,12 @@ class AppController(
         val t = tables ?: return false
         val key = aiKey ?: league.pickOpponent(rng, tier) ?: return false
         resetForNewGame()
+        // From the league, or one more from a game that was (랭크전 한 판 더).
+        rankedFrom = when (screen) {
+            Screen.LEAGUE -> Screen.LEAGUE
+            Screen.GAME -> rankedFrom
+            else -> null
+        }
         scouting = null
         scope.launch {
             val r = withContext(Dispatchers.Default) { league.scouting(key) }

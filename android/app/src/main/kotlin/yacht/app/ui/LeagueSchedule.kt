@@ -28,10 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import yacht.app.core.ClockView
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
+import yacht.app.core.Sheet
 import yacht.app.core.WeekRow
 import yacht.engine.league.Article
 import yacht.engine.league.Comp
@@ -160,6 +158,7 @@ fun WeekBar(c: ClockView, modifier: Modifier) {
 
 // ---- the 일정 tab ----------------------------------------------------------------------------------
 
+/** The 일정 tab's views: the week, or the whole season (the weeks sheet). */
 private enum class ScheduleMode(val label: String) { WEEK("이번 주"), SEASON("시즌 전체") }
 
 /**
@@ -173,17 +172,20 @@ fun ScheduleTab(lg: LeagueController, v: LeagueView, onLeague: () -> Unit, onCom
         CenterText("리그를 시작하면 시즌 일정이 짜여요.\n리그 한 라운드가 한 주예요. 요트컵·챔피언스 리그 같은 대회는 정해진 주에 하나씩 열리고, 리그가 끝나면 포스트시즌에 플레이오프를 치러요.")
         return
     }
-    var mode by remember { mutableStateOf(ScheduleMode.WEEK) }
+    val nav = lg.nav
+    val mode = if (nav.sheet == Sheet.WEEKS) ScheduleMode.SEASON else ScheduleMode.WEEK
     val open: (WeekStage) -> Unit = { s -> if (s.comp == Comp.LEAGUE) onLeague() else onComp(s.comp) }
     Column {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in ScheduleMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
+            for (m in ScheduleMode.entries) {
+                FilterChip(selected = mode == m, onClick = { nav.sheet = if (m == ScheduleMode.SEASON) Sheet.WEEKS else Sheet.NONE }, label = { Text(m.label, fontSize = 12.sp) })
+            }
         }
         when (mode) {
             ScheduleMode.WEEK -> WeekView(lg, v, c, open)
             ScheduleMode.SEASON -> SeasonWeeks(c) { w ->
-                lg.scheduleWeek = w
-                mode = ScheduleMode.WEEK
+                nav.week = w
+                nav.sheet = Sheet.NONE
             }
         }
     }
@@ -192,12 +194,13 @@ fun ScheduleTab(lg: LeagueController, v: LeagueView, onLeague: () -> Unit, onCom
 @Composable
 private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (WeekStage) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val w = (lg.scheduleWeek ?: c.week).coerceIn(1, maxOf(1, c.lastWeek))
+    val nav = lg.nav
+    val w = (nav.week ?: c.week).coerceIn(1, maxOf(1, c.lastWeek))
     val row = c.row(w)
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { lg.scheduleWeek = (w - 1).coerceAtLeast(1) }, enabled = w > 1) { Text("◀ 지난 주") }
+                TextButton(onClick = { nav.week = (w - 1).coerceAtLeast(1) }, enabled = w > 1) { Text("◀ 지난 주") }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(weekName(w, c.leagueWeeks), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -212,11 +215,11 @@ private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (W
                         color = if (w == c.week && !c.over) cs.tertiary else cs.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { lg.scheduleWeek = (w + 1).coerceAtMost(c.lastWeek) }, enabled = w < c.lastWeek) { Text("다음 주 ▶") }
+                TextButton(onClick = { nav.week = (w + 1).coerceAtMost(c.lastWeek) }, enabled = w < c.lastWeek) { Text("다음 주 ▶") }
             }
         }
-        if (lg.scheduleWeek != null && w != c.week && !c.over) {
-            item { AssistChip(onClick = { lg.scheduleWeek = null }, label = { Text("지금 주로 가기 (${weekName(c.week, c.leagueWeeks)})", fontSize = 12.sp) }) }
+        if (nav.week != null && w != c.week && !c.over) {
+            item { AssistChip(onClick = { nav.week = null }, label = { Text("지금 주로 가기 (${weekName(c.week, c.leagueWeeks)})", fontSize = 12.sp) }) }
         }
         if (row != null) item { WeekCard(c, row, v.season?.rules?.doubleElimination == true, open) }
         if (w == c.week && !c.over) {

@@ -28,7 +28,11 @@ import org.jetbrains.skia.EncodedImageFormat
 import yacht.app.core.AiPace
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
+import yacht.app.core.LeagueTab
+import yacht.app.core.MatchesView
+import yacht.app.core.Page
 import yacht.app.core.Screen
+import yacht.app.core.TablesView
 import yacht.app.core.ThinkTime
 import yacht.app.ui.AppRoot
 import yacht.app.ui.YachtTheme
@@ -200,29 +204,36 @@ private fun run(args: Array<String>) {
         (c.league.view?.rows?.count { it.rank != null } ?: 0) >= minOf(c.league.size - 2, 110) && (c.league.view?.season?.played ?: 0) >= 300
     }
     shot(c, out, "16_league_ladder", heightDp = 1500)
-    c.league.tab = 1
+    // Every screen below is a state of the league's navigation (today's tabs are its sub-views).
+    val nav = c.league.nav
+    nav.go(LeagueTab.MATCHES)
+    nav.matches = MatchesView.WEEK
     shot(c, out, "16e_league_schedule", heightDp = 1500)
-    c.league.tab = 2
+    nav.go(LeagueTab.TABLES)
+    nav.tables = TablesView.LEAGUE
     shot(c, out, "16b_league_season", heightDp = 1500)
-    c.league.tab = 3
+    nav.tables = TablesView.COMPS
     shot(c, out, "16c_league_comps", heightDp = 1500)
     // The cup's own bracket (승자조/패자조 chips, N선승 ties), then the rules dialog.
-    c.league.compFocus = yacht.engine.league.Comp.CUP
+    val cup = Page.Competition(yacht.engine.league.Comp.CUP)
+    nav.open(cup)
     shot(c, out, "16g_league_cup", heightDp = 1500)
-    c.league.compFocus = null
-    c.league.rulesOpen = true
+    nav.close(cup)
+    val rules = Page.Rules()
+    nav.open(rules)
     shot(c, out, "16h_league_rules", heightDp = 2600)
-    c.league.rulesOpen = false
+    nav.close(rules)
     bracketShots(c, out)
-    c.league.tab = 4
+    nav.tables = TablesView.CLUBS
     shot(c, out, "16d_league_clubs", heightDp = 1500)
-    c.league.tab = 5
+    nav.go(LeagueTab.MATCHES)
+    nav.matches = MatchesView.RESULTS
     shot(c, out, "17_league_feed", heightDp = 1100)
-    c.league.tab = 6
+    nav.go(LeagueTab.RECORDS)
     shot(c, out, "18_league_records", heightDp = 1500)
     // 기록 › 국가 랭킹, a nation's sheet, 유망주 (each screen loads its data when composed:
     // here before the shot, which is the first composition).
-    c.league.recordsMode = 1
+    nav.open(Page.Nations)
     c.league.loadNations()
     waitFor("nations") { c.league.nations.isNotEmpty() }
     shot(c, out, "18b_league_nations", heightDp = 1500)
@@ -230,26 +241,28 @@ private fun run(args: Array<String>) {
     waitFor("nation sheet") { c.league.nationSheet != null }
     shot(c, out, "18c_league_nation_sheet", heightDp = 1500)
     c.league.closeNation()
-    c.league.recordsMode = 2
+    nav.go(LeagueTab.RECORDS)
+    nav.open(Page.Prospects)
     c.league.loadProspects()
     waitFor("prospects") { c.league.prospects.isNotEmpty() }
     shot(c, out, "18d_league_prospects", heightDp = 1300)
-    c.league.recordsMode = 0
-    c.league.tab = 0
+    nav.go(LeagueTab.HOME)
     // A generated player's page (the best ranked), then two players side by side.
     val top = c.league.view?.rows?.filter { it.rank != null && !it.isMe && it.origin != yacht.engine.league.Origin.BASE }?.sortedBy { it.rank } ?: emptyList()
-    c.league.detail = top.firstOrNull()?.key ?: "win"
-    c.league.detail?.let { c.league.loadProfile(it) }
-    waitFor("profile") { c.league.profile?.key == c.league.detail }
+    val player = Page.Player(top.firstOrNull()?.key ?: "win")
+    nav.open(player)
+    c.league.loadProfile(player.key)
+    waitFor("profile") { c.league.profile?.key == player.key }
     shot(c, out, "19_league_detail", heightDp = 1800)
-    c.league.detail = null
+    nav.close(player)
     if (top.size >= 2) {
-        c.league.comparing = top[0].key
+        val compare = Page.Compare(top[0].key, top[1].key)
+        nav.open(compare)
         c.league.loadCompare(top[0].key, top[1].key)
         waitFor("compare") { c.league.compare != null }
         shot(c, out, "19b_league_compare", heightDp = 1500)
         c.league.closeCompare()
-        c.league.comparing = null
+        nav.close(compare)
     }
     c.league.stop()
     waitFor("league stopped", 60_000) { !c.league.running }

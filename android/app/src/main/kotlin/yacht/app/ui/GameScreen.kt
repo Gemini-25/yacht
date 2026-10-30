@@ -1020,6 +1020,10 @@ private fun GameOverPanel(c: AppController, s: GameState) {
                     OutlinedButton(onClick = { c.screen = Screen.HOME }, modifier = Modifier.weight(1f)) { Text("새 게임") }
                 }
             }
+            // A ranked game started from the league goes back to it.
+            if (c.rankedFrom == Screen.LEAGUE) {
+                OutlinedButton(onClick = { c.screen = Screen.LEAGUE }, modifier = Modifier.fillMaxWidth()) { Text("리그로 돌아가기") }
+            }
         }
     }
 }

@@ -63,15 +63,23 @@ import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
 import yacht.app.core.FeedItem
 import yacht.app.core.LadderRow
+import yacht.app.core.LadderSort
 import yacht.app.core.LeagueBackground
 import yacht.app.core.LeagueController
+import yacht.app.core.LeagueNav
 import yacht.app.core.LeagueRunMode
 import yacht.app.core.LeagueSpeed
+import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
+import yacht.app.core.MatchesView
+import yacht.app.core.Page
+import yacht.app.core.ResultsFilter
 import yacht.app.core.Screen
 import yacht.app.core.SeasonHistoryItem
 import yacht.app.core.SeasonRow
 import yacht.app.core.SeasonView
+import yacht.app.core.TableMode
+import yacht.app.core.TablesView
 import yacht.engine.explain.Ko
 import yacht.engine.league.byTeams
 import yacht.engine.league.Comp
@@ -80,7 +88,8 @@ import yacht.engine.league.Ladder
 import yacht.engine.league.Tier
 import yacht.engine.league.TierName
 
-private enum class LeagueTab(val label: String) {
+/** The tab bar's seven tabs, each shown by a state of the controller's [LeagueNav] ([screenTab], [show]). */
+private enum class ScreenTab(val label: String) {
     LADDER("순위표"),
     SCHEDULE("일정"),
     SEASON("리그"),
@@ -90,12 +99,68 @@ private enum class LeagueTab(val label: String) {
     RECORDS("기록"),
 }
 
-private enum class LadderSort(val label: String) {
-    RATING("레이팅"),
-    WIN_RATE("승률"),
-    SCORE("평균 점수"),
-    GAMES("경기 수"),
-    STREAK("연승"),
+/** The tab that shows [nav]'s state: 홈 is the ladder, the league opens on it. */
+private fun screenTab(nav: LeagueNav): ScreenTab = when (nav.tab) {
+    LeagueTab.HOME -> ScreenTab.LADDER
+    LeagueTab.MATCHES -> if (nav.matches == MatchesView.WEEK) ScreenTab.SCHEDULE else ScreenTab.NEWS
+    LeagueTab.TABLES -> when (nav.tables) {
+        TablesView.LEAGUE -> ScreenTab.SEASON
+        TablesView.COMPS -> ScreenTab.COMPS
+        TablesView.CLUBS -> ScreenTab.CLUBS
+        TablesView.RANKING, TablesView.LADDER -> ScreenTab.LADDER
+    }
+    LeagueTab.RECORDS -> ScreenTab.RECORDS
+}
+
+/** Opens tab [t] at its root (pages and the sheet close). */
+private fun LeagueNav.show(t: ScreenTab) {
+    when (t) {
+        ScreenTab.LADDER -> go(LeagueTab.HOME)
+        ScreenTab.SCHEDULE -> {
+            go(LeagueTab.MATCHES)
+            matches = MatchesView.WEEK
+        }
+        ScreenTab.NEWS -> {
+            go(LeagueTab.MATCHES)
+            if (matches == MatchesView.WEEK) matches = MatchesView.RESULTS
+        }
+        ScreenTab.SEASON -> {
+            go(LeagueTab.TABLES)
+            tables = TablesView.LEAGUE
+        }
+        ScreenTab.COMPS -> {
+            go(LeagueTab.TABLES)
+            tables = TablesView.COMPS
+        }
+        ScreenTab.CLUBS -> {
+            go(LeagueTab.TABLES)
+            tables = TablesView.CLUBS
+        }
+        ScreenTab.RECORDS -> go(LeagueTab.RECORDS)
+    }
+}
+
+/** Opens the 리그 tab on a followed player's division (the first division without one). */
+private fun LeagueNav.showSeason(season: SeasonView?, favourites: Set<String>) {
+    show(ScreenTab.SEASON)
+    val divisions = season?.divisions ?: return
+    val tiers = season.tiers.takeIf { it.size == divisions.size } ?: yacht.engine.league.Tiers.linear(divisions.size)
+    showDivision(tiers, divisions.indices.firstOrNull { d -> divisions[d].any { it.key in favourites } } ?: 0)
+}
+
+/** Shows division [d] in the 리그 tab: its tier and group, at its current round with the chart's default players. */
+private fun LeagueNav.showDivision(tiers: yacht.engine.league.Tiers, d: Int) {
+    tier = tiers.tier(d)
+    group = tiers.group(d)
+    round = null
+    chartKeys = emptyList()
+}
+
+/** Opens competition [comp] in the 대회 tab (the club league has its own tab). */
+private fun LeagueNav.showComp(comp: Comp) {
+    if (comp == Comp.CLUB) return show(ScreenTab.CLUBS)
+    show(ScreenTab.COMPS)
+    open(Page.Competition(comp))
 }
 
 /** The AI league: start/stop, the live ladder, match news and families. */
@@ -103,18 +168,17 @@ private enum class LadderSort(val label: String) {
 fun LeagueScreen(c: AppController) {
     val lg = c.league
     val v = lg.view
-    val tab = lg.tab
+    val nav = lg.nav
     // Leaving the league (a ranked game, watching) closes a nation sheet or comparison left open.
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             lg.closeNation()
             lg.closeCompare()
-            lg.comparing = null
+            for (p in nav.pages.filterIsInstance<Page.Compare>()) nav.close(p)
         }
     }
     var resetAsk by remember { mutableStateOf(false) }
     var rankedAsk by remember { mutableStateOf(false) }
-    var labAsk by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Scaffold(
         containerColor = cs.background,
@@ -135,8 +199,8 @@ fun LeagueScreen(c: AppController) {
                 },
                 navigationIcon = { TextButton(onClick = { c.screen = Screen.HOME }) { Text("홈") } },
                 actions = {
-                    TextButton(onClick = { labAsk = true }) { Text("연구소") }
-                    TextButton(onClick = { lg.rulesOpen = true }) { Text("규칙") }
+                    TextButton(onClick = { nav.open(Page.Lab) }) { Text("연구소") }
+                    TextButton(onClick = { nav.open(Page.Rules()) }) { Text("규칙") }
                     TextButton(onClick = { resetAsk = true }) { Text("초기화") }
                 },
             )
@@ -144,8 +208,8 @@ fun LeagueScreen(c: AppController) {
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             ControlCard(c, v) {
-                lg.scheduleWeek = null
-                lg.tab = LeagueTab.SCHEDULE.ordinal
+                nav.week = null
+                nav.show(ScreenTab.SCHEDULE)
             }
             Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
@@ -160,13 +224,23 @@ fun LeagueScreen(c: AppController) {
                 AssistChip(onClick = { c.editingAi = null; c.screen = Screen.BUILDER }, label = { Text("🛠 AI 만들기") })
             }
             lg.seasonNews?.let { SeasonNews(it) { lg.seasonNews = null } }
-            val tabs = LeagueTab.entries
-            val current = tabs.getOrElse(tab) { LeagueTab.LADDER }
+            val tabs = ScreenTab.entries
+            val current = screenTab(nav)
             // Seven short tabs fit a phone's width side by side (a scrolling row hid the last ones):
             // without the default 16 dp padding on each side of a tab's text.
             TabRow(selectedTabIndex = current.ordinal, containerColor = cs.background) {
                 for (t in tabs) {
-                    Tab(selected = current == t, onClick = { lg.tab = t.ordinal }) {
+                    Tab(
+                        selected = current == t,
+                        onClick = {
+                            when (t) {
+                                // The tab shown tapped again: it stays as it is (its chip, its division).
+                                current -> {}
+                                ScreenTab.SEASON -> nav.showSeason(v?.season, lg.favourites)
+                                else -> nav.show(t)
+                            }
+                        },
+                    ) {
                         Text(t.label, maxLines = 1, fontSize = 13.sp, softWrap = false, modifier = Modifier.padding(vertical = 12.dp))
                     }
                 }
@@ -174,40 +248,40 @@ fun LeagueScreen(c: AppController) {
             if (v == null) {
                 CenterText("리그 기록을 불러오는 중…")
             } else {
+                val open: (String) -> Unit = { nav.open(Page.Player(it)) }
                 when (current) {
-                    LeagueTab.LADDER -> LadderList(lg, v) { lg.detail = it }
-                    LeagueTab.SCHEDULE -> ScheduleTab(
-                        lg, v,
-                        onLeague = { lg.tab = LeagueTab.SEASON.ordinal },
-                        onComp = { comp ->
-                            if (comp == Comp.CLUB) {
-                                lg.tab = LeagueTab.CLUBS.ordinal
-                            } else {
-                                lg.compFocus = comp
-                                lg.tab = LeagueTab.COMPS.ordinal
-                            }
-                        },
-                    )
-                    LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
-                    LeagueTab.COMPS -> CompsTab(lg, v.comps, v.clock, v.season?.format) { lg.detail = it }
-                    LeagueTab.CLUBS -> ClubsTab(lg, v.clubs, v.season?.format) { lg.detail = it }
-                    LeagueTab.NEWS -> NewsTab(c, v) { FeedList(lg, v) }
-                    LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
+                    ScreenTab.LADDER -> LadderList(lg, v, open)
+                    ScreenTab.SCHEDULE -> ScheduleTab(lg, v, onLeague = { nav.showSeason(v.season, lg.favourites) }, onComp = { nav.showComp(it) })
+                    ScreenTab.SEASON -> SeasonList(lg, v.season, open)
+                    ScreenTab.COMPS -> CompsTab(lg, v.comps, v.clock, v.season?.format, open)
+                    ScreenTab.CLUBS -> ClubsTab(lg, v.clubs, v.season?.format, open)
+                    ScreenTab.NEWS -> NewsTab(c, v) { FeedList(lg, v) }
+                    ScreenTab.RECORDS -> RecordsTab(lg, v, open) { FamilyList(lg, v, open) }
                 }
             }
         }
     }
-    lg.nationSheet?.let { NationSheetDialog(lg, it) { k -> lg.detail = k } }
-    lg.comparing?.let { k -> CompareDialog(lg, k, v?.rows.orEmpty()) { lg.comparing = null } }
-    val key = lg.detail
-    val row = v?.rows?.firstOrNull { it.key == key }
-    if (row != null) AiDetail(c, row, onCompare = { lg.comparing = row.key; lg.detail = null }) { lg.detail = null }
-    else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
+    lg.nationSheet?.let { NationSheetDialog(lg, it) { k -> nav.open(Page.Player(k)) } }
+    // Until the new screens come, the pages are dialogs over the tabs (the top one drawn last).
+    for (p in nav.pages) {
+        androidx.compose.runtime.key(p) {
+            when (p) {
+                is Page.Player -> {
+                    val row = v?.rows?.firstOrNull { it.key == p.key }
+                    if (row != null) AiDetail(c, row, onCompare = { nav.replaceTop(Page.Compare(row.key)) }) { nav.close(p) }
+                    else if (v != null) PastProfileDialog(lg, p.key) { nav.close(p) }
+                }
+                is Page.Compare -> CompareDialog(lg, p.a, v?.rows.orEmpty()) { nav.close(p) }
+                is Page.Rules -> LeagueRulesDialog(lg) { nav.close(p) }
+                Page.Lab -> LabDialog(lg) { nav.close(p) }
+                // The others pick a chip of their tab (기록's, 대회's).
+                else -> {}
+            }
+        }
+    }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
-    if (lg.rulesOpen) LeagueRulesDialog(lg) { lg.rulesOpen = false }
-    if (labAsk) LabDialog(lg) { labAsk = false }
     lg.preview?.let { PreviewDialog(lg, it) }
-    lg.review?.let { if (lg.detail == null) SeasonReviewDialog(lg, it) }
+    lg.review?.let { if (nav.page !is Page.Player) SeasonReviewDialog(lg, it) }
     if (resetAsk) {
         AlertDialog(
             onDismissRequest = { resetAsk = false },
@@ -347,12 +421,14 @@ private fun SeasonNews(h: SeasonHistoryItem, onDismiss: () -> Unit) {
 
 @Composable
 private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
-    var family by remember { mutableStateOf<Family?>(null) }
-    var sort by remember { mutableStateOf(LadderSort.RATING) }
-    var onlyFavourites by remember { mutableStateOf(false) }
-    var origin by remember { mutableStateOf<yacht.engine.league.Origin?>(null) }
-    var nation by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
+    val nav = lg.nav
+    val filter = nav.ladderFilter
+    val family = filter.family
+    val sort = nav.ladderSort
+    val onlyFavourites = filter.followed
+    val origin = filter.origin
+    val nation = filter.nation
+    val query = nav.ladderQuery
     val favs = lg.favourites
     // A search also finds a nation by its name ("브라질").
     val q = query.trim()
@@ -375,7 +451,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         item {
             androidx.compose.material3.OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = { nav.ladderQuery = it },
                 placeholder = { Text("선수 이름이나 나라 검색", fontSize = 13.sp) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
@@ -384,10 +460,10 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         }
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = onlyFavourites, onClick = { onlyFavourites = !onlyFavourites }, label = { Text("★ 응원 ${favs.count { !it.startsWith(NATION_PREFIX) }}", fontSize = 12.sp) })
+                FilterChip(selected = onlyFavourites, onClick = { nav.ladderFilter = filter.copy(followed = !onlyFavourites) }, label = { Text("★ 응원 ${favs.count { !it.startsWith(NATION_PREFIX) }}", fontSize = 12.sp) })
                 for (o in yacht.engine.league.Origin.entries) {
                     val n = v.rows.count { it.origin == o }
-                    if (n > 0) FilterChip(selected = origin == o, onClick = { origin = if (origin == o) null else o }, label = { Text("${o.label} $n", fontSize = 12.sp) })
+                    if (n > 0) FilterChip(selected = origin == o, onClick = { nav.ladderFilter = filter.copy(origin = if (origin == o) null else o) }, label = { Text("${o.label} $n", fontSize = 12.sp) })
                 }
             }
         }
@@ -397,19 +473,19 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
         if (nations.size > 1) {
             item {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = nation == null, onClick = { nation = null }, label = { Text("🌐 전체 국적", fontSize = 12.sp) })
+                    FilterChip(selected = nation == null, onClick = { nav.ladderFilter = filter.copy(nation = null) }, label = { Text("🌐 전체 국적", fontSize = 12.sp) })
                     for ((code, n) in nations) {
                         val nat = yacht.engine.league.Nations.of(code) ?: continue
-                        FilterChip(selected = nation == code, onClick = { nation = if (nation == code) null else code }, label = { Text((if (nationFavourite(code) in favs) "★" else "") + "${nat.flag} ${nat.short} $n", fontSize = 12.sp) })
+                        FilterChip(selected = nation == code, onClick = { nav.ladderFilter = filter.copy(nation = if (nation == code) null else code) }, label = { Text((if (nationFavourite(code) in favs) "★" else "") + "${nat.flag} ${nat.short} $n", fontSize = 12.sp) })
                     }
                 }
             }
         }
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = family == null, onClick = { family = null }, label = { Text("전체", fontSize = 12.sp) })
+                FilterChip(selected = family == null, onClick = { nav.ladderFilter = filter.copy(family = null) }, label = { Text("전체", fontSize = 12.sp) })
                 for (f in Family.entries) {
-                    FilterChip(selected = family == f, onClick = { family = if (family == f) null else f }, label = { Text(f.label, fontSize = 12.sp) })
+                    FilterChip(selected = family == f, onClick = { nav.ladderFilter = filter.copy(family = if (family == f) null else f) }, label = { Text(f.label, fontSize = 12.sp) })
                 }
             }
         }
@@ -417,7 +493,7 @@ private fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> 
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("정렬", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 for (s in LadderSort.entries) {
-                    FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.label, fontSize = 12.sp) })
+                    FilterChip(selected = sort == s, onClick = { nav.ladderSort = s }, label = { Text(s.label, fontSize = 12.sp) })
                 }
             }
         }
@@ -601,12 +677,12 @@ private fun StreakText(streak: Int) {
 @Composable
 private fun FeedList(lg: LeagueController, v: LeagueView) {
     val cs = MaterialTheme.colorScheme
-    var kind by remember { mutableStateOf(FeedKind.ALL) }
+    val kind = FeedKind.of(lg.nav.results)
     val shown = remember(v.feed, kind) { v.feed.filter { kind.matches(it.comp) } }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (k in FeedKind.entries) FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(k.label, fontSize = 12.sp) })
+                for (k in FeedKind.entries) FilterChip(selected = kind == k, onClick = { lg.nav.results = k.filter }, label = { Text(k.label, fontSize = 12.sp) })
             }
         }
         if (v.live.isNotEmpty()) {
@@ -635,18 +711,23 @@ private fun FeedList(lg: LeagueController, v: LeagueView) {
     }
 }
 
-/** Which results the feed shows. */
-private enum class FeedKind(val label: String) {
-    ALL("전체"),
-    LEAGUE("📋 리그"),
-    COMPS("🏆 대회"),
-    FRIENDLY("🤝 친선");
+/** Which results the feed shows: the chips of [ResultsFilter] the feed has ([filter]). */
+private enum class FeedKind(val label: String, val filter: ResultsFilter) {
+    ALL("전체", ResultsFilter.ALL),
+    LEAGUE("📋 리그", ResultsFilter.LEAGUE),
+    COMPS("🏆 대회", ResultsFilter.COMPS),
+    FRIENDLY("🤝 친선", ResultsFilter.FRIENDLY);
 
     fun matches(c: Comp?): Boolean = when (this) {
         ALL -> true
         LEAGUE -> c == Comp.LEAGUE
         COMPS -> c != null && c != Comp.LEAGUE && c != Comp.FRIENDLY && c != Comp.LEGEND && c != Comp.LAB
         FRIENDLY -> c == Comp.FRIENDLY || c == Comp.LEGEND
+    }
+
+    companion object {
+        /** [f]'s chip (★ 응원 has none here: every result). */
+        fun of(f: ResultsFilter): FeedKind = entries.firstOrNull { it.filter == f } ?: ALL
     }
 }
 
@@ -776,12 +857,13 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
         return
     }
     val tiers = season.tiers.takeIf { it.size == season.divisions.size } ?: yacht.engine.league.Tiers.linear(season.divisions.size)
-    // A followed player's division first (in a pyramid of dozens of groups, the one to watch).
+    // A followed player's group first when a tier is picked (in a pyramid of dozens of groups, the one to watch).
     val favs = lg.favourites
-    fun followed(range: IntRange = season.divisions.indices) = range.firstOrNull { d -> season.divisions[d].any { it.key in favs } }
-    var division by remember(season.number) { mutableStateOf(followed() ?: 0) }
-    var mode by remember { mutableStateOf(SeasonMode.TABLE) }
-    val d = division.coerceIn(0, season.divisions.size - 1)
+    fun followed(range: IntRange) = range.firstOrNull { d -> season.divisions[d].any { it.key in favs } }
+    val nav = lg.nav
+    val mode = SeasonMode.of(nav.tableMode)
+    val tier = nav.tier.coerceIn(0, tiers.count - 1)
+    val d = tiers.groups(tier).let { g -> (g.first + nav.group).coerceIn(g.first, g.last) }
     val label = tiers.label(d)
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
@@ -831,7 +913,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                     val n = groups.sumOf { season.divisions[it].size }
                     FilterChip(
                         selected = tiers.tier(d) == t,
-                        onClick = { division = followed(groups) ?: groups.first },
+                        onClick = { nav.showDivision(tiers, followed(groups) ?: groups.first) },
                         label = { Text(yacht.engine.league.Tiers.tierLabel(t) + if (groups.count() > 1) " ${groups.count()}개 조" else " ($n)", fontSize = 12.sp) },
                     )
                 }
@@ -843,7 +925,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                     val star = if (season.divisions[g].any { it.key in favs }) "★" else ""
                     FilterChip(
                         selected = d == g,
-                        onClick = { division = g },
+                        onClick = { nav.showDivision(tiers, g) },
                         label = { Text(star + tiers.groupLabel(g) + tiers.names[g].takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty(), fontSize = 12.sp) },
                     )
                 }
@@ -852,7 +934,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (m in SeasonMode.entries) {
-                    FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
+                    FilterChip(selected = mode == m, onClick = { nav.tableMode = m.mode }, label = { Text(m.label, fontSize = 12.sp) })
                 }
             }
         }
@@ -981,13 +1063,19 @@ private fun oddsPct(p: Double): String = when {
     else -> "${"%.0f".format(100 * p)}%"
 }
 
-private enum class SeasonMode(val label: String) {
-    TABLE("순위표"),
-    LUCK("운 보정 순위"),
-    CALENDAR("일정표"),
-    CHART("순위 변동"),
-    H2H("상대 전적"),
-    ODDS("우승·승강 확률"),
+/** The 리그 tab's views: the [TableMode]s it has ([mode]). */
+private enum class SeasonMode(val label: String, val mode: TableMode) {
+    TABLE("순위표", TableMode.TABLE),
+    LUCK("운 보정 순위", TableMode.LUCK),
+    CALENDAR("일정표", TableMode.ROUND),
+    CHART("순위 변동", TableMode.CHART),
+    H2H("상대 전적", TableMode.H2H),
+    ODDS("우승·승강 확률", TableMode.ODDS);
+
+    companion object {
+        /** [m]'s view (최근 폼 has none here: the table). */
+        fun of(m: TableMode): SeasonMode = entries.firstOrNull { it.mode == m } ?: TABLE
+    }
 }
 
 /** 운 보정 승점: the two-game total's 3/1/0, plus the 완승 bonus points when the season gives them ([bonus]). */
@@ -1047,17 +1135,14 @@ private fun CalendarCard(lg: LeagueController, division: Int, season: Int, playe
     // Again as the season moves on (results, games in progress), on the round shown; a new
     // season or division opens on its current round.
     // The round asked for here (null: the one being played), kept for the reloads.
-    var wanted by remember(division, season) { mutableStateOf<Int?>(null) }
-    androidx.compose.runtime.LaunchedEffect(division, season, played) { lg.loadCalendar(division, wanted) }
+    val wanted = lg.nav.round
+    androidx.compose.runtime.LaunchedEffect(division, season, played, wanted) { lg.loadRound(division, wanted) }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (cal == null || cal.division != division) {
                 Text("일정을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             } else {
-                CalendarBody(lg, cal, bonus, onOpen) { md ->
-                    wanted = md
-                    lg.loadCalendar(division, md)
-                }
+                CalendarBody(lg, cal, bonus, onOpen) { md -> lg.nav.round = md }
             }
         }
     }
@@ -1125,7 +1210,7 @@ private fun RankChartCard(lg: LeagueController, season: SeasonView, division: In
     val positions = season.positions.getOrNull(division).orEmpty()
     val table = season.divisions.getOrNull(division).orEmpty()
     // The top 4 and the bottom 2 now, unless some are picked.
-    var picked by remember(division) { mutableStateOf<List<String>>(emptyList()) }
+    val picked = lg.nav.chartKeys
     val shown = picked.ifEmpty { (table.take(4) + table.takeLast(2)).map { it.key }.distinct() }
     val series = shown.mapIndexedNotNull { i, k ->
         val at = order.indexOf(k)
@@ -1143,7 +1228,7 @@ private fun RankChartCard(lg: LeagueController, season: SeasonView, division: In
                         selected = on,
                         onClick = {
                             val base = picked.ifEmpty { shown }
-                            picked = if (on) base - r.key else (base + r.key).takeLast(8)
+                            lg.nav.chartKeys = if (on) base - r.key else (base + r.key).takeLast(8)
                         },
                         label = { Text(r.name, fontSize = 11.sp, maxLines = 1) },
                     )

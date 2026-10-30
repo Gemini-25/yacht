@@ -1,0 +1,31 @@
+# Recorded on the 945de5e engine (S2 of the league redesign, before any engine change) on a shared 4-core server
+# while other builds ran: an earlier quiet-hour run of the same tree took about a third fewer CPU seconds (200: 44, 1000: 126 a season).
+# RunCheck size: new leagues under the app's default rules, from the seed 20261030, at FULL, 3 seasons each.
+# files n: every file of the league folder after season n's close and its saves, in bytes (the hand-made AIs' table caches, *.bin, not counted).
+# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of archive.txt, honours.txt, matchlogs.bin.
+# cpu n: the CPU seconds of the whole process in season n, from its start to the stop right after its close (the first from its first match on).
+# ref: the CPU seconds of a fixed workload on as many threads (the machine's speed: the median of before, between the seasons and after).
+league 200
+files 1 archive.txt=6377 clubs.txt=3086 config.txt=319 highlights.txt=10466 honours.txt=1209 lab.txt=11 ladder.txt=191022 nations.txt=19 news.txt=45905 prefs.txt=4 roster.txt=55684 season.txt=15292 stats.txt=56822
+files 2 archive.txt=10686 clubs.txt=4165 config.txt=319 highlights.txt=10052 honours.txt=2485 lab.txt=11 ladder.txt=226545 nations.txt=19 news.txt=42389 prefs.txt=4 roster.txt=56195 season.txt=16729 stats.txt=61801
+files 3 archive.txt=13881 clubs.txt=4179 config.txt=319 highlights.txt=10256 honours.txt=5538 lab.txt=11 ladder.txt=258484 nations.txt=5445 news.txt=45885 prefs.txt=4 roster.txt=57291 season.txt=15287 stats.txt=62335
+total 1 386216
+total 2 431400
+total 3 478915
+projected 666355
+cpu 1 79.34
+cpu 2 63.06
+cpu 3 55.51
+ref 3.20
+league 1000
+files 1 archive.txt=25864 clubs.txt=3214 config.txt=320 highlights.txt=10574 honours.txt=3043 lab.txt=11 ladder.txt=931441 nations.txt=19 news.txt=42522 prefs.txt=4 roster.txt=278921 season.txt=61446 stats.txt=268997
+files 2 archive.txt=40953 clubs.txt=4117 config.txt=320 highlights.txt=10427 honours.txt=6185 lab.txt=11 ladder.txt=1199124 nations.txt=19 news.txt=42918 prefs.txt=4 roster.txt=282229 season.txt=63157 stats.txt=281151
+files 3 archive.txt=55122 clubs.txt=4130 config.txt=320 highlights.txt=10184 honours.txt=11319 lab.txt=11 ladder.txt=1429211 nations.txt=6118 news.txt=42792 prefs.txt=4 roster.txt=287254 season.txt=61636 stats.txt=283684
+total 1 1626376
+total 2 1930615
+total 3 2191785
+projected 2770875
+cpu 1 175.61
+cpu 2 179.03
+cpu 3 173.46
+ref 3.05
