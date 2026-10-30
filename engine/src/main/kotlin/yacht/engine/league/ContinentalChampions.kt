@@ -173,7 +173,8 @@ class ContinentalChampions private constructor(
         private const val GROUP_STEP = 0.07
 
         // With the losers' bracket (4 groups): W 8강; W 4강 + L1; L2; W 결승 + L3; L 결승; 최종 결승.
-        // A section of 2 groups plays the last 4; single elimination the 8강, 4강 and final's times.
+        // A section of 2 groups plays the last 4. Single elimination (8강, 4강, 결승) takes this
+        // table's W 4강, W 결승 and 최종 결승 times.
         private val KO_OPENS_DOUBLE = listOf(0.45, 0.50, 0.55, 0.61, 0.68, 0.76)
         private val KO_TARGETS_DOUBLE = listOf(0.46, 0.52, 0.58, 0.65, 0.72, 0.80)
         private val KO_OPENS = listOf(0.50, 0.61, 0.76)
