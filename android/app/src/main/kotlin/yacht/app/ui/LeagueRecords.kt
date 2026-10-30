@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,8 +25,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.LeagueController
@@ -35,69 +39,18 @@ import yacht.app.core.Page
 import yacht.app.core.ProfileView
 import yacht.app.core.RecordsView
 import yacht.app.core.SeasonHistoryItem
+import yacht.engine.league.Family
 import yacht.engine.league.LeagueRecord
 import yacht.engine.league.Origin
 import yacht.engine.league.RecordGroup
 import yacht.engine.game.label
 
-/** An honour in Korean ("1부 우승", "요트컵 준우승", "신인왕", ...). */
-fun honourLabel(kind: String): String {
-    division(kind, "L")?.let { return "${it + 1}부 우승" }
-    division(kind, "UP")?.let { return "${it + 1}부 승격" }
-    division(kind, "DOWN")?.let { return "${it + 1}부 강등" }
-    division(kind, "STAY")?.let { return "${it + 1}부 잔류" }
-    return when (kind) {
-        "REG" -> "정규리그 1위"
-        "L0R" -> "우승 플레이오프 준우승"
-        "CUP" -> "요트컵 우승"
-        "CUP2" -> "요트컵 준우승"
-        "CL" -> "챔피언스 리그 우승"
-        "CL2" -> "챔피언스 리그 준우승"
-        "SUPER" -> "슈퍼컵 우승"
-        "ALLSTAR" -> "올스타전 승리"
-        "FAMILY" -> "계열 대항전 우승"
-        "FSQ" -> "계열 대표 선발"
-        "CLUB" -> "클럽 리그 우승"
-        "CLUB2" -> "클럽 리그 준우승"
-        "MVP" -> "MVP"
-        "ROOKIE" -> "신인왕"
-        "MIP" -> "기량발전상"
-        "YACHT" -> "최다 요트상"
-        "SCORER" -> "득점왕"
-        "WC" -> "요트 월드컵 우승"
-        "WC2" -> "요트 월드컵 준우승"
-        "WC4" -> "요트 월드컵 4강"
-        "WCW" -> "요트 월드컵 우승 멤버"
-        "WCMVP" -> "월드컵 MVP"
-        "WCTOP" -> "월드컵 득점왕"
-        "WCH" -> "요트 월드컵 개최"
-        "CC" -> "대륙컵 우승"
-        "CC2" -> "대륙컵 준우승"
-        "CCW" -> "대륙컵 우승 멤버"
-        "NSQ" -> "국가대표 선발"
-        "POTW" -> "이 주의 선수"
-        else -> kind
-    }
-}
-
-private fun division(kind: String, prefix: String): Int? =
-    if (kind.startsWith(prefix)) kind.removePrefix(prefix).toIntOrNull() else null
-
-/** Honours worth a trophy icon (titles and awards, not moves or call-ups). */
-private fun trophy(kind: String): String? = when {
-    kind.startsWith("UP") || kind.startsWith("DOWN") || kind.startsWith("STAY") || kind == "FSQ" || kind == "NSQ" || kind == "WCH" -> null
-    kind == "L0" -> "👑"
-    division(kind, "L") != null -> "🥇"
-    kind in setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "WCW", "CC", "CCW") -> "🏆"
-    kind in setOf("MVP", "ROOKIE", "MIP", "YACHT", "SCORER", "REG", "WCMVP", "WCTOP") -> "🏅"
-    kind == "WC4" -> "🥉"
-    kind.endsWith("2") || kind == "L0R" -> "🥈"
-    else -> null
-}
-
-/** The profile part of an AI's page: origin, family tree and honours (loaded on open). */
+/**
+ * The profile part of an AI's page: origin, family tree and honours (loaded on open); [onOpen]
+ * opens another player's page by key.
+ */
 @Composable
-fun ProfileSection(lg: LeagueController, key: String) {
+fun ProfileSection(lg: LeagueController, key: String, onOpen: (String) -> Unit) {
     LaunchedEffect(key) { lg.loadProfile(key) }
     val p = lg.profile?.takeIf { it.key == key } ?: return
     val cs = MaterialTheme.colorScheme
@@ -113,7 +66,7 @@ fun ProfileSection(lg: LeagueController, key: String) {
             style = MaterialTheme.typography.labelMedium,
             color = cs.secondary,
         )
-        p.identity?.let { IdentityPart(it, alive = p.retired == null) }
+        p.identity?.let { IdentityPart(it, alive = p.retired == null, onOpen = onOpen) }
         p.genes?.takeIf { p.identity?.style == null && (p.origin == Origin.GENERATED || p.origin == Origin.EVOLVED || p.origin == Origin.CREATED) }?.let {
             Text("스타일: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
@@ -300,7 +253,7 @@ private val RECORDS_MODES = setOf(RecordsMode.ROOM, RecordsMode.HALL, RecordsMod
 
 /** 기록: the hall of fame by season, the legends and retired players, and the families. */
 @Composable
-fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, families: @Composable () -> Unit) {
+fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     val mode = RecordsMode.of(lg.nav)
     LaunchedEffect(mode) { if (mode in RECORDS_MODES) lg.loadRecords() }
     Column {
@@ -316,7 +269,7 @@ fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, fa
             RecordsMode.LEGENDS -> Legends(lg, onOpen)
             RecordsMode.NATIONS -> NationRanking(lg)
             RecordsMode.PROSPECTS -> Prospects(lg, onOpen)
-            RecordsMode.FAMILIES -> families()
+            RecordsMode.FAMILIES -> FamilyList(lg, v, onOpen)
         }
     }
 }
@@ -411,12 +364,12 @@ private fun Legends(lg: LeagueController, onOpen: (String) -> Unit) {
 
 /** An AI no longer in the league (retired, or a legend): its profile alone. */
 @Composable
-fun PastProfileDialog(lg: LeagueController, key: String, onDismiss: () -> Unit) {
+fun PastProfileDialog(lg: LeagueController, key: String, onOpen: (String) -> Unit, onDismiss: () -> Unit) {
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("닫기") } },
         title = { Text(lg.name(key), fontWeight = FontWeight.Bold) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) { ProfileSection(lg, key) } },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { ProfileSection(lg, key, onOpen) } },
     )
 }
 
@@ -491,19 +444,6 @@ private fun RecordCard(lg: LeagueController, rec: LeagueRecord, onOpen: (String)
     }
 }
 
-/** A milestone event's args (kind, value) in Korean. */
-fun milestoneText(args: List<String>): String {
-    val v = args.getOrNull(1)?.toIntOrNull()?.let { "%,d".format(it) } ?: args.getOrNull(1).orEmpty()
-    return when (args.firstOrNull()) {
-        "games" -> "통산 ${v}판"
-        "wins" -> "통산 ${v}승"
-        "yachts" -> "통산 요트 ${v}번"
-        "300" -> if (v == "1") "첫 300점" else "통산 ${v}번째 300점 경기"
-        "title" -> if (v == "1") "첫 우승" else "통산 ${v}번째 우승"
-        else -> args.joinToString(" ")
-    }
-}
-
 @Composable
 private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomView?) {
     val cs = MaterialTheme.colorScheme
@@ -526,12 +466,6 @@ private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomVie
             }
         }
     }
-}
-
-/** An honour's winner: a family or all-star side by its label, a club or AI by name. */
-fun honourWinner(lg: LeagueController, kind: String, key: String): String = when (kind) {
-    "FAMILY", "ALLSTAR" -> yacht.engine.league.Competitions.teamLabel(key)
-    else -> lg.name(key)
 }
 
 @Composable
@@ -578,3 +512,78 @@ private fun MetaReportView(r: yacht.app.core.RecordsRoomView?) {
         }
     }
 }
+
+/** A family card's row, from plain values: unchanged rows skip recomposing on a new snapshot. */
+@Composable
+private fun FamilyMember(key: String, rank: Int?, name: String, tier: String?, tierColor: androidx.compose.ui.graphics.Color?, rating: Int?, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clickable { onOpen(key) }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(rank?.let { "${it}위" } ?: "배치", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.width(36.dp))
+        Text(name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (tier != null && tierColor != null) Text(tier, style = MaterialTheme.typography.labelSmall, color = tierColor, fontWeight = FontWeight.Bold)
+        Text("  ${rating ?: "–"}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val groups = Family.entries.map { f -> f to v.rows.filter { it.family == f } }
+            .sortedByDescending { (_, rows) -> rows.mapNotNull { it.rating }.average().takeIf { !it.isNaN() } ?: -1.0 }
+        item {
+            var open by remember { mutableStateOf(false) }
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically) {
+                        Text("계열 대 계열 상대 전적", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text(if (open) "접기" else "펼치기", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+                    }
+                    if (open) {
+                        val shown = groups.filter { it.second.isNotEmpty() }
+                        androidx.compose.runtime.LaunchedEffect(shown.size) {
+                            lg.loadMatrix("계열", shown.map { (_, rows) -> rows.map { it.key } }, shown.map { it.first.label })
+                        }
+                        val m = lg.h2h
+                        if (m == null || m.title != "계열") Text("상대 전적을 모으는 중…", style = MaterialTheme.typography.bodySmall)
+                        else H2hGrid(m)
+                    }
+                }
+            }
+        }
+        items(groups, key = { it.first.name }) { (f, rows) ->
+            val rated = rows.filter { it.rating != null }
+            // A family of a league of thousands holds hundreds: its best ten, the rest on request.
+            var all by remember(f) { mutableStateOf(false) }
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(f.label, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text(
+                            "${rows.size}개" + (rated.takeIf { it.isNotEmpty() }?.let { " · 평균 ${"%.0f".format(it.mapNotNull { r -> r.rating }.average())}" } ?: ""),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = cs.onSurfaceVariant,
+                        )
+                    }
+                    HorizontalDivider()
+                    val sorted = rows.sortedBy { it.rank ?: Int.MAX_VALUE }
+                    for (r in if (all) sorted.take(FAMILY_MAX) else sorted.take(FAMILY_TOP)) {
+                        FamilyMember(r.key, r.rank, r.shown, r.tier?.label, r.tier?.name?.let { tierColor(it) }, r.rating, onOpen)
+                    }
+                    if (sorted.size > FAMILY_TOP) {
+                        Text(
+                            if (all) "접기" + (if (sorted.size > FAMILY_MAX) " (상위 ${FAMILY_MAX}명까지 보여요)" else "") else "더 보기 (${sorted.size - FAMILY_TOP}명)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = cs.primary,
+                            modifier = Modifier.clickable { all = !all }.padding(vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A family card's members at first, and at most when opened. */
+private const val FAMILY_TOP = 10
+private const val FAMILY_MAX = 200
