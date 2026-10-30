@@ -5,6 +5,8 @@ import yacht.engine.league.Archive
 import yacht.engine.league.Awards
 import yacht.engine.league.BoardResult
 import yacht.engine.league.Comp
+import yacht.engine.league.Competitions
+import yacht.engine.league.Drama
 import yacht.engine.league.Dynasty
 import yacht.engine.league.Family
 import yacht.engine.league.Field
@@ -19,6 +21,7 @@ import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
 import yacht.engine.league.LeagueRecord
+import yacht.engine.league.MatchFormat
 import yacht.engine.league.MetaReport
 import yacht.engine.league.Offseason
 import yacht.engine.league.RatingMove
@@ -848,4 +851,153 @@ class StatsTest {
         assertEquals(1 to 1, dynasties.size to lines.size)
         assertEquals(setOf("c", "ba"), keys)
     }
+
+    @Test
+    fun aLegacyLeagueClosesAsBefore() {
+        // Hashes taken from the code before national leagues reached the records (this test on it).
+        val pyramid = LegacyLeague(600, LeagueConfig(), 11L).apply { play(3) }
+        assertEquals("a212e9d226257ac62f71853229fec00d932d24a6ed221f5b7ce5aa80ad2d49e6", pyramid.sha(pyramid.closes.toString()))
+        val linear = LegacyLeague(60, LeagueConfig(divisions = 3, matchFormat = MatchFormat.MIRRORED, doubleElimination = false, longKnockouts = false), 12L).apply { play(3) }
+        assertEquals("fdd8a717bbcc00c5547298544cfb7a88395bcf60d3a34a9f0f28c2864b50c717", linear.sha(linear.closes.toString()))
+    }
+}
+
+/**
+ * A legacy league (one league: linear divisions or a pyramid) played with made-up games that
+ * carry facts, every competition on, closed season by season as [LeagueWorld] closes it: what
+ * the records, awards and media make of it is written into [closes] (the golden tests of a
+ * legacy league's close and odds).
+ */
+internal class LegacyLeague(players: Int, val config: LeagueConfig, val seed: Long) {
+    private val rules = RuleSet()
+    private fun index(k: String) = k.removePrefix("p").toInt()
+    var keys: List<String> = (1..players).map { "p%04d".format(it) }
+        private set
+
+    /** Rating points gained since the start (a few players grow every season). */
+    private val drift = HashMap<String, Double>()
+    fun rating(k: String): Double = 2000.0 - 2 * (index(k) % 1000) + (drift[k] ?: 0.0)
+
+    val book = StatsBook()
+    val archive = Archive()
+    val honours = HonourBook()
+    val closes = StringBuilder()
+
+    /** Called halfway through each season's league stage and once it is over (before the post-season). */
+    var onHalf: (SeasonPlan) -> Unit = {}
+    var onEnd: (SeasonPlan) -> Unit = {}
+
+    /** Called with every fixture before its result is recorded. */
+    var onJob: (SeasonPlan, Fixture) -> Unit = { _, _ -> }
+
+    private val cards = HashMap<Int, Board>()
+    private fun card(total: Int): Board = cards.getOrPut(total) { Board.of(rules, Category.ALL.map { if (it == Category.CHOICE) total else 0 }) }
+
+    private val factCache = HashMap<Triple<Int, Int, Int>, GameFacts>()
+
+    /** Facts of a game the first player ends on [x] and the second on [y]; [shape] 0 steady, 1 a comeback, 2 a seesaw. */
+    private fun facts(x: Int, y: Int, shape: Int): GameFacts = factCache.getOrPut(Triple(x, y, shape)) {
+        val end = if (x > y) 100 else if (x < y) 0 else 50
+        val curve = ByteArray(24) { h ->
+            val t = (h + 1) / 24.0
+            val p = when (shape) {
+                1 -> if (h < 16) 50 + (if (end >= 50) -1 else 1) * (35 * (h + 1) / 16.0) else 50 + (end - 50) * (h - 15) / 8.0
+                2 -> 50 + 30 * (if (h % 6 < 3) 1 else -1) * (1 - t) + (end - 50) * t
+                else -> 50 + (end - 50) * t
+            }
+            p.toInt().coerceIn(0, 100).toByte()
+        }
+        val totals = ShortArray(48)
+        totals[46] = x.toShort()
+        totals[47] = y.toShort()
+        GameFacts(card(x), card(y), totals, curve)
+    }
+
+    /** [n] games of [a] against [b] from [rng]: the better rated wins more often; facts with every game. */
+    private fun board(a: String, b: String, n: Int, rng: Random): BoardResult {
+        val games = ArrayList<GameScore>(n)
+        val fs = ArrayList<GameFacts>(n)
+        for (i in 0 until n) {
+            val edge = (rating(a) - rating(b)) / 400.0
+            val aWins = rng.nextDouble() < 0.5 + edge.coerceIn(-0.3, 0.3)
+            val level = rng.nextInt(25) == 0
+            val hi = 190 + rng.nextInt(120)
+            val lo = (hi - 1 - rng.nextInt(70)).coerceAtLeast(60)
+            val (sa, sb) = if (level) hi to hi else if (aWins) hi to lo else lo to hi
+            games += GameScore(sa, sb, aYacht = rng.nextInt(9) == 0, bYacht = rng.nextInt(9) == 0)
+            // A moves first in even games (mirrored matches alternate).
+            val shape = rng.nextInt(3)
+            fs += if (i % 2 == 0) facts(sa, sb, shape) else facts(sb, sa, shape)
+        }
+        return BoardResult(a, b, games, fs)
+    }
+
+    fun play(f: Fixture): JobResult {
+        val rng = Random(f.seed xor 0x5EED)
+        return when (f.kind) {
+            JobKind.MATCH -> board(f.a, f.b, 2, rng).let { JobResult(f, listOf(it), TieRule.match(it.games, config.matchFormat), 1000L, config.matchFormat) }
+            JobKind.TIE -> board(f.a, f.b, 2 * maxOf(1, f.legs), rng).let { JobResult(f, listOf(it), TieRule.match(it.games).let { w -> if (w == 0) 1 else w }, 1000L) }
+            JobKind.TEAM -> f.lineupA.zip(f.lineupB).map { (x, y) -> board(x, y, 2, rng) }.let { JobResult(f, it, TieRule.team(it).let { w -> if (w == 0) 1 else w }, 1000L) }
+        }
+    }
+
+    private fun family(k: String): Family = Family.entries[index(k) % Family.entries.size]
+
+    private fun context(): Offseason.Context =
+        Offseason.Context(keys, ::rating, ::family, { k -> "도시${index(k) % 7}" }, config, Competitions.factories(), honours.all)
+
+    private fun line(s: String) = closes.append(s).append('\n')
+
+    /** Plays and closes [seasons] seasons. */
+    fun play(seasons: Int) {
+        var plan = Offseason.first(seed, context())
+        repeat(seasons) { s ->
+            book.startSeason(plan.number, keys.associateWith { rating(it) })
+            val half = plan.league.fixturesTotal / 2
+            var halfDone = false
+            var guard = 0
+            while (!plan.finished) {
+                if (plan.league.finished && !plan.postStarted) {
+                    onEnd(plan)
+                    plan.startPost(Competitions.postFactories())
+                }
+                val f = plan.next(emptySet(), 0, 1) ?: break
+                onJob(plan, f)
+                val r = play(f)
+                for (e in book.record(r, StatsContext(plan.number, ::rating, { k -> "도시${index(k) % 7}" }))) line("rec ${e.encode()}")
+                plan.record(r)
+                line("job ${f.comp.code} ${f.id} ${f.label} ${Drama.isFinal(f)} ${Drama.titleRace(plan.league, f)}")
+                if (!halfDone && plan.league.fixturesPlayed >= half) {
+                    halfDone = true
+                    onHalf(plan)
+                }
+                check(++guard < 2_000_000)
+            }
+            check(plan.finished)
+            // A few grow, one leaves, and newcomers arrive for the next season.
+            for (k in keys) if (index(k) % 13 == s) drift[k] = (drift[k] ?: 0.0) + 60.0
+            val gone = setOf(keys[keys.size / 2])
+            val moves = Offseason.moves(plan, gone)
+            val h = Offseason.honours(plan, moves, gone)
+            val end = book.endSeason(plan, h, honours, archive, ::rating, ::family, { k -> "선수${index(k)}" }, traits = { k -> mapOf("버릇" to "${index(k) % 3}") }, gone = gone)
+            val picks = plan.league.playersOfWeek(0 until plan.league.matchdays, gone).values.sortedBy { it.matchday }.map { Honour(plan.number, "POTW", it.key) }
+            honours.add(h + end.awards + picks)
+            line("season ${plan.number}")
+            line("honours ${h.joinToString(",") { it.encode() }}")
+            line("awards ${end.awards.joinToString(",") { it.encode() }}")
+            for (e in end.events) line("event ${e.encode()}")
+            line("inducted ${end.inducted}")
+            line("dynasties ${end.dynasties}")
+            line("review ${end.review}")
+            for (e in book.honourRecords(honours, plan.number) { k, n -> 20 + n + index(k) % 15 }) line("hrec ${e.encode()}")
+            line(archive.encode())
+            line(book.encode())
+            val newcomers = (1..6).map { "p%04d".format(1000 * (s + 1) + it) }
+            keys = keys.filter { it !in gone } + newcomers
+            plan = Offseason.next(plan, context()).first
+        }
+    }
+
+    fun sha(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 }

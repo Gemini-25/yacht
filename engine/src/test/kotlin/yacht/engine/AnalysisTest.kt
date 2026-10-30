@@ -286,6 +286,52 @@ class AnalysisTest {
         assertProbabilities(t)
     }
 
+    /** A legacy league's odds and previews halfway, at the end and through the post-season, written out. */
+    private fun legacyOdds(lg: LegacyLeague): String {
+        val out = StringBuilder()
+        var odds: OddsTable? = null
+        fun take(p: yacht.engine.league.SeasonPlan, at: String) {
+            val t = Odds.compute(p, lg::rating, runs = 300, seed = p.seed)
+            odds = t
+            out.append("odds ${p.number} $at ${t.played} ${t.total} ${t.runs} ${t.drawRate}\n")
+            for (r in t.rows) out.append(" $r\n")
+            // Previews of the 1부 top two, and of each division's top against the next one's.
+            val d = p.league.divisions
+            fun preview(a: String, b: String, f: Fixture? = null) =
+                Preview.of(a, b, null, p.league, t, null, null, null, { it }, f).let { out.append(" preview $a $b ${it.lines} ${it.stakes}\n") }
+            val top = p.league.table(0)
+            if (top.size >= 2) preview(top[0].key, top[1].key)
+            for (i in 0 until d.size - 1) preview(p.league.table(i).first().key, p.league.table(i + 1).first().key)
+        }
+        lg.onHalf = { take(it, "half") }
+        lg.onEnd = { take(it, "end") }
+        var n = 0
+        lg.onJob = { p, f ->
+            // Every competition's previews, and the odds once the post-season is under way.
+            if (f.comp != Comp.LEAGUE || n++ % 97 == 0) {
+                val pv = Preview.of(f.a, f.b, null, p.league, odds, null, null, null, { it }, f)
+                out.append("job ${f.comp.code} ${f.label} ${pv.stakes}\n")
+            }
+            if (p.league.finished && f.comp == Comp.TITLE_PLAYOFF) {
+                val t = Odds.compute(p, lg::rating, runs = 50, seed = 1L)
+                out.append(" po ${t.rows.take(6)}\n")
+            }
+        }
+        lg.play(2)
+        return out.toString()
+    }
+
+    @Test
+    fun aLegacyLeaguesOddsAndPreviewsAreAsBefore() {
+        // Hashes taken from the code before the odds became per league (this test on it).
+        val pyramid = LegacyLeague(600, LeagueConfig(), 21L)
+        assertEquals("17860b739333f1a67e824d08a6d84686f7ab5520344f3b98329ee71f5e2da9d3", pyramid.sha(legacyOdds(pyramid)))
+        val linear = LegacyLeague(60, LeagueConfig(divisions = 3, matchFormat = yacht.engine.league.MatchFormat.MIRRORED, doubleElimination = false), 22L)
+        assertEquals("fcbe542316dd78269bdcdd4ef72099d1e968827d0eee56db141acc3de6390b70", linear.sha(legacyOdds(linear)))
+        val double = LegacyLeague(48, LeagueConfig(divisions = 2), 23L)
+        assertEquals("d5e9e29cb5ac7c88d00a9137b92e369fdd6e0466fad8358cf5a49072832b2d37", double.sha(legacyOdds(double)))
+    }
+
     // ---- preview and scouting ------------------------------------------------------------------
 
     /** A profile [shift] points a box above the league in Full House and below in Aces. */
