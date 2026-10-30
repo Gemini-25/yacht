@@ -908,16 +908,19 @@ class StatsBook(
 
         // Hall of fame (AIs only: team competitions' honours are keyed by the team). Sorted, so
         // that the order of the inducted (and of archive.txt) does not depend on the map's.
-        // National leagues: only major titles count (28 league titles a season would fill it).
+        // National leagues: only major titles count (28 league titles a season would fill it),
+        // counted once for every player ([HonourBook.majorTitles] per player would read the whole
+        // book for each of thousands).
         val inducted = ArrayList<HallOfFameEntry>()
         val candidates = java.util.TreeSet<String>().apply {
             addAll(keys)
             addAll(careerStats.keys)
         }
+        val majorCount = if (national) book.all.filter { HonourBook.isMajor(it, major) }.groupingBy { it.key }.eachCount() else emptyMap()
         for (k in candidates) {
             if (archive.inHallOfFame(k)) continue
             val c = careerStats[k]
-            val titles = if (national) book.majorTitles(k, major) else titlesOf(k)
+            val titles = if (national) majorCount[k] ?: 0 else titlesOf(k)
             val mvps = maxOf(mvpCount[k] ?: 0, mvpCounts[k] ?: 0)
             val reason = Awards.hallOfFame(titles, mvps, c) ?: continue
             val e = HallOfFameEntry(k, name(k), n, reason, titles, c?.games ?: 0, c?.winRate ?: 0.0)

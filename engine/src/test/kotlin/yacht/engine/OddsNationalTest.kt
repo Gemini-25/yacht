@@ -1,19 +1,29 @@
 package yacht.engine
 
 import yacht.engine.league.AiOdds
+import yacht.engine.league.BoardResult
+import yacht.engine.league.ContinentalChampions
 import yacht.engine.league.GameScore
+import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueRank
 import yacht.engine.league.LeagueRanking
+import yacht.engine.league.LeagueTitlePlayoffs
 import yacht.engine.league.Leagues
 import yacht.engine.league.Odds
 import yacht.engine.league.OddsTable
 import yacht.engine.league.Season
 import yacht.engine.league.SeasonPlan
+import yacht.engine.league.SeasonStart
+import yacht.engine.league.TieRule
+import yacht.engine.league.TitlePlayoff
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -97,37 +107,71 @@ class OddsNationalTest {
     private fun ranking(vararg rows: Triple<String, Int, Boolean>): LeagueRanking =
         LeagueRanking(0, rows.mapIndexed { r, (id, slots, direct) -> LeagueRank(id, r, 0, 0.0, emptyList(), 0.0, slots, direct, 0, leagues.confedOf(id)) })
 
+    /** [p] with this season's 대륙 챔피언스 (Asia's KR, JP and CN: one section; GB alone in Europe has none). */
+    private fun withContinental(p: SeasonPlan): SeasonPlan {
+        val start = SeasonStart(
+            p.number, p.seed, p.config, ratings.keys.sortedByDescending(::rating), ::rating, divisions, emptyList(), emptyList(), { null }, { "서울" },
+            leagues = leagues, leagueRanking = p.ranking,
+        )
+        val ccl = assertNotNull(ContinentalChampions.create(start))
+        assertEquals(1, ccl.sections.size)
+        return SeasonPlan(p.league, p.config, mutableListOf(ccl)).also { it.ranking = p.ranking }
+    }
+
+    /** Each league's international places in all (rounded: shares add up to whole places). */
+    private fun places(p: SeasonPlan): Map<String, Double> = leagues.list.associate { it.id to Math.round(sum(odds(p, it.id).rows) { r -> r.champions } * 1e6) / 1e6 }
+
     @Test
-    fun internationalPlacesComeFromTheRanking() {
-        val p = plan(0.5)
+    fun continentalPlacesComeFromTheRanking() {
+        // The champions league off: the 대륙 챔피언스 places alone.
+        val p = plan(0.5, config.copy(champions = false))
         p.ranking = ranking(Triple("KR", 3, true), Triple("JP", 2, false), Triple("CN", 0, true), Triple("GB", 0, false))
-        val places = mapOf("KR" to 3.0, "JP" to 2.0, "CN" to 1.0, "GB" to 0.0)
-        for ((id, n) in places) {
+        assertEquals(mapOf("KR" to 3.0, "JP" to 2.0, "CN" to 0.0, "GB" to 0.0), places(withContinental(p)))
+        for (id in listOf("KR", "JP")) {
             val t = odds(p, id)
-            assertEquals(n, sum(t.rows) { it.champions }, 1e-9, id)
             // Only the 1부 goes; the champion always does.
             val top = leagues.byId(id)!!.top
             assertTrue(t.rows.filter { it.division != top }.all { it.champions == 0.0 })
-            if (n > 0) assertTrue(t.division(top).all { it.champions >= it.title - 1e-9 }, id)
+            assertTrue(t.division(top).all { it.champions >= it.title - 1e-9 }, id)
         }
         // KR's three places: the title playoff's winner from 4th takes the third's.
         val kr = odds(p, "KR").division(leagues.byId("KR")!!.top)
         assertTrue(kr.count { it.champions > 0.0 } >= 4, kr.toString())
-        // 대륙 챔피언스 off: a champion straight into the champions league only.
-        val off = p.config.copy(continentalCl = false)
-        val q = SeasonPlan(p.league, off).also { it.ranking = p.ranking }
-        assertEquals(1.0, sum(odds(q, "KR").rows) { it.champions }, 1e-9)
-        assertEquals(0.0, sum(odds(q, "JP").rows) { it.champions }, 1e-9)
+        // Without a ranking: Asia's three leagues share 8 places by strength (KR 3, JP 3, CN 2), GB none.
+        val q = plan(0.3, config.copy(champions = false))
+        assertEquals(LeagueRanking.EMPTY, q.ranking)
+        assertEquals(mapOf("KR" to 3.0, "JP" to 3.0, "CN" to 2.0, "GB" to 0.0), places(q))
     }
 
     @Test
-    fun withoutARankingThePlacesFollowTheStrengthOrder() {
-        // Asia's three leagues share 8 places (KR 3, JP 3, CN 2), GB has none in Europe; every
-        // league is among the seven whose champion goes straight into the champions league.
-        val p = plan(0.3)
-        assertEquals(LeagueRanking.EMPTY, p.ranking)
-        val expected = mapOf("KR" to 3.0, "JP" to 3.0, "CN" to 2.0, "GB" to 1.0)
-        for ((id, n) in expected) assertEquals(n, sum(odds(p, id).rows) { it.champions }, 1e-9, id)
+    fun afterAContinentalSeasonTheChampionsLeagueTakesChampionsAndRunnersUp() {
+        val p = plan(0.5)
+        p.ranking = ranking(Triple("KR", 3, true), Triple("JP", 2, false), Triple("CN", 0, true), Triple("GB", 0, false))
+        // One section's champion and runner-up and the four champions leave 9 places after the
+        // holder: every league's runner-up too (ChampionsLeague.worldEntrants), so a direct
+        // champion's league sends its top two. GB's champion is not direct: one place.
+        val q = withContinental(p)
+        assertEquals(mapOf("KR" to 3.0, "JP" to 2.0, "CN" to 2.0, "GB" to 1.0), places(q))
+        val cn = odds(q, "CN").division(leagues.byId("CN")!!.top)
+        assertTrue(cn.all { it.champions >= it.title - 1e-9 })
+        // 대륙 챔피언스 off next season: the champions league's places alone (KR's three are two).
+        val off = SeasonPlan(q.league, q.config.copy(continentalCl = false), q.comps).also { it.ranking = p.ranking }
+        assertEquals(mapOf("KR" to 2.0, "JP" to 1.0, "CN" to 2.0, "GB" to 1.0), places(off))
+    }
+
+    @Test
+    fun withoutAContinentalSeasonEachLeagueTakesItsTurnOnTheWorldStage() {
+        // No 대륙 챔피언스 this season: after the holder each league in rank order adds its next
+        // player until 16, so 15 places go 4, 4, 4, 3 (GB's 1부 has 3); more than KR's 3 대륙 places.
+        val p = plan(0.5)
+        p.ranking = ranking(Triple("KR", 3, true), Triple("JP", 2, false), Triple("CN", 0, true), Triple("GB", 0, false))
+        assertEquals(mapOf("KR" to 4.0, "JP" to 4.0, "CN" to 4.0, "GB" to 3.0), places(p))
+        // By strength without a ranking; with GB first in a ranking, KR is the one of three.
+        assertEquals(mapOf("KR" to 4.0, "JP" to 4.0, "CN" to 4.0, "GB" to 3.0), places(plan(0.3)))
+        val q = plan(0.3).also { it.ranking = ranking(Triple("GB", 0, true), Triple("CN", 2, true), Triple("JP", 3, true), Triple("KR", 3, true)) }
+        assertEquals(mapOf("KR" to 3.0, "JP" to 4.0, "CN" to 4.0, "GB" to 3.0), places(q))
+        // No champions league: nobody.
+        assertEquals(mapOf("KR" to 0.0, "JP" to 0.0, "CN" to 0.0, "GB" to 0.0), places(plan(0.3, config.copy(champions = false, continentalCl = false))))
     }
 
     @Test
@@ -144,5 +188,26 @@ class OddsNationalTest {
             assertEquals(1.0, sum(t.division(top)) { it.title }, 1e-9)
             assertEquals(p.league.table(top).first().key, t.division(top).first().key)
         }
+    }
+
+    @Test
+    fun aLeaguesTitleIsCertainOnceItsOwnFinalIsPlayed() {
+        val p = plan(1.0)
+        val titles = assertIs<LeagueTitlePlayoffs>(TitlePlayoff.create(p))
+        p.post += titles
+        // The better rated wins every tie; KR's final comes first, the other leagues' are still to play.
+        while (titles.honours().none { it.kind == "L0.KR" }) {
+            val f = assertNotNull(titles.next(1.0, emptySet()))
+            val g = List(2 * f.legs) { if (rating(f.a) > rating(f.b)) GameScore(220, 180) else GameScore(180, 220) }
+            titles.record(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), TieRule.match(g), 0))
+        }
+        assertFalse(titles.finished)
+        val champion = titles.honours().single { it.kind == "L0.KR" }.key
+        val kr = odds(p, "KR", 50)
+        assertEquals(1.0, kr[champion]!!.title)
+        assertEquals(1.0, sum(kr.division(leagues.byId("KR")!!.top)) { it.title }, 1e-9)
+        // JP's final is open: its title is still a chance for more than one.
+        assertTrue(titles.honours().none { it.kind == "L0.JP" })
+        assertTrue(odds(p, "JP", 50).rows.count { it.title > 0.0 } > 1)
     }
 }

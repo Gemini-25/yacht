@@ -133,11 +133,10 @@ class OddsInput internal constructor(
     internal val league: String = LeagueIds.LEGACY,
     internal val first: Int = 0,
     /**
-     * A national league: [clPlaces] of its 1부 are next season's 대륙 챔피언스 places, which its
-     * champion takes first; with [clDirect] its champion goes straight into the champions league.
+     * A national league: [clPlaces] of its 1부 are its places on next season's international
+     * stage, which its champion takes first.
      */
     internal val national: Boolean = false,
-    internal val clDirect: Boolean = false,
 ) {
     /** Fixtures the runs play. */
     val fixtures: Int get() = fa.size
@@ -166,12 +165,12 @@ class OddsInput internal constructor(
  *   finalists are known, or without a cup, each run applies [ChampionsLeague.entrants]' rule:
  *   those places, the finalists, then the 1st division's next places until 16, then by rating.
  * - A season of national leagues runs one league at a time ([input] with its id): its divisions,
- *   fixtures, boundaries and title playoff. Its international places are its 1부's places in
- *   next season's 대륙 챔피언스 ([LeagueRank.cclSlots] of [SeasonPlan.ranking]; a league the
- *   ranking does not have, by the strength order the draw uses), its champion first (the title
- *   playoff's winner may come from below them), and for a league whose champion goes straight
- *   into the champions league ([LeagueRank.clDirect]) its champion. The draw and the sweep bonus
- *   are the whole season's.
+ *   fixtures, boundaries and title playoff. Its international places are its 1부's top places,
+ *   its champion first (the title playoff's winner may come from below them): as many as the
+ *   more of its places in next season's 대륙 챔피언스 and in its champions league (see
+ *   [stagePlaces]); a league's rank is [SeasonPlan.ranking]'s, a league the ranking does
+ *   not have by the strength order the draws use. The draw and the sweep bonus are the whole
+ *   season's.
  *
  * Under 15 ns per fixture and run on a desktop: 5100 fixtures and 2000 runs take about 120 ms.
  * The app copies with [input] under its lock and calls [run] on a background thread.
@@ -249,9 +248,9 @@ object Odds {
 
     /**
      * The input for [plan]'s league: its config, the draw share from its results, and the
-     * post-season playoffs once each is over (the league is then over too), whose winners are
-     * then certain. In a season of national leagues, its first league ([firstLeague]; the
-     * overload with a league id takes any).
+     * post-season playoffs once each is over (the league is then over too; a national league's
+     * title playoff once its own bracket is), whose winners are then certain. In a season of
+     * national leagues, its first league ([firstLeague]; the overload with a league id takes any).
      */
     fun input(plan: SeasonPlan, rating: (String) -> Double): OddsInput = input(plan, rating, firstLeague(plan))
 
@@ -260,12 +259,15 @@ object Odds {
         val leagues = plan.league.leagues
         val lg = if (leagues.national) requireNotNull(leagues.byId(leagueId)) { "no league $leagueId this season" } else leagues.list.firstOrNull()
         val id = lg?.id ?: LeagueIds.LEGACY
-        val champion = plan.competition(Comp.TITLE_PLAYOFF)?.takeIf { it.finished }?.honours()?.firstOrNull { it.kind == HonourKind.of("L0", id) }?.key
+        // A national league's title playoff is over once its own bracket is (LeagueTitlePlayoffs
+        // names a bracket's champion when its final is decided; a series final can last longer
+        // in one league than in another).
+        val titlePlayoff = plan.competition(Comp.TITLE_PLAYOFF)?.takeIf { it.finished || it is LeagueTitlePlayoffs }
+        val champion = titlePlayoff?.honours()?.firstOrNull { it.kind == HonourKind.of("L0", id) }?.key
         val promo = (plan.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff)?.takeIf { it.finished }
         val decided = promo?.let { p -> p.spots.filter { it.league == id }.map { s -> s to p.honours().any { it.kind == "UP${s.division}" && it.key == s.lower } } }.orEmpty()
         if (lg != null && lg.national) {
-            val (slots, direct) = places(plan, lg, rating)
-            return input(plan.league, plan.config, rating, drawRate(plan.league), champion, decided, null, lg, slots, direct)
+            return input(plan.league, plan.config, rating, drawRate(plan.league), champion, decided, null, lg, stagePlaces(plan, lg, rating))
         }
         // The cup's finalists take champions league places (no cup this season: none).
         val cup = plan.competition(Comp.CUP)
@@ -278,24 +280,47 @@ object Odds {
     }
 
     /**
-     * National league [lg]'s international places next season: its 1부's places in its
-     * confederation's 대륙 챔피언스 and whether its champion goes straight into the champions
-     * league, from its row of [SeasonPlan.ranking]; without one (a ranking not set yet, a league
-     * new this season) as the draw would order the leagues: the ranked ones first, then by the
-     * average rating of their best 5 ([Coefficients.order]).
+     * National league [lg]'s 1부 places on next season's international stage, its champion first:
+     * the more of its places in its confederation's 대륙 챔피언스 and in the champions league.
+     * - 대륙 챔피언스: [LeagueRank.cclSlots] of its row of [SeasonPlan.ranking]; without one (a
+     *   ranking not set yet, a league new this season) as the draw orders the leagues, the ranked
+     *   ones first, then by the average rating of their best 5 ([Coefficients.order]).
+     * - Champions league ([ChampionsLeague.worldEntrants]): after a 대륙 챔피언스 (one this season),
+     *   its champion when it goes straight in ([LeagueRank.clDirect], else ranked under
+     *   [LeagueConfig.clDirect]), and its 1부's runner-up while places are left after the holder,
+     *   the continental champions and runners-up and the direct champions (taken here as its top
+     *   two). Without one (a small world, or 대륙 챔피언스 off) each league in rank order adds its
+     *   next player after the holder until 16, so its share of the 15 places.
+     * Who else gets in (a champion already in passes its place down, a short 1부 passes its own)
+     * is left out.
      */
-    private fun places(plan: SeasonPlan, lg: LeagueDef, rating: (String) -> Double): Pair<Int, Boolean> {
+    private fun stagePlaces(plan: SeasonPlan, lg: LeagueDef, rating: (String) -> Double): Int {
         val config = plan.config
-        plan.ranking.of(lg.id)?.let { row -> return (if (config.continentalCl) row.cclSlots else 0) to (config.champions && row.clDirect) }
         val season = plan.league
         val leagues = season.leagues
         val ids = leagues.list.filter { it.national }.map { it.id }
         val order = Coefficients.order(ids, plan.ranking) { id -> Coefficients.strength(leagues.byId(id)?.divisions?.flatMap { season.divisions[it] }.orEmpty(), rating) }
-        val direct = config.champions && order.indexOf(lg.id) in 0 until config.clDirect
-        val confed = leagues.confedOf(lg.id) ?: return 0 to direct
-        if (!config.continentalCl) return 0 to direct
-        val same = order.filter { leagues.confedOf(it) == confed }
-        return Coefficients.cclSlots(same.size, same.indexOf(lg.id), ContinentalChampions.sectionSize(same.size)) to direct
+        val rank = order.indexOf(lg.id)
+        val row = plan.ranking.of(lg.id)
+        val confed = leagues.confedOf(lg.id)
+        val continental = when {
+            !config.continentalCl -> 0
+            row != null -> row.cclSlots
+            confed == null -> 0
+            else -> order.filter { leagues.confedOf(it) == confed }.let { same -> Coefficients.cclSlots(same.size, same.indexOf(lg.id), ContinentalChampions.sectionSize(same.size)) }
+        }
+        val after = ChampionsLeague.SIZE - 1
+        val sections = (plan.competition(Comp.CONT_CHAMPIONS) as? ContinentalChampions)?.sections?.size ?: 0
+        val world = when {
+            !config.champions -> 0
+            sections == 0 -> Coefficients.cclSlots(order.size, rank, after)
+            else -> {
+                val direct = minOf(config.clDirect, ChampionsLeague.SIZE)
+                val left = after - minOf(2 * sections, maxOf(0, after - direct)) - minOf(direct, order.size)
+                (if (row?.clDirect ?: (rank < direct)) 1 else 0) + if (rank < left) 1 else 0
+            }
+        }
+        return maxOf(continental, world)
     }
 
     /**
@@ -306,10 +331,7 @@ object Odds {
     fun input(season: Season, config: LeagueConfig, rating: (String) -> Double, drawRate: Double): OddsInput =
         input(season, config, rating, drawRate, null, emptyList(), if (config.cup) null else emptyList())
 
-    /**
-     * [season]'s divisions (or national league [lg]'s alone, its 1부 with [cclSlots] places and
-     * its champion straight into the champions league when [clDirect]) as [run] reads them.
-     */
+    /** [season]'s divisions (or national league [lg]'s alone, its 1부 with [places] on the international stage) as [run] reads them. */
     private fun input(
         season: Season,
         config: LeagueConfig,
@@ -319,8 +341,7 @@ object Odds {
         decided: List<Pair<PromotionPlayoff.Spot, Boolean>>,
         finalists: List<String>?,
         lg: LeagueDef? = null,
-        cclSlots: Int = 0,
-        clDirect: Boolean = false,
+        places: Int = 0,
     ): OddsInput {
         val national = lg != null && lg.national
         val first = if (national) lg!!.first else 0
@@ -394,8 +415,8 @@ object Odds {
         val exact = if (national) null else finalists?.takeIf { clOn }?.map { index[it] ?: -1 }?.toIntArray()
         val clPlaces = IntArray(nd) { d ->
             when {
-                // A national league's 1부: its places in next season's 대륙 챔피언스.
-                national -> if (tierOf[d] == 0) cclSlots.coerceIn(0, size[d]) else 0
+                // A national league's 1부: its places on next season's international stage.
+                national -> if (tierOf[d] == 0) places.coerceIn(0, size[d]) else 0
                 !clOn || exact != null -> 0
                 else -> when (tierOf[d]) {
                     0 -> if (nt == 1) CL_FIRST + CL_SECOND else CL_FIRST
@@ -410,7 +431,7 @@ object Odds {
             season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, baseScored, strength,
             fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), tierOf, if (season.double) 2 else 1, swapBelow, downBelow, playoffBelow, clPlaces,
             config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating, sweepRate(season),
-            config.doubleElimination, lg?.id ?: LeagueIds.LEGACY, first, national, national && clDirect,
+            config.doubleElimination, lg?.id ?: LeagueIds.LEGACY, first, national,
         )
     }
 
@@ -631,7 +652,7 @@ object Odds {
                     won[3] = w4
                 }
             }
-            if (national && nd > 0) internationalPlaces(input, sorted, rankMask, size[0], four, won, champion, cl, clShare)
+            if (national && nd > 0) championFirst(input, sorted, rankMask, size[0], four, won, champion, cl, clShare)
             // A linear league's ties: the next place on each side.
             for (t in 0 until nt - 1) {
                 if (!input.playoffBelow[t] || groupsIn[t] * groupsIn[t + 1] > 1) continue
@@ -676,11 +697,10 @@ object Odds {
      * One run's international places of a national league ([OddsInput.national]) beyond its 1부's
      * top [OddsInput.clPlaces] (counted already): its champion takes a place first, so a title
      * playoff's winner from below them ([won]: this run's title shares of [four], the 1부's top
-     * four) takes the last one's; a league whose champion goes straight into the champions league
-     * ([OddsInput.clDirect]) gives its champion a place without any 대륙 챔피언스 place. [champion]:
-     * the index of a champion already known, else -1. Whole places go into [cl], shares into [share].
+     * four) takes the last one's. [champion]: the index of a champion already known, else -1.
+     * Whole places go into [cl], shares into [share].
      */
-    private fun internationalPlaces(
+    private fun championFirst(
         input: OddsInput,
         sorted: LongArray,
         rankMask: Long,
@@ -692,14 +712,10 @@ object Odds {
         share: DoubleArray,
     ) {
         val places = input.clPlaces[0]
-        if (places == 0 && !input.clDirect) return
+        if (places == 0) return
         if (input.titlePlayoff && champion < 0) {
             // The four are all in already, or the champion is one of them by its share.
             if (places >= TITLE_PLAYOFF) return
-            if (places == 0) {
-                for (j in 0 until TITLE_PLAYOFF) share[four[j]] += won[j]
-                return
-            }
             var below = 0.0
             for (j in places until TITLE_PLAYOFF) {
                 share[four[j]] += won[j]
@@ -712,12 +728,9 @@ object Odds {
         val ch = if (champion >= 0) champion else (sorted[0] and rankMask).toInt()
         var pos = -1
         for (p in 0 until topSize) if ((sorted[p] and rankMask).toInt() == ch) pos = p
-        when {
-            places == 0 -> cl[ch]++
-            pos >= places -> {
-                cl[ch]++
-                cl[(sorted[places - 1] and rankMask).toInt()]--
-            }
+        if (pos >= places) {
+            cl[ch]++
+            cl[(sorted[places - 1] and rankMask).toInt()]--
         }
     }
 
