@@ -47,6 +47,7 @@ import yacht.engine.explain.Ko
 import yacht.engine.league.Article
 import yacht.engine.league.CloneProfile
 import yacht.engine.league.Ladder
+import yacht.engine.league.MatchFormat
 import yacht.engine.league.Origin
 
 // 홈: the league's dashboard tab. For now one banner (the empty league, the season just over), the
@@ -129,8 +130,14 @@ private fun EmptyBanner(lg: LeagueController, v: LeagueView) {
                 "선수 ${"%,d".format(players)}명이 리그와 컵 대회에서 겨뤄요. 첫 시즌에는 레이팅으로 부를 나누고, 경기마다 레이팅이 ±로 바뀌어요.",
                 style = MaterialTheme.typography.bodySmall, color = cs.onPrimaryContainer,
             )
+            // The first season's match rule (the rules saved now).
+            val match = when (lg.config.matchFormat) {
+                MatchFormat.SINGLE -> "한 경기는 한 판이에요."
+                MatchFormat.BEST_OF_3 -> "한 경기는 같은 주사위로 선공·후공을 바꿔 두 판이고, 승부가 안 나면 세 번째 판을 둬요."
+                else -> "한 경기는 같은 주사위로 선공·후공을 바꿔 두 판이에요."
+            }
             Text(
-                "한 경기는 같은 주사위로 선공·후공을 바꿔 두 판이에요. ${Ladder.PLACEMENT}판을 두면 배치가 끝나 티어가 붙어요.",
+                "$match ${Ladder.PLACEMENT}판을 두면 배치가 끝나 티어가 붙어요.",
                 style = MaterialTheme.typography.labelSmall, color = cs.onPrimaryContainer,
             )
             if (lg.hasSeed && !lg.running) {
