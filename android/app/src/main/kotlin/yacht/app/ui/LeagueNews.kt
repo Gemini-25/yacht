@@ -1,7 +1,6 @@
 package yacht.app.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,70 +9,43 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import yacht.app.core.AppController
 import yacht.app.core.ClockView
+import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
 import yacht.app.core.Page
 import yacht.engine.league.Article
 import yacht.engine.league.Comp
 import yacht.engine.league.SeasonCalendar
 
-private enum class NewsMode(val label: String) {
-    NEWS("뉴스"),
-    LIVE("라이브"),
-    RESULTS("경기 결과"),
-    HIGHLIGHTS("하이라이트"),
-}
+/** True when article [a] is about a followed player, or a followed nation's team (its code among the keys). */
+private fun followedNews(a: Article, favourites: Set<String>): Boolean = a.keys.any { it in favourites || nationFavourite(it) in favourites }
 
-/** 소식: news articles, the live scoreboard, the results feed and the season's highlights. */
+/** [Page.News]: the league's articles by week, all or only the followed ones (`nav.newsFollowed`, the bar's ★). */
 @Composable
-fun NewsTab(c: AppController, v: LeagueView) {
-    val lg = c.league
+internal fun NewsPage(lg: LeagueController, v: LeagueView) {
     val nav = lg.nav
-    var mode by remember { mutableStateOf(NewsMode.NEWS) }
     val onlyFavourites = nav.newsFollowed
-    Column {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in NewsMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
-            if (mode == NewsMode.NEWS) {
-                FilterChip(selected = onlyFavourites, onClick = { nav.newsFollowed = !onlyFavourites }, label = { Text("★ 응원만", fontSize = 12.sp) })
-            }
-        }
-        when (mode) {
-            NewsMode.NEWS -> {
-                val favs = lg.favourites
-                // A followed nation's news: its national team's (its code among the keys).
-                val shown = if (onlyFavourites) v.news.filter { a -> a.keys.any { it in favs || nationFavourite(it) in favs } } else v.news
-                Articles(shown, onlyFavourites, v.clock) { if (lg.isAi(it)) nav.open(Page.Player(it)) }
-            }
-            NewsMode.LIVE -> LiveBoardView(c)
-            NewsMode.RESULTS -> FeedList(lg, v)
-            NewsMode.HIGHLIGHTS -> Highlights(c, v)
-        }
-    }
+    val favs = lg.favourites
+    val shown = if (onlyFavourites) v.news.filter { followedNews(it, favs) } else v.news
+    Articles(shown, onlyFavourites, v.clock) { if (lg.isAi(it)) nav.open(Page.Player(it)) }
 }
 
 @Composable
 private fun Articles(all: List<Article>, favourites: Boolean, clock: ClockView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (all.isEmpty()) {
-        CenterText(if (favourites) "응원하는 AI나 국가의 소식이 아직 없어요. 순위표에서 AI를 눌러 ‘☆ 응원하기’를, 기록 › 국가 랭킹에서 나라를 눌러 ‘☆ 응원 국가로’를 골라 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
+        CenterText(if (favourites) "응원하는 선수나 국가의 소식이 아직 없어요. 선수를 눌러 ‘☆ 응원하기’를, 순위 › 랭킹 › 국가대표 랭킹에서 나라를 골라 ‘☆’를 눌러 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
         return
     }
     // By the week they happened in (newest season and week first, newest first within a week),
@@ -127,7 +99,7 @@ private fun WeekHeading(a: Article, clock: ClockView?, playoffs: Boolean) {
 }
 
 @Composable
-private fun ArticleCard(a: Article, clock: ClockView?, onOpen: (String) -> Unit) {
+internal fun ArticleCard(a: Article, clock: ClockView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Card(
         Modifier.fillMaxWidth().clickable { a.keys.firstOrNull()?.let(onOpen) },

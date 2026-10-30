@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -25,7 +25,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,11 +44,11 @@ import yacht.engine.league.LabStats
 import yacht.engine.league.MatchPreview
 
 /**
- * AI 연구소: any two AIs (legends too) play hundreds or thousands of mirrored matches alongside
- * the league; the result is a win share and rating difference with 95% ranges.
+ * [Page.Lab] (AI 연구소): any two AIs (legends too) play hundreds or thousands of mirrored matches
+ * alongside the league; the result is a win share and rating difference with 95% ranges.
  */
 @Composable
-fun LabDialog(lg: LeagueController, onDismiss: () -> Unit) {
+fun LabPage(lg: LeagueController) {
     val cs = MaterialTheme.colorScheme
     var a by remember { mutableStateOf<String?>(null) }
     var b by remember { mutableStateOf<String?>(null) }
@@ -58,40 +57,33 @@ fun LabDialog(lg: LeagueController, onDismiss: () -> Unit) {
     val rows = lg.view?.rows.orEmpty().filter { !it.isMe }
     val legends = remember { lg.legends() }
     val choices = rows.map { it.key to it.name } + legends.map { (k, n) -> k to "🏛 $n" }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
-        title = { Text("🧪 AI 연구소", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "두 AI를 같은 주사위 두 판 경기로 수백~수천 번 붙여서 누가 얼마나 강한지 95% 범위로 알려줘요. 리그와 함께 돌고, 리그 기록에는 들어가지 않아요.",
-                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
-                )
-                if (current != null && !current.done) {
-                    LabCard(current, running = true)
-                    Button(onClick = { lg.stopLab() }, colors = ButtonDefaults.buttonColors(containerColor = cs.error), modifier = Modifier.fillMaxWidth()) { Text("■ 실험 멈추기") }
-                } else {
-                    Picker("A", choices, a) { a = it }
-                    Picker("B", choices, b) { b = it }
-                    Text("경기 수", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (t in LabSession.TARGETS) {
-                            FilterChip(selected = target == t, onClick = { target = t }, label = { Text(if (t == LabSession.UNTIL_PRECISE) "±1%p까지" else "${t}경기", fontSize = 12.sp) })
-                        }
-                    }
-                    val x = a
-                    val y = b
-                    Button(onClick = { if (x != null && y != null) lg.startLab(x, y, target) }, enabled = x != null && y != null && x != y, modifier = Modifier.fillMaxWidth()) { Text("▶ 실험 시작") }
-                }
-                if (history.isNotEmpty()) {
-                    HorizontalDivider()
-                    Text("지난 실험", fontWeight = FontWeight.Bold)
-                    for (r in history) LabCard(r, running = false)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "두 AI를 같은 주사위 두 판 경기로 수백~수천 번 붙여서 누가 얼마나 강한지 95% 범위로 알려줘요. 리그와 함께 돌고, 리그 기록에는 들어가지 않아요.",
+            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+        )
+        if (current != null && !current.done) {
+            LabCard(current, running = true)
+            Button(onClick = { lg.stopLab() }, colors = ButtonDefaults.buttonColors(containerColor = cs.error), modifier = Modifier.fillMaxWidth()) { Text("■ 실험 멈추기") }
+        } else {
+            Picker("A", choices, a) { a = it }
+            Picker("B", choices, b) { b = it }
+            Text("경기 수", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (t in LabSession.TARGETS) {
+                    FilterChip(selected = target == t, onClick = { target = t }, label = { Text(if (t == LabSession.UNTIL_PRECISE) "±1%p까지" else "${t}경기", fontSize = 12.sp) })
                 }
             }
-        },
-    )
+            val x = a
+            val y = b
+            Button(onClick = { if (x != null && y != null) lg.startLab(x, y, target) }, enabled = x != null && y != null && x != y, modifier = Modifier.fillMaxWidth()) { Text("▶ 실험 시작") }
+        }
+        if (history.isNotEmpty()) {
+            HorizontalDivider()
+            Text("지난 실험", fontWeight = FontWeight.Bold)
+            for (r in history) LabCard(r, running = false)
+        }
+    }
 }
 
 @Composable
@@ -168,36 +160,30 @@ private fun DiffHistogram(bins: List<Int>) {
     }
 }
 
-/** 경기 프리뷰: prediction, head-to-head, form, boxes and what is at stake. */
+/** 경기 프리뷰, a section of a coming match's page: prediction, head-to-head, form, boxes and what is at stake. */
 @Composable
-fun PreviewDialog(lg: LeagueController, p: MatchPreview) {
+fun PreviewBody(p: MatchPreview) {
     val cs = MaterialTheme.colorScheme
-    AlertDialog(
-        onDismissRequest = { lg.closePreview() },
-        confirmButton = { TextButton(onClick = { lg.closePreview() }) { Text("닫기") } },
-        title = { Text("🔮 ${lg.name(p.a)} 대 ${lg.name(p.b)}", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                p.winA?.let { w ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("${"%.0f".format(100 * w)}%", fontWeight = FontWeight.ExtraBold, color = gameColors.me)
-                        Box(Modifier.weight(1f).padding(horizontal = 8.dp).height(10.dp).clip(RoundedCornerShape(5.dp)).background(gameColors.opp)) {
-                            Box(Modifier.fillMaxWidth(w.toFloat()).height(10.dp).background(gameColors.me))
-                        }
-                        Text("${"%.0f".format(100 * (1 - w))}%", fontWeight = FontWeight.ExtraBold, color = gameColors.opp)
-                    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("🔮 프리뷰", fontWeight = FontWeight.Bold)
+        p.winA?.let { w ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${"%.0f".format(100 * w)}%", fontWeight = FontWeight.ExtraBold, color = gameColors.me)
+                Box(Modifier.weight(1f).padding(horizontal = 8.dp).height(10.dp).clip(RoundedCornerShape(5.dp)).background(gameColors.opp)) {
+                    Box(Modifier.fillMaxWidth(w.toFloat()).height(10.dp).background(gameColors.me))
                 }
-                Row {
-                    FormDots(p.formA)
-                    Box(Modifier.weight(1f))
-                    FormDots(p.formB)
-                }
-                for (line in p.lines) Text(line, style = MaterialTheme.typography.bodySmall)
-                if (p.stakes.isNotEmpty()) {
-                    Text("🔥 걸린 것", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
-                    for (line in p.stakes) Text(line, style = MaterialTheme.typography.bodySmall, color = cs.secondary)
-                }
+                Text("${"%.0f".format(100 * (1 - w))}%", fontWeight = FontWeight.ExtraBold, color = gameColors.opp)
             }
-        },
-    )
+        }
+        Row {
+            FormDots(p.formA)
+            Box(Modifier.weight(1f))
+            FormDots(p.formB)
+        }
+        for (line in p.lines) Text(line, style = MaterialTheme.typography.bodySmall)
+        if (p.stakes.isNotEmpty()) {
+            Text("🔥 걸린 것", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            for (line in p.stakes) Text(line, style = MaterialTheme.typography.bodySmall, color = cs.secondary)
+        }
+    }
 }

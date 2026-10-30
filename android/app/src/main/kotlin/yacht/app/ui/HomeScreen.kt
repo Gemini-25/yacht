@@ -226,8 +226,8 @@ fun HomeScreen(c: AppController) {
             "리그 AI와 혼자 두고 내 레이팅과 티어 매기기 · AI들과 같은 눈금이라 몇 위쯤인지 바로 보여요",
         ) { rankedAsk = true }
         MenuCard(
-            "🏆 AI 리그 · ${c.league.size}개 AI 솔랭",
-            "승률 AI부터 실수하는 AI, 단순 규칙까지 계속 붙여서 실시간 순위표로 보기 · 티어, 레이팅, 승률, 연승",
+            "🏆 AI 리그 · ${leagueStatus(c)}",
+            "AI 선수들이 리그와 컵 대회로 시즌을 치러요 · 홈, 경기, 순위, 기록으로 보기",
         ) { c.screen = Screen.LEAGUE }
 
         SectionTitle("기록과 검증")
@@ -307,6 +307,17 @@ private fun ModeCard(selected: Boolean, title: String, desc: String, onClick: ()
             Text((if (selected) "● " else "○ ") + title, fontWeight = FontWeight.Bold)
             Text(desc, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         }
+    }
+}
+
+/** Where the league is, for its menu card: "진행 중 · 시즌 3 · 12주차 / 42주", "멈춤 · …", "시작 전". */
+private fun leagueStatus(c: AppController): String {
+    val lg = c.league
+    val clock = lg.view?.clock
+    return when {
+        lg.running -> "진행 중 · " + barTitle(clock)
+        clock != null -> "멈춤 · " + barTitle(clock)
+        else -> "시작 전"
     }
 }
 

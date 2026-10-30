@@ -40,9 +40,13 @@ import yacht.app.core.LadderSort
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueNav
 import yacht.app.core.LeagueView
+import yacht.app.core.Page
+import yacht.app.core.RulesPart
 import yacht.app.core.SeasonRow
 import yacht.app.core.SeasonView
+import yacht.app.core.Sheet
 import yacht.app.core.TableMode
+import yacht.engine.league.Comp
 import yacht.engine.league.Family
 import yacht.engine.league.Ladder
 
@@ -56,9 +60,14 @@ internal fun LeagueNav.showDivision(tiers: yacht.engine.league.Tiers, d: Int) {
 
 // ---- ladder ------------------------------------------------------------------------------------
 
+/**
+ * 순위 › 레이팅: "선수 레이팅" with its ⓘ ([Sheet.RATING_INFO]), the search field and "필터 ▾"
+ * ([Sheet.LADDER_FILTER]), then the players by rating (or the order the filter picks).
+ */
 @Composable
 internal fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     val nav = lg.nav
+    val cs = MaterialTheme.colorScheme
     val filter = nav.ladderFilter
     val family = filter.family
     val sort = nav.ladderSort
@@ -86,87 +95,96 @@ internal fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) ->
     }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
-            androidx.compose.material3.OutlinedTextField(
-                value = query,
-                onValueChange = { nav.ladderQuery = it },
-                placeholder = { Text("선수 이름이나 나라 검색", fontSize = 13.sp) },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = onlyFavourites, onClick = { nav.ladderFilter = filter.copy(followed = !onlyFavourites) }, label = { Text("★ 응원 ${favs.count { !it.startsWith(NATION_PREFIX) }}", fontSize = 12.sp) })
-                for (o in yacht.engine.league.Origin.entries) {
-                    val n = v.rows.count { it.origin == o }
-                    if (n > 0) FilterChip(selected = origin == o, onClick = { nav.ladderFilter = filter.copy(origin = if (origin == o) null else o) }, label = { Text("${o.label} $n", fontSize = 12.sp) })
-                }
-            }
-        }
-        // Nations of the league: followed nations first, then most players first.
-        val nations = v.rows.filter { it.nation.isNotEmpty() }.groupingBy { it.nation }.eachCount().entries
-            .sortedWith(compareByDescending<Map.Entry<String, Int>> { nationFavourite(it.key) in favs }.thenByDescending { it.value })
-        if (nations.size > 1) {
-            item {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = nation == null, onClick = { nav.ladderFilter = filter.copy(nation = null) }, label = { Text("🌐 전체 국적", fontSize = 12.sp) })
-                    for ((code, n) in nations) {
-                        val nat = yacht.engine.league.Nations.of(code) ?: continue
-                        FilterChip(selected = nation == code, onClick = { nav.ladderFilter = filter.copy(nation = if (nation == code) null else code) }, label = { Text((if (nationFavourite(code) in favs) "★" else "") + "${nat.flag} ${nat.short} $n", fontSize = 12.sp) })
-                    }
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("선수 레이팅", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = { nav.sheet = Sheet.RATING_INFO }) { Text("ⓘ", fontSize = 16.sp) }
+                Box(Modifier.weight(1f))
+                Text("${"%,d".format(rows.size)}명", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
             }
         }
         item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = family == null, onClick = { nav.ladderFilter = filter.copy(family = null) }, label = { Text("전체", fontSize = 12.sp) })
-                for (f in Family.entries) {
-                    FilterChip(selected = family == f, onClick = { nav.ladderFilter = filter.copy(family = if (family == f) null else f) }, label = { Text(f.label, fontSize = 12.sp) })
-                }
-            }
-        }
-        item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("정렬", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                for (s in LadderSort.entries) {
-                    FilterChip(selected = sort == s, onClick = { nav.ladderSort = s }, label = { Text(s.label, fontSize = 12.sp) })
-                }
-            }
-        }
-        if (lg.clone == null) {
-            item {
-                Text(
-                    "🧬 ‘혼자 두기’로 ${yacht.engine.league.CloneProfile.MIN_GAMES}판 이상 끝내면 내 실수 습관을 닮은 ‘내 분신’ AI가 리그에 들어와요.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = query,
+                    onValueChange = { nav.ladderQuery = it },
+                    placeholder = { Text("선수 이름이나 나라 검색", fontSize = 13.sp) },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = { nav.sheet = Sheet.LADDER_FILTER }) { Text("필터 ▾") }
             }
         }
-        if (v.matches == 0L) {
+        // What the filter keeps, when it keeps less than everyone.
+        val parts = listOfNotNull(
+            "★ 응원".takeIf { onlyFavourites },
+            origin?.label,
+            nation?.let { yacht.engine.league.Nations.of(it)?.let { n -> "${n.flag} ${n.short}" } ?: it },
+            family?.label,
+            "${sort.label} 순".takeIf { sort != LadderSort.RATING },
+        )
+        if (parts.isNotEmpty()) {
             item {
-                Text(
-                    "▶ 시작을 누르면 AI들이 비슷한 레이팅끼리 붙어요. 한 경기는 같은 주사위로 선공·후공을 바꿔 두 판이고, " +
-                        "${Ladder.PLACEMENT}판을 두면 배치가 끝나 티어가 붙어요. 처음 몇십 판은 레이팅이 크게 흔들리고(± 표시), 판이 쌓일수록 자리를 잡아요.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("필터: " + parts.joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = cs.secondary, modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        nav.ladderFilter = yacht.app.core.LadderFilter()
+                        nav.ladderSort = LadderSort.RATING
+                    }) { Text("모두 보기", fontSize = 12.sp) }
+                }
             }
         }
         if (onlyFavourites && rows.isEmpty()) {
-            item { Text("AI를 눌러 ‘☆ 응원하기’를 고르면 여기에 모여요.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            item { Text("선수를 눌러 ‘☆ 응원하기’를 고르면 여기에 모여요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
         }
         items(rows, key = { it.key }) { r -> LadderItem(r, r.key in favs) { onOpen(r.key) } }
-        item {
-            Text(
-                "레이팅: 모든 판을 브래들리-테리 모형(엘로와 같은 눈금)으로 맞춘 값, 기대점수 AI = 1500. ±는 95% 범위, 7점 ≈ 승률 1%p. " +
-                    "순위는 레이팅 순서예요. 판이 적어 ± 범위가 넓은(±20 넘게) AI만 넘는 만큼의 3배를 내려서 매겨서, 운 좋은 출발로 꼭대기에 오르지 않아요. 판이 충분하면 판 수와 상관없이 레이팅만 봐요. " +
-                    "티어는 레이팅으로 매겨요: 마스터 1490↑, 그랜드마스터 1500↑ 상위 10, 챌린저 1505↑ 상위 3. 그래서 판이 적은 AI는 티어가 높아도 아래에 놓일 수 있어요.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
-            )
+    }
+}
+
+/** 순위 › 레이팅's filters: ★ 응원, origin, nation, family and the order (the chips of the 필터 sheet). */
+@Composable
+internal fun LadderFilterSheet(lg: LeagueController, v: LeagueView) {
+    val nav = lg.nav
+    val filter = nav.ladderFilter
+    val favs = lg.favourites
+    SheetHeading("응원·출신")
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilterChip(selected = filter.followed, onClick = { nav.ladderFilter = filter.copy(followed = !filter.followed) }, label = { Text("★ 응원 ${favs.count { !it.startsWith(NATION_PREFIX) }}", fontSize = 12.sp) })
+        for (o in yacht.engine.league.Origin.entries) {
+            val n = v.rows.count { it.origin == o }
+            if (n > 0) FilterChip(selected = filter.origin == o, onClick = { nav.ladderFilter = filter.copy(origin = if (filter.origin == o) null else o) }, label = { Text("${o.label} $n", fontSize = 12.sp) })
+        }
+    }
+    // Nations of the league: followed nations first, then most players first.
+    val nations = remember(v.rows, favs) {
+        v.rows.filter { it.nation.isNotEmpty() }.groupingBy { it.nation }.eachCount().entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { nationFavourite(it.key) in favs }.thenByDescending { it.value })
+    }
+    if (nations.size > 1) {
+        SheetHeading("국적")
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = filter.nation == null, onClick = { nav.ladderFilter = filter.copy(nation = null) }, label = { Text("🌐 전체 국적", fontSize = 12.sp) })
+            for ((code, n) in nations) {
+                val nat = yacht.engine.league.Nations.of(code) ?: continue
+                FilterChip(
+                    selected = filter.nation == code,
+                    onClick = { nav.ladderFilter = filter.copy(nation = if (filter.nation == code) null else code) },
+                    label = { Text((if (nationFavourite(code) in favs) "★" else "") + "${nat.flag} ${nat.short} $n", fontSize = 12.sp) },
+                )
+            }
+        }
+    }
+    SheetHeading("계열")
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilterChip(selected = filter.family == null, onClick = { nav.ladderFilter = filter.copy(family = null) }, label = { Text("전체", fontSize = 12.sp) })
+        for (f in Family.entries) {
+            FilterChip(selected = filter.family == f, onClick = { nav.ladderFilter = filter.copy(family = if (filter.family == f) null else f) }, label = { Text(f.label, fontSize = 12.sp) })
+        }
+    }
+    SheetHeading("정렬")
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (s in LadderSort.entries) {
+            FilterChip(selected = nav.ladderSort == s, onClick = { nav.ladderSort = s }, label = { Text(s.label, fontSize = 12.sp) })
         }
     }
 }
@@ -230,6 +248,11 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
 
 // ---- season ------------------------------------------------------------------------------------
 
+/**
+ * 순위 › 리그: "리그 순위표", the tier chips with "보기 ▾" ([Sheet.TABLE_MODE]) at the end of
+ * the same row, a pyramid's group chips, the division in the view picked, the zone legend with
+ * "ⓘ 규칙", and next season's newcomers under the last tier.
+ */
 @Composable
 internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -245,62 +268,43 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
     val favs = lg.favourites
     fun followed(range: IntRange) = range.firstOrNull { d -> season.divisions[d].any { it.key in favs } }
     val nav = lg.nav
-    val mode = SeasonMode.of(nav.tableMode)
+    val mode = nav.tableMode
     val tier = nav.tier.coerceIn(0, tiers.count - 1)
     val d = tiers.groups(tier).let { g -> (g.first + nav.group).coerceIn(g.first, g.last) }
     val label = tiers.label(d)
+    // 최근 폼: read again as results come in (the played count moves on).
+    if (mode == TableMode.FORM) androidx.compose.runtime.LaunchedEffect(d, season.number, season.played) { lg.loadForm(d) }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "시즌 ${season.number}" + if (season.matchdays > 0) " · ${minOf(season.currentMatchday + 1, season.matchdays)}주차 / ${season.matchdays}주" else "",
-                            fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),
-                        )
-                        Text("${season.played}/${season.total}경기", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-                    }
-                    LinearProgressIndicator(
-                        progress = { if (season.total == 0) 0f else season.played.toFloat() / season.total },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("리그 순위표", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Text(
-                        "부마다 라운드마다 한 번씩 맞붙어요. ${matchRuleText(season.format)} 🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프. " +
-                            "순위표는 모든 경기로 매긴 실력 점수(레이팅)이고, 부별 순위는 이번 시즌 리그 성적(승점)이라 둘이 달라요. 실력이 좋아도 아래 부에서 시작하면 승격으로 올라와야 해요.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = cs.onSurfaceVariant,
+                        "시즌 ${season.number}" + (if (season.matchdays > 0) " · ${minOf(season.currentMatchday + 1, season.matchdays)}/${season.matchdays}라운드" else "") +
+                            " · ${season.played}/${season.total}경기",
+                        style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
                     )
-                    if (!tiers.linear) {
-                        Text(
-                            "🗺 선수가 많아 지역 리그 피라미드로 열려요: " + (0 until tiers.count).joinToString(" · ") { t ->
-                                yacht.engine.league.Tiers.tierLabel(t) + if (tiers.groupCount(t) > 1) " ${tiers.groupCount(t)}개 조" else ""
-                            } + ". 아래 부의 조마다 위 ${season.swap}명이 올라가고, 위 부에서는 그만큼 내려와요. 조는 시즌마다 지역별로 다시 짜요.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = cs.secondary,
-                        )
-                    }
-                    if (season.newcomers.isNotEmpty()) {
-                        Text(
-                            "다음 시즌 ${tiers.count}부 합류 대기 ${season.newcomers.size}명: ${season.newcomers.take(10).joinToString(", ")}" +
-                                if (season.newcomers.size > 10) " 외" else "",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = cs.secondary,
-                        )
-                    }
                 }
+                LinearProgressIndicator(
+                    progress = { if (season.total == 0) 0f else season.played.toFloat() / season.total },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                )
             }
         }
         item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (t in 0 until tiers.count) {
-                    val groups = tiers.groups(t)
-                    val n = groups.sumOf { season.divisions[it].size }
-                    FilterChip(
-                        selected = tiers.tier(d) == t,
-                        onClick = { nav.showDivision(tiers, followed(groups) ?: groups.first) },
-                        label = { Text(yacht.engine.league.Tiers.tierLabel(t) + if (groups.count() > 1) " ${groups.count()}개 조" else " ($n)", fontSize = 12.sp) },
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (t in 0 until tiers.count) {
+                        val groups = tiers.groups(t)
+                        val n = groups.sumOf { season.divisions[it].size }
+                        FilterChip(
+                            selected = tiers.tier(d) == t,
+                            onClick = { nav.showDivision(tiers, followed(groups) ?: groups.first) },
+                            label = { Text(yacht.engine.league.Tiers.tierLabel(t) + if (groups.count() > 1) " ${groups.count()}개 조" else " ($n)", fontSize = 12.sp) },
+                        )
+                    }
                 }
+                TextButton(onClick = { nav.sheet = Sheet.TABLE_MODE }) { Text("${mode.label} ▾", fontSize = 12.sp, maxLines = 1) }
             }
         }
         if (tiers.groupCount(tiers.tier(d)) > 1) item {
@@ -315,24 +319,17 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                 }
             }
         }
-        item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (m in SeasonMode.entries) {
-                    FilterChip(selected = mode == m, onClick = { nav.tableMode = m.mode }, label = { Text(m.label, fontSize = 12.sp) })
-                }
-            }
-        }
         when (mode) {
-            SeasonMode.LUCK -> {
+            TableMode.LUCK -> {
                 // 판 승점제: the 완승 bonus is in both columns (luck is only who took the level matches).
                 val bonus = season.format.sweepBonus
                 item { LuckHeader(bonus) }
                 val rows = season.divisions[d].sortedWith(compareByDescending<SeasonRow> { fairPoints(it, bonus) }.thenByDescending { it.diff })
                 itemsIndexed(rows, key = { _, r -> "a-${r.key}" }) { i, r -> LuckRow(i, r, season.divisions[d].indexOf(r), bonus) { onOpen(r.key) } }
             }
-            SeasonMode.CALENDAR -> item { CalendarCard(lg, d, season.number, season.played, season.format.sweepBonus, onOpen) }
-            SeasonMode.CHART -> item { RankChartCard(lg, season, d) }
-            SeasonMode.ODDS -> {
+            TableMode.ROUND -> item { CalendarCard(lg, d, season.number, season.played, season.format.sweepBonus, onOpen) }
+            TableMode.CHART -> item { RankChartCard(lg, season, d) }
+            TableMode.ODDS -> {
                 item {
                     Text(
                         "남은 경기를 레이팅으로 2,000번 시뮬레이션한 확률이에요(시즌 10%마다 다시 계산).",
@@ -343,7 +340,7 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                 if (rows.none { it.odds != null }) item { Text("확률을 계산하는 중이에요. 리그가 돌아가면 곧 나와요.", style = MaterialTheme.typography.bodySmall) }
                 else items(rows, key = { "o-${it.key}" }) { r -> OddsRow(r, tiers.tier(d), tiers.count, label) { onOpen(r.key) } }
             }
-            SeasonMode.H2H -> item {
+            TableMode.H2H -> item {
                 // The table's order when opened (it reorders with nearly every result); the
                 // numbers come again every few seconds in the same order, keeping the cell picked.
                 val keys = remember(d, season.number) { season.divisions[d].map { it.key } }
@@ -363,46 +360,107 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                     }
                 }
             }
-            SeasonMode.TABLE -> {}
-        }
-        if (mode == SeasonMode.TABLE) item {
-            Row(Modifier.padding(horizontal = 8.dp)) {
-                Text("#", Modifier.width(24.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                Text("팀", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                Text("경기", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                Text("승-무-패", Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                if (season.format.sweepBonus) Text("완승", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+            TableMode.FORM -> {
+                val form = lg.form?.takeIf { it.division == d && it.season == season.number }
+                if (form == null) item { Text("최근 폼을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+                else itemsIndexed(season.divisions[d], key = { _, r -> "f-${r.key}" }) { i, r -> FormRow(i, r, form.form[r.key].orEmpty()) { onOpen(r.key) } }
+            }
+            TableMode.TABLE -> {
+                item {
+                    Row(Modifier.padding(horizontal = 8.dp)) {
+                        Text("#", Modifier.width(24.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        Text("팀", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        Text("경기", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        Text("승-무-패", Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        if (season.format.sweepBonus) Text("완승", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                    }
+                }
+                itemsIndexed(season.divisions[d], key = { _, r -> "s-${r.key}" }) { i, r ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable { onOpen(r.key) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.width(4.dp).height(30.dp).background(zoneColor(r.zone)))
+                        Text("${i + 1}", Modifier.width(24.dp).padding(start = 4.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
+                        Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
+                        Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        if (season.format.sweepBonus) Text("${r.sweeps}", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
+                    }
+                }
             }
         }
-        if (mode == SeasonMode.TABLE) itemsIndexed(season.divisions[d], key = { _, r -> "s-${r.key}" }) { i, r ->
-            val zone = when (r.zone) {
-                1 -> gameColors.good
-                -1 -> cs.error
-                2 -> gameColors.good.copy(alpha = 0.4f)
-                -2 -> cs.error.copy(alpha = 0.4f)
-                else -> Color.Transparent
-            }
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable { onOpen(r.key) },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(4.dp).height(30.dp).background(zone))
-                Text("${i + 1}", Modifier.width(24.dp).padding(start = 4.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
-                Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
-                Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                if (season.format.sweepBonus) Text("${r.sweeps}", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+                TextButton(onClick = { nav.open(Page.Rules(RulesPart.LEAGUE)) }) { Text("ⓘ 규칙", fontSize = 12.sp) }
             }
         }
-        if (season.history.isNotEmpty()) {
+        if (!tiers.linear) {
             item {
-                Text("🏛 지난 시즌 우승팀과 수상자는 ‘기록’ 탭 명예의 전당에 있어요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    "🗺 선수가 많아 지역 리그 피라미드로 열려요: " + (0 until tiers.count).joinToString(" · ") { t ->
+                        yacht.engine.league.Tiers.tierLabel(t) + if (tiers.groupCount(t) > 1) " ${tiers.groupCount(t)}개 조" else ""
+                    } + ". 아래 부의 조마다 위 ${season.swap}명이 올라가고, 위 부에서는 그만큼 내려와요. 조는 시즌마다 지역별로 다시 짜요.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.secondary,
+                )
             }
         }
+        // Newcomers join the lowest tier: their line goes under it.
+        if (season.newcomers.isNotEmpty() && tiers.tier(d) == tiers.count - 1) {
+            item {
+                Text(
+                    "다음 시즌 ${tiers.count}부 합류 대기 ${season.newcomers.size}명: ${season.newcomers.take(10).joinToString(", ")}" +
+                        if (season.newcomers.size > 10) " 외" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.secondary,
+                )
+            }
+        }
+        item {
+            Text(
+                "부별 순위는 이번 시즌 리그 성적(승점)이고, 선수 레이팅은 모든 경기로 매긴 실력 점수라 둘이 달라요. 실력이 좋아도 아래 부에서 시작하면 승격으로 올라와야 해요." +
+                    if (season.history.isNotEmpty()) " 지난 시즌 우승팀과 수상자는 기록 › 전당에 있어요." else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** A table row's zone stripe: promotion and relegation, paler for the playoff places. */
+@Composable
+private fun zoneColor(zone: Int): Color {
+    val cs = MaterialTheme.colorScheme
+    return when (zone) {
+        1 -> gameColors.good
+        -1 -> cs.error
+        2 -> gameColors.good.copy(alpha = 0.4f)
+        -2 -> cs.error.copy(alpha = 0.4f)
+        else -> Color.Transparent
+    }
+}
+
+/** 최근 폼: a player's place, its last results in the division (oldest first) and its points. */
+@Composable
+private fun FormRow(i: Int, r: SeasonRow, form: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(4.dp).height(30.dp).background(zoneColor(r.zone)))
+        Text("${i + 1}", Modifier.width(24.dp).padding(start = 4.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+        Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (form.isEmpty()) Text("–", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) else FormDots(form)
+        Text(
+            "${form.count { it == 'W' }}승 ${form.count { it == 'D' }}무 ${form.count { it == 'L' }}패",
+            Modifier.width(76.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End,
+        )
+        Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
     }
 }
 
@@ -447,20 +505,6 @@ private fun oddsPct(p: Double): String = when {
     else -> "${"%.0f".format(100 * p)}%"
 }
 
-/** The 리그 tab's views: the [TableMode]s it has ([mode]). */
-private enum class SeasonMode(val label: String, val mode: TableMode) {
-    TABLE("순위표", TableMode.TABLE),
-    LUCK("운 보정 순위", TableMode.LUCK),
-    CALENDAR("일정표", TableMode.ROUND),
-    CHART("순위 변동", TableMode.CHART),
-    H2H("상대 전적", TableMode.H2H),
-    ODDS("우승·승강 확률", TableMode.ODDS);
-
-    companion object {
-        /** [m]'s view (최근 폼 has none here: the table). */
-        fun of(m: TableMode): SeasonMode = entries.firstOrNull { it.mode == m } ?: TABLE
-    }
-}
 
 /** 운 보정 승점: the two-game total's 3/1/0, plus the 완승 bonus points when the season gives them ([bonus]). */
 private fun fairPoints(r: SeasonRow, bonus: Boolean): Int = r.aggPoints + if (bonus) r.sweeps else 0
@@ -565,7 +609,11 @@ private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: Leag
                 f.aName, Modifier.weight(1f).clickable { onOpen(f.a) }, style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (aWon) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Column(Modifier.padding(horizontal = 6.dp).clickable { lg.loadPreview(f.a, f.b) }, horizontalAlignment = Alignment.CenterHorizontally) {
+            // The score (or the coming match) opens its report: the preview before it is played.
+            Column(
+                Modifier.padding(horizontal = 6.dp).clickable { matchKey(cal.season, Comp.LEAGUE, f.id)?.let { lg.nav.open(Page.Match(it)) } },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 Text(
                     when {
                         g != null -> g.joinToString(" ") { "${it.a}:${it.b}" }

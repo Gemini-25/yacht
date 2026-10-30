@@ -21,6 +21,7 @@ import yacht.engine.league.Highlight
 import yacht.engine.league.Honour
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
+import yacht.engine.league.LeagueRank
 import yacht.engine.league.LeagueRecord
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.MatchPreview
@@ -478,7 +479,7 @@ data class WatchView(
     val message: String? = null,
 )
 
-// ---- the redesigned screens' views (filled by later stages; none is built yet) ----------------
+// ---- the redesigned screens' views (the competition page's in use; the rest filled later) ------------
 
 /** A club as badges show it. */
 data class ClubBadge(val id: String, val name: String, val city: String, val nation: String, val emblem: Emblem)
@@ -748,8 +749,47 @@ data class ClubPage(
     val legacy: ClubsView?,
 )
 
-/** A competition's page: its stages ("아시아 · 승자조 8강") and the one shown. */
+/**
+ * A competition's page: its stages ("아시아 · 승자조 8강") and the one shown ([stage] indexes
+ * [stages], which [competitionStages] of [view] gives in the same order).
+ */
 data class CompetitionPage(val key: String, val comp: Comp, val stages: List<String>, val stage: Int, val view: CompetitionView)
+
+/** A league in the league ranking (리그 랭킹); [live] its points this season so far. */
+data class RankRow(val rank: LeagueRank, val label: String, val short: String, val icon: String, val live: Double?)
+
+data class RankingView(val season: Int, val rows: List<RankRow>, val empty: Boolean)
+
+/** The home's 국제 무대: the stages of the world competitions, the ranking's top and this season's race. */
+data class WorldSnippet(val stages: List<Pair<Comp, String>>, val ranking: List<RankRow>, val live: List<Pair<String, Double>>)
+
+/** The home dashboard, built on request (never in the snapshot). */
+data class HomeView(
+    val season: Int,
+    val week: Int,
+    val banner: HomeBanner?,
+    val followed: List<FollowCard>,
+    val followedMore: Int,
+    val picks: List<BroadcastPick>,
+    val table: List<SeasonRow>,
+    val world: WorldSnippet?,
+    val pendingProposals: Int,
+    val news: List<Article>,
+    val footer: HomeFooter,
+)
+
+/** A league's page; [key] equals its page's load key; [tiers]: (tier label, its numbers). */
+data class LeaguePage(
+    val key: String,
+    val info: LeagueInfo,
+    val rank: LeagueRank?,
+    val top: List<SeasonRow>,
+    val clubs: List<ClubStandingRow>,
+    val stars: List<LadderRow>,
+    val champions: List<Pair<Int, String>>,
+    val moves: List<ClubMove>,
+    val tiers: List<Pair<String, AggregateStats>>,
+)
 
 /** A federation proposal; [choice] the player's (null: none), [result] and [by] as decided. */
 data class ProposalView(
