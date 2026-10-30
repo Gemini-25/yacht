@@ -64,11 +64,14 @@ fun compShort(c: Comp): String = when (c) {
     else -> c.label
 }
 
-/** "🏆 요트컵 64강", "📋 리그 12라운드", "🥇 슈퍼컵" ([short]: 챔스, 클럽, ...). */
+/**
+ * "🏆 요트컵 64강", "📋 리그 12라운드", "🥇 슈퍼컵" ([short]: 챔스, 클럽, ..., and a double
+ * elimination stage as "4강 · 패자 1R" through [shortStage]).
+ */
 fun stageName(comp: Comp, label: String, short: Boolean = false): String {
     val name = if (short) compShort(comp) else comp.label
     // The super cup and the all-star game are one match: their label is their name.
-    val rest = if (label == comp.label || label.isBlank() || (comp == Comp.PROMOTION_PLAYOFF && label == "승강전")) "" else " $label"
+    val rest = if (label == comp.label || label.isBlank() || (comp == Comp.PROMOTION_PLAYOFF && label == "승강전")) "" else " " + if (short) shortStage(label) else label
     return compIcon(comp) + " " + name + rest
 }
 
@@ -215,7 +218,7 @@ private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (W
         if (lg.scheduleWeek != null && w != c.week && !c.over) {
             item { AssistChip(onClick = { lg.scheduleWeek = null }, label = { Text("지금 주로 가기 (${weekName(c.week, c.leagueWeeks)})", fontSize = 12.sp) }) }
         }
-        if (row != null) item { WeekCard(c, row, open) }
+        if (row != null) item { WeekCard(c, row, v.season?.rules?.doubleElimination == true, open) }
         if (w == c.week && !c.over) {
             val late = c.late
             if (late.isNotEmpty()) item { LateCard(c, late, open) }
@@ -234,9 +237,9 @@ private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (W
     }
 }
 
-/** A week's stages: each with how far it is; a tap opens it. */
+/** A week's stages: each with how far it is; a tap opens it ([double]: the season plays 패자부활). */
 @Composable
-private fun WeekCard(c: ClockView, row: WeekRow, open: (WeekStage) -> Unit) {
+private fun WeekCard(c: ClockView, row: WeekRow, double: Boolean, open: (WeekStage) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val past = c.over || row.week < c.week
     val total = row.stages.filter { it.set }.sumOf { it.total }
@@ -253,13 +256,13 @@ private fun WeekCard(c: ClockView, row: WeekRow, open: (WeekStage) -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
             )
-            for (s in row.stages) StageLine(c, s, open)
+            for (s in row.stages) StageLine(c, s, double, open)
         }
     }
 }
 
 @Composable
-private fun StageLine(c: ClockView, s: WeekStage, open: (WeekStage) -> Unit) {
+private fun StageLine(c: ClockView, s: WeekStage, double: Boolean, open: (WeekStage) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val live = c.live[s.comp to s.stage] ?: 0
     // A playoff not set up yet has nothing to open.
@@ -283,7 +286,7 @@ private fun StageLine(c: ClockView, s: WeekStage, open: (WeekStage) -> Unit) {
         }
         val note = when {
             live > 0 -> "지금 ${live}경기 진행 중이에요"
-            !s.set && s.comp == Comp.TITLE_PLAYOFF -> "리그가 끝나면 1부 1~4위가 맞붙어요"
+            !s.set && s.comp == Comp.TITLE_PLAYOFF -> if (double) "리그가 끝나면 1부 1~4위가 패자부활 토너먼트로 맞붙어요" else "리그가 끝나면 1부 1~4위가 맞붙어요"
             !s.set && s.comp == Comp.PROMOTION_PLAYOFF -> "리그가 끝나면 부마다 승강을 걸고 맞붙어요"
             s.set && s.total == 0 -> "앞 단계가 끝나면 대진이 정해져요"
             else -> null

@@ -51,6 +51,7 @@ import yacht.engine.league.Club
 import yacht.engine.league.ClubMove
 import yacht.engine.league.ClubMoveKind
 import yacht.engine.league.Emblem
+import yacht.engine.league.MatchFormat
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -109,9 +110,12 @@ private enum class ClubsMode(val label: String) {
     MARKET("이적·드래프트"),
 }
 
-/** 클럽: the club league table, every club's card, and the transfer window and draft news. */
+/**
+ * 클럽: the club league table, every club's card, and the transfer window and draft news.
+ * [format] is the season's match rule (how a board is decided), null when not known.
+ */
 @Composable
-fun ClubsTab(lg: LeagueController, v: ClubsView?, onOpen: (String) -> Unit) {
+fun ClubsTab(lg: LeagueController, v: ClubsView?, format: MatchFormat? = null, onOpen: (String) -> Unit) {
     if (v == null || v.clubs.isEmpty()) {
         CenterText("클럽 리그는 시즌이 시작될 때 만들어져요. 클럽마다 AI 여섯 명이 모여 다섯 보드 단체전을 치르고, 시즌이 끝나면 상금으로 이적 시장과 드래프트를 열어요. (규칙에서 클럽 수를 바꾸거나 끌 수 있어요)")
         return
@@ -132,7 +136,8 @@ fun ClubsTab(lg: LeagueController, v: ClubsView?, onOpen: (String) -> Unit) {
                 else {
                     item {
                         val played = v.matches.count { it.result != null }
-                        Text("단체전: 보드마다 같은 주사위 두 판, 이긴 보드가 많은 클럽이 승리 (승 3·무 1). $played/${v.matches.size}경기", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        val board = if (format == MatchFormat.GAMES) " (판 승점: 1승 1패면 그 보드는 무승부)" else ""
+                        Text("단체전: 보드마다 같은 주사위 두 판$board, 이긴 보드가 많은 클럽이 승리 (승 3·무 1). $played/${v.matches.size}경기", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                     }
                     itemsIndexed(v.table, key = { _, r -> "ct-${r.club}" }) { i, r ->
                         val club = byId[r.club]

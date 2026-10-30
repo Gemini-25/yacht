@@ -52,6 +52,15 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("바꾼 규칙은 다음 시즌부터 적용돼요. 지금 시즌은 그대로 끝까지 가요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                // The season in play keeps the rules it began with: say so when they read otherwise.
+                val season = lg.view?.season
+                val now = season?.rules
+                if (season != null && now != null && rulesSummary(now) != rulesSummary(cfg)) {
+                    Text(
+                        "지금 시즌 ${season.number}의 규칙은 시작할 때 그대로예요: ${rulesSummary(now)}",
+                        style = MaterialTheme.typography.labelSmall, color = cs.secondary,
+                    )
+                }
                 Text("프리셋", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 for (p in LeaguePreset.entries) {
                     val selected = cfg == p.config
@@ -82,10 +91,11 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("홈·원정 두 번씩 (더블 라운드 로빈)", cfg.doubleRoundRobin) { cfg = cfg.copy(doubleRoundRobin = it) }
                 Text("경기 방식", style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (f in MatchFormat.entries) {
-                        FilterChip(selected = cfg.matchFormat == f, onClick = { cfg = cfg.copy(matchFormat = f) }, label = { Text(f.label, fontSize = 12.sp) })
+                    for ((f, name) in FORMAT_CHIPS) {
+                        FilterChip(selected = cfg.matchFormat == f, onClick = { cfg = cfg.copy(matchFormat = f) }, label = { Text(name, fontSize = 12.sp) })
                     }
                 }
+                Text(matchRuleText(cfg.matchFormat), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 Stepper("자동 승강", cfg.autoSwap, 0..5, { "${it}팀" }) { cfg = cfg.copy(autoSwap = it) }
                 Toggle("승강 플레이오프", cfg.promotionPlayoff) { cfg = cfg.copy(promotionPlayoff = it) }
                 Toggle("우승 플레이오프 (1부 상위 4팀)", cfg.titlePlayoff) { cfg = cfg.copy(titlePlayoff = it) }
@@ -129,12 +139,10 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("요트컵", cfg.cup) { cfg = cfg.copy(cup = it) }
                 Toggle("챔피언스 리그", cfg.champions) { cfg = cfg.copy(champions = it) }
                 Toggle("슈퍼컵", cfg.superCup) { cfg = cfg.copy(superCup = it) }
-                Toggle("긴 토너먼트 (16강부터 경기 수 늘림)", cfg.longKnockouts) { cfg = cfg.copy(longKnockouts = it) }
-                Text(
-                    if (cfg.longKnockouts) "요트컵·챔스·우승 플레이오프의 16강·8강은 2경기(4판), 4강은 3경기(6판), 결승은 4경기(8판)로 겨뤄요. 한 경기는 같은 주사위로 선공·후공 두 판이에요. 슈퍼컵은 2경기예요."
-                    else "토너먼트는 한 경기(두 판)로 끝나요. 챔스 8강·4강과 우승 플레이오프 4강만 2경기예요.",
-                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
-                )
+                Toggle("긴 토너먼트 (라운드가 갈수록 길게)", cfg.longKnockouts) { cfg = cfg.copy(longKnockouts = it) }
+                Toggle("선승제 시리즈 (먼저 N판 이기면 진출)", cfg.seriesKnockouts) { cfg = cfg.copy(seriesKnockouts = it) }
+                Toggle("패자부활 (4명·4팀 이상 토너먼트)", cfg.doubleElimination) { cfg = cfg.copy(doubleElimination = it) }
+                Text(knockoutRuleText(cfg), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 Toggle("올스타전", cfg.allStar) { cfg = cfg.copy(allStar = it) }
                 Toggle("국가대항전 (요트 월드컵·대륙컵)", cfg.nationCup) { cfg = cfg.copy(nationCup = it) }
                 Text(
@@ -152,6 +160,14 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
         },
     )
 }
+
+/** The match rule chips, the default first. */
+private val FORMAT_CHIPS = listOf(
+    MatchFormat.GAMES to "판 승점 (기본)",
+    MatchFormat.MIRRORED to "두 판 합계",
+    MatchFormat.BEST_OF_3 to "3판 2선승",
+    MatchFormat.SINGLE to "단판",
+)
 
 /** Quick choices for the number of players. */
 private val PLAYER_PRESETS = listOf(200, 500, 1000, 2000, 3000)
