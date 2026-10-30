@@ -721,6 +721,11 @@ class LeagueController(
     private val lastDelta = HashMap<String, Int>()
     private var startRanks: Map<String, Int> = emptyMap()
     private var stop = AtomicBoolean(true)
+    /**
+     * [stop] and [running] change together under this: a run that ends (on a worker thread)
+     * must not take the next run's [running] for its own (the run being set going meanwhile).
+     */
+    private val runGate = Any()
     private var runJob: Job? = null
     /** The ladder and its version the last full fit was made for. */
     private var fittedLadder: Ladder? = null
@@ -1084,8 +1089,12 @@ class LeagueController(
      */
     fun start(resume: Boolean = false) {
         val t = tables ?: return
-        if (running || ladder == null || restoring) return
-        running = true
+        val flag = AtomicBoolean(false)
+        synchronized(runGate) {
+            if (running || ladder == null || restoring) return
+            stop = flag
+            running = true
+        }
         stopReason = null
         weekDone = null
         endedBy = null
@@ -1094,8 +1103,6 @@ class LeagueController(
         failures.set(0)
         lastRecord = System.currentTimeMillis()
         scope.launch(fileWrites) { runCatching { resumeFile.writeTextAtomically("1") } }
-        val flag = AtomicBoolean(false)
-        stop = flag
         val previous = runJob
         runStart = System.currentTimeMillis()
         runMatches = 0
@@ -1159,9 +1166,15 @@ class LeagueController(
                 // A run that ended by itself (errors, its week played) must not leave the screen
                 // showing a league running with no one playing, nor end without a word or a save.
                 withContext(kotlinx.coroutines.NonCancellable) {
-                    if (stop === flag && running) {
-                        flag.set(true)
-                        running = false
+                    val ended = synchronized(runGate) {
+                        (stop === flag && running).also { mine ->
+                            if (mine) {
+                                flag.set(true)
+                                running = false
+                            }
+                        }
+                    }
+                    if (ended) {
                         preparing = null
                         // Why: an error, or its week played (said in green), else that it stopped.
                         val why = endedBy
@@ -1610,9 +1623,11 @@ class LeagueController(
             clearResume()
             weekGoal = null
         }
-        if (!running) return null
-        stop.set(true)
-        running = false
+        synchronized(runGate) {
+            if (!running) return null
+            stop.set(true)
+            running = false
+        }
         preparing = null
         val job = runJob
         return scope.launch {
