@@ -36,7 +36,14 @@ class SeasonPlan(
     init {
         // The league's matches are decided by the rules the season began with.
         league.format = config.matchFormat
+        league.bonus = config.sweepPoints
     }
+
+    /**
+     * The league ranking this season is played under (not saved: the world sets it when the season
+     * opens or is read). With [LeagueRanking.EMPTY] no league counts as one of the best-ranked.
+     */
+    var ranking: LeagueRanking = LeagueRanking.EMPTY
 
     /** League progress, 0..1: competitions open their rounds by it. */
     val progress: Double get() = league.progress

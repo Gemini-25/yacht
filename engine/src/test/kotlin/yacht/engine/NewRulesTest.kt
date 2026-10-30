@@ -60,6 +60,8 @@ class NewRulesTest {
         val keys = listOf("a", "b", "c", "d")
         val s = Season.start(1, 5L, listOf(keys))
         s.format = MatchFormat.GAMES
+        // As a season plan sets it from its rules (LeagueConfig.sweepPoints).
+        s.bonus = true
         while (true) {
             val f = s.next(emptySet()) ?: break
             // a sweeps everyone, b and c split, d loses the rest.

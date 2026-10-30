@@ -96,6 +96,31 @@ data class LeagueConfig(
     val onlyFlawed: Boolean = false,
     /** Only the strongest AIs by rating, 0 = everyone (the "elite" preset). */
     val onlyTop: Int = 0,
+    /**
+     * National leagues (국가 리그): every nation with [leagueMin] members or more plays its own
+     * league, the others a 연합 리그 of their confederation, each a ladder of divisions of about
+     * [divisionSize]; off, one league of [divisions] divisions or a regional pyramid. Not offered
+     * on the rules screen, and the federation never changes it.
+     */
+    val national: Boolean = false,
+    /** Players per division of a national league (부 인원). */
+    val divisionSize: Int = 20,
+    /** Members a nation needs for a league of its own (fewer: its confederation's 연합 리그). */
+    val leagueMin: Int = 24,
+    /** A 2-0 sweep earns the bonus point (완승 보너스) where the match format has one: [sweepPoints]. */
+    val sweepBonus: Boolean = true,
+    /** Strong players moving to a stronger league each season, per 1000 members (해외 이적). */
+    val transfers: Int = 4,
+    /** Each confederation's 대륙 챔피언스, whose best go on to the 챔피언스 리그. */
+    val continentalCl: Boolean = true,
+    /** Leagues (the best-ranked) whose champion goes straight into the 챔피언스 리그. */
+    val clDirect: Int = 7,
+    /** Members per club of a national league's nation (클럽 인원). */
+    val clubSize: Int = 8,
+    /** The 클럽 대항전, every other season. */
+    val clubCup: Boolean = true,
+    /** 요트협회: each off-season it proposes changes to the competition rules. */
+    val federation: Boolean = true,
 ) {
     init {
         require(divisions in 1..6) { "divisions $divisions" }
@@ -107,7 +132,19 @@ data class LeagueConfig(
         require(clubs == 0 || clubs in 4..24)
         require(squad in 5..8)
         require(onlyTop >= 0)
+        require(divisionSize in 16..24) { "divisionSize $divisionSize" }
+        require(leagueMin in 20..60) { "leagueMin $leagueMin" }
+        require(transfers in 0..10)
+        require(clDirect in 0..12)
+        require(clubSize in 5..12)
     }
+
+    /**
+     * A 2-0 sweep earns a bonus point in league and group tables: the match format has the bonus
+     * ([MatchFormat.sweepBonus]) and the rules keep it ([sweepBonus]). Every table, the odds and
+     * the screens read it from here.
+     */
+    val sweepPoints: Boolean get() = matchFormat.sweepBonus && sweepBonus
 
     fun encode(): String = buildString {
         append("config $VERSION\n")
@@ -138,6 +175,30 @@ data class LeagueConfig(
         append("doubleElim ${flag(doubleElimination)}\n")
         append("onlyFlawed ${flag(onlyFlawed)}\n")
         append("onlyTop $onlyTop\n")
+        append("national ${flag(national)}\n")
+        append("divisionSize $divisionSize\n")
+        append("leagueMin $leagueMin\n")
+        append("sweepBonus ${flag(sweepBonus)}\n")
+        append("transfers $transfers\n")
+        append("continentalCl ${flag(continentalCl)}\n")
+        append("clDirect $clDirect\n")
+        append("clubSize $clubSize\n")
+        append("clubCup ${flag(clubCup)}\n")
+        append("federation ${flag(federation)}\n")
+    }
+
+    /** The saved value of rule [key], as [encode] writes it ("20" for "divisionSize"); null for no such rule. */
+    fun valueOf(key: String): String? =
+        encode().lines().drop(1).firstNotNullOfOrNull { l -> l.split(' ').takeIf { it.size == 2 && it[0] == key }?.get(1) }
+
+    /**
+     * These rules with [key] set to [value] as [encode] writes it ("divisionSize", "22"); null
+     * when there is no such rule or the value is not one it can take (out of its range, not a
+     * number), which [decode] would quietly skip.
+     */
+    fun with(key: String, value: String): LeagueConfig? {
+        val lines = encode().lines().mapIndexed { i, l -> if (i > 0 && l.substringBefore(' ') == key) "$key $value" else l }
+        return decode(lines.joinToString("\n")).takeIf { it.valueOf(key) == value }
     }
 
     companion object {
@@ -153,9 +214,20 @@ data class LeagueConfig(
 
         /**
          * Version of [encode]'s rules: 2 brought 판 승점제 and the series and double-elimination
-         * knockouts (see [decode] for older ones).
+         * knockouts (see [decode] for older ones). It stays 2 while national leagues are built:
+         * the keys added since (from [national] on) are written and read, and a file without
+         * them keeps the constructor's values (no national leagues, the sweep bonus on), so no
+         * league is moved on to national leagues before the app can show them.
          */
         const val VERSION = 2
+
+        /**
+         * The rules of a new league once national leagues are offered: national leagues of
+         * divisions playing home and away, every competition. A literal (it reads no
+         * [LeaguePreset], whose [LeaguePreset.REAL] points at it), so neither class waits on the
+         * other's initialisation.
+         */
+        val DEFAULT = LeagueConfig(national = true, doubleRoundRobin = true)
 
         /** The version of a saved config (1 before versions were counted). */
         fun versionOf(text: String): Int =
@@ -205,6 +277,16 @@ data class LeagueConfig(
                         "doubleElim" -> c.copy(doubleElimination = v == "1")
                         "onlyFlawed" -> c.copy(onlyFlawed = v == "1")
                         "onlyTop" -> c.copy(onlyTop = v.toInt())
+                        "national" -> c.copy(national = v == "1")
+                        "divisionSize" -> c.copy(divisionSize = v.toInt())
+                        "leagueMin" -> c.copy(leagueMin = v.toInt())
+                        "sweepBonus" -> c.copy(sweepBonus = v == "1")
+                        "transfers" -> c.copy(transfers = v.toInt())
+                        "continentalCl" -> c.copy(continentalCl = v == "1")
+                        "clDirect" -> c.copy(clDirect = v.toInt())
+                        "clubSize" -> c.copy(clubSize = v.toInt())
+                        "clubCup" -> c.copy(clubCup = v == "1")
+                        "federation" -> c.copy(federation = v == "1")
                         else -> c
                     }
                 }.getOrDefault(c)
@@ -232,7 +314,8 @@ data class LeagueConfig(
 enum class LeaguePreset(val label: String, val desc: String, val config: LeagueConfig) {
     REAL(
         "현실 축구형", "선수 1000명의 지역 리그 피라미드(조당 50명), 같은 주사위 두 판 판 승점제(2:0 완승 +1), 선승제·패자부활 토너먼트, 승강·우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
-        LeagueConfig(),
+        // Today's single league until national leagues are offered (config version 3): then DEFAULT itself.
+        LeagueConfig.DEFAULT.copy(national = false, doubleRoundRobin = false),
     ),
     FAST(
         "빠른 시즌", "단판 경기, 한 번 지면 끝나는 토너먼트, 플레이오프·클럽 리그·국가대항전 없이 시즌이 빨리 돌아요 (선수가 적으면 2부까지)",

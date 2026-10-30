@@ -63,9 +63,17 @@ class SeasonStart(
     val history: List<Honour> = emptyList(),
     /** Each AI's nation code (generated and evolved players; null for the others). */
     val nation: (String) -> String? = { null },
-    /** This season's tiers ([divisions]' pyramid groups), and last season's ([lastTables]'). */
+    /** This season's tiers ([divisions]' pyramid groups), and last season's ([lastTables]'), of a legacy league. */
     val tiers: Tiers = Tiers.linear(divisions.size),
     val lastTiers: Tiers = Tiers.linear(lastTables.size),
+    /** The leagues of this season's [divisions] and of last season's [lastTables] (one legacy league before national leagues). */
+    val leagues: Leagues = Leagues.legacy(tiers),
+    val lastLeagues: Leagues = Leagues.legacy(lastTiers),
+    /** The league ranking the season is played under ([LeagueRanking.EMPTY] before the first national close). */
+    val leagueRanking: LeagueRanking = LeagueRanking.EMPTY,
+    /** Each member's club id, and that club's nation (null: no club). */
+    val clubOf: (String) -> String? = { null },
+    val clubNation: (String) -> String? = { null },
 )
 
 /**

@@ -10,10 +10,10 @@ class Standing(val key: String) {
     var draws = 0
     var losses = 0
 
-    /** League points: 3 for a won match, 1 for a drawn one, 1 more for a 2-0 sweep under 판 승점제. */
+    /** League points: 3 for a won match, 1 for a drawn one, 1 more for a 2-0 sweep under 판 승점제 ([Season.bonus]). */
     var points = 0
 
-    /** 2-0 sweeps that earned the bonus point (완승 보너스, [MatchFormat.sweepBonus]). */
+    /** 2-0 sweeps that earned the bonus point (완승 보너스, [Season.bonus]). */
     var sweeps = 0
 
     /** Total of its game scores, and of its opponents'. */
@@ -33,14 +33,21 @@ class Standing(val key: String) {
     val avgScore: Double get() = if (games == 0) 0.0 else scored.toDouble() / games
 }
 
-/** A league fixture: division [division], matchday [matchday], [a] first in the first game. */
-data class LeagueFixture(val id: Int, val division: Int, val matchday: Int, val a: String, val b: String)
+/**
+ * A league fixture: division [division], matchday [matchday] (the league stage's week, 0-based),
+ * [a] first in the first game. [round] is the division's own round (0-based): the matchday,
+ * except in a national season, whose shorter divisions spread their rounds over the weeks.
+ */
+data class LeagueFixture(val id: Int, val division: Int, val matchday: Int, val a: String, val b: String, val round: Int = matchday)
 
 /**
  * The league stage of a season: divisions that each play a round robin of matches, by matchdays
  * (every AI plays at most once per matchday; matchday k of every division opens together). See
- * docs/LEAGUE_SPEC.md section 2.1. Promotion, relegation and playoffs are decided by the
- * [SeasonPlan]; this class keeps the tables. Not thread-safe: callers synchronise.
+ * docs/LEAGUE_SPEC.md section 2.1. The divisions belong to [leagues]: one legacy league, or
+ * national leagues, whose divisions play an aligned schedule (every division's first round in
+ * the first week and its last in the last, the rounds of a shorter one spread between them).
+ * Promotion, relegation and playoffs are decided by the [SeasonPlan]; this class keeps the
+ * tables. Not thread-safe: callers synchronise.
  */
 class Season private constructor(
     val number: Int,
@@ -48,9 +55,20 @@ class Season private constructor(
     val seed: Long,
     val divisions: List<List<String>>,
     val double: Boolean,
-    /** Which tier each division is in: a regional pyramid's groups, else one division a tier. */
-    val tiers: Tiers = Tiers.linear(divisions.size),
+    /** The league of each division, and its tier there (a legacy pyramid's groups, else one division a tier). */
+    val leagues: Leagues,
 ) {
+    init {
+        require(leagues.size == divisions.size) { "a league for every division" }
+    }
+
+    /**
+     * Which tier each division is in, for code that knows one league only: a legacy season's
+     * tiers; a national season's divisions as one flat ladder (wrong labels, safe indices).
+     */
+    @Deprecated("A national season has several leagues: read leagues (tier, label) instead")
+    val tiers: Tiers = leagues.list.singleOrNull()?.tiers ?: Tiers.linear(divisions.size)
+
     val standings = HashMap<String, Standing>()
 
     /**
@@ -59,7 +77,21 @@ class Season private constructor(
      */
     var format: MatchFormat = MatchFormat.MIRRORED
         internal set
+
+    /**
+     * A 2-0 sweep earns the bonus point (완승 보너스): [SeasonPlan] sets it from its config
+     * ([LeagueConfig.sweepPoints]); a season read on its own has none.
+     */
+    var bonus: Boolean = false
+        internal set
     private val fixtures = ArrayList<LeagueFixture>()
+
+    /** Rounds of each division, and of the longest ([span], the league stage's matchdays once built). */
+    private val roundCount = IntArray(divisions.size)
+    private var span = 0
+
+    /** Each AI's scheduled league fixtures. */
+    private val scheduled = HashMap<String, Int>()
 
     /** Each fixture's two standings (by id), so [next] reads no map. */
     private val standingA = ArrayList<Standing>()
@@ -70,7 +102,10 @@ class Season private constructor(
     /** The games of every played fixture (for the calendar and the odds), by fixture id. */
     private val results = HashMap<Int, List<GameScore>>()
 
-    /** Positions after each completed matchday: positions[d][k][i] = place of divisions[d][i] (a division can hold hundreds). */
+    /**
+     * Positions after each completed round of a division: positions[d][k][i] = place of
+     * divisions[d][i] after its k-th round (a division can hold hundreds).
+     */
     val positions: List<MutableList<ShortArray>> = divisions.map { ArrayList() }
     private val matchdayLeft = HashMap<Pair<Int, Int>, Int>()
 
@@ -104,11 +139,30 @@ class Season private constructor(
 
     fun divisionOf(key: String): Int? = divisionIndex[key]
 
+    /** The league [key] plays in this season; null when it is not in it. */
+    fun leagueOf(key: String): LeagueDef? = divisionIndex[key]?.let { leagues.of(it) }
+
+    /** [key]'s tier in its league (0 = 1부); null when it is not in the season. */
+    fun tierOf(key: String): Int? = divisionIndex[key]?.let { leagues.tier(it) }
+
+    /** Rounds division [d] plays (fewer than [matchdays] for a shorter division of a national season). */
+    fun roundsOf(d: Int): Int = roundCount[d]
+
+    /** The matchday (0-based week of the league stage) of division [d]'s round [round] (0-based). */
+    fun weekOf(d: Int, round: Int): Int {
+        val r = roundCount[d]
+        // Spread so that the last round falls in the last week; (span - 1) / (r - 1) >= 1 keeps the rounds apart.
+        return if (leagues.national && r in 2 until span) Math.round(round * (span - 1).toDouble() / (r - 1)).toInt() else round
+    }
+
+    /** [key]'s own league fixtures this season (in an odd division a player sits out a round of each round robin). */
+    fun fixturesOf(key: String): Int = scheduled[key] ?: 0
+
     fun fixture(id: Int): LeagueFixture = fixtures[id]
 
-    /** The fixture as a job ([comp] LEAGUE, its own deal). */
+    /** The fixture as a job ([comp] LEAGUE, its own deal), labelled by its division's round. */
     fun job(f: LeagueFixture): Fixture =
-        Fixture(Comp.LEAGUE, f.id, f.a, f.b, DiceStream.mix(seed, Comp.LEAGUE.code.code.toLong(), f.id.toLong()), label = "${f.matchday + 1}라운드", week = f.matchday + 1)
+        Fixture(Comp.LEAGUE, f.id, f.a, f.b, DiceStream.mix(seed, Comp.LEAGUE.code.code.toLong(), f.id.toLong()), label = "${f.round + 1}라운드", week = f.matchday + 1)
 
     /** Played and total fixtures of each matchday, of division [division] or of all (for the season calendar). */
     fun matchdayCounts(division: Int? = null): List<StageCount> {
@@ -135,6 +189,19 @@ class Season private constructor(
         return List(n) { StageCount(played[it], total[it]) }
     }
 
+    /** Played and total fixtures of each of division [d]'s rounds ([roundsOf]); scans the season. */
+    fun roundCounts(d: Int): List<StageCount> {
+        val n = roundCount[d]
+        val played = IntArray(n)
+        val total = IntArray(n)
+        for (f in fixtures) {
+            if (f.division != d) continue
+            total[f.round]++
+            if (isPlayed(f.id)) played[f.round]++
+        }
+        return List(n) { StageCount(played[it], total[it]) }
+    }
+
     /** Fixture ids by matchday (built on first use; fixtures are only added while the season is built or read). */
     private var byDay: Array<IntArray> = emptyArray()
     private var byDayFor = -1
@@ -154,6 +221,8 @@ class Season private constructor(
         fixtures += f
         standingA += standings.getValue(f.a)
         standingB += standings.getValue(f.b)
+        scheduled.merge(f.a, 1, Int::plus)
+        scheduled.merge(f.b, 1, Int::plus)
     }
 
     /** True when every fixture of matchday [k] is played (in every division). */
@@ -162,13 +231,15 @@ class Season private constructor(
     /** The 이 주의 선수 of a matchday: [key] beat [opponent] with the best average score of the week. */
     data class WeekPick(val matchday: Int, val key: String, val opponent: String, val average: Double, val best: Int, val division: Int)
 
-    private val pickOrder: Comparator<WeekPick> = compareByDescending<WeekPick> { it.average }.thenByDescending { it.best }.thenBy { it.division }.thenBy { it.key }
+    private val pickOrder: Comparator<WeekPick> =
+        compareByDescending<WeekPick> { it.average }.thenByDescending { it.best }.thenBy { leagues.tier(it.division) }.thenBy { it.division }.thenBy { it.key }
 
     /**
      * 이 주의 선수 of each matchday in [days] (null for a day with no winner): of the players
      * who won their match that day (none of [excluded]), the best average score; level, the best
-     * single game, then the higher division, then by key (all fixed by the results: the same
-     * pick whenever it is asked). One pass over the fixtures.
+     * single game, then the higher tier (of whichever league), then the earlier division, then
+     * by key (all fixed by the results: the same pick whenever it is asked). One pass over the
+     * fixtures.
      */
     fun playersOfWeek(days: IntRange, excluded: Set<String> = emptySet()): Map<Int, WeekPick> {
         val best = HashMap<Int, WeekPick>()
@@ -197,20 +268,32 @@ class Season private constructor(
     fun unplayed(): List<LeagueFixture> = fixtures.filter { !isPlayed(it.id) }
 
     private fun build(rng: Random) {
-        // Ids in matchday order (then division), so the open matchdays come first in [remaining].
         val rounds = divisions.map { keys -> if (double) Calendar.doubleRoundRobin(keys, rng) else Calendar.roundRobin(keys, rng) }
+        for (d in rounds.indices) roundCount[d] = rounds[d].size
+        span = roundCount.maxOrNull() ?: 0
+        // The round each division plays on each matchday, -1 for none (a legacy season: round k on matchday k).
+        val roundAt = Array(divisions.size) { d -> IntArray(span) { -1 }.also { at -> for (j in 0 until roundCount[d]) at[weekOf(d, j)] = j } }
         var id = 0
         for (d in divisions.indices) for (k in divisions[d]) standings[k] = Standing(k)
-        for (md in 0 until (rounds.maxOfOrNull { it.size } ?: 0)) {
-            for ((d, rs) in rounds.withIndex()) {
-                for ((a, b) in rs.getOrNull(md).orEmpty()) {
-                    add(LeagueFixture(id, d, md, a, b))
+        // Ids in matchday order (then division), so the open matchdays come first in [remaining].
+        for (md in 0 until span) {
+            for (d in divisions.indices) {
+                val j = roundAt[d][md]
+                if (j < 0) continue
+                for ((a, b) in rounds[d][j]) {
+                    add(LeagueFixture(id, d, md, a, b, j))
                     remaining += id
                     id++
                 }
             }
         }
         countMatchdays()
+    }
+
+    /** [roundCount] and [span] from the fixtures (a season saved with every fixture). */
+    private fun countRounds() {
+        for (f in fixtures) roundCount[f.division] = maxOf(roundCount[f.division], f.round + 1)
+        span = roundCount.maxOrNull() ?: 0
     }
 
     private fun countMatchdays() {
@@ -298,7 +381,7 @@ class Season private constructor(
                 a.wins++
                 b.losses++
                 a.points += 3
-                if (format.sweepBonus && TieRule.sweptByA(games)) {
+                if (bonus && TieRule.sweptByA(games)) {
                     a.points++
                     a.sweeps++
                 }
@@ -307,7 +390,7 @@ class Season private constructor(
                 b.wins++
                 a.losses++
                 b.points += 3
-                if (format.sweepBonus && TieRule.sweptByB(games)) {
+                if (bonus && TieRule.sweptByB(games)) {
                     b.points++
                     b.sweeps++
                 }
@@ -344,15 +427,15 @@ class Season private constructor(
     // ---- saving --------------------------------------------------------------------------------
 
     /**
-     * The saved season (`season 4`): the divisions and the seed, from which [decode] builds the
-     * fixtures again, and the results of the played ones only (a league of thousands has tens of
-     * thousands of fixtures).
+     * The saved season (`season 4`; `season 5` with national leagues, which adds their `league`
+     * lines): the divisions and the seed, from which [decode] builds the fixtures again, and the
+     * results of the played ones only (a league of thousands has tens of thousands of fixtures).
      */
     fun encode(): String = buildString {
-        append(HEADER).append('\n')
+        append(if (leagues.national) NATIONAL_HEADER else HEADER).append('\n')
         append("number $number $seed ${if (double) 1 else 0}\n")
         for ((i, d) in divisions.withIndex()) append("division $i ${d.joinToString(",")}\n")
-        if (!tiers.linear) append(tiers.encode()).append('\n')
+        leagues.encode(this)
         append("fixtures ${fixtures.size}\n")
         for (f in fixtures) {
             if (!isPlayed(f.id)) continue
@@ -368,6 +451,9 @@ class Season private constructor(
 
     companion object {
         const val HEADER = "season 4"
+
+        /** A season of national leagues: their `league` lines, and the aligned schedule they imply. */
+        const val NATIONAL_HEADER = "season 5"
 
         /** The version before: every fixture saved. */
         private const val OLD_HEADER = "season 3"
@@ -385,15 +471,38 @@ class Season private constructor(
         }
 
         /**
-         * A new season of the league stage with these [divisions] (best division first), in
-         * [tiers] (null: one division a tier). Empty divisions are left out (and their tiers'
-         * groups with them).
+         * A new season of the league stage with these [divisions] (best division first) of one
+         * legacy league, in [tiers] (null: one division a tier). Empty divisions are left out (and
+         * their tiers' groups with them).
          */
         fun start(number: Int, seed: Long, divisions: List<List<String>>, double: Boolean = false, tiers: Tiers? = null): Season {
             val kept = divisions.indices.filter { divisions[it].isNotEmpty() }
             val t = tiers?.takeIf { it.size == divisions.size && kept.size == divisions.size }
                 ?: tiers?.takeIf { it.size == divisions.size }?.let { all -> keptTiers(all, kept) }
-            val s = Season(number, seed, kept.map { divisions[it] }, double, t ?: Tiers.linear(kept.size))
+            val s = Season(number, seed, kept.map { divisions[it] }, double, Leagues.legacy(t ?: Tiers.linear(kept.size)))
+            s.build(Random(DiceStream.mix(seed, 0x5EA5)))
+            return s
+        }
+
+        /**
+         * A new season with these [divisions] (league by league, best division first) in
+         * [leagues]: national leagues play the aligned schedule; a legacy one is built as by the
+         * other [start]. Empty divisions are left out, and a league left with none.
+         */
+        fun start(number: Int, seed: Long, divisions: List<List<String>>, double: Boolean, leagues: Leagues): Season {
+            require(leagues.size == divisions.size) { "a league for every division" }
+            if (!leagues.national) return start(number, seed, divisions, double, leagues.list.singleOrNull()?.tiers)
+            val kept = ArrayList<List<String>>()
+            val ids = ArrayList<String>()
+            val counts = ArrayList<Int>()
+            for (lg in leagues.list) {
+                val own = lg.divisions.map { divisions[it] }.filter { it.isNotEmpty() }
+                if (own.isEmpty()) continue
+                kept += own
+                ids += lg.id
+                counts += own.size
+            }
+            val s = Season(number, seed, kept, double, Leagues.national(ids, counts, leagues.worldConfed))
             s.build(Random(DiceStream.mix(seed, 0x5EA5)))
             return s
         }
@@ -421,20 +530,22 @@ class Season private constructor(
         }
 
         /**
-         * Reads a saved season of this version; throws on older versions or unusable files (the
-         * caller starts a new season). AIs no longer in [keys] keep their played results; their
-         * fixtures still to play are dropped.
+         * Reads a saved season of this version (`season 5` or `season 4`, or `season 3`); throws
+         * on older versions or unusable files, a `season 5` whose leagues do not cover its
+         * divisions included (the caller starts a new season). AIs no longer in [keys] keep their
+         * played results; their fixtures still to play are dropped.
          */
         fun decode(text: String, keys: Collection<String>): Season {
             val lines = text.lines()
             val header = lines.firstOrNull()?.trim()
-            require(header == HEADER || header == OLD_HEADER) { "not a season file" }
-            val rebuilt = header == HEADER
+            require(header == HEADER || header == NATIONAL_HEADER || header == OLD_HEADER) { "not a season file" }
+            val rebuilt = header != OLD_HEADER
             var number = 1
             var seed = 0L
             var double = false
             val divisions = ArrayList<MutableList<String>>()
             var tierLine: List<String>? = null
+            val leagueLines = ArrayList<String>()
             for (l in lines) {
                 val f = l.split(' ')
                 when (f[0]) {
@@ -445,12 +556,17 @@ class Season private constructor(
                     }
                     "division" -> divisions += f.getOrElse(2) { "" }.split(',').filter { it.isNotEmpty() }.toMutableList()
                     "tiers" -> tierLine = f.drop(1)
+                    "league" -> leagueLines += l
                 }
             }
             require(divisions.any { it.isNotEmpty() }) { "no divisions in the saved season" }
             val known = keys.toSet()
-            val tiers = tierLine?.let { Tiers.decode(it, divisions.size) } ?: Tiers.linear(divisions.size)
-            val s = Season(number, seed, divisions, double, tiers)
+            val leagues = if (header == NATIONAL_HEADER) {
+                requireNotNull(Leagues.decode(leagueLines, divisions.size)?.takeIf { it.national }) { "the leagues do not cover the divisions" }
+            } else {
+                Leagues.legacy(tierLine?.let { Tiers.decode(it, divisions.size) } ?: Tiers.linear(divisions.size))
+            }
+            val s = Season(number, seed, divisions, double, leagues)
             if (rebuilt) {
                 // The fixtures as the season built them; the played ones come off the list below.
                 s.build(Random(DiceStream.mix(seed, 0x5EA5)))
@@ -512,6 +628,7 @@ class Season private constructor(
                 // A match without saved games counts two (the format before others existed).
                 for (k in noGames) s.standings[k]?.let { st -> st.games = (counted[k] ?: 0) + 2 * maxOf(0, st.played - (matches[k] ?: 0)) }
             }
+            if (!rebuilt) s.countRounds()
             s.countMatchdays()
             return s
         }
