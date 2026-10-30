@@ -39,6 +39,7 @@ import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
 import yacht.app.core.Page
 import yacht.app.core.ResultsFilter
+import yacht.app.core.Screen
 import yacht.app.core.Sheet
 import yacht.engine.explain.Ko
 import yacht.engine.league.Comp
@@ -57,6 +58,17 @@ internal fun matchKey(season: Int, comp: Comp, id: Int): String? =
 internal fun followed(k: String, favourites: Set<String>): Boolean = k in favourites || nationFavourite(k) in favourites
 
 /**
+ * Watches a featured game (a top player against a rival, played afresh as a friendly): the league
+ * screen's old 👀 경기 관전, kept on 경기 › 중계 until the broadcast channel replaces it.
+ */
+internal fun watchFeatured(c: AppController) {
+    val lg = c.league
+    val (a, b) = lg.featured(java.util.Random()) ?: return
+    lg.startWatch(a, b) { c.aiPace.stepMs.coerceAtLeast(400L) }
+    c.screen = Screen.WATCH
+}
+
+/**
  * 경기 › 결과: "필터 ▾" ([Sheet.RESULTS_FILTER]), the matches being played (folded to one line,
  * each opening its report), and the results, newest first.
  */
@@ -66,19 +78,21 @@ internal fun FeedList(lg: LeagueController, v: LeagueView) {
     val nav = lg.nav
     val filter = nav.results
     val favs = lg.favourites
-    val shown = remember(v.feed, filter, favs) { v.feed.filter { shows(filter, it, favs) } }
+    val shown = remember(v.feed, filter, favs) { v.feed.filter { resultShown(filter, it.comp, it.a, it.b, favs) } }
+    // The matches in play under the same filter (★ 응원: only the followed players' own).
+    val live = remember(v.live, filter, favs) { v.live.filter { resultShown(filter, it.comp, it.a, it.b, favs) } }
     var liveOpen by remember { mutableStateOf(false) }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item { FilterLine("필터: ${filter.label}") { nav.sheet = Sheet.RESULTS_FILTER } }
-        if (v.live.isNotEmpty()) {
+        if (live.isNotEmpty()) {
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Row(Modifier.fillMaxWidth().clickable { liveOpen = !liveOpen }, verticalAlignment = Alignment.CenterVertically) {
-                            Text("⚔️ 지금 경기 중 ${v.live.size}", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                            Text("⚔️ 지금 경기 중 ${live.size}", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
                             Text(if (liveOpen) "접기" else "펼치기", style = MaterialTheme.typography.labelMedium, color = cs.primary)
                         }
-                        if (liveOpen) for (m in v.live) {
+                        if (liveOpen) for (m in live) {
                             val team = m.comp.byTeams
                             fun side(k: String) = if (team) Competitions.teamLabel(k) else lg.name(k)
                             val key = v.clock?.let { matchKey(it.season, m.comp, m.id) }
@@ -109,16 +123,13 @@ internal fun FeedList(lg: LeagueController, v: LeagueView) {
     }
 }
 
-/** True when [filter] keeps result [m]. */
-private fun shows(filter: ResultsFilter, m: FeedItem, favourites: Set<String>): Boolean {
-    val c = m.comp
-    return when (filter) {
-        ResultsFilter.ALL -> true
-        ResultsFilter.FOLLOWED -> followed(m.a, favourites) || followed(m.b, favourites)
-        ResultsFilter.LEAGUE -> c == Comp.LEAGUE
-        ResultsFilter.COMPS -> c != null && c != Comp.LEAGUE && c != Comp.FRIENDLY && c != Comp.LEGEND && c != Comp.LAB
-        ResultsFilter.FRIENDLY -> c == Comp.FRIENDLY || c == Comp.LEGEND
-    }
+/** True when [filter] keeps a match of [c] (null: a result saved before the competitions were kept) between [a] and [b]. */
+internal fun resultShown(filter: ResultsFilter, c: Comp?, a: String, b: String, favourites: Set<String>): Boolean = when (filter) {
+    ResultsFilter.ALL -> true
+    ResultsFilter.FOLLOWED -> followed(a, favourites) || followed(b, favourites)
+    ResultsFilter.LEAGUE -> c == Comp.LEAGUE
+    ResultsFilter.COMPS -> c != null && c != Comp.LEAGUE && c != Comp.FRIENDLY && c != Comp.LEGEND && c != Comp.LAB
+    ResultsFilter.FRIENDLY -> c == Comp.FRIENDLY || c == Comp.LEGEND
 }
 
 /** A sub-view's filter line: what it shows now, with ▾ to change it. */
@@ -281,8 +292,8 @@ internal fun HighlightCard(aName: String, bName: String, h: Highlight, action: S
 }
 
 /**
- * 경기 › 중계: for now the 스코어보드, the newest finished fixtures replayed turn by turn, six at
- * a time; a card opens its match report.
+ * 경기 › 중계: for now 👀 경기 관전 (a featured friendly to watch) and the 스코어보드, the newest
+ * finished fixtures replayed turn by turn, six at a time; a card opens its match report.
  */
 @Composable
 internal fun LiveBoardView(c: AppController) {
@@ -294,6 +305,8 @@ internal fun LiveBoardView(c: AppController) {
     val frames = lg.liveFrames
     val season = lg.view?.clock?.season
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Until the broadcast channel comes: a featured game to watch turn by turn, as the old 👀 경기 관전.
+        item { LinkLine("👀 경기 관전", "상위 선수와 라이벌이 새로 두는 친선 경기를 턴마다 지켜봐요.") { watchFeatured(c) } }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("📺 스코어보드", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)

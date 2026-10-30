@@ -41,6 +41,7 @@ import yacht.app.core.RecordsView
 import yacht.app.core.Screen
 import yacht.app.core.SeasonHistoryItem
 import yacht.app.core.SeasonRow
+import yacht.app.core.TableMode
 import yacht.app.core.TablesView
 import yacht.engine.explain.Ko
 import yacht.engine.league.Article
@@ -159,25 +160,30 @@ private fun MyLeague(lg: LeagueController, v: LeagueView) {
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
             }
-            for ((i, r) in top.take(3).withIndex()) TableLine("${i + 1}", r, r.key in favs)
-            for ((d, i, r) in followed) TableLine("${tiers.label(d)} ${i + 1}위", r, true)
+            val open: (String) -> Unit = { lg.nav.open(Page.Player(it)) }
+            for ((i, r) in top.take(3).withIndex()) TableLine("${i + 1}", r, r.key in favs, open)
+            for ((d, i, r) in followed) TableLine("${tiers.label(d)} ${i + 1}위", r, true, open)
             Text(
                 "순위표 전체 ›",
                 style = MaterialTheme.typography.labelMedium, color = cs.primary,
                 modifier = Modifier.align(Alignment.End).clip(RoundedCornerShape(6.dp)).clickable {
-                    lg.nav.go(LeagueTab.TABLES)
-                    lg.nav.tables = TablesView.LEAGUE
+                    // The card's table: 1부, in full.
+                    val nav = lg.nav
+                    nav.go(LeagueTab.TABLES)
+                    nav.tables = TablesView.LEAGUE
+                    nav.tableMode = TableMode.TABLE
+                    nav.showDivision(tiers, 0)
                 }.padding(horizontal = 6.dp, vertical = 6.dp),
             )
         }
     }
 }
 
-/** A row of the league card: its place, the zone stripe, ★ when followed, the name and the points. */
+/** A row of the league card: its place, the zone stripe, ★ when followed, the name and the points; a tap opens the player ([onOpen]). */
 @Composable
-private fun TableLine(place: String, r: SeasonRow, followed: Boolean) {
+private fun TableLine(place: String, r: SeasonRow, followed: Boolean, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(28.dp).clip(RoundedCornerShape(6.dp)).clickable { onOpen(r.key) }, verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(4.dp).height(22.dp).background(if (r.zone > 0) gameColors.good else if (r.zone < 0) cs.error else cs.surface))
         // A top-three place is one digit; a followed player's line says its division ("2부 A조 12위").
         Text(place, Modifier.widthIn(min = 28.dp).padding(start = 6.dp, end = 8.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, maxLines = 1)

@@ -2,6 +2,7 @@ package yacht.app.core
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.setValue
 import yacht.engine.league.BracketRound
 import yacht.engine.league.Comp
@@ -14,8 +15,11 @@ import yacht.engine.league.TieView
  * For now the competition pages, from the screen's snapshot.
  */
 class WorldPages internal constructor(private val host: LeagueHost) {
-    /** The competition pages loaded last (at most [KEEP]), by [Page.Competition.loadKey]. */
-    var competitions by mutableStateOf<Map<String, CompetitionPage>>(emptyMap())
+    /**
+     * The competition pages loaded last (at most [KEEP]), by [Page.Competition.loadKey], the newest
+     * last. Compared by identity: a page loaded again unchanged still moves to the end.
+     */
+    var competitions by mutableStateOf<Map<String, CompetitionPage>>(emptyMap(), referentialEqualityPolicy())
         private set
 
     /**

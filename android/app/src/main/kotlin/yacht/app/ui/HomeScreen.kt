@@ -226,7 +226,7 @@ fun HomeScreen(c: AppController) {
             "리그 AI와 혼자 두고 내 레이팅과 티어 매기기 · AI들과 같은 눈금이라 몇 위쯤인지 바로 보여요",
         ) { rankedAsk = true }
         MenuCard(
-            "🏆 AI 리그 · ${leagueStatus(c)}",
+            "🏆 AI 리그" + (leagueStatus(c)?.let { " · $it" } ?: ""),
             "AI 선수들이 리그와 컵 대회로 시즌을 치러요 · 홈, 경기, 순위, 기록으로 보기",
         ) { c.screen = Screen.LEAGUE }
 
@@ -310,13 +310,19 @@ private fun ModeCard(selected: Boolean, title: String, desc: String, onClick: ()
     }
 }
 
-/** Where the league is, for its menu card: "진행 중 · 시즌 3 · 12주차 / 42주", "멈춤 · …", "시작 전". */
-private fun leagueStatus(c: AppController): String {
+/**
+ * Where the league is, for its menu card: "진행 중 · 시즌 3 · 12주차 / 42주", "멈춤 · …", "시작 전";
+ * null while the saved league is still being read (it may well have seasons behind it).
+ */
+private fun leagueStatus(c: AppController): String? {
     val lg = c.league
-    val clock = lg.view?.clock
+    val v = lg.view
+    val clock = v?.clock
     return when {
-        lg.running -> "진행 중 · " + barTitle(clock)
+        lg.running -> "진행 중" + (clock?.let { " · " + barTitle(it) } ?: "")
         clock != null -> "멈춤 · " + barTitle(clock)
+        v == null -> null
+        v.matches > 0 -> "멈춤"
         else -> "시작 전"
     }
 }
