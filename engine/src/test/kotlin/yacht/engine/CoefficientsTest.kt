@@ -122,32 +122,39 @@ class CoefficientsTest {
     @Test
     fun aRealSeasonsCompetitionsEarnPoints() {
         val ten = listOf(10, 10)
-        val w = NationalStart(listOf("KR" to ten, "JP" to ten, "CN" to ten, "VN" to ten, "XWO" to ten), worldConfed = Confed.AMERICAS)
-        val start = w.start()
-        val plan = SeasonPlan(Season.start(2, start.seed, w.divisions, true, w.leagues), start.config)
-        plan.comps += assertNotNull(ChampionsLeague.create(start))
-        plan.comps += assertNotNull(ContinentalChampions.create(start))
-        val print = CompetitionPrint(w::rating)
-        for (c in plan.comps) {
-            var p = 0.0
-            while (!c.finished) {
-                val f = c.next(p, emptySet())
-                if (f == null) {
-                    p += 0.05
-                    check(p < 2.0)
-                    continue
+        for (confed in listOf(Confed.AMERICAS, Confed.ASIA)) {
+            val w = NationalStart(listOf("KR" to ten, "JP" to ten, "CN" to ten, "VN" to ten, "XWO" to ten), worldConfed = confed)
+            val start = w.start()
+            val plan = SeasonPlan(Season.start(2, start.seed, w.divisions, true, w.leagues), start.config)
+            plan.comps += assertNotNull(ChampionsLeague.create(start))
+            plan.comps += assertNotNull(ContinentalChampions.create(start))
+            val print = CompetitionPrint(w::rating)
+            for (c in plan.comps) {
+                var p = 0.0
+                while (!c.finished) {
+                    val f = c.next(p, emptySet())
+                    if (f == null) {
+                        p += 0.05
+                        check(p < 2.0)
+                        continue
+                    }
+                    c.record(print.play(f))
                 }
-                c.record(print.play(f))
             }
+            val s = Coefficients.season(plan)
+            // 16 CL places and the Asian section's 16: 32 entries (the 국제 연합 리그 of the Americas has no section).
+            assertEquals(32, s.values.sumOf { it[1] })
+            val all = plan.comps.flatMap { c -> (c as International).coefficientPoints().values }
+            assertEquals(all.sum(), s.values.sumOf { it[0] })
+            // The 국제 연합 리그 earns what its players earn, like any league; in Asia it has places in the section.
+            val xwo = plan.comps.flatMap { c -> (c as International).coefficientPoints().filterKeys { it.startsWith("xwo") }.values }
+            assertEquals(listOf(xwo.sum(), xwo.size), s.getValue("XWO").toList(), "$confed")
+            val section = (plan.comps[1] as ContinentalChampions).sections.single()
+            assertEquals(if (confed == Confed.ASIA) 3 else 0, section.groups.flatten().count { it.key.startsWith("xwo") }, "$confed")
+            if (confed == Confed.ASIA) assertTrue(s.getValue("XWO")[0] > 0)
+            // Group matches alone hand out 2 a win, 1 each a draw; with places and series every entrant of the CL has at least 2.
+            assertTrue((plan.comps[0] as International).coefficientPoints().values.all { it >= 2 })
         }
-        val s = Coefficients.season(plan)
-        // 16 CL places and the Asian section's 16: 32 entries; the 국제 연합 리그 (Americas) has no section.
-        assertEquals(32, s.values.sumOf { it[1] })
-        assertTrue(s.getValue("XWO")[1] in 0..16)
-        val all = plan.comps.flatMap { c -> (c as International).coefficientPoints().values }
-        assertEquals(all.sum(), s.values.sumOf { it[0] })
-        // Group matches alone hand out 2 a win, 1 each a draw; with places and series every entrant of the CL has at least 2.
-        assertTrue((plan.comps[0] as International).coefficientPoints().values.all { it >= 2 })
     }
 
     @Test

@@ -1,14 +1,17 @@
 package yacht.engine
 
 import yacht.engine.league.BoardResult
+import yacht.engine.league.ChampionsLeague
 import yacht.engine.league.ClubBook
 import yacht.engine.league.ClubCup
 import yacht.engine.league.ClubLeague
 import yacht.engine.league.ClubSource
+import yacht.engine.league.Coefficients
 import yacht.engine.league.Comp
 import yacht.engine.league.Confed
 import yacht.engine.league.Competition
 import yacht.engine.league.Competitions
+import yacht.engine.league.ContinentalChampions
 import yacht.engine.league.Family
 import yacht.engine.league.Fixture
 import yacht.engine.league.GameScore
@@ -23,6 +26,7 @@ import yacht.engine.league.LeaguePreset
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.LegendMatch
 import yacht.engine.league.MatchFormat
+import yacht.engine.league.MemoryCoefficients
 import yacht.engine.league.Nations
 import yacht.engine.league.NewsBook
 import yacht.engine.league.Offseason
@@ -31,11 +35,13 @@ import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.Stage
+import yacht.engine.league.SuperCup
 import yacht.engine.league.TieRule
 import yacht.engine.league.Tiers
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /** The season's weeks: where stages fall, when they open, and the weeks stamped on fixtures, news and the feed. */
@@ -457,7 +463,8 @@ class SeasonCalendarTest {
 
     @Test
     fun aNationalSeasonPlaysWeekByWeekWithEveryCompetition() {
-        // 1주씩 through a season of four lanes: nothing of a later week, and every week ends.
+        // 1주씩 through a season of four lanes: nothing of a later week, and every week ends; then the
+        // close sets up the next season's international stage.
         val p = nationalPlan(1000, 6)
         val rng = java.util.Random(6)
         var weeks = 0
@@ -485,6 +492,43 @@ class SeasonCalendarTest {
         assertEquals(p.calendar.lastWeek, weeks)
         assertTrue(listOf(Comp.CHAMPIONS, Comp.CONT_CHAMPIONS, Comp.CUP, Comp.SUPER, Comp.ALL_STAR, Comp.LEGEND, Comp.CLUB_CUP, Comp.TITLE_PLAYOFF).all { (seen[it] ?: 0) > 0 }, seen.toString())
         assertTrue(p.comps.all { it.finished } && p.post.all { it.finished })
+        closesIntoTheNextWorldStage(p)
+    }
+
+    /**
+     * The close of a played national season [p] (as the world will do it): its coefficients and
+     * ranking, its honours, then the next season's 챔피언스 리그 (the holder, the 대륙 챔피언스'
+     * finalists, the champions of the best-ranked leagues), 대륙 챔피언스 (the best-ranked league
+     * of each confederation sends its champion first) and 슈퍼컵 (the holder against the cup's
+     * winner).
+     */
+    private fun closesIntoTheNextWorldStage(p: SeasonPlan) {
+        val w = generated.getValue(1000)
+        val sums = Coefficients.season(p)
+        val ccl = p.competition(Comp.CONT_CHAMPIONS) as ContinentalChampions
+        assertEquals(ChampionsLeague.SIZE + ccl.sections.sumOf { it.size }, sums.values.sumOf { it[1] })
+        val store = MemoryCoefficients().apply { putCoefficients(p.number, sums) }
+        val leagues = p.league.leagues
+        val members = leagues.list.associate { lg -> lg.id to lg.divisions.flatMap { p.league.divisions[it] } }
+        val ranking = Coefficients.ranking(store, leagues, p.number, { id -> Coefficients.strength(members.getValue(id), w::rating) }, p.config)
+        assertEquals(leagues.list.map { it.id }.toSet(), ranking.rows.map { it.id }.toSet())
+        assertEquals(ranking.rows.sortedByDescending { it.coefficient }.map { it.coefficient }, ranking.rows.map { it.coefficient })
+        val ctx = Offseason.Context(w.keys, w::rating, { null }, { "" }, p.config, Competitions.factories(), nation = w::nation, ranking = ranking)
+        val (next, honours) = Offseason.next(p, ctx)
+        fun honour(kind: String) = honours.single { it.kind == kind }.key
+        val confeds = ccl.sections.map { it.confed }
+        val finalists = confeds.map { honour("CCL.${it.name}") } + confeds.map { honour("CCL2.${it.name}") }
+        val cl = assertNotNull(next.competition(Comp.CHAMPIONS) as? ChampionsLeague)
+        val first = (listOf(honour("CL")) + finalists).distinct().take(ChampionsLeague.SIZE - p.config.clDirect)
+        assertEquals(first, cl.entries.map { it.key }.take(first.size))
+        assertEquals(ChampionsLeague.SIZE, cl.entries.map { it.key }.toSet().size)
+        val again = assertNotNull(next.competition(Comp.CONT_CHAMPIONS) as? ContinentalChampions)
+        for (sec in again.sections) {
+            val best = ranking.confed(sec.confed).first { next.league.leagues.byId(it.id) != null }.id
+            assertEquals(honour("L0.$best"), sec.groups.flatten().single { it.seed == 1 }.key, "${sec.title}: the champion of $best")
+        }
+        val cup = listOf(honour("CUP"), honour("CUP2")).first { it != honour("CL") }
+        assertEquals(listOf(honour("CL"), cup), assertNotNull(next.competition(Comp.SUPER) as? SuperCup).entries.map { it.key })
     }
 
     @Test
