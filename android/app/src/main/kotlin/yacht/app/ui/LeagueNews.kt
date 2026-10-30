@@ -240,6 +240,8 @@ private fun LiveCard(c: AppController, f: LiveFrame) {
     val cs = MaterialTheme.colorScheme
     val fx = f.fixture
     val team = fx.kind == JobKind.TEAM
+    // A series (선승제): games won "2-1", and no "/N판" (it would tell how long the finished series ran).
+    val series = fx.firstTo > 0
     fun side(k: String) = if (team && fx.comp.byTeams) Competitions.teamLabel(k) else lg.name(k)
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (f.finished) cs.surface else cs.secondaryContainer.copy(alpha = 0.35f))) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -247,6 +249,7 @@ private fun LiveCard(c: AppController, f: LiveFrame) {
                 Text(
                     // The board may still hold last season's matches: their week is named without this season's length.
                     compIcon(fx.comp) + " " + listOf(fx.comp.label, fx.label).filter { it.isNotBlank() }.distinct().joinToString(" ") +
+                        (if (series) " · ${fx.firstTo}선승" else "") +
                         (if (fx.week > 0 && fx.comp != Comp.LEAGUE) " · " + weekLabel(fx.week, -1, null, fx.comp) else ""),
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f),
                 )
@@ -254,14 +257,14 @@ private fun LiveCard(c: AppController, f: LiveFrame) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(side(fx.a), Modifier.weight(1f), fontWeight = if (f.winner == 1) FontWeight.ExtraBold else FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${score(f.scoreA)} : ${score(f.scoreB)}", fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp))
+                Text(if (series) "${score(f.scoreA)}-${score(f.scoreB)}" else "${score(f.scoreA)} : ${score(f.scoreB)}", fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(horizontal = 8.dp))
                 Text(side(fx.b), Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = if (f.winner == -1) FontWeight.ExtraBold else FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             for (b in f.boards.take(5)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (team) Text(lg.name(b.a), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "${b.game + 1}/${b.games}판 ${b.halfTurn / 2}턴  ${b.totalA}:${b.totalB}",
+                        (if (series) "${b.game + 1}판째" else "${b.game + 1}/${b.games}판") + " ${b.halfTurn / 2}턴  ${b.totalA}:${b.totalB}",
                         style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                         modifier = if (team) Modifier.padding(horizontal = 6.dp) else Modifier.weight(1f),
                     )

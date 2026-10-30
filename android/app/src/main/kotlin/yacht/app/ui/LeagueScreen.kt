@@ -114,7 +114,6 @@ fun LeagueScreen(c: AppController) {
     }
     var resetAsk by remember { mutableStateOf(false) }
     var rankedAsk by remember { mutableStateOf(false) }
-    var rulesAsk by remember { mutableStateOf(false) }
     var labAsk by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Scaffold(
@@ -137,7 +136,7 @@ fun LeagueScreen(c: AppController) {
                 navigationIcon = { TextButton(onClick = { c.screen = Screen.HOME }) { Text("홈") } },
                 actions = {
                     TextButton(onClick = { labAsk = true }) { Text("연구소") }
-                    TextButton(onClick = { rulesAsk = true }) { Text("규칙") }
+                    TextButton(onClick = { lg.rulesOpen = true }) { Text("규칙") }
                     TextButton(onClick = { resetAsk = true }) { Text("초기화") }
                 },
             )
@@ -191,7 +190,7 @@ fun LeagueScreen(c: AppController) {
                     )
                     LeagueTab.SEASON -> SeasonList(lg, v.season) { lg.detail = it }
                     LeagueTab.COMPS -> CompsTab(lg, v.comps, v.clock) { lg.detail = it }
-                    LeagueTab.CLUBS -> ClubsTab(lg, v.clubs) { lg.detail = it }
+                    LeagueTab.CLUBS -> ClubsTab(lg, v.clubs, v.season?.format) { lg.detail = it }
                     LeagueTab.NEWS -> NewsTab(c, v) { FeedList(lg, v) }
                     LeagueTab.RECORDS -> RecordsTab(lg, v, { lg.detail = it }) { FamilyList(lg, v) { lg.detail = it } }
                 }
@@ -205,7 +204,7 @@ fun LeagueScreen(c: AppController) {
     if (row != null) AiDetail(c, row, onCompare = { lg.comparing = row.key; lg.detail = null }) { lg.detail = null }
     else if (key != null && v != null) PastProfileDialog(lg, key) { lg.detail = null }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
-    if (rulesAsk) LeagueRulesDialog(lg) { rulesAsk = false }
+    if (lg.rulesOpen) LeagueRulesDialog(lg) { lg.rulesOpen = false }
     if (labAsk) LabDialog(lg) { labAsk = false }
     lg.preview?.let { PreviewDialog(lg, it) }
     lg.review?.let { if (lg.detail == null) SeasonReviewDialog(lg, it) }
@@ -619,7 +618,7 @@ private fun FeedList(lg: LeagueController, v: LeagueView) {
                             val team = m.comp.byTeams
                             fun side(k: String) = if (team) yacht.engine.league.Competitions.teamLabel(k) else lg.name(k)
                             Text(
-                                "${stageName(m.comp, m.label, short = true)}  ${side(m.a)}  vs  ${side(m.b)}",
+                                "${stageName(m.comp, m.label, short = true)}  ${side(m.a)}  vs  ${side(m.b)}" + if (m.firstTo > 0) " · ${m.firstTo}선승" else "",
                                 style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
@@ -630,7 +629,9 @@ private fun FeedList(lg: LeagueController, v: LeagueView) {
         if (v.feed.isEmpty()) item { Text("아직 끝난 경기가 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
         else if (shown.isEmpty()) item { Text("고른 종류의 경기 결과가 아직 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
         val clock = v.clock
-        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it, clock) }
+        // 완승 보너스 only for this season's results (an older season's rule is not known here).
+        val bonusSeason = v.season?.takeIf { it.format.sweepBonus }?.number
+        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it, clock, bonusSeason != null && it.season == bonusSeason) }
     }
 }
 
@@ -663,43 +664,86 @@ private fun whereLine(m: FeedItem, clock: yacht.app.core.ClockView?): String? {
     return stageName(c, m.label) + week
 }
 
+/**
+ * One result. A series of more than two games shows the games won ("3-1", a drawn game half)
+ * with the scores below; [bonus]: this season's rule gives a 2-0 sweep in a league or group
+ * match the bonus point (완승 +1).
+ */
 @Composable
-private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?) {
+private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?, bonus: Boolean) {
     val cs = MaterialTheme.colorScheme
     val aPts: Int = m.games.map { if (it.a > it.b) 2 else if (it.a == it.b) 1 else 0 }.sum()
     val bPts = m.games.size * 2 - aPts
+    val series = m.games.size > 2
+    // A league round or a champions league group match (one on one): "A조 3차전".
+    val table = m.comp == Comp.LEAGUE || (m.comp == Comp.CHAMPIONS && m.label.endsWith("차전"))
+    val sweep = bonus && table && m.games.size == 2
+    val aSweep = sweep && yacht.engine.league.TieRule.sweptByA(m.games)
+    val bSweep = sweep && yacht.engine.league.TieRule.sweptByB(m.games)
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             whereLine(m, clock)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                FeedSide(m.aName, m.deltaA, aPts > bPts, Modifier.weight(1f), TextAlign.Start)
+                FeedSide(m.aName, m.deltaA, aPts > bPts, Modifier.weight(1f), TextAlign.Start, if (aSweep) "완승 +1" else null)
                 Text(
-                    m.games.joinToString("  ") { "${it.a}:${it.b}" },
-                    style = MaterialTheme.typography.labelMedium,
+                    if (series) "${halfText(aPts / 2.0)}-${halfText(bPts / 2.0)}" else m.games.joinToString("  ") { "${it.a}:${it.b}" },
+                    style = if (series) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 6.dp),
                 )
-                FeedSide(m.bName, m.deltaB, bPts > aPts, Modifier.weight(1f), TextAlign.End)
+                FeedSide(m.bName, m.deltaB, bPts > aPts, Modifier.weight(1f), TextAlign.End, if (bSweep) "완승 +1" else null)
             }
-            for (n in m.notes) noteText(lg, n)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.secondary, fontWeight = FontWeight.Bold) }
+            if (series) {
+                Text(
+                    m.games.joinToString("  ") { "${it.a}:${it.b}" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            for (n in m.notes) noteText(lg, n, m.games.size)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.secondary, fontWeight = FontWeight.Bold) }
             m.curve?.let { cv -> WinCurve(ByteArray(cv.size) { cv[it].toByte() }, "", "", height = 40.dp) }
         }
     }
 }
 
 @Composable
-private fun FeedSide(name: String, delta: Int, won: Boolean, modifier: Modifier, align: TextAlign) {
+private fun FeedSide(name: String, delta: Int, won: Boolean, modifier: Modifier, align: TextAlign, tag: String? = null) {
     val cs = MaterialTheme.colorScheme
     Column(modifier, horizontalAlignment = if (align == TextAlign.End) Alignment.End else Alignment.Start) {
         Text(name, style = MaterialTheme.typography.bodySmall, fontWeight = if (won) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = align)
-        if (delta != 0) {
-            Text("%+d".format(delta), style = MaterialTheme.typography.labelSmall, color = if (delta > 0) gameColors.good else cs.error)
+        if (delta != 0 || tag != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // The tag sits on the inner side, next to the score.
+                if (tag != null && align == TextAlign.End) SweepTag(tag)
+                if (delta != 0) Text("%+d".format(delta), style = MaterialTheme.typography.labelSmall, color = if (delta > 0) gameColors.good else cs.error)
+                if (tag != null && align != TextAlign.End) SweepTag(tag)
+            }
         }
     }
 }
 
-/** A feed note ("kind|key|value") as a headline. */
-private fun noteText(lg: LeagueController, note: String): String? {
+/** A small tag next to a result: "완승" (a 2-0 sweep, worth the bonus point under 판 승점제). */
+@Composable
+private fun SweepTag(text: String) {
+    val cs = MaterialTheme.colorScheme
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        color = cs.onSecondaryContainer,
+        maxLines = 1,
+        modifier = Modifier.padding(horizontal = 3.dp).clip(RoundedCornerShape(4.dp)).background(cs.secondaryContainer).padding(horizontal = 4.dp),
+    )
+}
+
+/** Games won with a drawn game as half: "3", "2.5". */
+private fun halfText(x: Double): String = if (x == Math.floor(x)) "%.0f".format(x) else "%.1f".format(x)
+
+/** A feed note ("kind|key|value") as a headline; [games] the games of the match. */
+private fun noteText(lg: LeagueController, note: String, games: Int): String? {
     val p = note.split('|')
     if (p.size < 3) return null
     val who = lg.name(p[1])
@@ -710,7 +754,11 @@ private fun noteText(lg: LeagueController, note: String): String? {
         "연승" -> "🔥 $who ${p[2]}연승 중!"
         "연패" -> "🥶 $who ${p[2]}연패…"
         "대기록" -> "🏅 $who ${p[2]}점 대기록!"
-        "이변" -> "😱 이변! $who, 레이팅 ${p[2]}점 높은 상대를 두 판 다 이겼어요"
+        "이변" -> "😱 이변! $who, 레이팅 ${p[2]}점 높은 상대를 " + when {
+            games <= 1 -> "이겼어요"
+            games == 2 -> "두 판 다 이겼어요"
+            else -> "${games}판 모두 이겼어요"
+        }
         else -> null
     }
 }
@@ -721,7 +769,10 @@ private fun noteText(lg: LeagueController, note: String): String? {
 private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (season == null || season.divisions.isEmpty()) {
-        CenterText("▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점(승 3, 무 1, 한 판씩이면 합계 점수로 승부)을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.")
+        CenterText(
+            "▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.\n" +
+                matchRuleText(lg.config.matchFormat),
+        )
         return
     }
     val tiers = season.tiers.takeIf { it.size == season.divisions.size } ?: yacht.engine.league.Tiers.linear(season.divisions.size)
@@ -748,7 +799,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "부마다 라운드마다 한 번씩 맞붙어요(같은 주사위로 두 판). 승 3점·무 1점, 한 판씩 나눠 가지면 두 판 합계 점수로 승부. 🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프. " +
+                        "부마다 라운드마다 한 번씩 맞붙어요. ${matchRuleText(season.format)} 🟢 승격 · 🔴 강등 · 흐린 색은 승강 플레이오프. " +
                             "순위표는 모든 경기로 매긴 실력 점수(레이팅)이고, 부별 순위는 이번 시즌 리그 성적(승점)이라 둘이 달라요. 실력이 좋아도 아래 부에서 시작하면 승격으로 올라와야 해요.",
                         style = MaterialTheme.typography.labelSmall,
                         color = cs.onSurfaceVariant,
@@ -807,11 +858,13 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
         }
         when (mode) {
             SeasonMode.LUCK -> {
-                item { LuckHeader() }
-                val rows = season.divisions[d].sortedWith(compareByDescending<SeasonRow> { it.aggPoints }.thenByDescending { it.diff })
-                itemsIndexed(rows, key = { _, r -> "a-${r.key}" }) { i, r -> LuckRow(i, r, season.divisions[d].indexOf(r)) { onOpen(r.key) } }
+                // 판 승점제: the 완승 bonus is in both columns (luck is only who took the level matches).
+                val bonus = season.format.sweepBonus
+                item { LuckHeader(bonus) }
+                val rows = season.divisions[d].sortedWith(compareByDescending<SeasonRow> { fairPoints(it, bonus) }.thenByDescending { it.diff })
+                itemsIndexed(rows, key = { _, r -> "a-${r.key}" }) { i, r -> LuckRow(i, r, season.divisions[d].indexOf(r), bonus) { onOpen(r.key) } }
             }
-            SeasonMode.CALENDAR -> item { CalendarCard(lg, d, season.number, season.played, onOpen) }
+            SeasonMode.CALENDAR -> item { CalendarCard(lg, d, season.number, season.played, season.format.sweepBonus, onOpen) }
             SeasonMode.CHART -> item { RankChartCard(lg, season, d) }
             SeasonMode.ODDS -> {
                 item {
@@ -853,6 +906,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                 Text("경기", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                 Text("승-무-패", Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                 Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                if (season.format.sweepBonus) Text("완승", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                 Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
             }
         }
@@ -874,6 +928,7 @@ private fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Strin
                 Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                 Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                 Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                if (season.format.sweepBonus) Text("${r.sweeps}", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                 Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
             }
         }
@@ -935,12 +990,17 @@ private enum class SeasonMode(val label: String) {
     ODDS("우승·승강 확률"),
 }
 
+/** 운 보정 승점: the two-game total's 3/1/0, plus the 완승 bonus points when the season gives them ([bonus]). */
+private fun fairPoints(r: SeasonRow, bonus: Boolean): Int = r.aggPoints + if (bonus) r.sweeps else 0
+
 @Composable
-private fun LuckHeader() {
+private fun LuckHeader(bonus: Boolean) {
     val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            "같은 주사위로 두 판을 두니까, 두 판 합계 점수가 높은 쪽에 3점(같으면 1점)을 주면 판 운을 뺀 순위가 나와요. '운'은 실제 승점에서 운 보정 승점을 뺀 값이에요.",
+            "같은 주사위로 두 판을 두니까, 두 판 합계 점수가 높은 쪽에 3점(같으면 1점)을 주면 판 운을 뺀 순위가 나와요. " +
+                (if (bonus) "판 승점제에서는 1승 1패가 무승부지만 여기서는 합계로 가려요. 2-0 완승 보너스는 실제와 보정 승점에 똑같이 더했어요. " else "") +
+                "'운'은 실제 승점에서 운 보정 승점을 뺀 값이에요.",
             style = MaterialTheme.typography.labelSmall,
             color = cs.onSurfaceVariant,
         )
@@ -955,9 +1015,10 @@ private fun LuckHeader() {
 }
 
 @Composable
-private fun LuckRow(i: Int, r: SeasonRow, realPlace: Int, onClick: () -> Unit) {
+private fun LuckRow(i: Int, r: SeasonRow, realPlace: Int, bonus: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val luck = r.points - r.aggPoints
+    val fair = fairPoints(r, bonus)
+    val luck = r.points - fair
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable(onClick = onClick).padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -974,13 +1035,13 @@ private fun LuckRow(i: Int, r: SeasonRow, realPlace: Int, onClick: () -> Unit) {
             "%+d".format(luck), Modifier.width(40.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End,
             color = if (luck > 0) gameColors.good else if (luck < 0) cs.error else cs.onSurfaceVariant,
         )
-        Text("${r.aggPoints}", Modifier.width(40.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
+        Text("$fair", Modifier.width(40.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
     }
 }
 
-/** 일정표: one matchday of a division, played and to come. */
+/** 일정표: one matchday of a division, played and to come ([bonus]: the season's 2-0 sweeps earn a point). */
 @Composable
-private fun CalendarCard(lg: LeagueController, division: Int, season: Int, played: Int, onOpen: (String) -> Unit) {
+private fun CalendarCard(lg: LeagueController, division: Int, season: Int, played: Int, bonus: Boolean, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val cal = lg.calendar
     // Again as the season moves on (results, games in progress), on the round shown; a new
@@ -993,7 +1054,7 @@ private fun CalendarCard(lg: LeagueController, division: Int, season: Int, playe
             if (cal == null || cal.division != division) {
                 Text("일정을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             } else {
-                CalendarBody(lg, cal, onOpen) { md ->
+                CalendarBody(lg, cal, bonus, onOpen) { md ->
                     wanted = md
                     lg.loadCalendar(division, md)
                 }
@@ -1003,7 +1064,7 @@ private fun CalendarCard(lg: LeagueController, division: Int, season: Int, playe
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: LeagueController, cal: yacht.app.core.CalendarView, onOpen: (String) -> Unit, onRound: (Int?) -> Unit) {
+private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: LeagueController, cal: yacht.app.core.CalendarView, bonus: Boolean, onOpen: (String) -> Unit, onRound: (Int?) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = { onRound(cal.matchday - 1) }, enabled = cal.matchday > 0) { Text("◀") }
@@ -1027,23 +1088,27 @@ private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: Leag
     for (f in cal.items) {
         Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             val g = f.games
-            val aWon = g != null && yacht.engine.league.TieRule.match(g) > 0
-            val bWon = g != null && yacht.engine.league.TieRule.match(g) < 0
+            // Won and lost by the season's own rule (판 승점제: a 1-1 is a draw).
+            val aWon = g != null && f.result == 1
+            val bWon = g != null && f.result == -1
+            val swept = bonus && g != null && ((aWon && yacht.engine.league.TieRule.sweptByA(g)) || (bWon && yacht.engine.league.TieRule.sweptByB(g)))
             Text(
                 f.aName, Modifier.weight(1f).clickable { onOpen(f.a) }, style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (aWon) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                when {
-                    g != null -> g.joinToString(" ") { "${it.a}:${it.b}" }
-                    f.live -> "⚔️ 경기 중"
-                    else -> "🔮 프리뷰"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (g != null) FontWeight.Bold else FontWeight.Normal,
-                color = if (g == null) cs.primary else cs.onSurface,
-                modifier = Modifier.padding(horizontal = 6.dp).clickable { lg.loadPreview(f.a, f.b) },
-            )
+            Column(Modifier.padding(horizontal = 6.dp).clickable { lg.loadPreview(f.a, f.b) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    when {
+                        g != null -> g.joinToString(" ") { "${it.a}:${it.b}" }
+                        f.live -> "⚔️ 경기 중"
+                        else -> "🔮 프리뷰"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (g != null) FontWeight.Bold else FontWeight.Normal,
+                    color = if (g == null) cs.primary else cs.onSurface,
+                )
+                if (swept) SweepTag("완승")
+            }
             Text(
                 f.bName, Modifier.weight(1f).clickable { onOpen(f.b) }, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End,
                 fontWeight = if (bWon) FontWeight.ExtraBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
