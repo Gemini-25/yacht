@@ -591,15 +591,20 @@ class Knockout(
  * A group stage: a round robin inside each group (double for the champions league), round k of
  * every group opening together at league progress [opensAt]. Tables: points 3/1/0, then the
  * difference (score points for one-on-one matches, boards for team matches, [teams]), then the
- * other difference, then the seed. Match ids run round by round from 0.
+ * other difference, then the seed. Match ids run round by round from [idBase].
  */
 class GroupStage(
     /** Members of each group, best seed first (the fixture list follows this order). */
     val groups: List<List<DrawEntry>>,
     double: Boolean,
     private val teams: Boolean,
-    /** A 2-0 sweep earns a bonus point (판 승점제's 완승 보너스; one-on-one matches only). */
+    /**
+     * A 2-0 sweep earns a bonus point (판 승점제's 완승 보너스; one-on-one matches only): the
+     * caller passes [LeagueConfig.sweepPoints] of its season.
+     */
     private val bonus: Boolean = false,
+    /** The first match id (a competition of several group stages keeps their ids apart). */
+    idBase: Int = 0,
     private val opensAt: (round: Int) -> Double,
 ) {
     /** Group names ("A조" by default). */
@@ -654,7 +659,7 @@ class GroupStage(
         rounds = schedules.maxOfOrNull { it.size } ?: 0
         val list = ArrayList<Match>()
         for (k in 0 until rounds) {
-            for ((g, s) in schedules.withIndex()) for ((a, b) in s.getOrNull(k).orEmpty()) list += Match(list.size, g, k, a, b)
+            for ((g, s) in schedules.withIndex()) for ((a, b) in s.getOrNull(k).orEmpty()) list += Match(idBase + list.size, g, k, a, b)
         }
         matches = list
         byId = list.associateBy { it.id }

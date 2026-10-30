@@ -2,8 +2,11 @@ package yacht.engine
 
 import yacht.engine.league.BoardResult
 import yacht.engine.league.ClubBook
+import yacht.engine.league.ClubCup
 import yacht.engine.league.ClubLeague
+import yacht.engine.league.ClubSource
 import yacht.engine.league.Comp
+import yacht.engine.league.Confed
 import yacht.engine.league.Competition
 import yacht.engine.league.Competitions
 import yacht.engine.league.Family
@@ -16,16 +19,20 @@ import yacht.engine.league.JobResult
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
+import yacht.engine.league.LeaguePreset
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.LegendMatch
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.Nations
 import yacht.engine.league.NewsBook
 import yacht.engine.league.Offseason
+import yacht.engine.league.PlayerBook
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.Stage
 import yacht.engine.league.TieRule
+import yacht.engine.league.Tiers
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -360,6 +367,162 @@ class SeasonCalendarTest {
 
     private val print = CompetitionPrint { 0.0 }
 
+    // ---- national lanes ---------------------------------------------------------------------------
+
+    private class Generated(n: Int) {
+        val book = PlayerBook().also { it.ensureGenerated(n) }
+        val keys = book.alive.map { it.key }
+        fun nation(k: String): String? = book[k]?.identity?.nation
+        fun rating(k: String): Double = 1400.0 + 5.0 * (book[k]?.identity?.abilities?.overall ?: 50) - (k.hashCode() and 7) * 0.1
+    }
+
+    private val generated = HashMap<Int, Generated>()
+
+    /**
+     * A national season [number] of [n] generated players under [config], after a national season
+     * of the same leagues (its tables these divisions; its champions their leaders, with every
+     * international honour), with every competition: the factories', a 클럽 대항전 of each league's
+     * best eight as its champion club, and a 레전드 매치 when one is due.
+     */
+    private fun nationalPlan(n: Int, number: Int, config: LeagueConfig = LeagueConfig.DEFAULT): SeasonPlan {
+        val w = generated.getOrPut(n) { Generated(n) }
+        val ctx = Offseason.Context(w.keys, w::rating, { null }, { "" }, config, nation = w::nation)
+        val league = Offseason.first(41L, ctx, number).league
+        val leagues = league.leagues
+        val last = number - 1
+        val ranking = w.keys.sortedByDescending(w::rating)
+        val honours = ArrayList<Honour>()
+        for ((i, kind) in listOf("CL", "CL2", "CUP", "CUP2").withIndex()) honours += Honour(last, kind, ranking[i])
+        for ((i, c) in Confed.entries.withIndex()) {
+            honours += Honour(last, "CCL.${c.name}", ranking[4 + 2 * i])
+            honours += Honour(last, "CCL2.${c.name}", ranking[5 + 2 * i])
+        }
+        for (lg in leagues.list) league.divisions[lg.top].firstOrNull()?.let { honours += Honour(last, "L0.${lg.id}", it) }
+        val flat = Tiers.linear(league.divisions.size)
+        val start = SeasonStart(
+            number, league.seed, config, ranking, w::rating, league.divisions, league.divisions, honours, { null }, { "" }, honours, w::nation, flat, flat, leagues, leagues,
+        )
+        val clubs = object : ClubSource {
+            override fun champions(season: Int) = leagues.list.map { "c${it.id}" }
+            override fun members(club: String) = league.divisions[leagues.byId(club.drop(1))!!.top].take(8)
+        }
+        val comps = (Competitions.factories() + ClubCup.factory { clubs }).mapNotNull { it(start) }.toMutableList()
+        if (LegendMatch.due(number)) comps += LegendMatch.codec.decode(listOf(LegendMatch.HEADER, "e legend 1 1900", "e ${ranking[0]} 2 1800"), number, league.seed)
+        return SeasonPlan(league, config, comps)
+    }
+
+    /** Each competition's weeks, lane by lane, and the season's length. */
+    private fun lanes(cal: SeasonCalendar): String = buildString {
+        append("R ${cal.leagueWeeks} last ${cal.lastWeek}")
+        for (lane in 0..3) {
+            val es = cal.entries.filter { !it.post && SeasonCalendar.nationalLane(it.comp) == lane }
+            if (es.isEmpty()) continue
+            append(" | ${"ABCD"[lane]}")
+            for (e in es) append(" ${e.comp.code}:${e.stages.indices.joinToString(",") { e.week(it).toString() }}")
+        }
+        val post = cal.entries.filter { it.post }
+        if (post.isNotEmpty()) append(" | post ${post.joinToString(" ") { e -> "${e.comp.code}:${e.stages.indices.joinToString(",") { e.week(it).toString() }}" }}")
+    }
+
+    /** No week holds two stages of one lane; every stage of the season in its weeks, in order; the post-season after it. */
+    private fun checkLanes(cal: SeasonCalendar, what: String) {
+        val season = cal.entries.filter { !it.post }
+        for (lane in 0..3) {
+            val weeks = season.filter { SeasonCalendar.nationalLane(it.comp) == lane }.flatMap { e -> e.stages.indices.map { e.week(it) } }
+            assertEquals(weeks.size, weeks.toSet().size, "$what: lane ${"ABCD"[lane]} at one stage a week: ${weeks.sorted()}")
+        }
+        for (e in season) {
+            val weeks = e.stages.indices.map { e.week(it) }
+            assertTrue(weeks.all { it in 1..cal.leagueWeeks } && weeks == weeks.sorted() && weeks.toSet().size == weeks.size, "$what ${e.comp}: $weeks")
+        }
+        for (e in cal.entries.filter { it.post }) assertTrue(e.stages.indices.all { e.week(it) > cal.leagueWeeks }, "$what ${e.comp}")
+    }
+
+    @Test
+    fun nationalLanesFitTheRealStagesOfLargeWorlds() {
+        val got = LinkedHashMap<String, String>()
+        for (n in listOf(1000, 3000)) for (number in listOf(3, 5, 6)) {
+            val p = nationalPlan(n, number)
+            val comps = p.comps.map { it.comp }.toSet()
+            assertTrue(comps.containsAll(listOf(Comp.CHAMPIONS, Comp.CONT_CHAMPIONS, Comp.CUP, Comp.SUPER, Comp.ALL_STAR)), "$n $number: $comps")
+            assertEquals(number != 5, Comp.LEGEND in comps || Comp.CLUB_CUP in comps, "$n $number: $comps")
+            val cal = p.calendar
+            checkLanes(cal, "$n players, season $number")
+            // The same competitions fit a 38- and a 42-week season too.
+            for (r in listOf(38, 42)) checkLanes(SeasonCalendar.build(r, p.comps, listOf(Comp.TITLE_PLAYOFF to listOf(Stage("4강", 0.0))), SeasonCalendar::nationalLane), "$n players, season $number, $r weeks")
+            got["$n $number"] = lanes(cal)
+        }
+        assertEquals(NATIONAL_LANES, got)
+    }
+
+    @Test
+    fun aNationalSeasonPlaysWeekByWeekWithEveryCompetition() {
+        // 1주씩 through a season of four lanes: nothing of a later week, and every week ends.
+        val p = nationalPlan(1000, 6)
+        val rng = java.util.Random(6)
+        var weeks = 0
+        var guard = 0
+        val seen = HashMap<Comp, Int>()
+        while (!p.finished) {
+            if (p.league.finished) p.startPost(Competitions.postFactories())
+            val goal = p.week
+            val flight = ArrayList<Fixture>()
+            while (true) {
+                while (flight.size < 4) {
+                    val busy = flight.flatMap { it.players }.toSet()
+                    val f = p.next(busy, flight.count { !p.isTeam(it.comp) && it.comp != Comp.LEAGUE }, 3, lastWeek = goal) ?: break
+                    assertTrue(f.week == SeasonCalendar.NONE || f.week <= goal, "${f.comp} ${f.label} of week ${f.week} in week $goal")
+                    seen.merge(f.comp, 1, Int::plus)
+                    flight += f
+                }
+                if (flight.isEmpty()) break
+                p.record(play(flight.removeAt(rng.nextInt(flight.size))))
+                check(++guard < 400_000)
+            }
+            assertTrue(p.finished || p.week > goal, "week $goal still in play")
+            weeks++
+        }
+        assertEquals(p.calendar.lastWeek, weeks)
+        assertTrue(listOf(Comp.CHAMPIONS, Comp.CONT_CHAMPIONS, Comp.CUP, Comp.SUPER, Comp.ALL_STAR, Comp.LEGEND, Comp.CLUB_CUP, Comp.TITLE_PLAYOFF).all { (seen[it] ?: 0) > 0 }, seen.toString())
+        assertTrue(p.comps.all { it.finished } && p.post.all { it.finished })
+    }
+
+    @Test
+    fun aFastNationalSeasonFitsItsLanes() {
+        val fast = LeaguePreset.FAST.config.copy(national = true)
+        for (number in listOf(2, 3)) {
+            val p = nationalPlan(1000, number, fast)
+            val cal = p.calendar
+            assertTrue(cal.leagueWeeks in 18..24, "R ${cal.leagueWeeks}")
+            checkLanes(cal, "FAST season $number")
+            // FAST has no playoffs: the season ends with the league.
+            assertEquals(emptyList(), cal.entries.filter { it.post }.map { it.comp })
+            assertEquals(cal.leagueWeeks, cal.lastWeek)
+            assertEquals(FAST_LANES[number], lanes(cal))
+        }
+    }
+
+    @Test
+    fun lanesSplitTheCompetitionsAndPriorityBreaksTies() {
+        assertEquals(listOf(0, 1, 1, 2, 2, 2, 3, 3, 0, 0, 0, 0), listOf(Comp.CUP, Comp.CHAMPIONS, Comp.CONT_CHAMPIONS, Comp.WORLD_CUP, Comp.CONTINENTAL, Comp.FAMILY, Comp.CLUB, Comp.CLUB_CUP, Comp.SUPER, Comp.ALL_STAR, Comp.LEGEND, Comp.TITLE_PLAYOFF).map(SeasonCalendar::nationalLane))
+        assertEquals(listOf(1, 0, 0, 0), listOf(Comp.CLUB, Comp.CLUB_CUP, Comp.CHAMPIONS, Comp.CUP).map(SeasonCalendar::legacyLane))
+        // Two stages of one lane wanting the same week: the champions league before the 대륙 챔피언스, the cup before the legend match.
+        val cl = Staged(Comp.CHAMPIONS, stages(0.5))
+        val ccl = Staged(Comp.CONT_CHAMPIONS, stages(0.5))
+        val legend = Staged(Comp.LEGEND, stages(0.5))
+        val cup = Staged(Comp.CUP, stages(0.5))
+        val clubCup = Staged(Comp.CLUB_CUP, stages(0.5))
+        val cal = SeasonCalendar.build(40, listOf(ccl, legend, cl, cup, clubCup), emptyList(), SeasonCalendar::nationalLane)
+        assertEquals(cal.week(Comp.CHAMPIONS, 0) + 1, cal.week(Comp.CONT_CHAMPIONS, 0))
+        assertEquals(cal.week(Comp.CUP, 0) + 1, cal.week(Comp.LEGEND, 0))
+        // Other lanes do not push each other: the cup, the champions league and the club cup share a week.
+        assertEquals(cal.week(Comp.CUP, 0), cal.week(Comp.CHAMPIONS, 0))
+        assertEquals(cal.week(Comp.CUP, 0), cal.week(Comp.CLUB_CUP, 0))
+        // Before national leagues they all shared one lane, the club league apart.
+        val legacy = SeasonCalendar.build(40, listOf(ccl, legend, cl, cup, clubCup), emptyList())
+        assertEquals(5, (0..40).count { legacy.at(it).isNotEmpty() })
+    }
+
     @Test
     fun weeksAreSavedWithTheNewsAndTheFeedAndOldLinesStillRead() {
         val w = world(LeagueConfig(divisions = 2, generated = 0, clubs = 0, familyCup = false))
@@ -399,6 +562,22 @@ class SeasonCalendarTest {
     }
 
     companion object {
+        /** [nationalLanesFitTheRealStagesOfLargeWorlds]: each lane's competitions and their weeks (code: weeks of its stages). */
+        private val NATIONAL_LANES = mapOf(
+            "1000 3" to "R 42 last 46 | A C:3,4,6,8,10,12,14,15,17,19,21,23,25,26,28,30,32,33,35,37 S:1 A:22 G:24 | B E:4,8,11,14,18,21,25,27,29,32,35,39 T:3,6,9,12,15,17,20,22,26,28,31,34 | C N:13,15,17,18,19,20,22,23,24,25,26 | post P:43,44,45,46 Q:43",
+            "1000 5" to "R 42 last 46 | A C:3,4,6,8,10,12,14,15,17,19,21,23,24,26,28,30,32,33,35,37 S:1 A:22 | B E:4,8,11,14,18,21,25,27,29,32,35,39 T:3,6,9,12,15,17,20,22,26,28,31,34 | C R:13,15,17,18,19,20,22 | post P:43,44,45,46 Q:43",
+            "1000 6" to "R 42 last 46 | A C:3,4,6,8,10,12,14,15,17,19,21,23,25,26,28,30,32,33,35,37 S:1 A:22 G:24 | B E:4,8,11,14,18,21,25,27,29,32,35,39 T:3,6,9,12,15,17,20,22,26,28,31,34 | D U:6,15,24,34,35,37,38 | post P:43,44,45,46 Q:43",
+            "3000 3" to "R 42 last 46 | A C:3,4,6,7,9,10,12,13,15,16,18,19,21,23,25,26,27,28,30,31,33,34,36,37 S:1 A:22 G:24 | B E:4,8,11,14,18,21,25,27,29,32,35,39 T:3,6,9,12,15,17,20,22,26,28,31,34 | C N:13,15,17,18,19,20,22,23,24,25,26 | post P:43,44,45,46 Q:43",
+            "3000 5" to "R 42 last 46 | A C:3,4,6,7,9,10,12,13,15,16,18,19,21,23,24,25,27,28,30,31,33,34,36,37 S:1 A:22 | B E:4,8,11,14,18,21,25,27,29,32,35,39 T:3,6,9,12,15,17,20,22,26,28,31,34 | C R:13,15,17,18,19,20,22 | post P:43,44,45,46 Q:43",
+            "3000 6" to "R 42 last 46 | A C:3,4,6,7,9,10,12,13,15,16,18,19,21,23,25,26,27,28,30,31,33,34,36,37 S:1 A:22 G:24 | B E:4,8,11,14,18,21,25,27,29,32,35,39 T:3,6,9,12,15,17,20,22,26,28,31,34 | D U:6,15,24,34,35,37,38 | post P:43,44,45,46 Q:43",
+        )
+
+        /** [aFastNationalSeasonFitsItsLanes] at 1000 players, by season. */
+        private val FAST_LANES = mapOf(
+            2 to "R 21 last 21 | A C:2,4,6,7,9,12,13,15,17,19 S:1 A:11 | B E:3,5,7,9,12,13,15,17,20 T:2,4,6,8,10,11,14,16,18 | D U:3,8,12,17,19",
+            3 to "R 21 last 21 | A C:2,4,6,7,9,12,14,15,17,19 S:1 A:11 G:13 | B E:3,5,7,9,12,13,15,17,20 T:2,4,6,8,10,11,14,16,18",
+        )
+
         /** [aLegacyPlanKeepsItsWeeks]' hashes, taken from the code before the national lanes. */
         private val LEGACY_WEEKS = mapOf(
             "default 60 2" to "0c9383e539d13d59b1a8d261aa13256c39432ca7a52736608e66676ef11361de",

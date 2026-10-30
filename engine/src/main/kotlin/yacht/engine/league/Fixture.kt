@@ -5,12 +5,18 @@ enum class Comp(val code: Char, val label: String) {
     LEAGUE('L', "리그"),
     CUP('C', "요트컵"),
     CHAMPIONS('E', "챔피언스 리그"),
+
+    /** Each confederation's champions of its national leagues (national seasons only). */
+    CONT_CHAMPIONS('T', "대륙 챔피언스"),
     SUPER('S', "슈퍼컵"),
     ALL_STAR('A', "올스타전"),
     FAMILY('W', "계열 대항전"),
     WORLD_CUP('N', "요트 월드컵"),
     CONTINENTAL('R', "대륙컵"),
     CLUB('K', "클럽 리그"),
+
+    /** Club champions of the national leagues, every other season (national seasons only). */
+    CLUB_CUP('U', "클럽 대항전"),
     TITLE_PLAYOFF('P', "우승 플레이오프"),
     PROMOTION_PLAYOFF('Q', "승강 플레이오프"),
     FRIENDLY('F', "친선 경기"),
@@ -23,8 +29,8 @@ enum class Comp(val code: Char, val label: String) {
     }
 }
 
-/** True for a competition between teams (all-star sides, families, nations): its keys are team ids. */
-val Comp.byTeams: Boolean get() = this == Comp.ALL_STAR || this == Comp.FAMILY || this == Comp.WORLD_CUP || this == Comp.CONTINENTAL
+/** True for a competition between teams (all-star sides, families, nations, clubs): its keys are team ids. */
+val Comp.byTeams: Boolean get() = this == Comp.ALL_STAR || this == Comp.FAMILY || this == Comp.WORLD_CUP || this == Comp.CONTINENTAL || this == Comp.CLUB_CUP
 
 /** What a job plays: one match, a knockout tie (legs and deciders), or a team match (boards). */
 enum class JobKind { MATCH, TIE, TEAM }

@@ -79,11 +79,21 @@ class AllStar private constructor(
         const val SIDE = 5
         private const val OPENS = 0.5
 
-        /** Null when off, or without a 1st division and other divisions of 5 AIs or more each. */
+        /**
+         * Null when off, or without a 1st division and other divisions of 5 AIs or more each. In a
+         * national season the 1st division side is the best of every league's 1부 ("모든 리그의
+         * 1부"), the challengers the best of every other division.
+         */
         fun create(start: SeasonStart): AllStar? {
             if (!start.config.allStar || start.divisions.size < 2) return null
-            val top = start.divisions[0].sortedByDescending { start.rating(it) }.take(SIDE)
-            val rest = start.divisions.drop(1).flatten().sortedByDescending { start.rating(it) }.take(SIDE)
+            val (first, others) = if (start.leagues.national) {
+                val tops = start.leagues.tops().toHashSet()
+                start.divisions.indices.partition { it in tops }.let { (t, o) -> t.flatMap { start.divisions[it] } to o.flatMap { start.divisions[it] } }
+            } else {
+                start.divisions[0] to start.divisions.drop(1).flatten()
+            }
+            val top = first.sortedByDescending { start.rating(it) }.take(SIDE)
+            val rest = others.sortedByDescending { start.rating(it) }.take(SIDE)
             if (top.size < SIDE || rest.size < SIDE) return null
             return AllStar(start.number, start.seed, top, rest, top.map(start.rating).average(), rest.map(start.rating).average())
         }
@@ -107,24 +117,28 @@ class AllStar private constructor(
     }
 }
 
-/** A family cup team: [id] is the [Family]'s name, [squad] its best rated AIs (board 1 first). */
+
+/**
+ * A team of a [TeamCup]: [id] is the [Family]'s name (계열 대항전) or a club id (클럽 대항전),
+ * [squad] its best rated AIs (board 1 first).
+ */
 data class FamilyTeam(val id: String, val squad: List<String>, val strength: Double)
 
 /**
- * 계열 대항전 (docs/LEAGUE_SPEC.md 2.3, seasons 2, 5, 8, ...): every family but MINE with at least
- * 3 AIs fields its 5 best rated as a team (4 to 12 teams, the strongest 12 when more). Groups of
- * 3 or 4 drawn from strength pots (one group for 4-5 teams, 3 groups of 3 for 9), a single round
- * robin of team matches inside each (rounds opening over league progress 0.1..0.6), then the
- * group winners and the best runners-up (by points per match) make 4 semi-finalists: semis at
- * 0.75 and the final at 0.9, one team match each; a level knockout match goes to the better seed.
- * Honours "FAMILY" keyed by the family's name and "FSQ" keyed by every squad member, so the next
- * edition can tell who was called up or dropped.
+ * A cup of teams of up to 5 (the 계열 대항전's format, which the 클럽 대항전 shares): 4 to 12
+ * teams, strongest first. Groups of 3 or 4 drawn from strength pots (one group for 4-5 teams, 3
+ * groups of 3 for 9), a single round robin of team matches inside each (rounds opening over league
+ * progress 0.1..0.6), then the group winners and the best runners-up (by points per match) make 4
+ * semi-finalists: semis at 0.75 and the final at 0.9, one team match each (with double
+ * elimination six ties in four stages); a level knockout match goes to the better seed.
  *
- * News: `draw_family` [team ids] (group) and `callup`/`dropped` [ai] (family label) against the
- * last edition's squads at the start; `qualified` [team] (4강, group place) when the groups end;
- * `cup_round`, `final` and `title` [winner] (계열 대항전) with team ids as keys.
+ * Honours by [Kinds]: the winner's (and runner-up's) team id, and a squad honour for every squad
+ * member or only the winners'. News: [announced] at the start; `qualified` [team] (4강, group
+ * place) when the groups end; `cup_round`, `final` and `title` [winner] ([Comp.label]) with team
+ * ids as keys.
  */
-class FamilyCup private constructor(
+open class TeamCup protected constructor(
+    final override val comp: Comp,
     val season: Int,
     private val seed: Long,
     /** Every team, strongest first (its seed). */
@@ -133,9 +147,14 @@ class FamilyCup private constructor(
     val groups: List<List<DrawEntry>>,
     private val announced: List<LeagueEvent>,
     /** The knockout is double elimination (패자부활); saved. */
-    private val double: Boolean = false,
+    private val double: Boolean,
+    private val kinds: Kinds,
 ) : ViewableCompetition {
-    override val comp: Comp get() = Comp.FAMILY
+    /**
+     * A cup's save header and honour kinds: [winner] and [runnerUp] (null: none) keyed by team id,
+     * [squad] keyed by each squad member of every team, or of the winning team only ([winnersOnly]).
+     */
+    class Kinds(val header: String, val winner: String, val runnerUp: String?, val squad: String, val winnersOnly: Boolean)
 
     /** The knockout's stages: semis and final, or with the losers' bracket six ties in four stages. */
     private val koOpens: List<Double> = if (double) Knockout.spread(4, KO_OPENS.first(), KO_OPENS.last()) else KO_OPENS
@@ -197,6 +216,11 @@ class FamilyCup private constructor(
         return if (k.isFinal(t)) KnockoutNews.final(season, comp, t, comp.label) else listOf(KnockoutNews.round(season, comp, t, k.label(t)))
     }
 
+    /** Puts saved results back, earliest first. */
+    internal fun restore(results: List<TieScore.Saved>) {
+        for (r in results) put(r.id, r.a, r.b, r.score)
+    }
+
     /** Semi-finalists from the group tables; returns the qualification news. */
     private fun drawKnockout(): List<LeagueEvent> {
         val tables = groups.indices.map { stage.table(it) }
@@ -229,14 +253,18 @@ class FamilyCup private constructor(
     override val fixturesLeft: Int get() = stage.fixturesLeft + (bracket?.fixturesLeft ?: koSizes.sum())
 
     override fun honours(): List<Honour> {
-        val w = bracket?.champion ?: return emptyList()
-        return listOf(Honour(season, "FAMILY", w.key)) + teams.flatMap { t -> t.squad.map { Honour(season, "FSQ", it) } }
+        val k = bracket ?: return emptyList()
+        val w = k.champion ?: return emptyList()
+        val out = arrayListOf(Honour(season, kinds.winner, w.key))
+        kinds.runnerUp?.let { kind -> k.runnerUp?.let { out += Honour(season, kind, it.key) } }
+        for (t in teams) if (!kinds.winnersOnly || t.id == w.key) for (p in t.squad) out += Honour(season, kinds.squad, p)
+        return out
     }
 
     override fun opening(): List<LeagueEvent> = announced
 
     override fun encode(out: StringBuilder) {
-        out.append(HEADER).append('\n')
+        out.append(kinds.header).append('\n')
         if (double) out.append(KnockoutLength.DOUBLE_LINE).append('\n')
         for ((i, t) in teams.withIndex()) out.append("t ").append(DrawEntry(t.id, i + 1, t.strength).encode()).append(' ').append(t.squad.joinToString(",")).append('\n')
         for ((g, members) in groups.withIndex()) for (e in members) out.append("g $g ${e.key}\n")
@@ -252,9 +280,7 @@ class FamilyCup private constructor(
     )
 
     companion object {
-        const val HEADER = "family 1"
-
-        /** AIs a family needs to field a team, and the most that play. */
+        /** AIs a team needs, and the most that play. */
         const val MIN_SQUAD = 3
         const val SQUAD = 5
         const val MIN_TEAMS = 4
@@ -270,11 +296,76 @@ class FamilyCup private constructor(
         private const val GROUP_TARGET_LAST = 0.56
         private val KO_TARGETS = listOf(0.80, 0.90)
 
+        /** Groups for [n] teams: one for 4-5, else groups of 3 or 4. */
+        fun groupCount(n: Int): Int = if (n <= 5) 1 else (n + 3) / 4
+
+        /** Groups drawn from pots of the seeds (pot 1 = the strongest), each group in pot order. */
+        fun draw(entries: List<DrawEntry>, rng: Random): List<List<DrawEntry>> {
+            val groups = List(groupCount(entries.size)) { ArrayList<DrawEntry>() }
+            for (pot in entries.chunked(groups.size)) for ((i, e) in pot.shuffled(rng).withIndex()) groups[i] += e
+            return groups
+        }
+
+        /** Reads a cup saved with [kinds]' header; [make] builds it from its teams, groups and double elimination. */
+        internal fun codec(kinds: Kinds, make: (season: Int, seed: Long, teams: List<FamilyTeam>, groups: List<List<DrawEntry>>, double: Boolean) -> TeamCup) =
+            CompetitionCodec { lines, season, seed ->
+                require(lines.firstOrNull()?.trim() == kinds.header) { "not a ${kinds.header} section" }
+                val teams = ArrayList<Pair<DrawEntry, List<String>>>()
+                val placed = ArrayList<Pair<Int, String>>()
+                for (l in lines) {
+                    runCatching {
+                        val f = l.trim().split(' ')
+                        when (f[0]) {
+                            "t" -> teams += DrawEntry.decode(f, 1) to f[4].split(',').filter { it.isNotEmpty() }
+                            "g" -> placed += f[1].toInt() to f[2]
+                        }
+                    }
+                }
+                val entries = teams.filter { it.second.isNotEmpty() }.distinctBy { it.first.key }.sortedBy { it.first.seed }
+                val byKey = entries.associate { it.first.key to it.first }
+                val count = (placed.maxOfOrNull { it.first } ?: -1) + 1
+                val groups = List(count) { g -> placed.filter { it.first == g }.mapNotNull { byKey[it.second] }.distinct().sortedBy { it.seed } }
+                require(groups.isNotEmpty() && groups.all { it.isNotEmpty() } && groups.sumOf { it.size } >= MIN_TEAMS) { "unusable ${kinds.header} groups" }
+                val inGroups = groups.flatten().map { it.key }.toSet()
+                val squads = entries.filter { it.first.key in inGroups }.map { (e, squad) -> FamilyTeam(e.key, squad, e.rating) }
+                make(season, seed, squads, groups, KnockoutLength.double(lines)).also { c -> c.restore(TieScore.Saved.parse(lines)) }
+            }
+    }
+}
+
+/**
+ * 계열 대항전 (docs/LEAGUE_SPEC.md 2.3, seasons 2, 5, 8, ...): every family but MINE with at least
+ * 3 AIs fields its 5 best rated as a team (4 to 12 teams, the strongest 12 when more), in the
+ * [TeamCup] format. Honours "FAMILY" keyed by the family's name and "FSQ" keyed by every squad
+ * member, so the next edition can tell who was called up or dropped.
+ *
+ * News: `draw_family` [team ids] (group) and `callup`/`dropped` [ai] (family label) against the
+ * last edition's squads at the start; `qualified` [team] (4강, group place) when the groups end;
+ * `cup_round`, `final` and `title` [winner] (계열 대항전) with team ids as keys.
+ */
+class FamilyCup private constructor(
+    season: Int,
+    seed: Long,
+    teams: List<FamilyTeam>,
+    groups: List<List<DrawEntry>>,
+    announced: List<LeagueEvent>,
+    double: Boolean = false,
+) : TeamCup(Comp.FAMILY, season, seed, teams, groups, announced, double, KINDS) {
+    companion object {
+        const val HEADER = "family 1"
+        private val KINDS = Kinds(HEADER, "FAMILY", null, "FSQ", winnersOnly = false)
+
+        /** AIs a family needs to field a team, and the most that play. */
+        const val MIN_SQUAD = TeamCup.MIN_SQUAD
+        const val SQUAD = TeamCup.SQUAD
+        const val MIN_TEAMS = TeamCup.MIN_TEAMS
+        const val MAX_TEAMS = TeamCup.MAX_TEAMS
+
         /** True for the seasons that hold a family cup: 2, 5, 8, ... */
         fun due(season: Int): Boolean = season >= 2 && (season - 2) % 3 == 0
 
         /** Groups for [n] teams: one for 4-5, else groups of 3 or 4. */
-        fun groupCount(n: Int): Int = if (n <= 5) 1 else (n + 3) / 4
+        fun groupCount(n: Int): Int = TeamCup.groupCount(n)
 
         /** The teams of a season, strongest first. */
         fun teams(start: SeasonStart): List<FamilyTeam> {
@@ -290,11 +381,7 @@ class FamilyCup private constructor(
         }
 
         /** Groups drawn from pots of the seeds (pot 1 = the strongest), each group in pot order. */
-        fun draw(entries: List<DrawEntry>, rng: Random): List<List<DrawEntry>> {
-            val groups = List(groupCount(entries.size)) { ArrayList<DrawEntry>() }
-            for (pot in entries.chunked(groups.size)) for ((i, e) in pot.shuffled(rng).withIndex()) groups[i] += e
-            return groups
-        }
+        fun draw(entries: List<DrawEntry>, rng: Random): List<List<DrawEntry>> = TeamCup.draw(entries, rng)
 
         /** This season's family cup; null when off, not due, or with fewer than 4 teams. */
         fun create(start: SeasonStart): FamilyCup? {
@@ -327,29 +414,64 @@ class FamilyCup private constructor(
             return out
         }
 
-        val codec = CompetitionCodec { lines, season, seed ->
-            require(lines.firstOrNull()?.trim() == HEADER) { "not a family cup section" }
-            val teams = ArrayList<Pair<DrawEntry, List<String>>>()
-            val placed = ArrayList<Pair<Int, String>>()
-            for (l in lines) {
-                runCatching {
-                    val f = l.trim().split(' ')
-                    when (f[0]) {
-                        "t" -> teams += DrawEntry.decode(f, 1) to f[4].split(',').filter { it.isNotEmpty() }
-                        "g" -> placed += f[1].toInt() to f[2]
-                    }
-                }
-            }
-            val entries = teams.filter { it.second.isNotEmpty() }.distinctBy { it.first.key }.sortedBy { it.first.seed }
-            val byKey = entries.associate { it.first.key to it.first }
-            val count = (placed.maxOfOrNull { it.first } ?: -1) + 1
-            val groups = List(count) { g -> placed.filter { it.first == g }.mapNotNull { byKey[it.second] }.distinct().sortedBy { it.seed } }
-            require(groups.isNotEmpty() && groups.all { it.isNotEmpty() } && groups.sumOf { it.size } >= MIN_TEAMS) { "unusable family cup groups" }
-            val inGroups = groups.flatten().map { it.key }.toSet()
-            val squads = entries.filter { it.first.key in inGroups }.map { (e, squad) -> FamilyTeam(e.key, squad, e.rating) }
-            FamilyCup(season, seed, squads, groups, emptyList(), KnockoutLength.double(lines)).also { c ->
-                for (r in TieScore.Saved.parse(lines)) c.put(r.id, r.a, r.b, r.score)
-            }
+        val codec: CompetitionCodec = TeamCup.codec(KINDS) { season, seed, teams, groups, double -> FamilyCup(season, seed, teams, groups, emptyList(), double) }
+    }
+}
+
+/**
+ * What the 클럽 대항전 reads of the clubs (the club book implements it): who won each league's
+ * club table, and who plays for a club.
+ */
+interface ClubSource {
+    /** The club-table champion of every league of season [season], club ids; empty when unknown. */
+    fun champions(season: Int): List<String>
+
+    /** Club [club]'s members now (any order); empty for a club that is gone. */
+    fun members(club: String): List<String>
+}
+
+/**
+ * 클럽 대항전 (national seasons only, [LeagueConfig.clubCup]): in even seasons from the second
+ * national season, last season's club-table champion of every league ([ClubSource.champions]) with
+ * its 5 best rated members still in the world, the 12 strongest clubs by their average rating, in
+ * the [TeamCup] format. Team ids are club ids. Honours "CLUBCUP" and "CLUBCUP2" (club ids) and
+ * "CLUBCUPW" (each member of the winning squad).
+ *
+ * News: `draw_clubcup` [club ids] (group) at the start, then as the [TeamCup].
+ */
+class ClubCup private constructor(
+    season: Int,
+    seed: Long,
+    teams: List<FamilyTeam>,
+    groups: List<List<DrawEntry>>,
+    announced: List<LeagueEvent>,
+    double: Boolean,
+) : TeamCup(Comp.CLUB_CUP, season, seed, teams, groups, announced, double, KINDS) {
+    companion object {
+        const val HEADER = "clubcup 1"
+        private val KINDS = Kinds(HEADER, "CLUBCUP", "CLUBCUP2", "CLUBCUPW", winnersOnly = true)
+
+        /** True for the seasons that may hold a club cup: the even ones. */
+        fun due(season: Int): Boolean = season >= 2 && season % 2 == 0
+
+        /** The season factory, reading the clubs from [clubs] (null: no club book, no cup). */
+        fun factory(clubs: () -> ClubSource?): (SeasonStart) -> Competition? = { start -> clubs()?.let { create(start, it) } }
+
+        /** This season's club cup; null when off, not due, not after a national season, or with fewer than 4 clubs. */
+        fun create(start: SeasonStart, clubs: ClubSource): ClubCup? {
+            if (!start.config.clubCup || !due(start.number) || !start.leagues.national || !start.lastLeagues.national) return null
+            val inWorld = start.ranking.toHashSet()
+            val teams = clubs.champions(start.number - 1).distinct().mapNotNull { id ->
+                val squad = clubs.members(id).filter { it in inWorld }.sortedWith(compareByDescending<String> { start.rating(it) }.thenBy { it }).take(SQUAD)
+                if (squad.size < MIN_SQUAD) null else FamilyTeam(id, squad, squad.map(start.rating).average())
+            }.sortedWith(compareByDescending<FamilyTeam> { it.strength }.thenBy { it.id }).take(MAX_TEAMS)
+            if (teams.size < MIN_TEAMS) return null
+            val entries = teams.mapIndexed { i, t -> DrawEntry(t.id, i + 1, t.strength) }
+            val groups = TeamCup.draw(entries, Random(Knockout.drawSeed(start.seed, Comp.CLUB_CUP)))
+            val news = groups.mapIndexed { g, members -> LeagueEvent("draw_clubcup", start.number, members.map { it.key }, listOf("${'A' + g}조"), Comp.CLUB_CUP) }
+            return ClubCup(start.number, start.seed, teams, groups, news, start.config.doubleElimination)
         }
+
+        val codec: CompetitionCodec = TeamCup.codec(KINDS) { season, seed, teams, groups, double -> ClubCup(season, seed, teams, groups, emptyList(), double) }
     }
 }

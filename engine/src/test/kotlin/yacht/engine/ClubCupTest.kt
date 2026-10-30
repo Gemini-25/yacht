@@ -1,15 +1,23 @@
 package yacht.engine
 
+import yacht.engine.league.ClubCup
+import yacht.engine.league.ClubSource
+import yacht.engine.league.Comp
+import yacht.engine.league.Competitions
 import yacht.engine.league.Family
 import yacht.engine.league.FamilyCup
 import yacht.engine.league.Honour
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.Leagues
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.Season
 import yacht.engine.league.SeasonStart
+import yacht.engine.league.byTeams
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * 클럽 대항전 ([yacht.engine.league.ClubCup]) and the family cup it shares its format with
@@ -45,6 +53,95 @@ class ClubCupTest {
         }
         for ((name, hash) in got) println("$name $hash")
         assertEquals(FAMILY_GOLDEN, got.toMap())
+    }
+
+    // ---- the club cup ----------------------------------------------------------------------------
+
+    /** 15 leagues of 2 divisions of 10, the first the strongest; club "c<n>" of league n has 8 members of its two divisions. */
+    private val ids = listOf("KR", "JP", "CN", "VN", "IN", "TH", "AU", "GB", "FR", "DE", "ES", "IT", "US", "BR", "AR")
+    private val world = NationalStart(ids.map { it to listOf(10, 10) })
+    private val clubPrint = CompetitionPrint(world::rating)
+
+    private fun division(n: Int, tier: Int) = world.divisions[world.leagues.byId(ids[n])!!.first + tier]
+
+    private inner class Clubs(val champions: List<String>) : ClubSource {
+        val members = ids.indices.associate { n -> "c$n" to (division(n, 0).take(5) + division(n, 1).take(3)).shuffled(java.util.Random(n.toLong())) }
+        val asked = ArrayList<Int>()
+        override fun champions(season: Int): List<String> = champions.also { asked += season }
+        override fun members(club: String): List<String> = members[club].orEmpty()
+    }
+
+    private fun start(number: Int, config: LeagueConfig = LeagueConfig(national = true), last: Leagues? = world.leagues, keys: List<String> = world.keys) =
+        if (last == null) world.start(number, config, world = keys) else world.start(number, config, lastTables = world.divisions, lastLeagues = last, world = keys)
+
+    @Test
+    fun theClubCupComesInEvenSeasonsAfterANationalOne() {
+        assertEquals(listOf(2, 4, 6, 8), (1..8).filter { ClubCup.due(it) })
+        val clubs = Clubs(ids.indices.map { "c$it" })
+        assertNotNull(ClubCup.create(start(4), clubs))
+        assertEquals(listOf(3), clubs.asked, "last season's champions")
+        assertNull(ClubCup.create(start(5), clubs), "odd season")
+        assertNull(ClubCup.create(start(4, last = null), clubs), "the first national season")
+        assertNull(ClubCup.create(start(4, config = LeagueConfig(national = true, clubCup = false)), clubs), "off")
+        val keys = world.keys
+        val legacy = SeasonStart(4, 1L, LeagueConfig(), keys, world::rating, Season.split(keys, 4), Season.split(keys, 4), emptyList(), { null }, { "" })
+        assertNull(ClubCup.create(legacy, clubs), "a legacy season")
+        // Fewer than 4 clubs with a squad: none. No club book: none.
+        assertNull(ClubCup.create(start(4), Clubs(listOf("c0", "c1", "c2"))))
+        assertNull(ClubCup.factory { null }(start(4)))
+        assertEquals(Comp.CLUB_CUP, ClubCup.factory { clubs }(start(4))?.comp)
+        assertTrue(Comp.CLUB_CUP.byTeams)
+    }
+
+    @Test
+    fun theTwelveStrongestChampionsPlayWithTheirBestFive() {
+        // All but two of c1's members left the world: too few for a squad. A club named twice plays once.
+        val clubs = Clubs(ids.indices.map { "c$it" } + "c0" + "gone")
+        val left = clubs.members.getValue("c1").drop(2).toSet()
+        val cup = assertNotNull(ClubCup.create(start(4, keys = world.keys - left), clubs))
+        // Leagues earlier in the list are stronger: c0 and c2..c12 make it, c13 and c14 do not.
+        assertEquals((listOf(0) + (2..12)).map { "c$it" }, cup.teams.map { it.id })
+        assertEquals(listOf(4, 4, 4), cup.groups.map { it.size })
+        for (t in cup.teams) {
+            val n = t.id.drop(1).toInt()
+            assertEquals(division(n, 0).take(5), t.squad, "the best five by rating, board 1 first")
+            assertEquals(t.squad.map(world::rating).average(), t.strength)
+        }
+        assertEquals(listOf("draw_clubcup"), cup.opening().map { it.kind }.distinct())
+        assertEquals(cup.groups.size, cup.opening().size)
+    }
+
+    @Test
+    fun theClubCupPlaysSavesAndHonoursItsWinners() {
+        val clubs = Clubs(ids.indices.map { "c$it" })
+        for (config in listOf(LeagueConfig(national = true), LeagueConfig(national = true, doubleElimination = false))) {
+            val cup = assertNotNull(ClubCup.create(start(6, config), clubs))
+            val text = clubPrint.fingerprint(cup, setOf(4, 12, 20), season = 6, seed = 186L)
+            assertTrue(text.contains("clubcup 1"), "its own header")
+            assertTrue(text.lines().filter { it.startsWith("f ") }.all { it.split(' ')[6] == "TEAM" })
+            // Team matches of 5 boards with the clubs' squads.
+            assertTrue(text.lines().filter { it.startsWith("f ") }.all { it.substringAfter("[").substringBefore("]").split(", ").size == 5 })
+            // Played out, saved and read back: the same honours.
+            val played = assertNotNull(ClubCup.create(start(6, config), clubs))
+            var p = 0.0
+            while (!played.finished) {
+                val f = played.next(p, emptySet())
+                if (f == null) {
+                    p += 0.05
+                    check(p < 2.0)
+                    continue
+                }
+                played.record(clubPrint.play(f))
+            }
+            val back = ClubCup.codec.decode(clubPrint.text(played).lines().filter { it.isNotEmpty() }, 6, 186L)
+            assertEquals(played.honours(), back.honours())
+            val h = back.honours()
+            assertEquals(listOf("CLUBCUP", "CLUBCUP2"), h.take(2).map { it.kind })
+            val winner = cup.teams.single { it.id == h[0].key }
+            assertEquals(winner.squad.map { Honour(6, "CLUBCUPW", it) }, h.drop(2))
+        }
+        assertTrue(Competitions.codecs.getValue(Comp.CLUB_CUP) === ClubCup.codec)
+        assertTrue(Competitions.codecs.getValue(Comp.FAMILY) === FamilyCup.codec)
     }
 
     companion object {

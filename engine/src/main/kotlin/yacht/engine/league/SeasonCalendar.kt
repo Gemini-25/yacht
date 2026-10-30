@@ -5,10 +5,11 @@ import kotlin.math.roundToInt
 /**
  * The season's weeks (docs/LEAGUE_SPEC.md 2.4). One league round is one week (week 1 is the
  * first round), and every stage of the other competitions gets a week of its own when the season
- * is set up, from its [Stage.target]: the cups, the champions league and the events share one
- * lane where one stage falls in a week (more only when they do not fit), the club league has a
- * lane of its own, and a competition's stages come in order, at least a week apart while
- * there is room. The post-season takes the weeks after the league: stage s of a playoff is in
+ * is set up, from its [Stage.target]. Competitions share lanes ([legacyLane], or [nationalLane] in a
+ * national season), where one stage falls in a week (more only when they do not fit), and a
+ * competition's stages come in order, at least a week apart while there is room: before national
+ * leagues the cups, the champions league and the events share one lane and the club league has
+ * one of its own. The post-season takes the weeks after the league: stage s of a playoff is in
  * week [leagueWeeks] + 1 + s (the title playoff's semi-finals and the promotion playoffs first,
  * the title final a week later).
  *
@@ -74,14 +75,15 @@ class SeasonCalendar private constructor(
 
         /**
          * The calendar of a season of [leagueWeeks] rounds with competitions [comps] and the
-         * post-season [post] (each playoff's competition and stages).
+         * post-season [post] (each playoff's competition and stages); [lanes] gives each
+         * competition its lane.
          */
-        fun build(leagueWeeks: Int, comps: List<Competition>, post: List<Pair<Comp, List<Stage>>>): SeasonCalendar {
+        fun build(leagueWeeks: Int, comps: List<Competition>, post: List<Pair<Comp, List<Stage>>>, lanes: (Comp) -> Int = ::legacyLane): SeasonCalendar {
             val r = maxOf(1, leagueWeeks)
             val season = comps.map { it.comp to runCatching { it.stages() }.getOrDefault(emptyList()) }.filter { it.second.isNotEmpty() }
             val placed = HashMap<Comp, IntArray>()
-            place(r, season.filter { it.first != Comp.CLUB }, placed)
-            place(r, season.filter { it.first == Comp.CLUB }, placed)
+            val byLane = season.groupBy { lanes(it.first) }
+            for (lane in byLane.keys.sorted()) place(r, byLane.getValue(lane), placed)
             val entries = ArrayList<Entry>()
             for ((c, stages) in season) entries += Entry(c, stages, placed.getValue(c), post = false)
             for ((c, stages) in post) {
@@ -119,7 +121,25 @@ class SeasonCalendar private constructor(
             for ((c, entry) in lane.withIndex()) out[entry.first] = weeks[c]
         }
 
-        /** Who gets a week first when two stages want the same one. */
-        private val PRIORITY = listOf(Comp.SUPER, Comp.WORLD_CUP, Comp.CHAMPIONS, Comp.CUP, Comp.CONTINENTAL, Comp.FAMILY, Comp.ALL_STAR)
+        /** Who gets a week first when two stages of a lane want the same one. */
+        private val PRIORITY = listOf(
+            Comp.SUPER, Comp.WORLD_CUP, Comp.CHAMPIONS, Comp.CONT_CHAMPIONS, Comp.CUP, Comp.CONTINENTAL, Comp.FAMILY, Comp.ALL_STAR, Comp.LEGEND, Comp.CLUB_CUP,
+        )
+
+        /** Lanes before national leagues: the club league (1) apart from everything else (0). */
+        fun legacyLane(c: Comp): Int = if (c == Comp.CLUB) 1 else 0
+
+        /**
+         * Lanes of a national season: A (0) the cups and events (요트컵, 슈퍼컵, 올스타전, 레전드
+         * 매치), B (1) the international club competitions (챔피언스 리그, 대륙 챔피언스), C (2)
+         * the nations' and families' cups, D (3) the clubs' (클럽 대항전, a club league still in play).
+         * Each fits at one stage a week in a season of 38-42 weeks.
+         */
+        fun nationalLane(c: Comp): Int = when (c) {
+            Comp.CHAMPIONS, Comp.CONT_CHAMPIONS -> 1
+            Comp.WORLD_CUP, Comp.CONTINENTAL, Comp.FAMILY -> 2
+            Comp.CLUB, Comp.CLUB_CUP -> 3
+            else -> 0
+        }
     }
 }

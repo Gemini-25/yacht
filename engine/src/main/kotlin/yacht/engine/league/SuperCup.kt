@@ -1,9 +1,10 @@
 package yacht.engine.league
 
 /**
- * 슈퍼컵 (docs/LEAGUE_SPEC.md 2.3, from season 2): last season's champion against last season's
- * cup winner (the runner-up when the champion won the cup too), one knockout tie at the season
- * start; the champion is side A (it goes through when still level). Honour SUPER.
+ * 슈퍼컵 (docs/LEAGUE_SPEC.md 2.3, from season 2): last season's champion (after a national season
+ * the 챔피언스 리그's winner) against last season's cup winner (the runner-up when the champion won
+ * the cup too), one knockout tie at the season start; the champion is side A (it goes through when
+ * still level). Honour SUPER.
  *
  * News: `draw_super` [champion, opponent] (their honours) at the start, then `final`, `title`
  * [winner] (슈퍼컵) and `upset`.
@@ -35,13 +36,19 @@ class SuperCup private constructor(season: Int, seed: Long, entries: List<DrawEn
          * Last season's champion ("L0") against its cup winner ("CUP", or "CUP2" when that is the
          * champion). A champion that has left (retired) is replaced by the best of last season's
          * 1st division still in the league, a cup winner that has left by the cup's runner-up.
-         * Null in the first season, when off, or when no pair is left.
+         * After a national season the champion's side is the 챔피언스 리그's winner ("CL", one
+         * that left replaced by its runner-up). Null in the first season, when off, or when no
+         * pair is left.
          */
         fun create(start: SeasonStart): SuperCup? {
             if (!start.config.superCup || start.number < 2) return null
             val inLeague = start.ranking.toSet()
-            val l0 = start.lastHonours.firstOrNull { it.kind == "L0" }?.key ?: return null
-            val champion = if (l0 in inLeague) l0 else start.lastTables.firstOrNull()?.firstOrNull { it in inLeague } ?: return null
+            val champion = if (start.lastLeagues.national) {
+                listOf("CL", "CL2").firstNotNullOfOrNull { kind -> start.lastHonours.firstOrNull { it.kind == kind }?.key?.takeIf { it in inLeague } } ?: return null
+            } else {
+                val l0 = start.lastHonours.firstOrNull { it.kind == "L0" }?.key ?: return null
+                if (l0 in inLeague) l0 else start.lastTables.firstOrNull()?.firstOrNull { it in inLeague } ?: return null
+            }
             val cups = listOfNotNull(start.lastHonours.firstOrNull { it.kind == "CUP" }?.key, start.lastHonours.firstOrNull { it.kind == "CUP2" }?.key)
             val opponent = cups.firstOrNull { it != champion && it in inLeague } ?: return null
             val entries = listOf(DrawEntry(champion, 1, start.rating(champion)), DrawEntry(opponent, 2, start.rating(opponent)))

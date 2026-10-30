@@ -7,6 +7,7 @@ import yacht.engine.league.Comp
 import yacht.engine.league.Competition
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
+import yacht.engine.league.ContinentalChampions
 import yacht.engine.league.Cup
 import yacht.engine.league.DrawEntry
 import yacht.engine.league.Family
@@ -463,6 +464,11 @@ class CompetitionsTest {
         assertNull(FamilyCup.create(start(45, number = 3)))
         assertNotNull(FamilyCup.create(start(45, number = 5)))
         assertTrue(Competitions.codecs.keys.containsAll(listOf(Comp.CUP, Comp.CHAMPIONS, Comp.SUPER, Comp.ALL_STAR, Comp.FAMILY, Comp.TITLE_PLAYOFF, Comp.PROMOTION_PLAYOFF)))
+        // The international stage reads back too; the 대륙 챔피언스 never runs in a legacy season.
+        assertTrue(Competitions.codecs.keys.containsAll(listOf(Comp.CONT_CHAMPIONS, Comp.CLUB_CUP)))
+        assertNull(ContinentalChampions.create(on))
+        assertEquals(listOf('T', 'U'), listOf(Comp.CONT_CHAMPIONS.code, Comp.CLUB_CUP.code))
+        assertEquals(Comp.entries.size, Comp.entries.map { it.code }.toSet().size)
     }
 
     @Test
@@ -685,5 +691,85 @@ class CompetitionsTest {
             }
             seasons(n, config, 3, threads = 4, order = 3L, reload = true, leave = true)
         }
+    }
+
+    // ---- after a national season ----------------------------------------------------------------
+
+    private val ten = listOf(10, 10)
+
+    /** Ten leagues (Asia 4, Europe 2, the Americas 2, Africa 2) that played last season as they play now. */
+    private val nations = NationalStart(listOf("KR", "GB", "US", "JP", "FR", "CN", "BR", "VN", "NG", "ZA").map { it to ten })
+
+    /** Last season's honours: the CL, the 대륙 챔피언스, each league's champion (KR's after its title playoff). */
+    private val worldHonours = listOf(
+        Honour(1, "CL", "us0x05"),
+        Honour(1, "CCL.ASIA", "kr0x00"), Honour(1, "CCL.EUROPE", "gb0x00"), Honour(1, "CCL.AMERICAS", "us0x00"), Honour(1, "CCL.AFRICA", "ng0x00"),
+        Honour(1, "CCL2.ASIA", "jp0x00"), Honour(1, "CCL2.EUROPE", "fr0x00"), Honour(1, "CCL2.AMERICAS", "br0x00"), Honour(1, "CCL2.AFRICA", "za0x02"),
+        Honour(1, "L0.KR", "kr0x03"), Honour(1, "L0R.KR", "kr0x00"),
+    ) + listOf("GB", "US", "JP", "FR", "CN", "BR", "VN", "NG", "ZA").map { Honour(1, "L0.$it", "${it.lowercase()}0x00") }
+
+    private fun worldStart(clDirect: Int = 7, honours: List<Honour> = worldHonours, world: List<String> = nations.keys) = nations.start(
+        config = LeagueConfig(national = true, clDirect = clDirect), lastTables = nations.divisions, lastLeagues = nations.leagues, lastHonours = honours,
+        ranking = nations.ranking(listOf("KR", "GB", "US", "JP", "FR", "CN", "BR", "VN", "NG", "ZA")), world = world,
+    )
+
+    @Test
+    fun theChampionsLeagueIsTheWorldStageAfterANationalSeason() {
+        // The holder, the continental champions and runners-up, the champions of the best-ranked
+        // leagues (a champion already in passes its place down), then the 1부 runners-up.
+        val holder = listOf("us0x05")
+        val continental = listOf("kr0x00", "gb0x00", "us0x00", "ng0x00", "jp0x00", "fr0x00", "br0x00", "za0x02")
+        val champions = listOf("kr0x03", "cn0x00", "vn0x00", "za0x00")
+        assertEquals(holder + continental + champions + listOf("gb0x01", "us0x01", "jp0x01"), ChampionsLeague.entrants(worldStart()))
+        // One more direct place: the last continental runner-up makes room for a league's runner-up later on.
+        assertEquals(holder + continental.dropLast(1) + champions + listOf("gb0x01", "us0x01", "jp0x01", "fr0x01"), ChampionsLeague.entrants(worldStart(clDirect = 8)))
+        // No direct places: the runners-up of the best-ranked leagues take them (KR's is in already).
+        assertEquals(holder + continental + listOf("gb0x01", "us0x01", "jp0x01", "fr0x01", "cn0x01", "br0x01", "vn0x01"), ChampionsLeague.entrants(worldStart(clDirect = 0)))
+        // A holder who left the world leaves its place too.
+        assertEquals(continental + champions + listOf("gb0x01", "us0x01", "jp0x01", "fr0x01"), ChampionsLeague.entrants(worldStart(world = nations.keys - "us0x05")))
+        val cl = assertNotNull(ChampionsLeague.create(worldStart()))
+        assertEquals(ChampionsLeague.entrants(worldStart()), cl.entries.map { it.key })
+    }
+
+    @Test
+    fun withoutContinentalChampionsEachLeagueAddsItsNextPlayerInTurn() {
+        val regions = NationalStart(listOf("XEU", "XAS", "XAM", "XAF").map { it to ten })
+        val honours = listOf(Honour(1, "CL", "xeu0x04"), Honour(1, "L0.XAM", "xam0x02")) +
+            listOf("XEU", "XAS", "XAF").map { Honour(1, "L0.$it", "${it.lowercase()}0x00") }
+        val start = regions.start(lastTables = regions.divisions, lastLeagues = regions.leagues, lastHonours = honours, ranking = regions.ranking(listOf("XEU", "XAS", "XAM", "XAF")))
+        // The holder, 4 champions, 4 seconds, 4 thirds and 3 fourths.
+        assertEquals(
+            listOf("xeu0x04") + listOf("xeu0x00", "xas0x00", "xam0x02", "xaf0x00") + listOf("xeu0x01", "xas0x01", "xam0x00", "xaf0x01") +
+                listOf("xeu0x02", "xas0x02", "xam0x01", "xaf0x02") + listOf("xeu0x03", "xas0x03", "xam0x03"),
+            ChampionsLeague.entrants(start),
+        )
+        // The legacy rule is unchanged after a legacy season, and the first season goes by rating.
+        assertEquals(regions.keys.sortedByDescending(regions::rating).take(16), ChampionsLeague.entrants(regions.start()))
+    }
+
+    @Test
+    fun theSuperCupAndTheAllStarsOfANationalWorld() {
+        val honours = worldHonours + listOf(Honour(1, "CUP", "jp0x03"), Honour(1, "CUP2", "cn0x00"), Honour(1, "CL2", "gb0x02"))
+        // The champions league's winner against the cup's.
+        assertEquals(listOf("us0x05", "jp0x03"), assertNotNull(SuperCup.create(worldStart(honours = honours))).entries.map { it.key })
+        // The cup's winner is the holder: the cup's runner-up; a holder who left: the champions league's runner-up.
+        val double = honours.map { if (it.kind == "CUP") it.copy(key = "us0x05") else it }
+        assertEquals(listOf("us0x05", "cn0x00"), assertNotNull(SuperCup.create(worldStart(honours = double))).entries.map { it.key })
+        assertEquals(listOf("gb0x02", "jp0x03"), assertNotNull(SuperCup.create(worldStart(honours = honours, world = nations.keys - "us0x05"))).entries.map { it.key })
+        // Without a champions league winner there is none (a league's L0.<id> is no champion of the world).
+        assertNull(SuperCup.create(worldStart(honours = honours.filter { it.kind != "CL" && it.kind != "CL2" })))
+
+        // 1부 올스타: the best of every league's 1부; 도전자: the best of all the other divisions.
+        val start = worldStart()
+        val star = assertNotNull(AllStar.create(start))
+        val tops = nations.leagues.tops().toSet()
+        val first = nations.divisions.filterIndexed { d, _ -> d in tops }.flatten().sortedByDescending(nations::rating).take(AllStar.SIDE)
+        val rest = nations.divisions.filterIndexed { d, _ -> d !in tops }.flatten().sortedByDescending(nations::rating).take(AllStar.SIDE)
+        assertEquals(first, star.top)
+        assertEquals(rest, star.challenger)
+        assertTrue(first.any { it.startsWith("gb") } && rest.all { it.contains("1x") })
+
+        // A national world's factories: the champions league first, the 대륙 챔피언스 next.
+        assertEquals(listOf(Comp.CHAMPIONS, Comp.CONT_CHAMPIONS, Comp.CUP, Comp.ALL_STAR), Competitions.factories().mapNotNull { it(start)?.comp })
     }
 }

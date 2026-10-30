@@ -104,9 +104,13 @@ interface ViewableCompetition : Competition {
  * [codecs] to read them back from season.txt.
  */
 object Competitions {
-    /** Builders of a season's competitions, champions league first (it gets the cup slots first). */
+    /**
+     * Builders of a season's competitions, champions league first (it gets the cup slots first),
+     * then the 대륙 챔피언스 (national seasons only). The 클럽 대항전 needs the clubs: the world adds
+     * [ClubCup.factory].
+     */
     fun factories(): List<(SeasonStart) -> Competition?> =
-        listOf(ChampionsLeague::create, Cup::create, SuperCup::create, AllStar::create, FamilyCup::create, NationCup::world, NationCup::continental)
+        listOf(ChampionsLeague::create, ContinentalChampions::create, Cup::create, SuperCup::create, AllStar::create, FamilyCup::create, NationCup::world, NationCup::continental)
 
     /** Builders of the post-season: the title playoff, then the promotion playoffs. */
     fun postFactories(): List<(SeasonPlan) -> Competition?> = listOf(TitlePlayoff::create, PromotionPlayoff::create)
@@ -114,11 +118,13 @@ object Competitions {
     val codecs: Map<Comp, CompetitionCodec> = mapOf(
         Comp.CUP to Cup.codec,
         Comp.CHAMPIONS to ChampionsLeague.codec,
+        Comp.CONT_CHAMPIONS to ContinentalChampions.codec,
         Comp.SUPER to SuperCup.codec,
         Comp.ALL_STAR to AllStar.codec,
         Comp.FAMILY to FamilyCup.codec,
         Comp.WORLD_CUP to NationCup.worldCodec,
         Comp.CONTINENTAL to NationCup.continentalCodec,
+        Comp.CLUB_CUP to ClubCup.codec,
         Comp.TITLE_PLAYOFF to TitlePlayoff.codec,
         Comp.PROMOTION_PLAYOFF to PromotionPlayoff.codec,
     )

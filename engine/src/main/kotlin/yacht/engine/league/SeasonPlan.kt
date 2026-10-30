@@ -83,27 +83,36 @@ class SeasonPlan(
 
     /**
      * The season's weeks ([SeasonCalendar]) for the competitions set up so far; the post-season's
-     * from the rules until it is set up. Rebuilt when a competition is added.
+     * from the rules until it is set up. Rebuilt when a competition is added. A national season
+     * places its competitions in the national lanes ([SeasonCalendar.nationalLane]).
      */
     val calendar: SeasonCalendar
         get() {
             val key = comps.size * 10_000 + post.size * 10 + (if (postStarted) 1 else 0)
             built?.let { if (builtFor == key) return it }
             val post = if (postStarted) post.map { it.comp to runCatching { it.stages() }.getOrDefault(emptyList()) } else expectedPost()
-            return SeasonCalendar.build(leagueWeeks, comps, post).also {
+            val lanes = if (league.leagues.national) SeasonCalendar::nationalLane else SeasonCalendar::legacyLane
+            return SeasonCalendar.build(leagueWeeks, comps, post, lanes).also {
                 built = it
                 builtFor = key
                 openWeek = Int.MIN_VALUE
             }
         }
 
-    /** The playoffs the rules call for, before the league is over (the calendar shows them ahead). */
+    /**
+     * The playoffs the rules call for, before the league is over (the calendar shows them ahead):
+     * the title playoff when a league's 1부 has 4 players or more, the promotion playoff when a
+     * league has 2 divisions or more (a legacy season: its 1st division, its divisions).
+     */
     private fun expectedPost(): List<Pair<Comp, List<Stage>>> {
         val out = ArrayList<Pair<Comp, List<Stage>>>()
-        if (config.titlePlayoff && league.divisions.firstOrNull().orEmpty().size >= 4) {
+        val leagues = league.leagues
+        val title = if (leagues.national) leagues.tops().any { league.divisions[it].size >= 4 } else league.divisions.firstOrNull().orEmpty().size >= 4
+        if (config.titlePlayoff && title) {
             out += Comp.TITLE_PLAYOFF to Knockout.stageLabels(2, config.doubleElimination) { if (it == 0) "4강" else "결승" }.map { Stage(it, 0.0) }
         }
-        if (config.promotionPlayoff && league.divisions.size >= 2) out += Comp.PROMOTION_PLAYOFF to listOf(Stage(PromotionPlayoff.STAGE, 0.0))
+        val moves = if (leagues.national) leagues.list.any { it.size >= 2 } else league.divisions.size >= 2
+        if (config.promotionPlayoff && moves) out += Comp.PROMOTION_PLAYOFF to listOf(Stage(PromotionPlayoff.STAGE, 0.0))
         return out
     }
 
@@ -202,12 +211,17 @@ class SeasonPlan(
     /**
      * Every stage of the season on its week, league rounds first in each week (comp LEAGUE, stage
      * = matchday), with what has been played; playoffs not set up yet have no fixtures counted.
-     * Scans the season: for the screen, not per job.
+     * A national season's league weeks are "N주차" (a division of fewer players plays fewer
+     * rounds, so a week is not every division's round N). Scans the season: for the screen, not
+     * per job.
      */
     fun schedule(): List<WeekStage> {
         val cal = calendar
         val out = ArrayList<WeekStage>()
-        for ((k, n) in league.matchdayCounts().withIndex()) out += WeekStage(Comp.LEAGUE, k, "${k + 1}라운드", k + 1, n.played, n.total, false)
+        val national = league.leagues.national
+        for ((k, n) in league.matchdayCounts().withIndex()) {
+            out += WeekStage(Comp.LEAGUE, k, if (national) "${k + 1}주차" else "${k + 1}라운드", k + 1, n.played, n.total, false)
+        }
         for (e in cal.entries) {
             val c = competition(e.comp)
             val counts = c?.let { runCatching { it.stageCounts() }.getOrNull() }.orEmpty()
@@ -238,7 +252,7 @@ class SeasonPlan(
     private fun owner(f: Fixture): Competition? = comps.firstOrNull { it.comp == f.comp } ?: post.firstOrNull { it.comp == f.comp }
 
     /** True for team competitions: they run with the league; cups and groups take the cup slots. */
-    fun isTeam(c: Comp) = c == Comp.CLUB || c == Comp.ALL_STAR || c == Comp.FAMILY || c == Comp.WORLD_CUP || c == Comp.CONTINENTAL
+    fun isTeam(c: Comp) = c == Comp.CLUB || c == Comp.ALL_STAR || c == Comp.FAMILY || c == Comp.WORLD_CUP || c == Comp.CONTINENTAL || c == Comp.CLUB_CUP
 
     // ---- saving --------------------------------------------------------------------------------
 
