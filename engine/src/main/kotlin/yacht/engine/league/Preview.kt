@@ -309,11 +309,17 @@ object Preview {
             }
             Comp.ALL_STAR, Comp.LEGEND -> "${Ko.ieyo(f.comp.label)}. 순위와 상관없는 이벤트 경기예요."
             else -> {
-                val what = if (label.isEmpty() || label == f.comp.label) f.comp.label else "${f.comp.label} $label"
+                // A 대륙 챔피언스 section's fixture starts with its confederation ("아시아 A조 1차전"):
+                // named after the section ("아시아 챔피언스 A조 1차전", "아시아 챔피언스 결승").
+                val section = if (f.comp != Comp.CONT_CHAMPIONS) null else Confed.entries.firstOrNull { label.startsWith(it.label + " ") }
+                val title = section?.let { ContinentalChampions.title(it) } ?: f.comp.label
+                val round = section?.let { label.removePrefix(it.label + " ") } ?: label
+                val what = if (round.isEmpty() || round == title) title else "$title $round"
                 when {
                     f.kind != JobKind.TIE -> "${Ko.ieyo(what)}."
+                    section != null && final -> "$title 결승이에요. 이기는 쪽이 우승해요.$series"
                     final -> "${f.comp.label} ${if (finalOf.isEmpty()) "" else "$finalOf "}결승이에요. 이기는 쪽이 우승해요.$series"
-                    what == f.comp.label -> "${Ko.ieyo(what)}. 이기는 쪽이 우승해요.$series"
+                    what == title -> "${Ko.ieyo(what)}. 이기는 쪽이 우승해요.$series"
                     winnersSide -> "${Ko.ieyo(what)}. 지는 쪽은 패자조로 내려가요.$series"
                     else -> "${Ko.ieyo(what)}. 지는 쪽은 바로 탈락해요.$series"
                 }

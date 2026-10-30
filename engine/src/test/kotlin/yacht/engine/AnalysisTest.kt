@@ -430,16 +430,17 @@ class AnalysisTest {
         val lower = Preview.of("ai01", "ai07", null, s, table, null, null, null, fixture = Fixture(Comp.CUP, 2, "ai01", "ai07", 1L, JobKind.TIE, label = "16강"))
         assertTrue("ai07의 한국 2부 우승 확률은 50%예요." in lower.stakes, lower.stakes.toString())
         // The playoffs say whose they are.
-        fun round(comp: Comp, a: String, b: String, label: String, season: Season = s) =
-            Preview.of(a, b, null, season, null, null, null, null, fixture = Fixture(comp, 1, a, b, 1L, JobKind.TIE, label = label)).stakes.first()
+        fun round(comp: Comp, a: String, b: String, label: String, season: Season = s, kind: JobKind = JobKind.TIE) =
+            Preview.of(a, b, null, season, null, null, null, null, fixture = Fixture(comp, 1, a, b, 1L, kind, label = label)).stakes.first()
         assertEquals("한국 리그 우승 플레이오프 결승이에요. 이기는 쪽이 한국 리그 챔피언이 돼요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai02", "한국 결승"))
         assertEquals("한국 리그 우승 플레이오프 결승이에요. 이기는 쪽이 한국 리그 챔피언이 돼요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai02", "한국 최종 결승"))
         assertEquals("한국 리그 우승 플레이오프 승자조 4강이에요. 지는 쪽은 패자조로 내려가 한 번 더 기회가 있어요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai04", "한국 승자조 4강"))
         assertEquals("한국 리그 우승 플레이오프 4강이에요. 지는 쪽은 우승 도전이 끝나요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai04", "한국 4강"))
         assertEquals("한국 1·2부 승강전이에요. 이기는 쪽이 다음 시즌 한국 1부에서 뛰어요.", round(Comp.PROMOTION_PLAYOFF, "ai05", "ai09", "한국 1·2부 승강전"))
-        assertEquals("대륙 챔피언스 아시아 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 결승"))
-        assertEquals("대륙 챔피언스 아시아 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 최종 결승"))
-        assertEquals("대륙 챔피언스 아시아 승자조 결승이에요. 지는 쪽은 패자조로 내려가요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 승자조 결승"))
+        assertEquals("아시아 챔피언스 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 결승"))
+        assertEquals("아시아 챔피언스 결승이에요. 이기는 쪽이 우승해요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 최종 결승"))
+        assertEquals("아시아 챔피언스 승자조 결승이에요. 지는 쪽은 패자조로 내려가요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아시아 승자조 결승"))
+        assertEquals("아프리카·중동 챔피언스 A조 1차전이에요.", round(Comp.CONT_CHAMPIONS, "ai01", "ai13", "아프리카·중동 A조 1차전", kind = JobKind.MATCH))
         // A legacy league's as before.
         val legacy = Season.start(1, 3L, listOf(keys(6)))
         assertEquals("우승 플레이오프 결승이에요. 이기는 쪽이 1부 챔피언이 돼요.", round(Comp.TITLE_PLAYOFF, "ai01", "ai02", "결승", legacy))
