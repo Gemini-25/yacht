@@ -173,7 +173,7 @@ data class FeedItem(
 )
 
 /** A match being played: its two sides (team ids for team matches) and where. */
-data class LiveMatch(val a: String, val b: String, val comp: Comp, val label: String, val week: Int)
+data class LiveMatch(val a: String, val b: String, val comp: Comp, val label: String, val week: Int, val firstTo: Int = 0)
 
 /** One week of the season (일정): its stages, the league round first. */
 data class WeekRow(val week: Int, val stages: List<WeekStage>) {
@@ -298,6 +298,8 @@ data class SeasonView(
     val swap: Int = 0,
     /** How the season's matches are decided (판 승점제 gives a 2-0 sweep a bonus point). */
     val format: MatchFormat = MatchFormat.MIRRORED,
+    /** The rules the season began with (a change applies from the next season). */
+    val rules: LeagueConfig? = null,
 )
 
 /** One fixture in the calendar (일정표): its games once played, or whether it is being played. */
@@ -656,6 +658,9 @@ class LeagueController(
 
     /** The competition the 대회 tab shows (null: the first), and the week the 일정 tab shows (null: the week in play). */
     var compFocus by mutableStateOf<Comp?>(null)
+
+    /** The rules dialog (규칙 설정) is open. */
+    var rulesOpen by mutableStateOf(false)
     var scheduleWeek by mutableStateOf<Int?>(null)
 
     /** The player's own AIs (saved) and clone profile. */
@@ -2202,7 +2207,7 @@ class LeagueController(
         val w = world
         w?.lab?.let { b -> val v = b.current?.results to b.history; scope.launch { lab = v } }
         return LeagueView(
-            rows, feed, l.matches, l.games, live.values.map { LiveMatch(it.a, it.b, it.comp, it.label, it.week) }, s?.let { seasonView(it) }, comps, clubs,
+            rows, feed, l.matches, l.games, live.values.map { LiveMatch(it.a, it.b, it.comp, it.label, it.week, it.firstTo) }, s?.let { seasonView(it) }, comps, clubs,
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
             s?.let { runCatching { clockView(it) }.getOrNull() },
         )
@@ -2283,7 +2288,7 @@ class LeagueController(
             // Next season's newcomers: members not in this season (the rules keep the rest out).
             s.number, s.fixturesPlayed, s.fixturesTotal, divisions, world?.members.orEmpty().filter { it !in inLeague }.map { name(it) },
             history(),
-            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap, s.format,
+            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap, s.format, p.config,
         )
     }
 

@@ -59,10 +59,21 @@ data class TieView(
     val legs: Int,
     /** A series tie: first to this many games won (0: legs of matches). */
     val firstTo: Int = 0,
+    /**
+     * The side that came from the winners' bracket ([a] and [b] go by seed): in a losers'
+     * round that takes the winners' losers, the one that dropped; in the grand final, the
+     * winners' champion. Null elsewhere or while unknown.
+     */
+    val fromWinners: String? = null,
 )
 
 /** A group table, best first. */
-data class GroupTable(val label: String, val rows: List<GroupRow>)
+data class GroupTable(
+    val label: String,
+    val rows: List<GroupRow>,
+    /** A 2-0 sweep earns a bonus point here (판 승점제's 완승 보너스): [GroupRow.sweeps] are in the points. */
+    val bonus: Boolean = false,
+)
 
 /** A group table line; [diff] is the score difference (boards for team matches). */
 data class GroupRow(
@@ -73,6 +84,8 @@ data class GroupRow(
     val losses: Int,
     val points: Int,
     val diff: Int,
+    /** 2-0 sweeps that earned the bonus point (with [GroupTable.bonus]). */
+    val sweeps: Int = 0,
 )
 
 /** A competition the 대회 screen can draw. */

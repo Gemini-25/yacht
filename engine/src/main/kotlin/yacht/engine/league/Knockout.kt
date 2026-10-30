@@ -415,7 +415,13 @@ class Knockout(
         val s = t.result
         val a = if (t.bye) t.a else t.a ?: t.top
         val b = if (t.bye) null else t.b ?: t.bottom
-        return TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs, t.firstTo)
+        // Fed from the winners' bracket: a losers' odd round's bottom (the dropped loser), the grand final's top.
+        val fromWinners = when (t.side) {
+            BracketSide.GRAND -> t.top?.key
+            BracketSide.LOSERS -> if (t.round % 2 == 1) t.bottom?.key else null
+            BracketSide.WINNERS -> null
+        }
+        return TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs, t.firstTo, fromWinners)
     }
 
     /**
@@ -755,7 +761,7 @@ class GroupStage(
         .thenBy { it.entry.seed }
 
     fun view(g: Int): GroupTable =
-        GroupTable(groupLabel(g), table(g).map { GroupRow(it.entry.key, it.played, it.wins, it.draws, it.losses, it.points, diff(it)) })
+        GroupTable(groupLabel(g), table(g).map { GroupRow(it.entry.key, it.played, it.wins, it.draws, it.losses, it.points, diff(it), it.sweeps) }, bonus && !teams)
 
     /** Result lines of the played matches. */
     fun encode(out: StringBuilder) {
