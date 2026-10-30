@@ -34,9 +34,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import yacht.app.core.AppController
+import yacht.app.core.BackAction
 import yacht.app.core.LeagueBackground
 import yacht.app.core.GameStorage
-import yacht.app.core.Screen
+import yacht.app.core.backTarget
 import yacht.app.ui.AppRoot
 import yacht.app.ui.FilePort
 import yacht.app.ui.LocalFilePort
@@ -229,15 +230,10 @@ class MainActivity : ComponentActivity() {
                 // Back on the home screen sends the app back (as Android 12+ does) instead of closing
                 // it: closing would stop a league that keeps going while the app is hidden.
                 BackHandler {
-                    if (c.screen == Screen.HOME) {
-                        moveTaskToBack(true)
-                        return@BackHandler
-                    }
-                    if (c.screen == Screen.WATCH) c.league.stopWatch()
-                    c.screen = when (c.screen) {
-                        Screen.REVIEW -> Screen.HISTORY
-                        Screen.WATCH, Screen.BUILDER, Screen.MAKER -> Screen.LEAGUE
-                        else -> Screen.HOME
+                    when (val a = backTarget(c.screen, c.league.nav, c.rankedFrom) { c.league.stopWatch() }) {
+                        BackAction.ToBackground -> moveTaskToBack(true)
+                        BackAction.Handled -> {}
+                        is BackAction.Go -> c.screen = a.screen
                     }
                 }
                 CompositionLocalProvider(LocalFilePort provides port) {

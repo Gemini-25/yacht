@@ -38,6 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.ClockView
 import yacht.app.core.LeagueController
+import yacht.app.core.LeagueTab
+import yacht.app.core.Page
+import yacht.app.core.TablesView
 import yacht.engine.league.BracketRound
 import yacht.engine.league.BracketSide
 import yacht.engine.league.Comp
@@ -63,7 +66,9 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
         )
         return
     }
-    val shown = comps.firstOrNull { it.first == lg.compFocus } ?: comps.first()
+    // The competition whose page is open (the first without one).
+    val focus = (lg.nav.pages.lastOrNull { it is Page.Competition } as? Page.Competition)?.comp
+    val shown = comps.firstOrNull { it.first == focus } ?: comps.first()
     // Each competition's stages on the calendar, in order.
     val stages = remember(clock?.weeks) { clock?.weeks.orEmpty().flatMap { it.stages }.filter { it.comp != Comp.LEAGUE }.groupBy { it.comp }.mapValues { (_, l) -> l.sortedBy { it.stage } } }
     val mine = stages[shown.first].orEmpty()
@@ -90,7 +95,12 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
                 for ((c, v) in comps) {
                     val status = clock?.let { compStatus(stages[c].orEmpty(), it) }
                     FilterChip(
-                        selected = c == shown.first, onClick = { lg.compFocus = c },
+                        selected = c == shown.first,
+                        onClick = {
+                            lg.nav.go(LeagueTab.TABLES)
+                            lg.nav.tables = TablesView.COMPS
+                            lg.nav.open(Page.Competition(c))
+                        },
                         label = { Text(compIcon(c) + " " + v.title + (status?.let { " · $it" } ?: ""), fontSize = 12.sp) },
                     )
                 }
@@ -119,6 +129,8 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
                     p.knockout?.let { k -> item { BracketCard(k, label, open, roundWeeks(shown.first, mine, k.rounds, leagueWeeks), podium = podium, format = format) } }
                 }
             }
+            // A kind of view this screen does not draw yet.
+            else -> {}
         }
         val squads = when (val v = shown.second) {
             is CompetitionView.Sections -> v.parts.getOrNull(part.coerceIn(0, maxOf(0, v.parts.size - 1)))?.squads ?: v.squads
@@ -225,6 +237,8 @@ fun compIcon(c: Comp): String = when (c) {
     Comp.LAB -> "🧪"
     Comp.FRIENDLY -> "🤝"
     Comp.LEAGUE -> "📋"
+    // A competition this screen does not know yet.
+    else -> "🏅"
 }
 
 /** The icon of a continental tournament by its name ("아시아컵" 🌏). */

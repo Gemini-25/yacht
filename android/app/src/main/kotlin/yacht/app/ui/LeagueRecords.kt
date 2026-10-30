@@ -28,8 +28,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.LeagueController
+import yacht.app.core.LeagueNav
+import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
+import yacht.app.core.Page
 import yacht.app.core.ProfileView
+import yacht.app.core.RecordsView
 import yacht.app.core.SeasonHistoryItem
 import yacht.engine.league.LeagueRecord
 import yacht.engine.league.Origin
@@ -263,15 +267,32 @@ private fun Genealogy(p: ProfileView) {
     }
 }
 
-private enum class RecordsMode(val label: String) {
-    ROOM("기록실"),
-    NATIONS("국가 랭킹"),
-    PROSPECTS("유망주"),
-    HALL("명예의 전당"),
-    ARCHIVE("시즌 아카이브"),
-    META("메타 리포트"),
-    LEGENDS("레전드 보관소"),
-    FAMILIES("계열별"),
+/** 기록's chips: a sub-view of the tab ([view]) or a page over it ([page]). */
+private enum class RecordsMode(val label: String, val view: RecordsView? = null, val page: Page? = null) {
+    ROOM("기록실", view = RecordsView.ROOM),
+    NATIONS("국가 랭킹", page = Page.Nations),
+    PROSPECTS("유망주", page = Page.Prospects),
+    HALL("명예의 전당", view = RecordsView.HALL),
+    ARCHIVE("시즌 아카이브", view = RecordsView.SEASONS),
+    META("메타 리포트", page = Page.Meta),
+    LEGENDS("레전드 보관소", page = Page.Legends),
+    FAMILIES("계열별", page = Page.Families);
+
+    companion object {
+        /** The chip [nav] shows: its page's, else its sub-view's (리더 is the records room here). */
+        fun of(nav: LeagueNav): RecordsMode {
+            val pages = entries.mapNotNull { it.page }
+            val page = nav.pages.lastOrNull { it in pages }
+            return entries.firstOrNull { page != null && it.page == page } ?: entries.firstOrNull { it.view == nav.records } ?: ROOM
+        }
+    }
+}
+
+/** Shows chip [m] of 기록 (from the tab's root). */
+private fun LeagueNav.showRecords(m: RecordsMode) {
+    go(LeagueTab.RECORDS)
+    m.view?.let { records = it }
+    m.page?.let { open(it) }
 }
 
 /** The modes that show the records room's data. */
@@ -280,11 +301,11 @@ private val RECORDS_MODES = setOf(RecordsMode.ROOM, RecordsMode.HALL, RecordsMod
 /** 기록: the hall of fame by season, the legends and retired players, and the families. */
 @Composable
 fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit, families: @Composable () -> Unit) {
-    val mode = RecordsMode.entries.getOrElse(lg.recordsMode) { RecordsMode.ROOM }
+    val mode = RecordsMode.of(lg.nav)
     LaunchedEffect(mode) { if (mode in RECORDS_MODES) lg.loadRecords() }
     Column {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { lg.recordsMode = m.ordinal }, label = { Text(m.label, fontSize = 12.sp) })
+            for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { lg.nav.showRecords(m) }, label = { Text(m.label, fontSize = 12.sp) })
         }
         val r = lg.records
         when (mode) {
@@ -401,7 +422,7 @@ fun PastProfileDialog(lg: LeagueController, key: String, onDismiss: () -> Unit) 
 
 
 @Composable
-private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsView?, onOpen: (String) -> Unit) {
+private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (r == null) {
         CenterText("기록을 불러오는 중…")
@@ -484,7 +505,7 @@ fun milestoneText(args: List<String>): String {
 }
 
 @Composable
-private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsView?) {
+private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomView?) {
     val cs = MaterialTheme.colorScheme
     if (r == null || r.summaries.isEmpty()) {
         CenterText("시즌이 끝나면 시즌마다 우승팀·수상자·깨진 기록이 여기에 남아요.")
@@ -514,7 +535,7 @@ fun honourWinner(lg: LeagueController, kind: String, key: String): String = when
 }
 
 @Composable
-private fun MetaReportView(r: yacht.app.core.RecordsView?) {
+private fun MetaReportView(r: yacht.app.core.RecordsRoomView?) {
     val cs = MaterialTheme.colorScheme
     val m = r?.meta
     if (m == null || m.cards == 0) {

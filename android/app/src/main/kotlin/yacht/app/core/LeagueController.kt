@@ -35,10 +35,8 @@ import yacht.engine.league.HonourBook
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
-import yacht.engine.league.LeagueEvent
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonCalendar
-import yacht.engine.league.WeekStage
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Competitions
@@ -50,22 +48,10 @@ import yacht.engine.league.diff
 import yacht.engine.league.Origin
 import yacht.engine.league.Club
 import yacht.engine.league.ClubLeague
-import yacht.engine.league.ClubMatch
-import yacht.engine.league.ClubMove
-import yacht.engine.league.ClubRow
-import yacht.engine.league.AiStats
-import yacht.engine.league.Dynasty
-import yacht.engine.league.HallOfFameEntry
-import yacht.engine.league.LeagueRecord
-import yacht.engine.league.MetaReport
-import yacht.engine.league.SeasonLine
 import yacht.engine.league.SeasonReview
-import yacht.engine.league.SeasonSummary
-import yacht.engine.league.Article
 import yacht.engine.league.Highlight
 import yacht.engine.league.LiveFrame
 import yacht.engine.league.WatchTurn
-import yacht.engine.league.AiOdds
 import yacht.engine.league.BoxProfile
 import yacht.engine.league.LabResult
 import yacht.engine.league.MatchFormat
@@ -99,410 +85,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-/** One AI on the ladder as the screen shows it. */
-data class LadderRow(
-    val key: String,
-    val name: String,
-    val family: Family,
-    val desc: String,
-    val heavy: Boolean,
-    /** Null while still in placement. */
-    val rank: Int?,
-    val rating: Int?,
-    /** 95% half-width of the rating. */
-    val margin: Int?,
-    val tier: Tier?,
-    val games: Int,
-    val wins: Int,
-    val ties: Int,
-    val losses: Int,
-    val winRate: Double,
-    val avgScore: Double,
-    val best: Int,
-    val yachts: Int,
-    val bonuses: Int,
-    val streak: Int,
-    val bestStreak: Int,
-    /** Last results, oldest first ('W', 'D', 'L'). */
-    val recent: String,
-    /** Empty in snapshots: the profile carries it ([ProfileView.ratingHistory]). */
-    val history: List<Int>,
-    val peak: Int?,
-    /** Rating change in its last match. */
-    val lastDelta: Int,
-    /** Places gained since the league was started this time (positive = up). */
-    val rankChange: Int?,
-    val playing: Boolean,
-    /** The player's own line (ranked games). */
-    val isMe: Boolean = false,
-    /** Season division (0 = top), null when not in this season. */
-    val division: Int? = null,
-    /** 기본 (hand-made), 생성, 진화 or 내 AI. */
-    val origin: Origin = Origin.BASE,
-    val hometown: String = "",
-    /** A generated or evolved player's nation code, flag and age ("" / null for the others). */
-    val nation: String = "",
-    val flag: String = "",
-    val age: Int? = null,
-    /** Its division as shown ("3부", "3부 B조"), null when not in this season. */
-    val divisionLabel: String? = null,
-) {
-    /** The name with its flag, as lists show it ("🇧🇷 루카스 시우바"). */
-    val shown: String get() = if (flag.isEmpty()) name else "$flag $name"
-}
-
-data class FeedItem(
-    val a: String,
-    val aName: String,
-    val b: String,
-    val bName: String,
-    val games: List<GameScore>,
-    val deltaA: Int,
-    val deltaB: Int,
-    val time: Long,
-    /** "kind|key|value" news, e.g. "승급|win|다이아몬드". */
-    val notes: List<String>,
-    /** [a]'s P(win) after each half-turn of the first game, percent (when the live board still has it). */
-    val curve: IntArray? = null,
-    /** Where it was played: the competition (null for matches saved before), its stage or board, the week. */
-    val comp: Comp? = null,
-    val label: String = "",
-    val week: Int = SeasonCalendar.NONE,
-    /** The season it was played in (0 when unknown). */
-    val season: Int = 0,
-)
-
-/** A match being played: its two sides (team ids for team matches) and where. */
-data class LiveMatch(val a: String, val b: String, val comp: Comp, val label: String, val week: Int, val firstTo: Int = 0)
-
-/** One week of the season (일정): its stages, the league round first. */
-data class WeekRow(val week: Int, val stages: List<WeekStage>) {
-    val done: Boolean get() = stages.all { it.done }
-}
-
-/**
- * The season's clock and calendar (일정). [week] is the week in play: 1..[leagueWeeks] are the
- * league rounds, the weeks after them the post-season; [weeks] holds every week from 1 to
- * [lastWeek] with its stages and what has been played.
- */
-data class ClockView(
-    val season: Int,
-    val week: Int,
-    val leagueWeeks: Int,
-    val lastWeek: Int,
-    /** Everything is played: the season is closing. */
-    val over: Boolean,
-    val weeks: List<WeekRow>,
-    /** Matches being played per (competition, stage); a league round's stage is its matchday. */
-    val live: Map<Pair<Comp, Int>, Int> = emptyMap(),
-) {
-    fun row(w: Int): WeekRow? = weeks.getOrNull(w - 1)
-
-    /** Stages of the weeks before [week] that still have matches to play. */
-    val late: List<WeekStage> get() = weeks.take((week - 1).coerceIn(0, weeks.size)).flatMap { r -> r.stages.filter { !it.done && it.set } }
-
-    /** The next weeks' stages that are not league rounds, from week [from] on. */
-    fun upcoming(from: Int): List<WeekStage> = weeks.drop((from - 1).coerceAtLeast(0)).flatMap { r -> r.stages.filter { it.comp != Comp.LEAGUE } }
-}
-
-data class LeagueView(
-    val rows: List<LadderRow>,
-    val feed: List<FeedItem>,
-    val matches: Long,
-    val games: Long,
-    /** Matches being played right now. */
-    val live: List<LiveMatch>,
-    val season: SeasonView? = null,
-    /** This season's competitions as the 대회 tab draws them (post-season last). */
-    val comps: List<Pair<Comp, CompetitionView>> = emptyList(),
-    val clubs: ClubsView? = null,
-    /** News articles, newest first. */
-    val news: List<Article> = emptyList(),
-    /** This season's most dramatic games and the all-time best, best first. */
-    val highlights: List<Highlight> = emptyList(),
-    val allTime: List<Highlight> = emptyList(),
-    /** The season's weeks (null before the first season). */
-    val clock: ClockView? = null,
-)
-
-/** The 클럽 tab: this season's club table, every club and the latest transfers and draft picks. */
-data class ClubsView(
-    /** This season's club league table, best first (empty when there is none this season). */
-    val table: List<ClubRow>,
-    val clubs: List<Club>,
-    /** Newest first. */
-    val moves: List<ClubMove>,
-    /** This season's club fixtures, by round. */
-    val matches: List<ClubMatch>,
-    /** Each club's lineup this season (board 1 first), fixed when the season started. */
-    val lineups: Map<String, List<String>> = emptyMap(),
-)
-
-/** One team in a season table. */
-data class SeasonRow(
-    val key: String,
-    val name: String,
-    val played: Int,
-    val wins: Int,
-    val draws: Int,
-    val losses: Int,
-    val points: Int,
-    val diff: Int,
-    val avgScore: Double,
-    val yachts: Int,
-    /** +1 promotion zone, -1 relegation zone, +-2 the playoff places, 0 otherwise. */
-    val zone: Int,
-    /** 운 보정 승점: 3 for the higher two-game total on the same dice, 1 when equal. */
-    val aggPoints: Int = 0,
-    /** 우승·승강 확률 (Monte Carlo over the rest of the season), null before the first estimate. */
-    val odds: AiOdds? = null,
-    /** 2-0 sweeps that earned the bonus point (판 승점제's 완승 보너스), counted in [points]. */
-    val sweeps: Int = 0,
-)
-
-data class SeasonHistoryItem(
-    val number: Int,
-    val champions: List<String>,
-    val topScorer: String?,
-    val topScore: Double,
-    val yachtKing: String?,
-    val yachts: Int,
-    val promoted: List<String>,
-    val relegated: List<String>,
-    /** The season's titles and awards besides the division champions: (kind, winner's name). */
-    val titles: List<Pair<String, String>> = emptyList(),
-    /** Each of [champions]' tier (0 = 1부; a pyramid has a champion per group). */
-    val championTiers: List<Int> = emptyList(),
-    /** All the moves, of which [promoted] and [relegated] name some in a pyramid. */
-    val promotedCount: Int = promoted.size,
-    val relegatedCount: Int = relegated.size,
-)
-
-data class SeasonView(
-    val number: Int,
-    val played: Int,
-    val total: Int,
-    val divisions: List<List<SeasonRow>>,
-    /** AIs that join the lowest division next season. */
-    val newcomers: List<String>,
-    /** Latest first. */
-    val history: List<SeasonHistoryItem>,
-    /** Places after each finished matchday per division, in [order] (순위 변동 그래프). */
-    val positions: List<List<ShortArray>> = emptyList(),
-    /** Each division's AIs in the order [positions] uses. */
-    val order: List<List<String>> = emptyList(),
-    val matchdays: Int = 0,
-    val currentMatchday: Int = 0,
-    /** Which tier each division is in (a regional pyramid's groups), and how many go up from each lower group. */
-    val tiers: yacht.engine.league.Tiers = yacht.engine.league.Tiers.linear(divisions.size),
-    val swap: Int = 0,
-    /** How the season's matches are decided (판 승점제 gives a 2-0 sweep a bonus point). */
-    val format: MatchFormat = MatchFormat.MIRRORED,
-    /** The rules the season began with (a change applies from the next season). */
-    val rules: LeagueConfig? = null,
-)
-
-/** One fixture in the calendar (일정표): its games once played, or whether it is being played. */
-data class CalendarItem(
-    val id: Int,
-    val a: String,
-    val aName: String,
-    val b: String,
-    val bName: String,
-    val games: List<GameScore>?,
-    val live: Boolean,
-    /** Once played: +1 A won, -1 B won, 0 a draw, by the season's rule. */
-    val result: Int? = null,
-)
-
-/**
- * 상대 전적 매트릭스: [score][i][j] is row [i]'s points share against column [j] (ties half),
- * NaN with fewer than 2 games; [games][i][j] the games between them.
- */
-class H2hMatrix(val title: String, val labels: List<String>, val score: Array<DoubleArray>, val games: Array<IntArray>)
-
-/** An AI's profile (프로필): where it comes from, its family tree and its honours. */
-data class ProfileView(
-    val key: String,
-    val name: String,
-    val origin: Origin,
-    val hometown: String,
-    /** Debut season of a generated or evolved player (null for the others). */
-    val born: Int?,
-    /** Season it retired, for a retired player or a legend. */
-    val retired: Int?,
-    val legend: Boolean,
-    /** 계보도: names per generation upwards (parents, grandparents, ...), null where unknown. */
-    val ancestors: List<List<String?>>,
-    /** Names per generation downwards (children, grandchildren, ...). */
-    val descendants: List<List<String>>,
-    /** Its honours, newest season first. */
-    val honours: List<Honour>,
-    val titles: Int,
-    /** Genes in words, for generated and evolved players. */
-    val genes: String?,
-    /** Its best and worst opponents (at least 4 games against them). */
-    val best: List<Matchup> = emptyList(),
-    val worst: List<Matchup> = emptyList(),
-    /** This season's and its career statistics (copies), and the league's box averages to compare. */
-    val season: AiStats? = null,
-    val career: AiStats? = null,
-    val league: MetaReport? = null,
-    /** 성장 곡선: one line per season, oldest first. */
-    val lines: List<SeasonLine> = emptyList(),
-    val hallOfFame: Boolean = false,
-    /** Nation, age, abilities, tendencies and style of a generated or evolved player. */
-    val identity: IdentityView? = null,
-    /** Its rating after each of its last matches (레이팅 흐름). */
-    val ratingHistory: List<Int> = emptyList(),
-)
-
-/**
- * Who a generated or evolved player is, for its page: nation, gender and age, its nickname, its
- * abilities (with the change since the season began and its best) and tendencies, its style, its
- * national team career, its rival and its 이 주의 선수 count. Only what is known is filled in (a
- * player retired before identities has a nation and an age at most).
- */
-data class IdentityView(
-    val flag: String,
-    val nationCode: String,
-    val nation: String,
-    val gender: String,
-    /** Its age now, or when it retired. */
-    val age: Int?,
-    val stage: String?,
-    val debutAge: Int?,
-    val nickname: String? = null,
-    val abilities: List<Int>? = null,
-    val change: List<Int> = emptyList(),
-    val peak: List<Int>? = null,
-    val potential: Int? = null,
-    val outlook: String? = null,
-    val tendencies: List<Int>? = null,
-    val style: String? = null,
-    val styleNotes: List<String> = emptyList(),
-    /** Hidden genes as chips: mistakes by feel or slips, the temper. */
-    val chips: List<String> = emptyList(),
-    val school: String? = null,
-    /** Rival: (name, its points, games). */
-    val rival: Triple<String, Double, Int>? = null,
-    val caps: Int = 0,
-    val capTitles: Int = 0,
-    val capBoards: Triple<Int, Int, Int>? = null,
-    /** Its rank among its nation's players by rating. */
-    val nationRank: Int? = null,
-    val nationPlayers: Int = 0,
-    val weeks: Int = 0,
-)
-
-/** The 기록 tab's records room, archive and meta (read on request). */
-data class RecordsView(
-    val records: List<LeagueRecord>,
-    val dynasties: List<Dynasty>,
-    val hallOfFame: List<HallOfFameEntry>,
-    /** Newest first. */
-    val summaries: List<SeasonSummary>,
-    val milestones: List<LeagueEvent>,
-    /** This season so far, and the last finished one. */
-    val meta: MetaReport?,
-    val previousMeta: MetaReport?,
-    /** Best average match rating this season (the MVP race), with its matches. */
-    val mvpRace: List<Pair<String, AiStats>>,
-)
-
-/** A nation in the 국가 랭킹: its national team's record and its players' strength. */
-data class NationRow(
-    val code: String,
-    val flag: String,
-    val name: String,
-    val confed: String,
-    /** Its players in the league now. */
-    val players: Int,
-    /** Average rating of its five best (its national team's strength), null without five rated. */
-    val strength: Int?,
-    val best: String?,
-    val worldTitles: Int,
-    val continentalTitles: Int,
-    val worldBest: Int,
-    val continentalBest: Int,
-    val editions: Int,
-    val won: Int,
-    val drawn: Int,
-    val lost: Int,
-)
-
-/** One nation's sheet: its school, squad, capped players, cups and 국적별 기록. */
-data class NationSheet(
-    val row: NationRow,
-    val motto: String,
-    /** Its best players now: (key, name, rating, age). */
-    val squad: List<NationPlayer>,
-    val capped: List<NationPlayer>,
-    /** "시즌 7 요트 월드컵 우승", newest first. */
-    val cups: List<String>,
-    /** Honours its players won, by kind: (kind, count), most first. */
-    val honours: List<Pair<String, Int>>,
-    val legends: List<NationPlayer>,
-    /** Players by age band: (label, count). */
-    val ages: List<Pair<String, Int>>,
-    val women: Int,
-)
-
-/** A player in a nation's sheet; [note] says what it is listed for. */
-data class NationPlayer(val key: String, val name: String, val note: String)
-
-/** A young player worth watching (유망주). */
-data class ProspectRow(val key: String, val shown: String, val age: Int, val overall: Int, val potential: Int, val outlook: String?, val rating: Int?)
-
-/** Two players side by side (선수 비교). */
-data class CompareView(
-    val a: String,
-    val b: String,
-    val nameA: String,
-    val nameB: String,
-    val idA: IdentityView?,
-    val idB: IdentityView?,
-    /** Rating, rank, games, win rate, average score, titles, MVPs: (label, a, b, which is better: 1 a, -1 b, 0 neither). */
-    val lines: List<CompareLine>,
-    /** a's points share against b and their games, null when they never met. */
-    val h2h: Pair<Double, Int>?,
-)
-
-data class CompareLine(val label: String, val a: String, val b: String, val better: Int)
-
-/** A retired player or legend for the 레전드 보관소. */
-data class PastPlayer(
-    val key: String,
-    val name: String,
-    val born: Int,
-    val retired: Int,
-    val bestRating: Int?,
-    val titles: Int,
-    val legend: Boolean,
-    val honours: String,
-    val hometown: String,
-)
-
-/** A matchday of a division in the calendar. */
-data class CalendarView(val division: Int, val matchday: Int, val matchdays: Int, val current: Int, val items: List<CalendarItem>, val season: Int = 0)
-
-/** A ranked game counted: my rating and tier before and after. */
-data class RankResult(
-    val opponent: String,
-    val won: Boolean,
-    val draw: Boolean,
-    val before: Int?,
-    val after: Int?,
-    val tierBefore: Tier?,
-    val tierAfter: Tier?,
-    val rank: Int?,
-    val games: Int,
-    val placementLeft: Int,
-)
-
-/** A matchup of one AI for its detail page: its points share against [other] in [games] games. */
-data class Matchup(val other: String, val name: String, val score: Double, val games: Int)
-
 /** How many cores the league may use (battery). */
 /** What the league does while the app is hidden. */
 enum class LeagueBackground(val label: String) {
@@ -534,40 +116,6 @@ enum class LeagueSpeed(val label: String) {
     }
 }
 
-/** One shown step of a watched game: a throw of one side, with the cards after the turn when it ends. */
-data class WatchStep(
-    val turn: Int,
-    /** 0 = first player. */
-    val side: Int,
-    val throwNo: Int,
-    val dice: List<Int>,
-    val held: List<Int>?,
-    val category: yacht.engine.Category?,
-    val points: Int,
-    /** The first player's P(win) after this step. */
-    val winFirst: Double?,
-    val lines: List<yacht.engine.explain.Comment>,
-    val first: yacht.engine.Board,
-    val second: yacht.engine.Board,
-)
-
-/** A game being watched: the two AIs, the steps worked out so far, and the one shown. */
-data class WatchView(
-    val first: String,
-    val second: String,
-    val firstName: String,
-    val secondName: String,
-    val steps: List<WatchStep>,
-    /** Steps the game has in all (two sides × 12 turns, one to three throws each); known once done. */
-    val complete: Boolean,
-    val shown: Int,
-    val playing: Boolean,
-    /** A highlight's caption when one is replayed (not counted anywhere). */
-    val title: String? = null,
-    /** Why it cannot be shown (an AI changed since), instead of the game. */
-    val message: String? = null,
-)
-
 /**
  * The AI league: dozens of AIs play mirrored matches in the background while the screen shows
  * the ladder and the season live. Runs only while started and the app is visible; everything is
@@ -589,6 +137,8 @@ class LeagueController(
     /** Present while the league should be running: it goes on by itself the next time the app opens. */
     private val resumeFile = File(folder, "resume.txt")
     private val favouriteFile = File(folder, "favourites.txt")
+    private val uiFile = File(folder, UiPrefs.FILE)
+    private val logFile = File(folder, MatchCenter.LOGS)
     private val cores = Runtime.getRuntime().availableProcessors()
 
     var view by mutableStateOf<LeagueView?>(null)
@@ -648,20 +198,42 @@ class LeagueController(
     var pace by mutableStateOf(0.0)
         private set
 
-    /** Screen state: the tab shown (ladder, season, news, families) and the AI opened in detail. */
-    var tab by mutableStateOf(0)
-    var detail by mutableStateOf<String?>(null)
+    /**
+     * What the league screens show (tabs, sheets, pages, filters): all of it, so the harness can
+     * set any screen. Main thread only: [shownLeague] keeps a copy of its league for the snapshot.
+     */
+    val nav: LeagueNav = LeagueNav {
+        shownLeague = nav.league
+        publish(force = true)
+    }
 
-    /** The part of 기록 shown (its chips, in order), and the player a 선수 비교 starts from. */
-    var recordsMode by mutableStateOf(0)
-    var comparing by mutableStateOf<String?>(null)
+    /** [nav]'s league, for the snapshot off the main thread. */
+    @Volatile
+    private var shownLeague: String? = null
 
-    /** The competition the 대회 tab shows (null: the first), and the week the 일정 tab shows (null: the week in play). */
-    var compFocus by mutableStateOf<Comp?>(null)
+    /**
+     * The player whose page is on top, for the player dialogs until the pages replace them:
+     * a key opens its page, null closes the top player page.
+     */
+    @Deprecated("A transition to the pages: use nav", ReplaceWith("nav.page"))
+    var detail: String?
+        get() = (nav.page as? Page.Player)?.key
+        set(key) {
+            if (key != null) nav.open(Page.Player(key)) else (nav.page as? Page.Player)?.let { nav.close(it) }
+        }
 
-    /** The rules dialog (규칙 설정) is open. */
-    var rulesOpen by mutableStateOf(false)
-    var scheduleWeek by mutableStateOf<Int?>(null)
+    /** UI preferences saved in league/ui.txt (dismissed banners, the watch pace). */
+    var uiPrefs by mutableStateOf(UiPrefs())
+        private set
+
+    /** Changes the UI preferences and saves them. */
+    fun updateUiPrefs(change: (UiPrefs) -> UiPrefs) {
+        val p = change(uiPrefs)
+        if (p == uiPrefs) return
+        uiPrefs = p
+        val text = p.encode()
+        scope.launch(fileWrites) { runCatching { uiFile.writeTextAtomically(text) } }
+    }
 
     /** The player's own AIs (saved) and clone profile. */
     var customs by mutableStateOf<List<CustomAiSpec>>(emptyList())
@@ -725,6 +297,9 @@ class LeagueController(
     var config by mutableStateOf(LeagueConfig())
         private set
 
+    /** The seed a new league's first season is drawn from (fixed by the harness, to measure the same league again). */
+    internal var leagueSeed: () -> Long = System::nanoTime
+
     private val lock = Any()
     private val throttle = Any()
     private val busy = HashSet<String>()
@@ -751,6 +326,64 @@ class LeagueController(
     private val snapshotAgain = AtomicBoolean(false)
     private var shownSnapshot = 0L
 
+    /** What the helpers below reach the league by (read when called: some fields are set later). */
+    private val host = object : LeagueHost {
+        override val scope: CoroutineScope get() = this@LeagueController.scope
+        override val lock: Any get() = this@LeagueController.lock
+        override val folder: File get() = this@LeagueController.folder
+        override fun world(): LeagueWorld? = world
+        override fun tables(): Tables? = tables
+        override fun extra(): LeagueTables? = extra
+        override fun estimate(): WinEstimate? = estimate
+        override fun ai(key: String): LeagueAi? = aiOf(key)
+
+        override fun aiFrom(key: String, spec: CustomAiSpec): LeagueAi? {
+            val t = tables ?: return null
+            val x = extra ?: return null
+            return leagueAi(PlayerRecord(key, name(key), "", Origin.of(key), 1, null, null, spec), t, x)
+        }
+
+        override fun adaptive(key: String): Boolean =
+            key == LeagueRoster.ADAPTIVE || key == CustomAis.CLONE || key in DUEL_AIS || aiOf(key)?.adapts == true || customs.any { it.key == key && it.adapts }
+
+        override fun name(key: String): String = this@LeagueController.name(key)
+
+        override fun shown(key: String): String {
+            val flag = synchronized(lock) { world?.players?.get(key)?.identity?.nation }?.let { Nations.of(it)?.flag }
+            return if (flag == null) name(key) else "$flag ${name(key)}"
+        }
+
+        override fun badge(key: String): ClubBadge? = null
+        override fun leagueLabel(key: String): String? = null
+        override fun favourites(): Set<String> = favourites
+        override fun view(): LeagueView? = view
+        override fun running(): Boolean = running
+        override fun startOneWeek(): Unit = this@LeagueController.startOneWeek()
+
+        override fun requestSave() {
+            scope.launch { save() }
+        }
+
+        override fun oppModel(key: String): OppModel? {
+            val t = tables ?: return null
+            return synchronized(lock) { world?.oppModel(t, key) }
+        }
+
+        override fun members(): Int = synchronized(lock) { world?.members?.size ?: 0 }
+    }
+
+    /** Watching real matches (for now the friendly, played as the league screen's 관전 is). */
+    val center: MatchCenter = MatchCenter(host) { a, b -> startWatch(a, b) { uiPrefs.watchPace.ms } }
+
+    /** Player pages, leaderboards, reviews and match lists, on request. */
+    val analytics: LeagueAnalytics = LeagueAnalytics(host)
+
+    /** Competition, club, league, ranking and federation pages, on request. */
+    val worldPages: WorldPages = WorldPages(host)
+
+    /** The home dashboard. */
+    val home: HomeFeed = HomeFeed(host)
+
     init {
         runCatching {
             prefs.takeIf { it.exists() }?.readText()?.trim()?.let { v -> LeagueSpeed.entries.firstOrNull { it.name == v }?.let { speed = it } }
@@ -764,6 +397,7 @@ class LeagueController(
         customs = runCatching { customFile.takeIf { it.exists() }?.readLines()?.mapNotNull { CustomAiSpec.decode(it) } }.getOrNull().orEmpty()
         config = readConfig()
         favourites = readFavourites()
+        uiPrefs = readUiPrefs()
     }
 
     /**
@@ -785,6 +419,9 @@ class LeagueController(
 
     private fun readFavourites(): Set<String> =
         runCatching { favouriteFile.takeIf { it.exists() }?.readLines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() }.getOrNull().orEmpty()
+
+    /** league/ui.txt, or the defaults (missing or unreadable). */
+    private fun readUiPrefs(): UiPrefs = UiPrefs.decode(runCatching { uiFile.takeIf { it.exists() }?.readText() }.getOrNull())
 
     /** Number of AIs in the league. */
     val size: Int get() = roster.size
@@ -889,10 +526,13 @@ class LeagueController(
                     runCatching { files[name]?.let { f.writeAtomically(it) } ?: f.delete() }
                 }
             }
+            center.clear()
         } catch (e: Throwable) {
             restoring = false
             throw e
         }
+        // The backup's UI preferences (the defaults when it has none).
+        uiPrefs = readUiPrefs()
         reload()
     }
 
@@ -1104,7 +744,12 @@ class LeagueController(
      * Starts (or resumes) the league. [resume]: it goes on by itself (the app back, a speed
      * change, a relaunch), so a 1주씩 run keeps the week it was playing.
      */
-    fun start(resume: Boolean = false) {
+    fun start(resume: Boolean = false): Unit = start(resume, oneWeek = false)
+
+    /** ▶ for one week whatever the run mode (which is not changed): the week in play, then it stops. */
+    fun startOneWeek(): Unit = start(resume = false, oneWeek = true)
+
+    private fun start(resume: Boolean, oneWeek: Boolean) {
         val t = tables ?: return
         val flag = AtomicBoolean(false)
         synchronized(runGate) {
@@ -1137,11 +782,13 @@ class LeagueController(
                         startRanks = l.keys.mapNotNull { k -> l.rankOf(k)?.let { k to it } }.toMap()
                         if (w.plan == null) {
                             configureWorld(w)
-                            w.openFirstSeason(System.nanoTime())
+                            w.openFirstSeason(leagueSeed())
                         }
+                        // A run going on by itself keeps its week (a one-week run in 계속 too).
                         weekGoal = when {
-                            runMode != LeagueRunMode.WEEK -> null
+                            oneWeek -> w.plan?.let { it.number to it.week }
                             resume && weekGoal != null -> weekGoal
+                            runMode != LeagueRunMode.WEEK -> null
                             else -> w.plan?.let { it.number to it.week }
                         }
                     }
@@ -1222,7 +869,7 @@ class LeagueController(
         // first one, or the workers would wait forever.
         if (w.plan == null) {
             configureWorld(w)
-            w.openFirstSeason(System.nanoTime())
+            w.openFirstSeason(leagueSeed())
         }
         val p = w.plan ?: return null
         val inLeague = p.league.standings.keys
@@ -1294,9 +941,23 @@ class LeagueController(
         timings.note("rollover", System.nanoTime() - t0)
         val news = historyItem(closing.season, closing.honours)
         val rv = w.archive.pendingReview
+        // A new season opens on a followed player's division (the first division without one).
+        val shown = w.plan?.league?.let { s ->
+            val tiers = s.tiers.takeIf { it.size == s.divisions.size } ?: yacht.engine.league.Tiers.linear(s.divisions.size)
+            val favs = favourites
+            val d = s.divisions.indices.firstOrNull { i -> s.divisions[i].any { it in favs } } ?: 0
+            if (s.divisions.isEmpty()) null else tiers.tier(d) to tiers.group(d)
+        }
         scope.launch {
             seasonNews = news
             if (rv != null) review = rv
+            // On its current round, with the chart's default players.
+            shown?.let { (tier, group) ->
+                nav.tier = tier
+                nav.group = group
+            }
+            nav.round = null
+            nav.chartKeys = emptyList()
         }
         saveAsync()
     }
@@ -1440,6 +1101,14 @@ class LeagueController(
             if (isCup(it.comp)) cupsInFlight++
             if (it.kind == JobKind.TEAM) world?.let { w -> w.teamsInFlight++ }
         }
+
+    /**
+     * The run in progress plays season [season] to its end and stops by itself right after its
+     * close, nothing of the next season played (the harness measures whole seasons this way).
+     */
+    internal fun stopAfterSeason(season: Int) {
+        scope.launch(Dispatchers.Default) { synchronized(lock) { weekGoal = season to Int.MAX_VALUE } }
+    }
 
     /** The last week a 1주씩 run plays in [w]'s season (none once the season is another). */
     private fun lastWeek(w: LeagueWorld): Int {
@@ -1746,10 +1415,13 @@ class LeagueController(
 
     /**
      * A new world under the lock: [players] and [ladder] (a fresh one by default); the season,
-     * clubs, stats, archive, news, highlights and the lab start again.
+     * clubs, stats, archive, news, highlights, the lab and the match logs start again.
      */
     private fun renew(players: PlayerBook, ladder: Ladder? = null) {
         world = null
+        // The old league's logs: a new league's "1:L:123" must not find them.
+        center.clear()
+        scope.launch(fileWrites) { runCatching { logFile.delete() } }
         pendingPlayers = players
         rebuildRoster()
         val w = LeagueWorld(ladder ?: Ladder(ladderKeys()), config).also { it.players = players }
@@ -1780,7 +1452,7 @@ class LeagueController(
                 synchronized(lock) { renew(players) }
             }
             withContext(fileWrites) {
-                for (name in LeagueWorld.FILES) runCatching { File(folder, name).delete() }
+                for (name in LeagueWorld.FILES + MatchCenter.LOGS) runCatching { File(folder, name).delete() }
             }
             review = null
             seasonNews = null
@@ -1803,7 +1475,7 @@ class LeagueController(
         // comparison of the old league closes.
         nationSheet = null
         closeCompare()
-        comparing = null
+        for (p in nav.pages.filterIsInstance<Page.Compare>()) nav.close(p)
         nations = emptyList()
         prospects = emptyList()
         loadNations()
@@ -1812,39 +1484,57 @@ class LeagueController(
 
     private suspend fun save() = withContext(Dispatchers.Default) {
         var from: LeagueWorld? = null
+        var bytes: Map<String, ByteArray> = emptyMap()
         val texts = synchronized(lock) {
             val t0 = System.nanoTime()
             from = world
+            bytes = center.files()
             world?.encodeFiles().also { timings.note("save", System.nanoTime() - t0) }
         } ?: return@withContext
-        withContext(fileWrites) { write(texts, from) }
+        withContext(fileWrites) { write(texts, bytes, from) }
     }
 
     /** Saves every league file (under the lock: the encoding needs it). */
     private fun saveAsync() {
         val w = world ?: return
         val texts = w.encodeFiles()
-        scope.launch(fileWrites) { write(texts, w) }
+        val bytes = center.files()
+        scope.launch(fileWrites) { write(texts, bytes, w) }
     }
 
     /**
-     * Writes [from]'s files, in order; nothing when that world was replaced since (a reset or a
-     * restore) or a restore is writing its files.
+     * Writes [from]'s text files, then its binary ones, in order; nothing when that world was
+     * replaced since (a reset or a restore) or a restore is writing its files.
      */
-    private fun write(texts: Map<String, String>, from: LeagueWorld?) {
+    private fun write(texts: Map<String, String>, bytes: Map<String, ByteArray>, from: LeagueWorld?) {
         for ((name, text) in texts) {
             if (restoring || world !== from) return
             runCatching { File(folder, name).writeTextAtomically(text) }
         }
+        for ((name, data) in bytes) {
+            if (restoring || world !== from) return
+            runCatching { File(folder, name).writeAtomically(data) }
+        }
     }
 
-    /** The league files as they are now (encoded under the lock) and the rules, for a backup. */
+    /**
+     * The league files as they are now (encoded under the lock), the match logs, the rules and the
+     * UI preferences, for a backup.
+     */
     fun backupFiles(): Map<String, ByteArray> {
-        val texts = synchronized(lock) { world?.encodeFiles() }.orEmpty()
+        var bytes: Map<String, ByteArray> = emptyMap()
+        val texts = synchronized(lock) {
+            bytes = center.files()
+            world?.encodeFiles()
+        }.orEmpty()
         val out = LinkedHashMap<String, ByteArray>()
         for ((name, text) in texts) out[name] = text.toByteArray()
-        for (f in listOf(configFile, customFile, prefs, favouriteFile)) {
-            if (f.exists()) runCatching { out[f.name] = f.readBytes() }
+        out.putAll(bytes)
+        // As they are now (a change may still be on its way to the file).
+        out[UiPrefs.FILE] = uiPrefs.encode().toByteArray()
+        // The files beside the league's as saved (the match logs only when none are in memory).
+        for (f in listOf(configFile, customFile, prefs, favouriteFile, logFile)) {
+            if (f.name !in out && f.exists()) runCatching { out[f.name] = f.readBytes() }
         }
         // Before the league is read: the files on disk.
         if (texts.isEmpty()) for (name in LeagueWorld.FILES) File(folder, name).takeIf { it.exists() }?.let { f -> runCatching { out[name] = f.readBytes() } }
@@ -2207,7 +1897,7 @@ class LeagueController(
         val w = world
         w?.lab?.let { b -> val v = b.current?.results to b.history; scope.launch { lab = v } }
         return LeagueView(
-            rows, feed, l.matches, l.games, live.values.map { LiveMatch(it.a, it.b, it.comp, it.label, it.week, it.firstTo) }, s?.let { seasonView(it) }, comps, clubs,
+            rows, feed, l.matches, l.games, live.values.map { LiveMatch(it.a, it.b, it.comp, it.label, it.week, it.firstTo, it.id) }, s?.let { seasonView(it) }, comps, clubs,
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
             s?.let { runCatching { clockView(it) }.getOrNull() },
         )
@@ -2387,7 +2077,7 @@ class LeagueController(
     }
 
     /** The records room, archive and meta, read on request. */
-    var records by mutableStateOf<RecordsView?>(null)
+    var records by mutableStateOf<RecordsRoomView?>(null)
         private set
 
     fun loadRecords() {
@@ -2395,7 +2085,7 @@ class LeagueController(
             val v = synchronized(lock) {
                 val w = world ?: return@synchronized null
                 val st = w.stats
-                RecordsView(
+                RecordsRoomView(
                     st.records.all, w.archive.dynasties.toList(), w.archive.hallOfFame.toList(),
                     w.archive.summaries.sortedByDescending { it.season }, st.milestones.reversed(),
                     runCatching { st.liveMeta() }.getOrNull(), st.previousMeta ?: st.meta,
@@ -2771,6 +2461,38 @@ class LeagueController(
 
     private val calendarRequests = java.util.concurrent.atomic.AtomicInteger()
 
+    /** Loads [round] of [division] into [calendar] (null: the round being played); a round is a matchday. */
+    fun loadRound(division: Int, round: Int? = null): Unit = loadCalendar(division, round)
+
+    /** The recent form (최근 폼) asked for last, read off the main thread on request. */
+    var form by mutableStateOf<FormView?>(null)
+        private set
+
+    /** Loads [division]'s last [FORM_GAMES] results per player into [form]. */
+    fun loadForm(division: Int) {
+        val request = formRequests.incrementAndGet()
+        scope.launch(Dispatchers.Default) {
+            val v = synchronized(lock) {
+                val s = plan?.league ?: return@synchronized null
+                if (s.divisions.isEmpty()) return@synchronized null
+                val d = division.coerceIn(0, s.divisions.size - 1)
+                // Matchday by matchday: each player's results oldest first.
+                val results = HashMap<String, StringBuilder>()
+                for (md in 0 until s.matchdays) for (f in s.matchday(md)) {
+                    if (f.division != d) continue
+                    val games = s.result(f.id) ?: continue
+                    val r = TieRule.match(games, s.format)
+                    results.getOrPut(f.a) { StringBuilder() }.append(if (r > 0) 'W' else if (r < 0) 'L' else 'D')
+                    results.getOrPut(f.b) { StringBuilder() }.append(if (r < 0) 'W' else if (r > 0) 'L' else 'D')
+                }
+                FormView(d, s.number, s.fixturesPlayed, s.divisions[d].associateWith { k -> results[k]?.takeLast(FORM_GAMES)?.toString().orEmpty() })
+            }
+            scope.launch { if (request == formRequests.get()) form = v }
+        }
+    }
+
+    private val formRequests = java.util.concurrent.atomic.AtomicInteger()
+
     /** A past season for the hall of fame, from its honours. */
     private fun historyItem(season: Int, h: List<Honour>): SeasonHistoryItem {
         val titles = h.filter { DIVISION.matches(it.kind) }.sortedBy { it.kind.drop(1).toIntOrNull() ?: 0 }
@@ -2811,14 +2533,20 @@ class LeagueController(
         /** Honours the season history lists after the division champions, in this order. */
         val SHOWN_TITLES = listOf("REG", "L0R", "CL", "CL2", "CUP", "CUP2", "SUPER", "CLUB", "FAMILY", "ALLSTAR", "WC", "WC2", "CC", "WCMVP", "MVP", "ROOKIE", "MIP")
 
-        /** League files a backup restores (when this phone's league has no games yet). */
-        val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt")
+        /** League files a backup restores (when this phone's league has no games yet); one the backup lacks is removed. */
+        val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt", UiPrefs.FILE, MatchCenter.LOGS)
+
+        /** Hand-made AIs that play the end of a game by a table of the opponent's actual results (막판 대결표, 최소최대). */
+        private val DUEL_AIS = setOf("duel", "minimax")
 
         /** The default number of players before the pyramid. */
         private const val OLD_DEFAULT_PLAYERS = 200
 
         /** Moves a season's history names (more: only those into 1부 and 2부). */
         const val MOVES_LISTED = 16
+
+        /** Results a row's recent form holds. */
+        const val FORM_GAMES = 5
 
         /** Oldest age listed among the 유망주. */
         const val PROSPECT_AGE = 22
