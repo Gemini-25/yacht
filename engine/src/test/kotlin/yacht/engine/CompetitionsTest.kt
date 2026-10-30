@@ -585,7 +585,7 @@ class CompetitionsTest {
         val e = (1..3).map { DrawEntry(key(it), it, rating(key(it))) }
         // A draw read back with a seed missing: the top side of a tie is empty.
         val k = Knockout(listOf(null to e[1], e[0] to e[2]), { 1 }, { "r$it" }, { 0.0 })
-        assertEquals(TieView("ai02", null, 0.0, 0.0, "ai02", false, 1), k.view()[0].ties[0])
+        assertEquals(TieView("ai02", null, 0.0, 0.0, "ai02", false, 1, bye = true), k.view()[0].ties[0])
         // The final waits for the other tie: its known side shows, the other is not known yet.
         assertEquals(TieView("ai02", null, 0.0, 0.0, null, false, 1), k.view()[1].ties[0])
     }
