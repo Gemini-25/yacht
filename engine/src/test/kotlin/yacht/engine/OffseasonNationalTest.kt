@@ -1,15 +1,18 @@
 package yacht.engine
 
 import yacht.engine.league.BoardResult
+import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
 import yacht.engine.league.Fixture
 import yacht.engine.league.GameScore
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.LeagueTitlePlayoffs
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.Nations
 import yacht.engine.league.Offseason
+import yacht.engine.league.PromotionPlayoff
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.TieRule
@@ -17,6 +20,7 @@ import java.security.MessageDigest
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -109,6 +113,82 @@ class OffseasonNationalTest {
         val (d, _) = close(two, (1..24).map(::key), emptySet())
         out.append(d)
         assertEquals(LEGACY, sha(out.toString()))
+    }
+
+    /** 300 Koreans, 26 Japanese and 400 of the other 26 nations (each too few for a league of its own). */
+    private fun nationOf(k: String): String {
+        val i = index(k)
+        val rest = Nations.ALL.drop(2)
+        return when {
+            i <= 300 -> "KR"
+            i <= 326 -> "JP"
+            else -> rest[i % rest.size].code
+        }
+    }
+
+    /** National leagues of 16 a division (Japan's 26 two of 13), five up and down, every playoff: played to the end. */
+    private fun nationalSeason(): SeasonPlan {
+        val config = LeagueConfig(national = true, doubleRoundRobin = true, divisionSize = 16, leagueMin = 20, autoSwap = 5)
+        val ctx = Offseason.Context((1..726).map(::key), ::rating, { null }, { "" }, config, nation = ::nationOf)
+        val plan = Offseason.first(11L, ctx)
+        drive(plan, Random(21))
+        return plan
+    }
+
+    @Test
+    fun aNationalSeasonHasHonoursAndMovesPerLeague() {
+        val plan = nationalSeason()
+        val season = plan.league
+        val leagues = season.leagues
+        assertEquals(listOf("KR", "JP", "XAS", "XEU", "XAM", "XAF"), leagues.list.map { it.id })
+        val moves = Offseason.moves(plan)
+        val honours = Offseason.honours(plan, moves)
+        // Titles carry the league; moves are no honours.
+        assertTrue(honours.none { it.kind.startsWith("UP") || it.kind.startsWith("DOWN") || it.kind.startsWith("STAY") })
+        assertTrue(honours.none { it.kind in setOf("L0", "REG", "L0R", "L1") })
+        val titles = assertIs<LeagueTitlePlayoffs>(plan.competition(Comp.TITLE_PLAYOFF))
+        for (lg in leagues.list) {
+            assertEquals(season.table(lg.top).first().key, honours.single { it.kind == "REG.${lg.id}" }.key)
+            // The 1부's champion is the playoff's, its runner-up the playoff's L0R.
+            val champion = titles.honours().single { it.kind == "L0.${lg.id}" }.key
+            assertEquals(champion, honours.single { it.kind == "L0.${lg.id}" }.key)
+            assertEquals(titles.honours().single { it.kind == "L0R.${lg.id}" }, honours.single { it.kind == "L0R.${lg.id}" })
+            for (t in 1 until lg.size) assertEquals(season.table(lg.first + t).first().key, honours.single { it.kind == "L$t.${lg.id}" }.key, "${lg.id} $t")
+            assertTrue(honours.none { it.kind == "L${lg.size}.${lg.id}" })
+        }
+        assertTrue(honours.any { it.kind == "L1.KR" } && honours.any { it.kind == "L18.KR" })
+        // A leader deleted during the season wins nothing: the next in the table has it.
+        val jpTop = season.table(leagues.byId("JP")!!.top).map { it.key }
+        val gone = setOf(jpTop[0])
+        assertEquals(jpTop[1], Offseason.honours(plan, Offseason.moves(plan, gone), gone).single { it.kind == "REG.JP" }.key)
+        // Moves: per boundary of each league, a third of the smaller side at most, and the 승강전.
+        val promo = assertIs<PromotionPlayoff>(plan.competition(Comp.PROMOTION_PLAYOFF))
+        val won = promo.honours().filter { it.kind.startsWith("UP") }.map { it.key }.toSet()
+        assertTrue(moves.all { m -> leagues.byId(m.league)?.let { lg -> season.leagueOf(m.key) == lg } == true })
+        var swaps = 0
+        for (lg in leagues.list) for (t in 0 until lg.size - 1) {
+            val upper = season.table(lg.first + t).map { it.key }
+            val lower = season.table(lg.first + t + 1).map { it.key }
+            val s = minOf(plan.config.autoSwap, upper.size / 3, lower.size / 3)
+            if (lg.id == "JP") assertEquals(4, s)
+            val ties = promo.spots.filter { it.league == lg.id && it.division == t }
+            assertEquals(listOf(upper[upper.size - s - 1] to lower[s]), ties.map { it.upper to it.lower }, "${lg.id} $t")
+            val lowerWon = ties.filter { it.lower in won }
+            swaps += lowerWon.size
+            val downs = moves.filter { it.league == lg.id && it.from == t && it.to == t + 1 }.map { it.key }
+            val ups = moves.filter { it.league == lg.id && it.from == t + 1 && it.to == t }.map { it.key }
+            assertEquals((upper.takeLast(s) + lowerWon.map { it.upper }).toSet(), downs.toSet(), "${lg.id} $t")
+            assertEquals((lower.take(s) + lowerWon.map { it.lower }).toSet(), ups.toSet(), "${lg.id} $t")
+        }
+        assertTrue(swaps > 0, "some 승강전 went to the lower side")
+        assertEquals(moves.size, moves.toSet().size)
+        // The next season: national again, everyone placed, the moves applied in the leagues
+        // that kept their ladders.
+        val (next, told) = Offseason.next(plan, Offseason.Context((1..726).map(::key), ::rating, { null }, { "" }, plan.config, nation = ::nationOf))
+        assertEquals(honours, told)
+        assertTrue(next.league.leagues.national)
+        assertEquals(leagues, next.league.leagues)
+        for (m in moves) assertEquals(m.to, next.league.tierOf(m.key), "${m.key} ${m.from} -> ${m.to}")
     }
 
     private companion object {

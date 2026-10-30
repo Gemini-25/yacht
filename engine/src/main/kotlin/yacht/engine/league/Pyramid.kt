@@ -90,6 +90,9 @@ class Tiers(private val of: IntArray, val names: List<String>) {
  * Between two tiers the top [LeagueConfig.groupSwap] of every lower group go up and as many go
  * down from the upper groups' bottom places ([crossing]); places left by players who retired are
  * filled by the best of the tier below ([next]).
+ *
+ * The tables, boundaries and tier rankings are per league ([LeagueDef]): a national season's
+ * leagues are each a linear ladder, whose boundaries are a linear league's ([NationalLeagues]).
  */
 object Pyramid {
     const val MAX_LINEAR = 6
@@ -164,8 +167,12 @@ object Pyramid {
         return out
     }
 
-    /** The group tables of tier [t] of [league], best first each. */
-    fun tables(league: Season, t: Int): List<List<String>> = league.tiers.groups(t).map { d -> league.table(d).map { it.key } }
+    /** The group tables of tier [t] of league [lg] of [season], best first each. */
+    fun tables(season: Season, lg: LeagueDef, t: Int): List<List<String>> = lg.tiers.groups(t).map { d -> season.table(lg.first + d).map { it.key } }
+
+    /** [tables] of a season's single league (a national season: all its divisions as one ladder, as [Season.tiers] has them). */
+    @Deprecated("A national season has several leagues: pass the league's LeagueDef")
+    fun tables(league: Season, t: Int): List<List<String>> = tables(league, flat(league), t)
 
     /** Worse first: fewer points per match, then a lower score difference and score per match, then by key. */
     fun worse(league: Season): Comparator<String> {
@@ -177,21 +184,41 @@ object Pyramid {
             .thenByDescending { it }
     }
 
-    /** The boundary below tier [t] of [league] under [config] (linear: [LeagueConfig.autoSwap], groups: [LeagueConfig.groupSwap]). */
-    fun crossing(league: Season, config: LeagueConfig, t: Int): Crossing =
-        crossing(tables(league, t), tables(league, t + 1), if (league.tiers.linear) config.autoSwap else config.groupSwap, config.promotionPlayoff, worse(league))
+    /**
+     * The boundary below tier [t] of league [lg] of [season] under [config] (a linear ladder:
+     * [LeagueConfig.autoSwap]; a pyramid's groups: [LeagueConfig.groupSwap]).
+     */
+    fun crossing(season: Season, config: LeagueConfig, lg: LeagueDef, t: Int): Crossing =
+        crossing(tables(season, lg, t), tables(season, lg, t + 1), if (lg.tiers.linear) config.autoSwap else config.groupSwap, config.promotionPlayoff, worse(season))
+
+    /** [crossing] of a season's single league (a national season: all its divisions as one ladder, as [Season.tiers] has them). */
+    @Deprecated("A national season has several leagues: pass the league's LeagueDef")
+    fun crossing(league: Season, config: LeagueConfig, t: Int): Crossing = crossing(league, config, flat(league), t)
 
     /**
-     * Tier [t]'s players from best to worst: every group's winner (the better by points per
-     * match first), then every runner-up, ... A linear tier: its table.
+     * Tier [t] of league [lg] from best to worst: every group's winner (the better by points per
+     * match first), then every runner-up, ... ([interleave]). A linear tier: its table.
      */
-    fun ranking(league: Season, t: Int): List<String> {
-        val tables = tables(league, t)
-        val better = worse(league).reversed()
-        val out = ArrayList<String>()
-        for (p in 0 until (tables.maxOfOrNull { it.size } ?: 0)) out += tables.mapNotNull { it.getOrNull(p) }.sortedWith(better)
+    fun ranking(season: Season, lg: LeagueDef, t: Int): List<String> = interleave(tables(season, lg, t), worse(season).reversed())
+
+    /** [ranking] of a season's single league (a national season: all its divisions as one ladder, as [Season.tiers] has them). */
+    @Deprecated("A national season has several leagues: pass the league's LeagueDef")
+    fun ranking(league: Season, t: Int): List<String> = ranking(league, flat(league), t)
+
+    /**
+     * [lists] position by position: every list's first (the [better] first among them), then
+     * every list's second, and so on. Players are only ever compared with the same place of
+     * another list, never across places.
+     */
+    fun interleave(lists: List<List<String>>, better: Comparator<String>): List<String> {
+        val out = ArrayList<String>(lists.sumOf { it.size })
+        for (p in 0 until (lists.maxOfOrNull { it.size } ?: 0)) out += lists.mapNotNull { it.getOrNull(p) }.sortedWith(better)
         return out
     }
+
+    /** A season's single league; a national season's divisions as one ladder (the view of [Season.tiers]). */
+    private fun flat(season: Season): LeagueDef =
+        season.leagues.list.singleOrNull() ?: LeagueDef(LeagueIds.LEGACY, 0, Tiers.linear(season.divisions.size))
 
     /**
      * Next season's divisions and tiers for [shape] (groups per tier): the last season's
@@ -203,8 +230,8 @@ object Pyramid {
      */
     fun next(league: Season, moves: List<Offseason.Move>, ctx: Offseason.Context, shape: List<Int>): Pair<List<List<String>>, Tiers> {
         val keys = ctx.keys.toSet()
-        val old = league.tiers
-        val lists = (0 until old.count).map { ranking(league, it).toMutableList() }.toMutableList()
+        val lg = flat(league)
+        val lists = (0 until lg.tiers.count).map { ranking(league, lg, it).toMutableList() }.toMutableList()
         for (m in moves) {
             if (m.from !in lists.indices || m.to !in lists.indices) continue
             lists[m.from].remove(m.key)
@@ -229,9 +256,10 @@ object Pyramid {
      * into groups. A tier short of players takes the best of the tiers below (the next one
      * first; any one further down when it is empty) who were not [relegated] this season; a tier
      * with too many sends its worst down, those [promoted] into it last (a player announced as
-     * promoted keeps its place unless nobody else is left).
+     * promoted keeps its place unless nobody else is left). [NationalLeagues.next] fills each
+     * national league's ladder with it.
      */
-    private fun fill(
+    internal fun fill(
         lists: MutableList<MutableList<String>>,
         ctx: Offseason.Context,
         shape: List<Int>,

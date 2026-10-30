@@ -9,6 +9,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PyramidTest {
+    /** The single (legacy) league's tiers. */
+    private val Season.legacy: Tiers get() = leagues.list.single().tiers
+
     private fun key(i: Int) = "p%04d".format(i)
     private fun index(k: String) = k.removePrefix("p").toInt()
     private fun rating(k: String) = 2000.0 - index(k)
@@ -85,7 +88,7 @@ class PyramidTest {
     fun aPyramidSeasonSendsEveryoneToTheRightTierAndKeepsTheSizes() {
         val ctx = context(1000)
         val plan = Offseason.first(42L, ctx)
-        val tiers = plan.league.tiers
+        val tiers = plan.league.legacy
         assertFalse(tiers.linear)
         assertEquals(20, plan.league.divisions.size)
         assertEquals(listOf(1, 2, 4, 8, 5), (0 until tiers.count).map { tiers.groupCount(it) })
@@ -99,7 +102,7 @@ class PyramidTest {
 
         // The saved season keeps its tiers.
         val back = Season.decode(plan.league.encode(), ctx.keys)
-        assertEquals(tiers, back.tiers)
+        assertEquals(tiers, back.legacy)
 
         val rng = Random(7)
         drive(plan, rng, 0.5)
@@ -139,7 +142,7 @@ class PyramidTest {
         }
 
         val (next, _) = Offseason.next(plan, ctx)
-        val nt = next.league.tiers
+        val nt = next.league.legacy
         assertEquals(ctx.keys.toSet(), next.league.divisions.flatten().toSet())
         assertEquals(1000, next.league.divisions.sumOf { it.size })
         assertTrue(next.league.divisions.all { it.size == 50 })
@@ -162,7 +165,7 @@ class PyramidTest {
         val leaving = plan.league.divisions[0].take(10).toSet()
         val keys = ctx.keys.filter { it !in leaving } + (1001..1040).map(::key)
         val next = Offseason.next(plan, Offseason.Context(keys, ::rating, { null }, { "도시" }, LeagueConfig(), nation = ::nation)).first
-        val nt = next.league.tiers
+        val nt = next.league.legacy
         assertEquals(keys.toSet(), next.league.divisions.flatten().toSet())
         // 1030 players: 21 groups.
         val shape = assertNotNull(Pyramid.shape(keys.size, LeagueConfig()))
@@ -177,19 +180,19 @@ class PyramidTest {
     fun aSmallLeagueStaysAsItWasAndCanGrowIntoAPyramid() {
         val small = context(203)
         val plan = Offseason.first(1L, small)
-        assertTrue(plan.league.tiers.linear)
+        assertTrue(plan.league.legacy.linear)
         assertEquals(4, plan.league.divisions.size)
         assertFalse(plan.league.encode().contains("tiers"), "a linear league's file is as before")
         drive(plan, Random(3))
         // The league grows to 600: next season is a pyramid (12 groups: 1, 2, 4, 5).
         val big = Offseason.Context((1..600).map(::key), ::rating, { null }, { "도시" }, LeagueConfig(), nation = ::nation)
         val next = Offseason.next(plan, big).first
-        assertEquals(listOf(1, 2, 4, 5), (0 until next.league.tiers.count).map { next.league.tiers.groupCount(it) })
+        assertEquals(listOf(1, 2, 4, 5), (0 until next.league.legacy.count).map { next.league.legacy.groupCount(it) })
         assertEquals(big.keys.toSet(), next.league.divisions.flatten().toSet())
         // And back down to divisions.
         drive(next, Random(4))
         val back = Offseason.next(next, Offseason.Context((1..250).map(::key), ::rating, { null }, { "도시" }, LeagueConfig(), nation = ::nation)).first
-        assertTrue(back.league.tiers.linear)
+        assertTrue(back.league.legacy.linear)
         assertEquals(4, back.league.divisions.size)
         assertEquals((1..250).map(::key).toSet(), back.league.divisions.flatten().toSet())
     }
@@ -243,7 +246,7 @@ class PyramidTest {
         assertEquals(Pyramid.sizes(keys.size, shape), next.league.divisions.map { it.size }, "group sizes")
         assertEquals(keys.toSet(), next.league.divisions.flatten().toSet())
         val tierOf = HashMap<String, Int>()
-        for (d in next.league.divisions.indices) for (k in next.league.divisions[d]) tierOf[k] = next.league.tiers.tier(d)
+        for (d in next.league.divisions.indices) for (k in next.league.divisions[d]) tierOf[k] = next.league.legacy.tier(d)
         // A player announced as promoted plays in the tier it was promoted to.
         // (Never lower; a league that grows a lot can lift it further.)
         for (m in moves) if (m.to < m.from && m.key in tierOf) assertTrue(tierOf.getValue(m.key) <= m.to, "${m.key} promoted to ${m.to}, plays in ${tierOf[m.key]}")
@@ -255,7 +258,7 @@ class PyramidTest {
         for ((n, divisions) in listOf(200 to 6, 200 to 5, 230 to 4, 300 to 6)) {
             val cfg = LeagueConfig(divisions = divisions)
             val plan = Offseason.first(n.toLong(), context(n, cfg))
-            assertTrue(plan.league.tiers.linear)
+            assertTrue(plan.league.legacy.linear)
             grow(plan, (1..1000).map(::key), Random(n.toLong()))
         }
     }
@@ -277,11 +280,11 @@ class PyramidTest {
         }
         val odds = Odds.compute(plan, ::rating, runs = 1, seed = 1L)
         val cfg = plan.config
-        for (t in 0 until plan.league.tiers.count - 1) {
-            val c = Pyramid.crossing(plan.league, cfg, t)
-            val down = plan.league.tiers.groups(t).flatMap { d -> odds.division(d) }.filter { it.relegation >= 1.0 - 1e-9 && it.relegationPlayoff == 0.0 }.map { it.key }.toSet()
+        for (t in 0 until plan.league.legacy.count - 1) {
+            val c = Pyramid.crossing(plan.league, cfg, plan.league.leagues.list.single(), t)
+            val down = plan.league.legacy.groups(t).flatMap { d -> odds.division(d) }.filter { it.relegation >= 1.0 - 1e-9 && it.relegationPlayoff == 0.0 }.map { it.key }.toSet()
             assertEquals(c.down.toSet(), down, "boundary $t: automatic drops")
-            val upperTies = plan.league.tiers.groups(t).flatMap { d -> odds.division(d) }.filter { it.relegationPlayoff > 0.0 }.map { it.key }.toSet()
+            val upperTies = plan.league.legacy.groups(t).flatMap { d -> odds.division(d) }.filter { it.relegationPlayoff > 0.0 }.map { it.key }.toSet()
             assertEquals(c.ties.map { it.first }.toSet(), upperTies, "boundary $t: playoff upper sides")
         }
     }
@@ -290,12 +293,48 @@ class PyramidTest {
     fun groupsAreCutByRegion() {
         val ctx = context(1000)
         val plan = Offseason.first(9L, ctx)
-        val tiers = plan.league.tiers
+        val tiers = plan.league.legacy
         // Within a tier the groups follow the region order: no nation is split over many groups.
         for (t in 1 until tiers.count) {
             val groups = tiers.groups(t).map { d -> plan.league.divisions[d].map(::nation).toSet() }
             val spread = Nations.ALL.map { n -> groups.count { n.code in it } }.max()
             assertTrue(spread <= 2 + groups.size / 4, "tier $t: a nation in $spread groups")
         }
+    }
+
+    @Test
+    fun interleaveGoesPlaceByPlace() {
+        val better = compareBy<String> { it.last() }.thenBy { it }
+        assertEquals(listOf("a1", "b1", "a2", "b2", "a3"), Pyramid.interleave(listOf(listOf("a1", "a2", "a3"), listOf("b1", "b2")), better))
+        // Within a place the better first; never across places.
+        assertEquals(listOf("y0", "x9", "x1", "y2"), Pyramid.interleave(listOf(listOf("x9", "x1"), listOf("y0", "y2")), compareBy { it.last() }))
+        assertEquals(emptyList(), Pyramid.interleave(emptyList(), better))
+    }
+
+    @Test
+    fun aNationalSeasonsTablesAndBoundariesArePerLeague() {
+        // Korea three divisions of 12, Japan two.
+        val keys = (1..60).map(::key)
+        val season = Season.start(1, 4L, keys.chunked(12), true, Leagues.national(listOf("KR", "JP"), listOf(3, 2)))
+        val plan = SeasonPlan(season, LeagueConfig(national = true))
+        drive(plan, Random(6), until = 1.0)
+        assertTrue(season.finished)
+        val jp = season.leagues.byId("JP")!!
+        val worse = Pyramid.worse(season)
+        for (t in 0 until 2) {
+            assertEquals(listOf(season.table(3 + t).map { it.key }), Pyramid.tables(season, jp, t))
+            assertEquals(season.table(3 + t).map { it.key }, Pyramid.ranking(season, jp, t))
+        }
+        val c = Pyramid.crossing(season, plan.config, jp, 0)
+        val own = Pyramid.crossing(listOf(season.table(3).map { it.key }), listOf(season.table(4).map { it.key }), plan.config.autoSwap, true, worse)
+        assertEquals(listOf(own.up, own.down, own.ties), listOf(c.up, c.down, c.ties))
+        assertEquals(2, c.swap)
+        // The deprecated overloads see one ladder of all five divisions (as Season.tiers does): safe, not per league.
+        @Suppress("DEPRECATION")
+        val flat = (0 until 4).map { Pyramid.crossing(season, plan.config, it) }
+        assertEquals(c.down, flat[3].down)
+        @Suppress("DEPRECATION")
+        val last = Pyramid.ranking(season, 4)
+        assertEquals(season.table(4).map { it.key }, last)
     }
 }
