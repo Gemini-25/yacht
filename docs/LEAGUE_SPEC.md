@@ -96,9 +96,21 @@ Ground rules for all code:
   of every division opens together (a calendar). Fixture order inside an open matchday: fewest
   played first, heaviest first once 80% of the league is played. `season.txt` (`season 4`)
   keeps the divisions and seed (fixtures are built again) and the played results only.
-- Match = 2 games on mirrored dice (`matchFormat`: SINGLE = 1 game, MIRRORED = 2 games default,
-  BEST_OF_3 = mirrored + a decider when level). League points 3/1/0; a 1-1 match goes to the
-  two-game total; equal totals draw.
+- Match = 2 games on mirrored dice (`matchFormat`). **GAMES (판 승점제, the default from rules
+  version 2)**: decided by the games alone: 2-0 or a win and a drawn game wins, 1-1 or two drawn
+  games is a draw, no total; a 2-0 sweep earns a bonus point (완승 보너스: league points 3/1/0
+  + 1, `Standing.sweeps`, also in one-on-one group tables, `GroupStage.bonus`, saved as a
+  `bonus 1` line). MIRRORED (합계제, the default before): a 1-1 match goes to the two-game total,
+  equal totals draw. SINGLE = 1 game, BEST_OF_3 = mirrored + a decider when level. Season
+  totals stay a table tiebreak (and 운 보정 승점 compares the totals whatever the rule).
+  `JobResult.format` carries how a job was decided, so every board, group table, club table,
+  nation cup line, statistic, live board and preview reads it by the rule it was played with;
+  the AI lab always plays the total.
+- **Rules versions** (`LeagueConfig.VERSION`, the `config N` line): version 1 is the totals,
+  legs and single elimination; version 2 brought 판 승점제 and the series and double-elimination
+  knockouts (2.3). A version-1 file (a season in play, `cfg` lines; the archive) reads as it was
+  played. A league's own settings file moves on once (`LeagueConfig.migrated`: MIRRORED becomes
+  GAMES, series and double elimination on), so the change starts with the next season.
 - End of season, per tier boundary (`Pyramid.crossing`): the top s of every lower group go up
   (s = `autoSwap`, default 2, linear; `groupSwap`, default 3, pyramid; at most a third of the
   smallest group) and as many go down from the upper groups' bottom places (each group's last,
@@ -110,15 +122,20 @@ Ground rules for all code:
 - Honours by tier: `L<t>` a group title of tier t (one per group), `UP<t>`/`DOWN<t>` moves into
   tier t. In a pyramid, news covers 1부-3부 titles and the moves around 1부-3부; the rest is one
   `lower_tiers` article a season.
-- `titlePlayoff` (default on): 1st division top 4 play semis (1v4, 2v3, two legs) and a final
-  (one match); with 긴 토너먼트 (2.3) the semis are 3 matches and the final 4. The winner is champion; the regular-season leader gets "정규리그 1위".
+- `titlePlayoff` (default on): 1st division top 4 play semis (1v4, 2v3) and a final; with series
+  (2.3) the semis are first to 3 and the final first to 4, with double elimination the semis'
+  losers play on (6 ties in 4 post-season weeks: semis; winners' final + losers' round; losers'
+  final; grand final). Before series: semis over two legs and a one-match final (3 and 4 matches
+  with 긴 토너먼트). The winner is champion; the regular-season leader gets "정규리그 1위".
 
 ### 2.2 Club league (team competition)
 - `clubs` (default 16) clubs of `squad` (default 6) AIs; a match day fields 5 (best rated first,
   board 1 strongest). Clubs: deterministic name `<hometown> <mascot>` and emblem
   (shape, two colours, initial) from the club id.
-- Team match: board i is a mirrored 2-game match between the two lineups' i-th AIs; boards won
-  (a level board is half) decide; equal → total points over all boards; equal → draw.
+- Team match: board i is a mirrored 2-game match between the two lineups' i-th AIs, decided by
+  the season's rule (판 승점제: a 1-1 board is level); boards won (a level board is half) decide;
+  equal → a draw under 판 승점제 (a team knockout then goes by the total points, then the seed),
+  the total points over all boards under 합계제. No sweep bonus for team matches.
 - Single round robin (15 rounds), a round every few weeks of the season calendar (2.4); 3/1/0;
   table with board difference.
 - Money: every AI has a value `v = max(1, (rating - 1100) / 10)`; clubs have a budget
@@ -130,23 +147,40 @@ Ground rules for all code:
   pick per round, best rated first.
 
 ### 2.3 Cups and other competitions
-All knockout ties use `TieRule.knockout`: games won (draw = half) → total points → up to 3
-single decider games on new deals (seats alternating) → higher seed.
-**긴 토너먼트** (`longKnockouts`, default on; off in the 빠른 시즌 preset): one-on-one knockouts
-grow toward the final (`KnockoutLength`): 16강 and 8강 2 matches, 4강 3, 결승 4 (a match is two
-mirrored games, so a final is 8 games); earlier rounds keep their length. It applies to the
-요트컵, the champions league knockout and the title playoff; the 슈퍼컵 is 2 matches, the
-promotion playoff stays 2, team matches are unchanged. A competition drawn long saves a
-`long 1` line, so a season keeps the lengths it was drawn with (older saves read as short).
+**Series (선승제, `seriesKnockouts`, default on from rules version 2).** A one-on-one knockout tie
+is first to N games won (a drawn game half each), played in pairs on the same dice dealt as legs
+were (pair j on the deal of leg j, A first in its first game: `LeagueMatch.playTie(firstTo)`),
+stopping as soon as a side has N and leads; at most N + 1 pairs (`Fixture.legs`), then up to 3
+single deciders on new deals while level, then the total, then the higher seed. N
+(`KnockoutLength.wins`): 2 before the 8강, 3 in the 8강 and 4강 (and a winners' final before a
+grand final), 4 in the final; losers' rounds 2, the losers' final 3; the 슈퍼컵 and the
+promotion playoff 3. With **긴 토너먼트** off (the 빠른 시즌 preset) every series is to 2.
+Team knockouts stay one team match a tie.
+**Double elimination (패자부활, `doubleElimination`, default on from version 2)** in every
+knockout of 4 or more entries (요트컵, champions league, title playoff, family cup, world and
+continental cups): a loss on the winners' side drops to the losers' side, a loss there ends it;
+the losers' round 1 pairs the first round's losers, then rounds alternate between taking the
+next winners' round's losers (in reverse order every other time) and halving; its final takes
+the winners' final's loser; one grand final (`Knockout.GRAND_LABEL` "최종 결승") between the
+two sides' winners, no advantage and no reset. Stages in play order (W1; W2 + L1; L2; W3 + L3;
+...; Wk + L(2k-3); L(2k-2); grand final: 2k stages), tie ids in that order (saved results read
+back in id order). Places: champion, runner-up (the grand final's loser), the last four (the
+losers' final and the round before it: WC4, the podium's semis), then pairs of losers' rounds.
+News says when a loser drops to the losers' side.
+**Before version 2** (a season in play keeps it): legs of two-game matches won on games then
+the total, deciders, the higher seed; one loss out; with 긴 토너먼트 16강 and 8강 2 matches, 4강
+3, 결승 4. Each competition saves `long 1`, `series 1` and `double 1` lines for the rules it was
+drawn with (older saves read as legs and single elimination).
 - **요트컵** (cup): every AI except me. Bracket of the next power of two with byes for the best
   seeds (by rating), rounds spread over the season calendar from 4% to 88% of the regular
   season (2.4), final last.
 - **챔피언스 리그**: 16 AIs — previous season's 1st division top 12, 2nd division top 2 (a
   pyramid: each 2부 group's winner), cup winner and runner-up (taken places pass down the 1st division). Season 1: top 16 by rating.
   4 groups of 4 (pots by entry order, seeded draw), double round robin (6 matchdays, 48
-  matches), top 2 to a fixed bracket: QF (A1-B2, B1-A2, C1-D2, D1-C2) and SF over two legs,
-  final one match. Matchdays from 8% of the season about every four weeks, QF at 60%, SF at
-  72%, final at 94% (2.4).
+  matches), top 2 to a fixed bracket: QF (A1-B2, B1-A2, C1-D2, D1-C2), SF and final (series and
+  double elimination: 14 ties in 6 stages opening 62%..90%, targets 58%..93%; before version 2
+  QF and SF over two legs and a one-match final). Matchdays from 8% of the season about every
+  four weeks, QF at 60%, SF at 72%, final at 94% (2.4).
 - **슈퍼컵** (from season 2): previous champion vs previous cup winner (runner-up if the same AI)
   at the season start, one knockout tie.
 - **올스타전** (mid-season, 50%): "1부 올스타" (top 5 of division 1 by average match
@@ -348,7 +382,8 @@ In order, idempotent by season number:
 `LeagueConfig` (`league/config.txt`): divisions (1-6), pyramid, groupSize (30-80),
 groupSwap (1-8), doubleRoundRobin, matchFormat, autoSwap, promotionPlayoff, titlePlayoff,
 generated (0-3000), aging, childShare, baseAis, nationCup, clubs (0 = off, 4-24), squad, cup,
-champions, superCup, allStar, familyCup, onlyFlawed, onlyTop. Presets: 현실 축구형 (defaults:
+champions, superCup, allStar, familyCup, longKnockouts, seriesKnockouts, doubleElimination,
+onlyFlawed, onlyTop (rules version 2, see 2.1). Presets: 현실 축구형 (defaults:
 1000 players in a pyramid), 빠른 시즌 (2 divisions, single games, no club league, no national
 cups), 대혼돈 (only players with mistakes, 70% pupils), 강자만 (the top 48 by rating in 2
 divisions, no aging). Rules saved before the pyramid with the old default of 200 players read
@@ -403,7 +438,8 @@ Conventions for modules:
 - Seeds: `DiceStream.mix(start.seed, comp.code.code.toLong(), salt...)`; fixture ids unique
   within the competition.
 - A knockout tie is one `JobKind.TIE` fixture with `a` = the higher seed (it goes through when
-  still level after the deciders); two legs = `legs = 2`.
+  still level after the deciders); two legs = `legs = 2`; a series has `firstTo = N` and
+  `legs = N + 1` (the most pairs before deciders).
 - Encode in-progress fixtures as unplayed.
 - Events (`LeagueEvent.kind`), keys first then args:
   `upset` [winner, loser] (rating gap) · `comeback` [winner, loser] (lowest P%) ·

@@ -231,7 +231,7 @@ data class LeagueConfig(
 /** Ready-made rule sets (리그 프리셋). */
 enum class LeaguePreset(val label: String, val desc: String, val config: LeagueConfig) {
     REAL(
-        "현실 축구형", "선수 1000명의 지역 리그 피라미드(조당 50명), 같은 주사위 두 판, 승강·우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
+        "현실 축구형", "선수 1000명의 지역 리그 피라미드(조당 50명), 같은 주사위 두 판 판 승점제(2:0 완승 +1), 선승제·패자부활 토너먼트, 승강·우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
         LeagueConfig(),
     ),
     FAST(

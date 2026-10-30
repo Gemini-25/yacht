@@ -8,7 +8,8 @@ import java.util.Random
  * matches), then the top 2 of each group in a fixed bracket: quarter-finals A1-B2, B1-A2, C1-D2,
  * D1-C2 and semi-finals over two legs (at 0.7 and 0.8), a one-match final (at 0.9); with
  * [LeagueConfig.longKnockouts] the semis are 3 matches and the final 4. Group tables:
- * points 3/1/0, then score difference. Honours CL and CL2.
+ * points 3/1/0 (and 1 for a 2-0 sweep under 판 승점제), then score difference. With series
+ * and double elimination (rules version 2) the knockout is 14 ties in 6 stages. Honours CL and CL2.
  *
  * Entrants: the first season takes the top 16 by rating; later ones last season's 1st division
  * top 12, the 2nd division's top 2 (a pyramid's 2부: each group's winner) and the cup winner and runner-up, a place already taken (or an
