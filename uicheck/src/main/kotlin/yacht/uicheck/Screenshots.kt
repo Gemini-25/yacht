@@ -11,16 +11,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import yacht.app.ui.BracketCard
-import yacht.app.ui.GroupCard
-import yacht.engine.league.BracketSide
-import yacht.engine.league.CompetitionView
-import yacht.engine.league.DrawEntry
-import yacht.engine.league.GroupRow
-import yacht.engine.league.GroupTable
-import yacht.engine.league.Knockout
-import yacht.engine.league.KnockoutLength
-import yacht.engine.league.TieScore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,10 +19,7 @@ import yacht.app.core.AiPace
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.LeagueTab
-import yacht.app.core.MatchesView
-import yacht.app.core.Page
 import yacht.app.core.Screen
-import yacht.app.core.TablesView
 import yacht.app.core.ThinkTime
 import yacht.app.ui.AppRoot
 import yacht.app.ui.YachtTheme
@@ -188,10 +175,11 @@ private fun run(args: Array<String>) {
     c.changeStyle(PlayStyle.ASSISTED)
 
     // The AI league: from the shipped seed when there is one (else played from zero until
-    // everyone is placed), then a short run so the season starts; then every tab.
+    // everyone is placed), then a short run so the season starts. At each point of the run the
+    // league's shots are taken by the file of the stage that owns their screens (LEAGUE_SHOTS).
     c.screen = Screen.LEAGUE
     waitFor("league view") { c.league.view != null }
-    shot(c, out, "16a_league_empty")
+    leagueShots(c) { it.empty(c, out) }
     c.league.changeSpeed(yacht.app.core.LeagueSpeed.FULL)
     if (c.league.hasSeed) {
         c.league.loadSeed()
@@ -203,67 +191,7 @@ private fun run(args: Array<String>) {
         // first matchdays.
         (c.league.view?.rows?.count { it.rank != null } ?: 0) >= minOf(c.league.size - 2, 110) && (c.league.view?.season?.played ?: 0) >= 300
     }
-    shot(c, out, "16_league_ladder", heightDp = 1500)
-    // Every screen below is a state of the league's navigation (today's tabs are its sub-views).
-    val nav = c.league.nav
-    nav.go(LeagueTab.MATCHES)
-    nav.matches = MatchesView.WEEK
-    shot(c, out, "16e_league_schedule", heightDp = 1500)
-    nav.go(LeagueTab.TABLES)
-    nav.tables = TablesView.LEAGUE
-    shot(c, out, "16b_league_season", heightDp = 1500)
-    nav.tables = TablesView.COMPS
-    shot(c, out, "16c_league_comps", heightDp = 1500)
-    // The cup's own bracket (승자조/패자조 chips, N선승 ties), then the rules dialog.
-    val cup = Page.Competition(yacht.engine.league.Comp.CUP)
-    nav.open(cup)
-    shot(c, out, "16g_league_cup", heightDp = 1500)
-    nav.close(cup)
-    val rules = Page.Rules()
-    nav.open(rules)
-    shot(c, out, "16h_league_rules", heightDp = 2600)
-    nav.close(rules)
-    bracketShots(c, out)
-    nav.tables = TablesView.CLUBS
-    shot(c, out, "16d_league_clubs", heightDp = 1500)
-    nav.go(LeagueTab.MATCHES)
-    nav.matches = MatchesView.RESULTS
-    shot(c, out, "17_league_feed", heightDp = 1100)
-    nav.go(LeagueTab.RECORDS)
-    shot(c, out, "18_league_records", heightDp = 1500)
-    // 기록 › 국가 랭킹, a nation's sheet, 유망주 (each screen loads its data when composed:
-    // here before the shot, which is the first composition).
-    nav.open(Page.Nations)
-    c.league.loadNations()
-    waitFor("nations") { c.league.nations.isNotEmpty() }
-    shot(c, out, "18b_league_nations", heightDp = 1500)
-    c.league.loadNation("KR")
-    waitFor("nation sheet") { c.league.nationSheet != null }
-    shot(c, out, "18c_league_nation_sheet", heightDp = 1500)
-    c.league.closeNation()
-    nav.go(LeagueTab.RECORDS)
-    nav.open(Page.Prospects)
-    c.league.loadProspects()
-    waitFor("prospects") { c.league.prospects.isNotEmpty() }
-    shot(c, out, "18d_league_prospects", heightDp = 1300)
-    nav.go(LeagueTab.HOME)
-    // A generated player's page (the best ranked), then two players side by side.
-    val top = c.league.view?.rows?.filter { it.rank != null && !it.isMe && it.origin != yacht.engine.league.Origin.BASE }?.sortedBy { it.rank } ?: emptyList()
-    val player = Page.Player(top.firstOrNull()?.key ?: "win")
-    nav.open(player)
-    c.league.loadProfile(player.key)
-    waitFor("profile") { c.league.profile?.key == player.key }
-    shot(c, out, "19_league_detail", heightDp = 1800)
-    nav.close(player)
-    if (top.size >= 2) {
-        val compare = Page.Compare(top[0].key, top[1].key)
-        nav.open(compare)
-        c.league.loadCompare(top[0].key, top[1].key)
-        waitFor("compare") { c.league.compare != null }
-        shot(c, out, "19b_league_compare", heightDp = 1500)
-        c.league.closeCompare()
-        nav.close(compare)
-    }
+    leagueShots(c) { it.running(c, out) }
     c.league.stop()
     waitFor("league stopped", 60_000) { !c.league.running }
     // 1주씩: ▶ plays the week in play and stops by itself, saying what it played.
@@ -272,7 +200,7 @@ private fun run(args: Array<String>) {
     waitFor("week started") { c.league.running }
     waitFor("week played", 300_000) { !c.league.running }
     check(c.league.weekDone != null) { "the week stopped without its note: ${c.league.stopReason}" }
-    shot(c, out, "16f_league_week_done", heightDp = 1000)
+    leagueShots(c) { it.weekDone(c, out) }
     c.league.changeRunMode(yacht.app.core.LeagueRunMode.ON)
     println("league: ${c.league.view?.matches} matches; top: " + c.league.view?.rows?.take(5)?.joinToString { "${it.name} ${it.rating}" })
 
@@ -304,19 +232,9 @@ private fun run(args: Array<String>) {
     c.screen = Screen.HOME
     shot(c, out, "22_home_ranked_backup", heightDp = 2400)
 
-    // Watching a league game throw by throw.
+    // The league stopped: watching a game throw by throw, and the other shots of a stopped league.
     c.changeAiPace(AiPace.NORMAL)
-    c.screen = Screen.LEAGUE
-    val rival = c.league.rivalOf("win", Random(3)) ?: "ev"
-    c.league.startWatch("win", rival) { 300L }
-    c.screen = Screen.WATCH
-    waitFor("watch", 180_000) { (c.league.watch?.shown ?: 0) >= 8 }
-    c.league.pauseWatch()
-    shot(c, out, "23_watch", heightDp = 1300)
-    waitFor("watch complete", 180_000) { c.league.watch?.complete == true }
-    repeat(30) { c.league.skipWatchTurn() }
-    shot(c, out, "24_watch_end", heightDp = 1300)
-    c.league.stopWatch()
+    leagueShots(c) { it.stopped(c, out) }
 
     // Building my own AI.
     c.editingAi = null
@@ -348,6 +266,7 @@ private fun run(args: Array<String>) {
 
     val s = c.state!!
     println("verify: ${c.verify.games} games, diff ${c.verify.diff}, plan ${c.verify.avgPlanMs} ms; last game ${s.me.total}:${s.opp.total}")
+    leagueShots(c) { it.last(c, out) }
     c.shutdown()
 }
 
@@ -363,7 +282,7 @@ private fun load(dir: File): Tables {
     return Tables(rules, TableIO.readEv(map("ev.bin"), rules), TableIO.readDist(map("dist.bin"), rules), bonus = bonus)
 }
 
-private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean) {
+internal fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean) {
     println("waiting for $what")
     val deadline = System.currentTimeMillis() + timeoutMs
     while (!cond()) {
@@ -373,49 +292,45 @@ private fun waitFor(what: String, timeoutMs: Long = 60_000, cond: () -> Boolean)
 }
 
 /**
- * A double-elimination bracket played out by hand (deterministic, whatever the league did):
- * the losers' side and the grand final, and a group table under the 완승 bonus.
+ * One stage's league shots (one file per stage, so stages never share a file): each point of the
+ * run calls the same function of every file, in [LEAGUE_SHOTS] order, each from the league
+ * screen's 홈 tab with no page or sheet open. A function may wait for more of the season, and
+ * leaves the league running or stopped as it found it. Every function does nothing unless the
+ * file overrides it.
  */
-private fun bracketShots(c: AppController, out: File) {
-    val keys = c.league.view?.rows?.filter { it.rank != null }?.sortedBy { it.rank }?.map { it.key }?.take(8) ?: emptyList()
-    if (keys.size < 8) return
-    val entries = keys.mapIndexed { i, k -> DrawEntry(k, i + 1, 1500.0 - 20 * i) }
-    val labels = listOf("8강", "4강", "결승")
-    val k = Knockout(
-        Knockout.pairings(entries), { 1 }, { labels[it] }, { 0.0 },
-        winsOf = { r -> KnockoutLength.wins(8 shr r, true, grandAfter = true) },
-        double = true,
-        losersWins = { KnockoutLength.losersWins(it, true) },
-        grandWins = KnockoutLength.grandWins(true),
-    )
-    // Wins of the winner side by tie, upsets every third tie, one series with a drawn game.
-    var n = 0
-    while (true) {
-        val t = k.all.firstOrNull { it.ready } ?: break
-        val need = t.firstTo.coerceAtLeast(1).toDouble()
-        val upset = n % 3 == 1
-        val other = if (n == 4) need - 0.5 else (n % (need.toInt())).toDouble().coerceAtMost(need - 1)
-        val score = if (upset) TieScore(other, need, 230 * 3, 245 * 3, -1) else TieScore(need, other, 250 * 3, 228 * 3, 1)
-        k.record(t.id, t.a!!.key, t.b!!.key, score)
-        n++
+internal interface LeagueShots {
+    /** The league screen on an empty league, before the seed and ▶. */
+    fun empty(c: AppController, out: File) {}
+
+    /** The league running at FULL: 110 players ranked at least (all but two of a smaller league) and 300 fixtures of season 1 played. */
+    fun running(c: AppController, out: File) {}
+
+    /** The league stopped by itself after a 1주씩 week. */
+    fun weekDone(c: AppController, out: File) {}
+
+    /** The league stopped, after a ranked game against one of its players. */
+    fun stopped(c: AppController, out: File) {}
+
+    /** After every other shot: a pass of its own that may replace the league (a legacy league, say). */
+    fun last(c: AppController, out: File) {}
+}
+
+/** The league's shot files, in the order each point of the run calls them. */
+private val LEAGUE_SHOTS: List<LeagueShots> = listOf(ShotsLeague, ShotsPlayer, ShotsWorld, ShotsWatch, ShotsRecords, ShotsHome)
+
+/** Calls [phase] on every file of [LEAGUE_SHOTS], each from the league screen's 홈 tab. */
+private fun leagueShots(c: AppController, phase: (LeagueShots) -> Unit) {
+    for (s in LEAGUE_SHOTS) {
+        c.screen = Screen.LEAGUE
+        c.league.nav.go(LeagueTab.HOME)
+        phase(s)
     }
-    val bracket = CompetitionView.Bracket("요트컵 (예시)", k.view())
-    shotOf(out, "16i_bracket_losers", 1100) { BracketCard(bracket, c.league::name, {}, start = BracketSide.LOSERS) }
-    shotOf(out, "16j_bracket_grand", 900) { BracketCard(bracket, c.league::name, {}, start = BracketSide.GRAND) }
-    shotOf(out, "16j_bracket_grand_dark", 900, dark = true) { BracketCard(bracket, c.league::name, {}, start = BracketSide.GRAND) }
-    val rows = keys.take(4).mapIndexed { i, key ->
-        val w = 3 - i
-        val d = if (i == 1) 1 else 0
-        val sw = maxOf(0, 2 - i)
-        GroupRow(key, played = 4, wins = w, draws = d, losses = 4 - w - d, points = 3 * w + d + sw, diff = 60 - 40 * i, sweeps = sw)
-    }
-    shotOf(out, "16k_group_bonus", 500) { GroupCard(GroupTable("A조", rows, bonus = true), c.league::name, {}) }
 }
 
 /** Renders [content] alone (a card of the league screens) like [shot]. */
 @OptIn(ExperimentalComposeUiApi::class)
-private fun shotOf(out: File, name: String, heightDp: Int, dark: Boolean = false, content: @Composable () -> Unit) {
-    render(out, name, heightDp, settleMs = 0, what = name) {
+internal fun shotOf(out: File, name: String, heightDp: Int, dark: Boolean = false, widthDp: Int = WIDTH_DP, content: @Composable () -> Unit) {
+    render(out, name, widthDp, heightDp, settleMs = 0, what = name) {
         YachtTheme(dark = dark) {
             Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                 Box(Modifier.padding(12.dp)) { content() }
@@ -425,15 +340,18 @@ private fun shotOf(out: File, name: String, heightDp: Int, dark: Boolean = false
 }
 
 /** [settleMs]: real time for a screen that loads its data off the main thread before the picture. */
-private fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850, settleMs: Long = 0) {
+internal fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850, settleMs: Long = 0, widthDp: Int = WIDTH_DP) {
     Thread.sleep(200)
-    render(out, name, heightDp, settleMs, "$name, screen=${c.screen}") { YachtTheme(dark = dark) { AppRoot(c) } }
+    render(out, name, widthDp, heightDp, settleMs, "$name, screen=${c.screen}") { YachtTheme(dark = dark) { AppRoot(c) } }
 }
 
+/** The phone width every shot is rendered at, unless a narrower one is asked for (360 dp). */
+private const val WIDTH_DP = 392
+
 @OptIn(ExperimentalComposeUiApi::class)
-private fun render(out: File, name: String, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
+private fun render(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
     val density = 2f
-    val scene = ImageComposeScene(width = (392 * density).toInt(), height = (heightDp * density).toInt(), density = Density(density), content = content)
+    val scene = ImageComposeScene(width = (widthDp * density).toInt(), height = (heightDp * density).toInt(), density = Density(density), content = content)
     scene.render(0)
     if (settleMs > 0) {
         Thread.sleep(settleMs)

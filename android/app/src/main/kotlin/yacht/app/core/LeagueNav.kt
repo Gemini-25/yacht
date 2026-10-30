@@ -40,6 +40,9 @@ enum class NewsFilter(val label: String) { ALL("전체"), TOP("주요"), LEAGUE(
 /** The rating ladder's orders. */
 enum class LadderSort(val label: String) { RATING("레이팅"), WIN_RATE("승률"), SCORE("평균 점수"), GAMES("경기 수"), STREAK("연승") }
 
+/** 국가대표 랭킹's orders: titles, the top five's strength, players. */
+enum class NationSort(val label: String) { CUPS("대회 성적"), STRENGTH("전력 (상위 5명)"), PLAYERS("선수 수") }
+
 /** The leaderboards, [first] the six shown before "다른 부문 6개 ›". */
 enum class LeaderKind(val label: String, val first: Boolean) {
     SCORER("득점왕", true), YACHTS("요트왕", true), MVP("MVP 레이스", true),
@@ -143,6 +146,9 @@ class LeagueNav(private val onLeague: () -> Unit = {}) {
 
     /** 리그 랭킹's confederation; null = 전체. */
     var rankingConfed by mutableStateOf<Confed?>(null)
+
+    /** 국가대표 랭킹's order. */
+    var nationSort by mutableStateOf(NationSort.CUPS)
     var sheet by mutableStateOf(Sheet.NONE)
 
     /** The pages over the tabs, the top one last (at most [MAX_PAGES]). */

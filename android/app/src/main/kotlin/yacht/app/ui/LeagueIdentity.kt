@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.IdentityView
+import yacht.app.core.NationSort
 import yacht.engine.league.Abilities
 import yacht.engine.league.Tendencies
 
@@ -59,10 +60,10 @@ fun abilityGrade(v: Int): String = when {
 /**
  * Who a generated or evolved player is: nation, gender, age and stage, nickname, abilities with
  * this season's change, tendencies, style, its nation's school, rival, national team and
- * 이 주의 선수 count.
+ * 이 주의 선수 count. [onOpen] opens a player's page by key, for the lines that name one.
  */
 @Composable
-fun IdentityPart(id: IdentityView, alive: Boolean) {
+fun IdentityPart(id: IdentityView, alive: Boolean, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val small = MaterialTheme.typography.labelSmall
     Text(
@@ -206,19 +207,13 @@ fun nationFavourite(code: String) = NATION_PREFIX + code
 
 const val NATION_PREFIX = "nation:"
 
-private enum class NationSort(val label: String) {
-    CUPS("대회 성적"),
-    STRENGTH("전력 (상위 5명)"),
-    PLAYERS("선수 수"),
-}
-
 /** 국가 랭킹: every nation by its national team's titles, its players' strength or its numbers. */
 @Composable
 fun NationRanking(lg: yacht.app.core.LeagueController) {
     val cs = MaterialTheme.colorScheme
     // Read again each season (titles and squads change at a rollover).
     androidx.compose.runtime.LaunchedEffect(lg.view?.season?.number) { lg.loadNations() }
-    var sort by remember { mutableStateOf(NationSort.CUPS) }
+    val sort = lg.nav.nationSort
     val all = lg.nations
     if (all.isEmpty()) {
         CenterText("국가 기록을 불러오는 중…")
@@ -240,7 +235,7 @@ fun NationRanking(lg: yacht.app.core.LeagueController) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in NationSort.entries) {
-                    androidx.compose.material3.FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.label, fontSize = 12.sp) })
+                    androidx.compose.material3.FilterChip(selected = sort == s, onClick = { lg.nav.nationSort = s }, label = { Text(s.label, fontSize = 12.sp) })
                 }
             }
         }
