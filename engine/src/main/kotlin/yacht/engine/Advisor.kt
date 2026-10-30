@@ -161,6 +161,8 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         oppShift: Int = 0,
         /** The opponent as its record shows it (상대 맞춤); null = a max-expectation opponent. */
         oppModel: OppModel? = null,
+        /** This game is one of a match decided on the total over its games (경기 승리); null = this game alone. */
+        stakes: Stakes? = null,
     ): PlannedTurn {
         require(me.rules == tables.rules)
         val evPlan = TurnPlan(me, ExpectedAfter(tables.ev, me.mask))
@@ -169,15 +171,17 @@ class Advisor(val tables: Tables, private val pool: ExecutorService? = null, val
         }
         val remaining = Category.COUNT - me.filledCount
         val oppExpected = opp.total + if (opp.isComplete) 0.0 else tables.ev[opp.mask, opp.u]
-        // The duel table plays against a max-expectation opponent turn by turn: not with a model.
-        if (oppModel == null) table?.after(me, opp)?.let { after ->
+        // The duel table plays this game alone against a max-expectation opponent turn by turn:
+        // not with a model, nor for a match.
+        val alone = oppModel == null && stakes == null
+        if (alone) table?.after(me, opp)?.let { after ->
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, after), duel = true, weightBase = oppExpected)
         }
-        if (oppModel == null && duel && canDuel(me, opp) && DuelSearch.fitsMemory(tables, me, opp, ties = ties)) {
+        if (alone && duel && canDuel(me, opp) && DuelSearch.fitsMemory(tables, me, opp, ties = ties)) {
             val search = DuelSearch(tables, me, opp, true, pool, deadlineNanos, adversarial = adversarial, ties = ties)
             return PlannedTurn(me, Mode.WIN, remaining, evPlan, TurnPlan(me, search), duel = true, weightBase = oppExpected)
         }
-        val curve = WinCurve.against(tables, opp, tieValue, oppShift, oppModel)
+        val curve = WinCurve.against(tables, opp, tieValue, oppShift, oppModel, stakes)
         val d = depth ?: WinSearch.chooseDepth(tables, me, budgetOps, opp)
         val search = WinSearch(tables, me, curve, d, pool, deadlineNanos, ties = ties)
         return PlannedTurn(me, Mode.WIN, d, evPlan, TurnPlan(me, search))

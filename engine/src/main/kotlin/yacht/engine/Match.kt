@@ -26,6 +26,8 @@ class AdvisorPlayer(
     private val exactAt: Int = 0,
     /** The opponent as its record shows it (상대 맞춤; null = a max-expectation opponent). */
     private val oppModel: OppModel? = null,
+    /** This game is one of a match decided on the total over its games (경기 승리; null = this game alone). */
+    private val stakes: Stakes? = null,
 ) : Player {
     private lateinit var turn: PlannedTurn
 
@@ -34,7 +36,7 @@ class AdvisorPlayer(
 
     override fun startTurn(me: Board, opp: Board) {
         if (me.filledCount == 0) table = null
-        if (mode == Mode.WIN && duelOps > 0 && table?.after(me, opp) == null && advisor.canDuel(me, opp) &&
+        if (mode == Mode.WIN && duelOps > 0 && oppModel == null && stakes == null && table?.after(me, opp) == null && advisor.canDuel(me, opp) &&
             DuelSearch.estimateOps(advisor.tables, me, opp, limit = duelOps, adversarial = advisor.adversarial) <= duelOps &&
             DuelSearch.fitsMemory(advisor.tables, me, opp)
         ) {
@@ -42,7 +44,7 @@ class AdvisorPlayer(
         }
         val left = Category.COUNT - me.filledCount
         val depth = if (left <= exactAt) left else fixedDepth
-        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = depth, table = table, tieValue = tieValue, oppShift = oppShift, oppModel = oppModel)
+        turn = advisor.planTurn(me, opp, mode, budgetOps, depth = depth, table = table, tieValue = tieValue, oppShift = oppShift, oppModel = oppModel, stakes = stakes)
     }
 
     override fun chooseKeep(rollsDone: Int, r: Int) = turn.bestKeep(rollsDone, r)

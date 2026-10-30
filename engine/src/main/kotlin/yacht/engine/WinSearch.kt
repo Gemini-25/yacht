@@ -22,9 +22,12 @@ object WinCurve {
     /**
      * [oppShift]: points added to every opponent final (a player that misjudges the opponent's
      * strength). [model]: the opponent as its record shows it ([OppModel]) instead of a
-     * max-expectation player; a finished opponent is its total either way.
+     * max-expectation player; a finished opponent is its total either way. [stakes]: this game
+     * is one of a match decided on the total over its games ([Stakes]): the curve is then the
+     * value of the match (a level match counts [tieValue]), the opponent's final read as
+     * outscoring me by what I am ahead and by what the games still to come may bring.
      */
-    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0, oppShift: Int = 0, model: OppModel? = null): Curve {
+    fun against(tables: Tables, opp: Board, tieValue: Double = 0.0, oppShift: Int = 0, model: OppModel? = null, stakes: Stakes? = null): Curve {
         val base = opp.total + oppShift
         var pmf: DoubleArray
         var lo: Int
@@ -41,10 +44,17 @@ object WinCurve {
                 lo = lo2
             }
         }
+        if (stakes != null) {
+            val (p2, lo2) = stakes.apply(pmf, lo)
+            pmf = p2
+            lo = lo2
+        }
         val mass = pmf.sum()
         val curve = DoubleArray(SIZE)
         val ties = DoubleArray(SIZE)
+        // Finals below 0 (a match I lead by more than the opponent can score): won from any final.
         var below = 0.0
+        for (x in pmf.indices) if (base + lo + x < 0) below += pmf[x] / mass
         for (f in 0 until SIZE) {
             val x = f - base - lo
             val p = if (x in pmf.indices) pmf[x] / mass else 0.0
@@ -53,6 +63,74 @@ object WinCurve {
             below += p
         }
         return Curve(curve, base + lo, base + lo + pmf.size - 1, ties)
+    }
+}
+
+/**
+ * A game that is one of several deciding a match on the total over them. A league match is two
+ * games on the same dice, won by more games won, else by the higher total: that is the same as
+ * the higher total over the two games (a won game and a lost one leave the totals to decide; two
+ * won games, or a won and a drawn one, are a higher total too). [carry]: my margin in the games
+ * already played (mine minus the opponent's); [rest]: the distribution of my margin in the games
+ * still to come, over [restLo, restLo + rest.size) (a single 0: this is the last game). The
+ * match is won when the margins add up above zero: against an opponent final o, as if it were
+ * o - carry - (what is still to come).
+ */
+class Stakes(val carry: Int, val rest: DoubleArray = LAST, val restLo: Int = 0) {
+    init {
+        require(rest.isNotEmpty())
+    }
+
+    /** True for the last game of the match (nothing still to come). */
+    val last: Boolean get() = rest.size == 1 && restLo == 0
+
+    /** The opponent's remaining points [pmf] over [lo, ...) read as the match sees them. */
+    fun apply(pmf: DoubleArray, lo: Int): Pair<DoubleArray, Int> {
+        // o - carry - r: the rest's support reversed, added to the opponent's.
+        val out = DoubleArray(pmf.size + rest.size - 1)
+        val top = rest.size - 1
+        for (i in pmf.indices) {
+            val p = pmf[i]
+            if (p == 0.0) continue
+            for (j in rest.indices) out[i + top - j] += p * rest[j]
+        }
+        return out to lo - carry - restLo - top
+    }
+
+    override fun equals(other: Any?): Boolean = other is Stakes && other.carry == carry && other.restLo == restLo && other.rest.contentEquals(rest)
+    override fun hashCode(): Int = (carry * 31 + restLo) * 31 + rest.contentHashCode()
+    override fun toString(): String = if (last) "Stakes(carry=$carry, last)" else "Stakes(carry=$carry, rest=${rest.size})"
+
+    companion object {
+        private val LAST = doubleArrayOf(1.0)
+
+        /** The last game of a match, [carry] ahead (behind when negative). */
+        fun last(carry: Int) = Stakes(carry)
+
+        /**
+         * The first of two games: my margin in the second is read as that of two
+         * max-expectation players (one's final minus the other's: symmetric, about 54 points of
+         * deviation). Cached per tables.
+         */
+        fun firstOfTwo(tables: Tables): Stakes = synchronized(firsts) {
+            val dist = requireNotNull(tables.dist) { "the match needs the distribution table" }
+            firsts.getOrPut(dist) {
+                val p = dist.pmf(0, 0)
+                // P(X - Y = d) for X, Y independent finals over [lo, lo + n): d over [-(n-1), n-1].
+                val n = p.size
+                val d = DoubleArray(2 * n - 1)
+                for (x in 0 until n) for (y in 0 until n) d[x - y + n - 1] += p[x] * p[y]
+                // The ends carry no mass to speak of: cut what is below 1e-12 at either end.
+                var a = 0
+                var b = d.size - 1
+                while (a < b && d[a] < 1e-12) a++
+                while (b > a && d[b] < 1e-12) b--
+                val sum = (a..b).sumOf { d[it] }
+                Stakes(0, DoubleArray(b - a + 1) { d[a + it] / sum }, a - (n - 1))
+            }
+        }
+
+        private val firsts = java.util.WeakHashMap<DistTable, Stakes>()
     }
 }
 
