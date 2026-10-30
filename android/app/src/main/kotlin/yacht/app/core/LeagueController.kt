@@ -232,7 +232,8 @@ class LeagueController(
         if (p == uiPrefs) return
         uiPrefs = p
         val text = p.encode()
-        scope.launch(fileWrites) { runCatching { uiFile.writeTextAtomically(text) } }
+        // Not over a restore's files: the backup's preferences replace these.
+        scope.launch(fileWrites) { if (!restoring) runCatching { uiFile.writeTextAtomically(text) } }
     }
 
     /** The player's own AIs (saved) and clone profile. */
@@ -501,11 +502,18 @@ class LeagueController(
         // A restore may have brought the rules and the favourites too.
         val favs = readFavourites()
         val rv = synchronized(lock) { w.archive.pendingReview }
+        // A restored league is shown from its own season (at start-up the screen is not open yet).
+        val shown = if (first) null else synchronized(lock) { followedDivision(w, favs) }
         scope.launch {
             config = cfg
             favourites = favs
             review = rv
             seasonNews = null
+            if (!first) {
+                form = null
+                nav.week = null
+                showNewSeason(shown)
+            }
         }
         publish(force = true)
     }
@@ -780,10 +788,7 @@ class LeagueController(
                         val w = world ?: return@synchronized
                         val l = w.ladder
                         startRanks = l.keys.mapNotNull { k -> l.rankOf(k)?.let { k to it } }.toMap()
-                        if (w.plan == null) {
-                            configureWorld(w)
-                            w.openFirstSeason(leagueSeed())
-                        }
+                        if (w.plan == null) openFirstSeason(w)
                         // A run going on by itself keeps its week (a one-week run in 계속 too).
                         weekGoal = when {
                             oneWeek -> w.plan?.let { it.number to it.week }
@@ -867,10 +872,7 @@ class LeagueController(
         val l = w.ladder
         // No season (a restore read an old season file while the league was starting): a
         // first one, or the workers would wait forever.
-        if (w.plan == null) {
-            configureWorld(w)
-            w.openFirstSeason(leagueSeed())
-        }
+        if (w.plan == null) openFirstSeason(w)
         val p = w.plan ?: return null
         val inLeague = p.league.standings.keys
         val members = w.members
@@ -941,25 +943,46 @@ class LeagueController(
         timings.note("rollover", System.nanoTime() - t0)
         val news = historyItem(closing.season, closing.honours)
         val rv = w.archive.pendingReview
-        // A new season opens on a followed player's division (the first division without one).
-        val shown = w.plan?.league?.let { s ->
-            val tiers = s.tiers.takeIf { it.size == s.divisions.size } ?: yacht.engine.league.Tiers.linear(s.divisions.size)
-            val favs = favourites
-            val d = s.divisions.indices.firstOrNull { i -> s.divisions[i].any { it in favs } } ?: 0
-            if (s.divisions.isEmpty()) null else tiers.tier(d) to tiers.group(d)
-        }
+        val shown = followedDivision(w, favourites)
         scope.launch {
             seasonNews = news
             if (rv != null) review = rv
-            // On its current round, with the chart's default players.
-            shown?.let { (tier, group) ->
-                nav.tier = tier
-                nav.group = group
-            }
-            nav.round = null
-            nav.chartKeys = emptyList()
+            showNewSeason(shown)
         }
         saveAsync()
+    }
+
+    /** The first season of a new league (under the lock); the 리그 tab then opens on it. */
+    private fun openFirstSeason(w: LeagueWorld) {
+        configureWorld(w)
+        w.openFirstSeason(leagueSeed())
+        val shown = followedDivision(w, favourites)
+        scope.launch { showNewSeason(shown) }
+    }
+
+    /**
+     * The division of [w]'s season a new season opens on (under the lock): the first with one of
+     * [favs], else 1부; as its tier and group, null without a season.
+     */
+    private fun followedDivision(w: LeagueWorld, favs: Set<String>): Pair<Int, Int>? {
+        val s = w.plan?.league ?: return null
+        if (s.divisions.isEmpty()) return null
+        val tiers = s.tiers.takeIf { it.size == s.divisions.size } ?: yacht.engine.league.Tiers.linear(s.divisions.size)
+        val d = s.divisions.indices.firstOrNull { i -> s.divisions[i].any { it in favs } } ?: 0
+        return tiers.tier(d) to tiers.group(d)
+    }
+
+    /**
+     * The 리그 tab on a new season (main thread): [division] (tier, group; null: 1부) at its
+     * current round, the chart with its default players, as the tab showed a season it had not
+     * shown before.
+     */
+    private fun showNewSeason(division: Pair<Int, Int>?) {
+        val (tier, group) = division ?: (0 to 0)
+        nav.tier = tier
+        nav.group = group
+        nav.round = null
+        nav.chartKeys = emptyList()
     }
 
     private fun friendly(pair: Pair<String, String>, rng: Random, label: String = "") =
@@ -1468,7 +1491,12 @@ class LeagueController(
         profile?.key?.let { loadProfile(it) }
         lastMatrix?.let { (title, groups, labels) -> loadMatrix(title, groups, labels) }
         calendar = null
+        form = null
         preview = null
+        // The new league from its start: its week in play, 1부 (its first season then opens on a
+        // followed player's division), the current round, the chart's default players.
+        nav.week = null
+        showNewSeason(null)
         loadRecords()
         loadPastPlayers()
         // The new league's nations and prospects (an open list reads them again); a sheet or a

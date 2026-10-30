@@ -13,6 +13,7 @@ import yacht.engine.league.LeagueConfig
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -65,6 +66,38 @@ class UiPrefsTest {
             runBlocking { b.restore(files - UiPrefs.FILE) }
             assertEquals(UiPrefs(), b.uiPrefs)
             assertFalse(File(bDir, "league/${UiPrefs.FILE}").exists())
+        } finally {
+            scope.cancel()
+            for (d in dirs) d.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun matchLogsTravelWithBackupsAndGoWithTheLeague() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val aDir = Files.createTempDirectory("logs-a").toFile().also { dirs += it }
+            val a = LeagueController(scope, aDir)
+            a.changeConfig(LeagueConfig(generated = 0))
+            // A match log book saved before (none is kept in memory yet): the backup takes the file.
+            val book = byteArrayOf(0x59, 0x4D, 0x4C, 0x01, 0, 7, -1)
+            val aLogs = File(aDir, "league/${MatchCenter.LOGS}").apply { writeBytes(book) }
+            waitFor { File(aDir, "league/config.txt").exists() }
+            val files = a.backupFiles()
+            assertContentEquals(book, files[MatchCenter.LOGS])
+
+            // Restored elsewhere it comes along; a backup without it removes the file there.
+            val bDir = Files.createTempDirectory("logs-b").toFile().also { dirs += it }
+            val b = LeagueController(scope, bDir)
+            val bLogs = File(bDir, "league/${MatchCenter.LOGS}")
+            runBlocking { b.restore(files) }
+            assertContentEquals(book, bLogs.readBytes())
+            runBlocking { b.restore(files - MatchCenter.LOGS) }
+            assertFalse(bLogs.exists())
+
+            // A new league does not keep the old one's logs.
+            a.reset()
+            waitFor { !aLogs.exists() }
         } finally {
             scope.cancel()
             for (d in dirs) d.deleteRecursively()

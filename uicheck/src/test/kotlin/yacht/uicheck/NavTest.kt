@@ -1,11 +1,18 @@
 package yacht.uicheck
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import yacht.app.core.LeagueController
 import yacht.app.core.LeagueNav
 import yacht.app.core.LeagueTab
 import yacht.app.core.Page
 import yacht.app.core.PlayerTab
 import yacht.app.core.Sheet
 import yacht.engine.league.Comp
+import yacht.engine.league.LeagueConfig
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -112,6 +119,41 @@ class NavTest {
         assertNull(nav.league)
         assertEquals(0, nav.tier)
         assertEquals(2, told)
+    }
+
+    @Test
+    fun aNewLeagueIsShownFromItsStart() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val dir = Files.createTempDirectory("nav-reset").toFile()
+        try {
+            val lg = LeagueController(scope, dir)
+            lg.changeConfig(LeagueConfig(generated = 0))
+            val nav = lg.nav
+            nav.go(LeagueTab.TABLES)
+            nav.tier = 2
+            nav.group = 1
+            nav.round = 7
+            nav.chartKeys = listOf("gone")
+            nav.week = 12
+            nav.open(Page.Compare("gone"))
+            // The old league's division, round, chart picks and week mean nothing in the new one
+            // (picks of players who left would leave the chart empty).
+            lg.reset()
+            val end = System.currentTimeMillis() + 10_000
+            while (nav.round != null || nav.pages.isNotEmpty()) {
+                check(System.currentTimeMillis() < end) { "timed out" }
+                Thread.sleep(10)
+            }
+            assertEquals(0, nav.tier)
+            assertEquals(0, nav.group)
+            assertEquals(emptyList(), nav.chartKeys)
+            assertNull(nav.week)
+            // The tab shown stays.
+            assertEquals(LeagueTab.TABLES, nav.tab)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
     }
 
     @Test
