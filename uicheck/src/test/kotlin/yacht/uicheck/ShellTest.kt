@@ -13,6 +13,7 @@ import yacht.app.core.WorldPages
 import yacht.app.core.competitionStages
 import yacht.app.core.roundInPlay
 import yacht.app.ui.barTitle
+import yacht.app.ui.firstSentence
 import yacht.app.ui.matchKey
 import yacht.app.ui.nationFavourite
 import yacht.app.ui.resultShown
@@ -37,7 +38,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** The league shell's logic that needs no screen: competition stages and pages, match keys, the results filter, the bar's title. */
+/** The league shell's logic that needs no screen: competition stages and pages, match keys, the results filter, the bar's lines. */
 class ShellTest {
     /** A one-match tie; a played one won 2-0 by [winner]. */
     private fun tie(a: String?, b: String?, played: Boolean = false, winner: String? = null) =
@@ -170,6 +171,10 @@ class ShellTest {
         assertEquals("시즌 3 · 12주차 / 42주", barTitle(clock))
         assertEquals("시즌 3 · 포스트시즌 2주차", barTitle(clock.copy(week = 44)))
         assertEquals("시즌 3 마무리 중", barTitle(clock.copy(over = true)))
+        // A week played: the bar keeps the note's first sentence.
+        assertEquals("46주차를 다 치렀어요", firstSentence("46주차를 다 치렀어요. ▶를 누르면 47주차를 해요."))
+        assertEquals("시즌 1 일정을 다 마쳤어요", firstSentence("시즌 1 일정을 다 마쳤어요."))
+        assertEquals("한 주를 치렀어요", firstSentence("한 주를 치렀어요"))
     }
 
     private fun view(vararg comps: Pair<Comp, CompetitionView>) =

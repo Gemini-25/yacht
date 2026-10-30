@@ -45,7 +45,7 @@ internal fun NewsPage(lg: LeagueController, v: LeagueView) {
 private fun Articles(all: List<Article>, favourites: Boolean, clock: ClockView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (all.isEmpty()) {
-        CenterText(if (favourites) "응원하는 선수나 국가의 소식이 아직 없어요. 선수를 눌러 ‘☆ 응원하기’를, 순위 › 랭킹 › 국가대표 랭킹에서 나라를 골라 ‘☆’를 눌러 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
+        CenterText(if (favourites) "응원하는 선수나 국가의 소식이 아직 없어요. 선수를 눌러 ‘☆ 응원하기’를, 순위 › 랭킹 › 국가대표 랭킹에서 나라를 골라 ‘☆ 응원’을 눌러 보세요." else "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요.")
         return
     }
     // By the week they happened in (newest season and week first, newest first within a week),

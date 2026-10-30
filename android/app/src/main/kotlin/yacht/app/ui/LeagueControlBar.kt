@@ -63,10 +63,17 @@ internal fun barStatus(lg: LeagueController, v: LeagueView?): BarStatus {
         }
         return BarStatus("🔴 " + (clock?.let { weekStages(it) } ?: "리그 진행 중"), BarTone.LIVE)
     }
-    lg.weekDone?.let { return BarStatus("✓ $it", BarTone.DONE) }
-    if ((v?.matches ?: 0L) == 0L) return BarStatus("아직 경기가 없어요 · ▶를 누르면 시작해요", BarTone.QUIET)
-    return BarStatus(if (lg.runMode == LeagueRunMode.WEEK) "⏸ 멈춤 · ▶를 누르면 한 주만 진행해요" else "⏸ 멈춤 · ▶를 누르면 계속 진행해요", BarTone.QUIET)
+    lg.weekDone?.let { return BarStatus("✓ " + firstSentence(it), BarTone.DONE) }
+    // Short enough for the ~200 dp the line has at 360 dp.
+    if ((v?.matches ?: 0L) == 0L) return BarStatus("아직 경기가 없어요 · ▶로 시작해요", BarTone.QUIET)
+    return BarStatus(if (lg.runMode == LeagueRunMode.WEEK) "⏸ 멈춤 · ▶로 한 주를 치러요" else "⏸ 멈춤 · ▶로 계속 진행해요", BarTone.QUIET)
 }
+
+/**
+ * The first sentence of a note ("46주차를 다 치렀어요. ▶를 누르면 47주차를 해요." → "46주차를 다
+ * 치렀어요"): what the bar's one line can hold; the title already names the next week.
+ */
+internal fun firstSentence(note: String): String = note.substringBefore(". ").removeSuffix(".")
 
 /** What the week in play holds: "요트컵 64강 · 챔스 A조 4차전", "리그 12라운드" when only the league plays. */
 private fun weekStages(c: ClockView): String {
