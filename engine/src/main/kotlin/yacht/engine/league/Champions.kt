@@ -395,8 +395,8 @@ class ChampionsLeague private constructor(
          * 5. then the 1부 runners-up (L0R.<id>, else the best other of its 1부) in league order;
          * 6. then rating.
          * Without a 대륙 챔피언스 last season (a small world: one 연합 리그 a confederation), after
-         * the holder each league in turn, by rank, adds its next player (its champion, then its 1부
-         * table): 4 champions, 4 seconds, 4 thirds, ...
+         * the holder each league in turn, by rank, adds its next player still in the world (its
+         * champion, then its 1부 table): 4 champions, 4 seconds, 4 thirds, ...
          */
         fun worldEntrants(start: SeasonStart): List<String> {
             val inWorld = start.ranking.toHashSet()
@@ -417,7 +417,8 @@ class ChampionsLeague private constructor(
                 for (id in order) if (champions < direct && add(places(id).firstOrNull())) champions++
                 for (id in order) add(honour(HonourKind.of("L0R", id)) ?: places(id).drop(1).firstOrNull { it in inWorld })
             } else {
-                val lists = order.map(::places)
+                // One who left passes the place to the next of the same league (as in the 대륙 챔피언스).
+                val lists = order.map { id -> places(id).filter { it in inWorld } }
                 var p = 0
                 while (out.size < SIZE && lists.any { p < it.size }) {
                     for (l in lists) add(l.getOrNull(p))

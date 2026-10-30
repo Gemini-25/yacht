@@ -743,6 +743,17 @@ class CompetitionsTest {
                 listOf("xeu0x02", "xas0x02", "xam0x01", "xaf0x02") + listOf("xeu0x03", "xas0x03", "xam0x03"),
             ChampionsLeague.entrants(start),
         )
+        // A champion who left the world passes its place to the next of its league: XAS still sends
+        // four, and the last-ranked league the three of the fourth round.
+        val left = regions.start(
+            lastTables = regions.divisions, lastLeagues = regions.leagues, lastHonours = honours, ranking = regions.ranking(listOf("XEU", "XAS", "XAM", "XAF")),
+            world = regions.keys - "xas0x00",
+        )
+        assertEquals(
+            listOf("xeu0x04") + listOf("xeu0x00", "xas0x01", "xam0x02", "xaf0x00") + listOf("xeu0x01", "xas0x02", "xam0x00", "xaf0x01") +
+                listOf("xeu0x02", "xas0x03", "xam0x01", "xaf0x02") + listOf("xeu0x03", "xas0x04", "xam0x03"),
+            ChampionsLeague.entrants(left),
+        )
         // The legacy rule is unchanged after a legacy season, and the first season goes by rating.
         assertEquals(regions.keys.sortedByDescending(regions::rating).take(16), ChampionsLeague.entrants(regions.start()))
     }

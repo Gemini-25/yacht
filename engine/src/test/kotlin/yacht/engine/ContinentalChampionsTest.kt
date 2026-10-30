@@ -163,7 +163,9 @@ class ContinentalChampionsTest {
     fun sectionsKeepTheirIdsApartAndTheSaveReadsBack() {
         for (config in listOf(LeagueConfig(national = true), LeagueConfig(national = true, matchFormat = MatchFormat.MIRRORED, seriesKnockouts = false, doubleElimination = false))) {
             val ccl = assertNotNull(ContinentalChampions.create(world.start(config = config)))
-            val text = print.fingerprint(ccl, setOf(30, 60, 100), season = 2, seed = 62L)
+            // Read back in the groups and in every section's knockout (from fixture 121 on).
+            val knockout = listOf(122, 126, 130, 134, 140, 146)
+            val text = print.fingerprint(ccl, setOf(30, 60, 100) + knockout, season = 2, seed = 62L)
             val handed = text.lines().filter { it.startsWith("f ") }.map { it.split(' ') }
             val ids = handed.map { it[2].toInt() }
             assertEquals(ids.size, ids.toSet().size, "every id once")
@@ -173,6 +175,9 @@ class ContinentalChampionsTest {
                 if (f[6] == "MATCH") assertTrue(local < 48, f.toString()) else assertTrue(local - ChampionsBracket.KO_BASE in 0 until 14, f.toString())
             }
             assertEquals(setOf(0, 1, 2, 3), ids.map { it / ContinentalChampions.SECTION_IDS }.toSet())
+            // Every section's knockout was under way at one of the read-backs.
+            fun ties(s: Int, of: List<List<String>>) = of.any { it[6] == "TIE" && it[2].toInt() / ContinentalChampions.SECTION_IDS == s }
+            for (s in 0 until 4) assertTrue(knockout.any { n -> ties(s, handed.take(n)) && ties(s, handed.drop(n)) }, "section $s")
             // The codec reads a damaged block as far as it can and refuses one without its sections.
             assertTrue(Competitions.codecs.getValue(Comp.CONT_CHAMPIONS).runCatching { decode(listOf("ccl 1", "g 0 0 kr0x00 1 1900"), 2, 62L) }.isFailure)
         }
