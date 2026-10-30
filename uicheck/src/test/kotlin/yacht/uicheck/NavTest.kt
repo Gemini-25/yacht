@@ -157,6 +157,32 @@ class NavTest {
     }
 
     @Test
+    @Suppress("DEPRECATION")
+    fun detailForwardsToThePlayerPages() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val dir = Files.createTempDirectory("nav-detail").toFile()
+        try {
+            val lg = LeagueController(scope, dir)
+            val nav = lg.nav
+            // The news still opens a player this way (until its file moves to the pages).
+            lg.detail = "a"
+            assertEquals(Page.Player("a"), nav.page)
+            assertEquals("a", lg.detail)
+            nav.open(Page.Lab)
+            assertNull(lg.detail)
+            // Closing closes only a player page on top.
+            lg.detail = null
+            assertEquals(listOf(Page.Player("a"), Page.Lab), nav.pages.toList())
+            nav.back()
+            lg.detail = null
+            assertTrue(nav.pages.isEmpty())
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun aTabKeepsItsChipRowState() {
         val nav = LeagueNav()
         assertSame(nav.chipState(LeagueTab.MATCHES), nav.chipState(LeagueTab.MATCHES))
