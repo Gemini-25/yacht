@@ -49,6 +49,7 @@ fun main(args: Array<String>) {
         "adapt" -> adapt(opts)
         "oracle" -> oracle(opts)
         "stakes" -> stakes(opts)
+        "rules" -> rules(opts)
         "league" -> league(opts, loadTables(File(opts["tables"] ?: "tables")).withoutRisk())
         "league-report" -> {
             val t = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
@@ -85,6 +86,8 @@ fun main(args: Array<String>) {
                     what knowing the opponent completely adds: its exact distribution from every state
                     (players of their own card only; risk AIs by their θ) vs the record model vs the win AI
               stakes --tables DIR [--opps win,ev,greedy] [--games N] [--tie V] [--threads T] [--seed S]
+              rules --tables DIR [--pairs slip10:slip10,ev:slip10,...] [--games N] [--threads T] [--seed S]
+                    league and knockout match rules compared on the same games (wins, draws, games a match takes)
                     경기 승리: the win AI playing a two-game league match for the match (the higher total
                     over both) instead of game by game, against each opponent on the same deals
               explain --tables DIR [--games N] [--seed S] [--stray P]
