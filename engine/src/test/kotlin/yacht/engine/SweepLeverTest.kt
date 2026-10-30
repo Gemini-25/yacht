@@ -56,4 +56,19 @@ class SweepLeverTest {
         assertFalse(back.league.bonus)
         assertTrue(SeasonPlan.decode(SeasonPlan(Season.start(1, 22L, listOf(keys)), LeagueConfig()).encode(), keys, emptyMap()).league.bonus)
     }
+
+    @Test
+    fun aSeasonSavedBeforeTheRuleExistedKeepsItsBonus() {
+        // The season in play as 945de5e saved it: its rules without the keys added since.
+        val added = setOf("national", "divisionSize", "leagueMin", "sweepBonus", "transfers", "continentalCl", "clDirect", "clubSize", "clubCup", "federation")
+        val text = SeasonPlan(Season.start(1, 23L, listOf(keys)), LeagueConfig()).encode().lines()
+            .filter { l -> !l.startsWith("cfg ") || l.removePrefix("cfg ").substringBefore(' ') !in added }.joinToString("\n")
+        assertFalse("cfg sweepBonus" in text)
+        val s = SeasonPlan.decode(text, keys, emptyMap()).league
+        assertTrue(s.bonus)
+        val f = s.next(emptySet())!!
+        s.record(f.id, List(2) { GameScore(230, 170) })
+        assertEquals(4, s.standings.getValue(f.a).points)
+        assertEquals(1, s.standings.getValue(f.a).sweeps)
+    }
 }

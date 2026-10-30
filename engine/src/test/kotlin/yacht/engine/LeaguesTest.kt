@@ -85,6 +85,7 @@ class LeaguesTest {
         assertNull(Leagues.decode(listOf("league KR 0 3", "league JP 4 2"), 6), "a gap")
         assertNull(Leagues.decode(listOf("league KR 0 x"), 1))
         assertNull(Leagues.decode(listOf("league XWO 0 1 MARS"), 1))
+        assertNull(Leagues.decode(listOf("league KR 0 2", "league ZZ 2 1"), 3), "a league this version does not know")
         // Legacy: the tiers line of a pyramid, nothing for linear divisions.
         val pyramid = Leagues.legacy(Tiers.of(listOf(1, 2), listOf("", "한국", "유럽")))
         val text = StringBuilder().also { pyramid.encode(it) }.toString()
@@ -109,6 +110,8 @@ class LeaguesTest {
         assertEquals(listOf(32, 33, 34, 35), listOf("XAS", "XEU", "XAM", "XAF").map(LeagueIds::code))
         assertEquals("", LeagueIds.ofCode(30), "a spare code")
         assertFailsWith<IllegalArgumentException> { LeagueIds.code("ZZ") }
+        assertTrue(ids.all(LeagueIds::known))
+        assertFalse(listOf("ZZ", "XAX", "kr", " ").any(LeagueIds::known))
         // Names.
         assertEquals("리그", LeagueIds.label(""))
         assertEquals("한국 리그", LeagueIds.label("KR"))

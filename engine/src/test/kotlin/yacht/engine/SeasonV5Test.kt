@@ -120,6 +120,8 @@ class SeasonV5Test {
         assertFailsWith<IllegalArgumentException> { Season.decode(text.replace(Regex("fixtures \\d+"), "fixtures 7"), all) }
         assertFailsWith<IllegalArgumentException> { Season.decode(text.replace("league XWO 6 1 AMERICAS\n", ""), all) }
         assertFailsWith<IllegalArgumentException> { Season.decode(text.lines().filter { !it.startsWith("league ") }.joinToString("\n"), all) }
+        // A league of a nation a newer version added: unreadable here (a fresh season starts).
+        assertFailsWith<IllegalArgumentException> { Season.decode(text.replace("\nleague JP 3 2\n", "\nleague ZZ 3 2\n"), all) }
     }
 
     @Test

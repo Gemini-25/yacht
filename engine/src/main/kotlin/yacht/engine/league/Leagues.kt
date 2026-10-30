@@ -112,8 +112,9 @@ class Leagues(val list: List<LeagueDef>, worldConfed: Confed? = null) {
 
         /**
          * The leagues of a saved season of [divisions] divisions, from its `league` lines (null when
-         * they do not cover the divisions in order) or, without any, its legacy `tiers` line (linear
-         * without one, or with one that does not fit).
+         * they do not cover the divisions in order, or name a league this version does not know,
+         * [LeagueIds.known]) or, without any, its legacy `tiers` line (linear without one, or with
+         * one that does not fit).
          */
         fun decode(lines: List<String>, divisions: Int): Leagues? = runCatching {
             val defs = ArrayList<LeagueDef>()
@@ -125,6 +126,8 @@ class Leagues(val list: List<LeagueDef>, worldConfed: Confed? = null) {
                     "league" -> {
                         val count = f[3].toInt()
                         require(count > 0)
+                        // A nation added by a newer version: no name, no archive code here (the season is unreadable, as any newer file).
+                        require(LeagueIds.known(f[1])) { "league ${f[1]}" }
                         defs += LeagueDef(f[1], f[2].toInt(), Tiers.linear(count))
                         if (f[1] == LeagueIds.WORLD) f.getOrNull(4)?.let { world = Confed.valueOf(it) }
                     }
@@ -155,6 +158,9 @@ object LeagueIds {
     fun region(c: Confed): String = REGIONS.getValue(c)
 
     fun isRegion(id: String): Boolean = id in REGION_CONFED
+
+    /** An id this version knows (every one [code] takes): the legacy league, a nation of [Nations.ALL], a 연합 리그, [WORLD]. */
+    fun known(id: String): Boolean = id == LEGACY || id == WORLD || isRegion(id) || Nations.of(id) != null
 
     /**
      * The confederation of a nation's league or of a 연합 리그; null for [WORLD] (a season's
