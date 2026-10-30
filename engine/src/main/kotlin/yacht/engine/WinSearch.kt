@@ -66,9 +66,9 @@ object WinCurve {
  * a record by [of]: null (the plain max-expectation opponent) with too few games, or when the
  * record is that of a max-expectation player.
  */
-class OppModel(val shift: Double, val spread: Double = 1.0) {
+open class OppModel(val shift: Double, val spread: Double = 1.0) {
     /** [pmf] over [lo, lo + pmf.size) of [opp]'s remaining points, reshaped; returns the new pmf and its lo. */
-    fun reshape(tables: Tables, opp: Board, pmf: DoubleArray, lo: Int): Pair<DoubleArray, Int> {
+    open fun reshape(tables: Tables, opp: Board, pmf: DoubleArray, lo: Int): Pair<DoubleArray, Int> {
         val dist = tables.dist ?: return pmf to lo
         val (rootMean, rootVar) = root(tables)
         val (m, v) = DistTable.moments(pmf, lo)

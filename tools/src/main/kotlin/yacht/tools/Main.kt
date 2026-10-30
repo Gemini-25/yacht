@@ -47,6 +47,7 @@ fun main(args: Array<String>) {
         "ladder" -> ladderRun(opts)
         "cost" -> cost(opts)
         "adapt" -> adapt(opts)
+        "oracle" -> oracle(opts)
         "league" -> league(opts, loadTables(File(opts["tables"] ?: "tables")).withoutRisk())
         "league-report" -> {
             val t = loadTables(File(opts["tables"] ?: "tables")).withoutRisk()
@@ -79,6 +80,9 @@ fun main(args: Array<String>) {
               adapt --tables DIR [--opps greedy,keeper,slip20,soft3,rule,ev] [--record N] [--games N] [--threads T] [--seed S]
                     상대 맞춤 승률 AI vs the app's win AI on the same deals against each opponent,
                     the opponent's model taken from its finals in N games against the max-expectation AI
+              oracle --tables DIR [--opps ev,greedy,keeper,...,risk+0.1] [--games N] [--record N] [--threads T] [--seed S]
+                    what knowing the opponent completely adds: its exact distribution from every state
+                    (players of their own card only; risk AIs by their θ) vs the record model vs the win AI
               explain --tables DIR [--games N] [--seed S] [--stray P]
                     print the Korean explanations of whole games (P = chance of not following advice)
             """.trimIndent(),
