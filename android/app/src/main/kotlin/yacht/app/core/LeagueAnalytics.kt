@@ -472,18 +472,16 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
     }
 
     /**
-     * 평점왕 while the season is under way (the MVP race): players who played [MVP_RACE_SHARE] of the
-     * league matches the busiest of [keys] has played so far; at the close this becomes the award's
-     * rule (that share of its own scheduled matches, [Leaders.season]), so the board is not empty for
-     * the first half of a season.
+     * 평점왕 while the season is under way (the MVP race): the [mvpRacers] of [keys]; at the close
+     * this becomes the award's rule (that share of its own scheduled matches, [Leaders.season]), so
+     * the board is not empty for the first half of a season.
      */
     private fun mvpRace(w: LeagueWorld, league: Season, keys: List<String>): List<LeaderEntry> {
-        val most = keys.maxOfOrNull { league.standings[it]?.played ?: 0 } ?: 0
-        if (most == 0) return emptyList()
+        val racers = mvpRacers(league, keys)
         return keys.mapNotNull { k ->
+            if (k !in racers) return@mapNotNull null
             val st = w.stats.season(k)?.takeIf { !it.avgRating.isNaN() } ?: return@mapNotNull null
-            val played = league.standings[k]?.played ?: 0
-            if (played < MVP_RACE_SHARE * most) null else LeaderEntry(k, st.avgRating, st.matches)
+            LeaderEntry(k, st.avgRating, st.matches)
         }.sortedWith(compareByDescending<LeaderEntry> { it.value }.thenByDescending { it.games }.thenBy { it.key })
     }
 
@@ -662,7 +660,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
             game(id, h?.tags?.firstOrNull()?.label ?: "명승부")
         }
         val top = review?.topRated?.let { game(it.ref, "평점 ${String.format(Locale.ROOT, "%.1f", it.value)}", it.key, it.other) }
-        val upset = review?.upset?.let { game(it.ref, "레이팅 ${it.value.roundToInt()} 차 이변", it.key, it.other) }
+        val upset = review?.upset?.let { game(it.ref, "레이팅 ${grouped(it.value)}점 차 이변", it.key, it.other) }
         val followed = host.favourites().filter { ':' !in it }.sorted().mapNotNull { k ->
             val line = w.archive.lines(k).firstOrNull { it.season == season } ?: return@mapNotNull null
             FollowedSeason(
@@ -857,7 +855,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         const val CAREER_CLUTCH = 30
         const val SEASON_STEADY = 40
 
-        /** The share of the busiest player's league matches the MVP race asks while the season is under way. */
+        /** The share of its division's busiest player's league matches the MVP race asks while the season is under way. */
         const val MVP_RACE_SHARE = 0.6
 
         /** Games with both cards known a player needs for its style radar and label. */
@@ -907,7 +905,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         fun ruleOf(k: LeaderKind, filter: LeaderFilter, finished: Boolean = false): String {
             val base = when {
                 k == LeaderKind.MVP && filter.scope == StatScope.SEASON && !filter.recent && !finished ->
-                    "공식 경기 평균 평점이에요. 지금까지 가장 많이 뛴 선수의 60% 이상 뛰어야 올라가요. 시즌이 끝나면 리그 경기의 60% 이상 뛴 선수 중 1위가 MVP예요."
+                    "공식 경기 평균 평점이에요. 같은 부에서 지금까지 가장 많이 뛴 선수의 60% 이상 뛰어야 올라가요. 시즌이 끝나면 리그 경기의 60% 이상 뛴 선수 중 1위가 MVP예요."
                 k == LeaderKind.UNLUCKY -> "실제 승점에서 같은 주사위로 비교한 운 보정 승점을 뺀 값이 가장 작은 순이에요. 0보다 작으면 운이 따르지 않았어요."
                 filter.recent && k == LeaderKind.CLUTCH -> "${AiStats.CLOSE}점 차 이내로 끝난 판의 승률이에요."
                 filter.recent && k == LeaderKind.SCORER -> "리그 경기 평균 점수예요."
@@ -1098,6 +1096,25 @@ internal fun identityOf(w: LeagueWorld, key: String, name: (String) -> String): 
         nationRank = rank, nationPlayers = compatriots.size,
         weeks = honours.count { it.kind == "POTW" },
     )
+}
+
+/**
+ * The players of [keys] in the MVP race of [league] while it is under way: those who have played
+ * [share] of the league matches the busiest player of their own division has played so far (a
+ * national season's divisions play different numbers of rounds, so the busiest of all would
+ * leave a small league's players out until its season ends).
+ */
+internal fun mvpRacers(league: Season, keys: Collection<String>, share: Double = LeagueAnalytics.MVP_RACE_SHARE): Set<String> {
+    val most = HashMap<Int, Int>()
+    val out = HashSet<String>()
+    for (k in keys) {
+        val played = league.standings[k]?.played ?: continue
+        if (played == 0) continue
+        val d = league.divisionOf(k) ?: continue
+        val busiest = most.getOrPut(d) { league.divisions[d].maxOf { league.standings[it]?.played ?: 0 } }
+        if (played >= share * busiest) out += k
+    }
+    return out
 }
 
 // ---- leaderboards over the last league matches ("최근 10경기") --------------------------------------

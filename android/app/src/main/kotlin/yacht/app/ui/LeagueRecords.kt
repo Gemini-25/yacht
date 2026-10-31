@@ -150,7 +150,8 @@ private fun RecordsRoom(lg: LeagueController, r: RoomView?, onOpen: (String) -> 
         }
         if (r.news.isNotEmpty()) {
             item(key = "news-head") { RoomHeading("📰 최근 기록 뉴스") }
-            items(r.news, key = { "news-${it.season}-${it.week}-${it.headline}" }) { a -> ArticleCard(a, lg.view?.clock) { k -> if (lg.isAi(k)) onOpen(k) } }
+            // By place: two record articles of one week can share a headline (a game record broken twice in a match), and a key used twice crashes the list.
+            items(r.news.size, key = { "news-$it" }) { i -> ArticleCard(r.news[i], lg.view?.clock) { k -> if (lg.isAi(k)) onOpen(k) } }
         }
         if (r.retired.isNotEmpty()) {
             item(key = "retired") {

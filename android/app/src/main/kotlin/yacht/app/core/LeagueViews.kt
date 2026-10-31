@@ -889,7 +889,7 @@ data class ReviewList(val items: List<ReviewListItem>)
 
 /**
  * A game the review points at, ready to show: its [ref], both sides' shown names, the score ("247 :
- * 198"), what it was ([note]: "평점 9.4", "레이팅 214 차 이변") and whether ▶ can play it again ([replay]).
+ * 198"), what it was ([note]: "평점 9.4", "레이팅 214점 차 이변") and whether ▶ can play it again ([replay]).
  */
 data class ReviewGameView(val ref: String, val a: String, val b: String, val score: String?, val note: String, val replay: Boolean)
 

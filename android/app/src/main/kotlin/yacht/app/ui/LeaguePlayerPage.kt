@@ -794,7 +794,7 @@ private fun ColumnScope.MatchesTab(c: AppController, v: LeagueView, p: PlayerPag
             p.profile.retired != null -> if (p.highlights.isEmpty()) "은퇴한 선수예요." else "은퇴한 선수예요. 남은 하이라이트를 볼 수 있어요."
             p.profile.key == Ladder.ME -> "리그 경기에는 나가지 않아요."
             filter == MatchFilter.LEAGUE -> "이번 시즌 치른 리그 경기가 아직 없어요."
-            filter == MatchFilter.COMPS -> "이번 시즌 대회 토너먼트에서 치른 경기가 아직 없어요."
+            filter == MatchFilter.COMPS -> "이번 시즌 대회에서 치른 경기가 아직 없어요."
             else -> "이번 시즌 치른 경기가 아직 없어요."
         }
         Text(none, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)

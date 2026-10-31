@@ -20,6 +20,7 @@ import yacht.app.core.MatchReport
 import yacht.app.core.ReplaySource
 import yacht.app.core.ReportState
 import yacht.app.core.leaderText
+import yacht.app.core.mvpRacers
 import yacht.app.core.radarOf
 import yacht.app.core.recentBoard
 import yacht.app.core.recentStats
@@ -27,8 +28,14 @@ import yacht.app.core.seatSplit
 import yacht.app.core.styleOf
 import yacht.app.core.styleSentence
 import yacht.app.ui.matchMvp
+import yacht.engine.Advisor
+import yacht.engine.AdvisorPlayer
 import yacht.engine.Category
+import yacht.engine.GreedyPlayer
+import yacht.engine.Mode
 import yacht.engine.OppModel
+import yacht.engine.RuleSet
+import yacht.engine.TableIO
 import yacht.engine.Tables
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.GameScore
@@ -41,8 +48,12 @@ import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.Season
 import yacht.engine.league.SeasonPlan
+import yacht.engine.league.WatchMatch
 import yacht.engine.league.WinEstimate
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.channels.FileChannel
+import java.util.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -83,16 +94,22 @@ class AnalyticsTest {
     }
 
     /**
-     * A season of [keys] in one division (single round robin) with every fixture played by
-     * [score] (the fixture and its index among those played): returns the world and the fixtures in play order.
+     * A season of [keys] in one division (single round robin; [divisions] when given) with every
+     * fixture played by [score] (the fixture and its index among those played), the first [upTo]
+     * fixtures handed out only: returns the world and the fixtures in play order.
      */
-    private fun played(keys: List<String>, score: (LeagueFixture, Int) -> List<GameScore>): Pair<LeagueWorld, List<LeagueFixture>> {
+    private fun played(
+        keys: List<String>,
+        divisions: List<List<String>> = listOf(keys),
+        upTo: Int = Int.MAX_VALUE,
+        score: (LeagueFixture, Int) -> List<GameScore>,
+    ): Pair<LeagueWorld, List<LeagueFixture>> {
         val w = LeagueWorld(Ladder(keys))
-        val season = Season.start(1, 11L, listOf(keys))
+        val season = Season.start(1, 11L, divisions)
         w.plan = SeasonPlan(season, LeagueConfig())
         w.members = keys
         val out = ArrayList<LeagueFixture>()
-        while (true) {
+        while (out.size < upTo) {
             val f = season.next(emptySet()) ?: break
             assertTrue(season.record(f.id, score(f, out.size)))
             out += f
@@ -260,6 +277,51 @@ class AnalyticsTest {
         host.w = LeagueWorld(Ladder(listOf("x")))
         assertNull(an.leaders(all))
         assertNull(an.facts())
+    }
+
+    @Test
+    fun theMvpRaceMeasuresEachPlayerAgainstItsOwnDivision() {
+        // A division of eight plays seven rounds, one of four three: at the end the four have played
+        // three matches each, under 60% of the busiest of all (seven) but all of their own division's.
+        val big = (1..8).map { "a$it" }
+        val small = (1..4).map { "b$it" }
+        val (w, _) = played(big + small, listOf(big, small)) { _, _ -> listOf(GameScore(220, 200), GameScore(200, 210)) }
+        val season = w.plan!!.league
+        assertEquals(7, season.standings.getValue("a1").played)
+        assertEquals(3, season.standings.getValue("b1").played)
+        assertEquals((big + small).toSet(), mvpRacers(season, big + small))
+        // Half way through the big division's matches: who has played 60% of its busiest is in, a player of no season is not.
+        val (w2, _) = played(big, upTo = 10) { _, _ -> listOf(GameScore(220, 200), GameScore(200, 210)) }
+        val s2 = w2.plan!!.league
+        val most = big.maxOf { s2.standings.getValue(it).played }
+        val racers = mvpRacers(s2, big + "nobody")
+        assertEquals(big.filter { s2.standings.getValue(it).played.let { p -> p > 0 && p >= 0.6 * most } }.toSet(), racers)
+        assertTrue(racers.isNotEmpty() && "nobody" !in racers)
+    }
+
+    @Test
+    fun accuracyFindsExpectedScorePlayPerfectAndGreedyPlayNot() {
+        // The precomputed tables (only the expected scores are needed): not in every checkout.
+        val dir = listOf(File("../tables"), File("tables")).firstOrNull { File(it, "ev.bin").exists() } ?: return
+        val rules = RuleSet.NINTENDO
+        val ev = RandomAccessFile(File(dir, "ev.bin"), "r").use { f -> TableIO.readEv(f.channel.map(FileChannel.MapMode.READ_ONLY, 0, f.length()), rules) }
+        val tables = Tables(rules, ev, null)
+        for (seed in 1L..3L) for (bestFirst in listOf(true, false)) {
+            val best = AdvisorPlayer(Advisor(tables), Mode.EXPECTED_SCORE)
+            val greedy = GreedyPlayer()
+            val turns = WatchMatch.play(rules, if (bestFirst) best else greedy, if (bestFirst) greedy else best, Random(seed))
+            val (first, second) = Accuracies.of(tables, turns)
+            // Each side read from its own seat: the expected-score player gives nothing away wherever it sits.
+            val side = if (bestFirst) 0 else 1
+            val (mine, other) = if (bestFirst) first to second else second to first
+            assertEquals(0.0, mine.lost, 1e-6, "seed $seed, first $bestFirst")
+            assertEquals(100.0, mine.percent, 1e-6)
+            assertEquals(0, mine.mistakes)
+            // Every decision found among the advisor's options: a box a turn, a keep after each of the first two throws (the last one kept whole: stopped).
+            assertEquals(turns.filter { it.side == side }.sumOf { 1 + minOf(it.throws.size, 2) }, mine.decisions)
+            assertTrue(other.lost > 0 && other.percent < 100 && other.mistakes > 0, "greedy: $other")
+            assertEquals(other.percent, Accuracies.percent(other.lost), 1e-9)
+        }
     }
 
     @Test

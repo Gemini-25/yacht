@@ -212,7 +212,7 @@ internal object ShotsRecords : LeagueShots {
                 ReviewGameView("4:L:5120:0:0", lg.name(a), lg.name(b), "341 : 198", "평점 9.4", false),
             ),
             ReviewGameView("4:L:5120:0:0", lg.name(a), lg.name(b), "341 : 198", "평점 9.4", true),
-            ReviewGameView("4:K:77:0", lg.name(i), lg.name(d), "2 : 1", "레이팅 214 차 이변", false),
+            ReviewGameView("4:K:77:0", lg.name(i), lg.name(d), "2 : 1", "레이팅 214점 차 이변", false),
             listOf(FollowedSeason(a, "한국 1부 1위 · 21승 5무 4패", "평점 8.12 · 레이팅 1,642"), FollowedSeason(f, "한국 2부 3위 · 17승 4무 9패", "평점 6.71 · 레이팅 1,561")),
             mapOf("KR" to "🇰🇷 한국 리그", "JP" to "🇯🇵 일본 리그", "BR" to "🇧🇷 브라질 리그"),
         )
