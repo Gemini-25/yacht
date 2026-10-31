@@ -394,20 +394,20 @@ class MatchLogBook {
     /** The record of [ref]'s board (board -1 reads board 0) in the block of its season; null when none is kept. */
     operator fun get(ref: MatchRef): MatchLog? {
         val k = key(ref)
-        current?.let { c -> if (c.season == k.season) (c.records[k] ?: memory[k])?.let { return it } }
-        return blockOf(k.season)?.records?.get(k)
+        val cur = current
+        if (cur != null && cur.season == k.season) return cur.records[k] ?: memory[k]
+        return past(k)
     }
 
     /** Every kept board of [ref]'s fixture, board order. */
     fun boards(ref: MatchRef): List<MatchLog> {
-        val out = ArrayList<MatchLog>()
-        fun scan(m: Map<MatchRef, MatchLog>) {
-            for ((k, v) in m) if (k.season == ref.season && k.comp == ref.comp && k.id == ref.id) out += v
+        fun mine(k: MatchRef) = k.season == ref.season && k.comp == ref.comp && k.id == ref.id
+        val cur = current
+        if (cur != null && cur.season == ref.season) {
+            val out = cur.records.values.filter { mine(it.ref) } + memory.values.filter { mine(it.ref) }
+            return out.distinctBy { it.ref.board }.sortedBy { it.ref.board }
         }
-        current?.let { c -> if (c.season == ref.season) scan(c.records) }
-        if (current?.season == ref.season) scan(memory)
-        blockOf(ref.season)?.let { if (it !== current) scan(it.records) }
-        return out.distinctBy { it.ref.board }.sortedBy { it.ref.board }
+        return pastBlocks(ref.season).flatMap { b -> b.records.keys.filter(::mine) }.distinct().sortedBy { it.board }.mapNotNull(::past)
     }
 
     /** Adds class [c] to the kept record of [ref]'s board; false when none is kept. */
@@ -419,11 +419,32 @@ class MatchLogBook {
             place(cur, k, old.copy(classes = old.classes or c.bit))
             return true
         }
-        val b = blockOf(k.season) ?: return false
-        val old = b.records[k] ?: return false
-        // Old blocks keep their classes as saved (memory classes mean nothing there).
-        if (c.saved) b.records[k] = old.copy(classes = old.classes or c.bit)
-        return true
+        var found = false
+        for (b in pastBlocks(k.season)) {
+            val old = b.records[k] ?: continue
+            found = true
+            // Old blocks keep their classes as saved (memory classes mean nothing there).
+            if (c.saved) b.records[k] = old.copy(classes = old.classes or c.bit)
+        }
+        return found
+    }
+
+    /** The blocks of past season [season]: last season's, then its archive entry (either may be missing). */
+    private fun pastBlocks(season: Int): List<Block> =
+        listOfNotNull(previous?.takeIf { it.season == season }, archive.lastOrNull { it.season == season })
+
+    /**
+     * [k]'s record of a past season from both of its blocks: last season's keeps a series'
+     * deciding game, its archive entry may keep another (a highlight), and either may hold a
+     * record the other does not, so the games of both are read together.
+     */
+    private fun past(k: MatchRef): MatchLog? {
+        val p = previous?.takeIf { it.season == k.season }?.records?.get(k)
+        val a = archive.lastOrNull { it.season == k.season }?.records?.get(k)
+        if (p == null || a == null) return p ?: a
+        val more = a.games.filter { g -> p.games.none { it.index == g.index } }
+        if (more.isEmpty()) return p
+        return p.copy(games = (p.games + more).sortedBy { it.index }, tag = if (p.tag != 0) p.tag else a.tag)
     }
 
     /** Bytes of the saved records of the blocks of [kind]: [CURRENT], [PREVIOUS] or [ARCHIVE] (all archived seasons). */
@@ -528,7 +549,11 @@ class MatchLogBook {
     /**
      * [dropForeign] for a league now in season [season] of seed [seed]: the current block must be
      * that season's, and an older block's seed must lead to [seed] by the off-season's rule
-     * ([nextSeed], as [Offseason.next] derives each season's seed from the one before).
+     * ([nextSeed], as [Offseason.next] derives each season's seed from the one before). A current
+     * block of the season before, whose seed leads to [seed], is kept too: the book was saved
+     * before that season's close and the league after it (the league's files are written first),
+     * so the caller rolls it over ([rollover] from [season] - 1 into [season]) before [begin],
+     * which would drop it.
      */
     fun dropForeign(season: Int, seed: Long) {
         fun leads(b: Block): Boolean {
@@ -537,7 +562,13 @@ class MatchLogBook {
             return x == seed
         }
         val ours = (listOfNotNull(current, previous) + archive)
-            .filter { b -> if (b.kind == CURRENT) b.season == season && b.seed == seed else b.season < season && leads(b) }
+            .filter { b ->
+                when {
+                    b.kind != CURRENT -> b.season < season && leads(b)
+                    b.season == season -> b.seed == seed
+                    else -> b.season == season - 1 && leads(b)
+                }
+            }
             .associate { it.season to it.seed }
         dropForeign { ours[it] }
     }
@@ -631,9 +662,6 @@ class MatchLogBook {
             }
         }
     }
-
-    private fun blockOf(season: Int): Block? =
-        current?.takeIf { it.season == season } ?: previous?.takeIf { it.season == season } ?: archive.lastOrNull { it.season == season }
 
     /** A record's key: its board (0 for a whole one-on-one fixture), no game. */
     private fun key(ref: MatchRef): MatchRef = if (ref.board >= 0 && ref.game < 0) ref else ref.copy(board = maxOf(0, ref.board), game = -1)

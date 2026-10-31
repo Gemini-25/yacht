@@ -1,6 +1,8 @@
 package yacht.engine
 
+import yacht.engine.league.ClubBook
 import yacht.engine.league.ClubCup
+import yacht.engine.league.ClubLeague
 import yacht.engine.league.ClubSource
 import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
@@ -8,6 +10,7 @@ import yacht.engine.league.Competitions
 import yacht.engine.league.Confed
 import yacht.engine.league.Family
 import yacht.engine.league.Fixture
+import yacht.engine.league.Hometowns
 import yacht.engine.league.Honour
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
@@ -18,6 +21,7 @@ import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LegendMatch
 import yacht.engine.league.MatchRef
 import yacht.engine.league.NationCup
+import yacht.engine.league.Nations
 import yacht.engine.league.Offseason
 import yacht.engine.league.PlayerBook
 import yacht.engine.league.SeasonCalendar
@@ -117,8 +121,12 @@ class SeasonMatchesTest {
         return out
     }
 
-    /** The checks every played season passes; its news links [linkedComps] competitions or more, its brackets [minTies] ties. */
-    private fun check(p: Played, linkedComps: Int, minTies: Int) {
+    /**
+     * The checks every played season passes; its news links [linkedComps] competitions or more, its
+     * brackets [minTies] ties; at least [minForeseen] fixtures were foreseen at mid-season and
+     * [minAgain] played again.
+     */
+    private fun check(p: Played, linkedComps: Int, minTies: Int, minForeseen: Int = 100, minAgain: Int = 200, known: Collection<String> = keys + "legend") {
         val plan = p.plan
         val all = SeasonMatches.all(plan).toList()
         val byKey = all.associateBy { it.ref.comp to it.ref.id }
@@ -136,7 +144,7 @@ class SeasonMatchesTest {
             assertEquals(f.week, m.week)
             p.foreseen[key]?.let { assertEquals(it, f, "$key foreseen at mid-season") }
         }
-        assertTrue(p.foreseen.size > 100, "${p.foreseen.size} foreseen")
+        assertTrue(p.foreseen.size > minForeseen, "${p.foreseen.size} foreseen")
         // Played again from the rebuilt fixture: the same result (every competition match, a share of the league's).
         var again = 0
         for ((i, m) in all.withIndex()) {
@@ -145,7 +153,7 @@ class SeasonMatchesTest {
             assertTrue(SeasonMatches.verify(m, r), "${m.ref} again")
             again++
         }
-        assertTrue(again > 200, "$again played again")
+        assertTrue(again > minAgain, "$again played again")
         // A changed AI does not play its matches the same way.
         val league = all.first { it.ref.comp == Comp.LEAGUE }
         val changed = LeagueAi(league.fixture.a, "", Family.EV, "") { GreedyPlayer() }
@@ -209,7 +217,7 @@ class SeasonMatchesTest {
         assertTrue(ties >= minTies, "$ties ties")
         // Read back from season.txt: the same matches.
         val codecs = Competitions.codecs + (Comp.LEGEND to LegendMatch.codec)
-        val back = SeasonPlan.decode(plan.encode(), keys + "legend", codecs)
+        val back = SeasonPlan.decode(plan.encode(), known, codecs + (Comp.CLUB to ClubLeague.codec))
         assertEquals(all, SeasonMatches.all(back).toList())
     }
 
@@ -238,6 +246,46 @@ class SeasonMatchesTest {
         assertNull(SeasonMatches.of(plan, Comp.WORLD_CUP, 999_999))
         assertNull(SeasonMatches.of(plan, Comp.CUP, 0), "no cup this season")
         assertNull(SeasonMatches.of(plan, MatchRef(plan.number + 1, Comp.LEAGUE, 0)), "another season's")
+    }
+
+    /**
+     * A legacy season [number] of [n] players (no national leagues) with every competition the
+     * factories make and the club league, as if last season's tables were this season's
+     * divisions; and its players.
+     */
+    private fun legacyPlan(n: Int, number: Int): Pair<SeasonPlan, List<String>> {
+        val config = LeagueConfig()
+        val players = (1..n).map { "p%04d".format(it) }
+        fun rating(k: String) = 2000.0 - k.drop(1).toInt()
+        val nations = Nations.ALL.map { it.code }
+        val nation = { k: String -> nations[k.drop(1).toInt() % nations.size] }
+        val families = Family.entries.filter { it != Family.MINE }
+        val family = { k: String -> families[k.drop(1).toInt() % families.size] }
+        val ctx = Offseason.Context(players, ::rating, family, { "서울" }, config, nation = nation)
+        val league = Offseason.first(31L, ctx, number).league
+        val last = number - 1
+        val honours = listOf(Honour(last, "L0", players[2]), Honour(last, "CUP", players[5]), Honour(last, "CUP2", players[7]), Honour(last, "MVP", players[1]))
+        val tiers = league.leagues.list.single().tiers
+        val start = SeasonStart(number, league.seed, config, players, ::rating, league.divisions, league.divisions, honours, family, { "서울" }, honours, nation, tiers, tiers)
+        val factories = Competitions.factories() + ClubLeague.factory({ null }, { s -> ClubBook.create(s.ranking, s.config.clubs, s.config.squad, s.seed, Hometowns.ALL) })
+        return SeasonPlan(league, config, factories.mapNotNull { it(start) }.toMutableList()) to players
+    }
+
+    @Test
+    fun everyMatchOfALegacySeasonIsFoundToo() {
+        // The club league (read through its own API), the family cup and the legacy playoffs.
+        val (plan, players) = legacyPlan(200, 5)
+        val comps = plan.comps.map { it.comp }
+        for (c in listOf(Comp.CLUB, Comp.FAMILY, Comp.CUP, Comp.CHAMPIONS)) assertTrue(c in comps, "$c in $comps")
+        val p = play(plan)
+        assertTrue(plan.post.map { it.comp }.containsAll(listOf(Comp.TITLE_PLAYOFF, Comp.PROMOTION_PLAYOFF)), plan.post.map { it.comp }.toString())
+        check(p, linkedComps = 4, minTies = 40, minForeseen = 50, minAgain = 100, known = players)
+        // A club match is the player's own board.
+        val club = SeasonMatches.ofComp(plan, Comp.CLUB).last()
+        val k = club.fixture.lineupB.last()
+        val own = SeasonMatches.ofPlayer(plan, k).filter { it.ref.comp == Comp.CLUB }
+        assertTrue(own.isNotEmpty() && own.all { it.fixture.lineupA.getOrNull(it.ref.board) == k || it.fixture.lineupB.getOrNull(it.ref.board) == k })
+        assertEquals(MatchRef(plan.number, Comp.CLUB, club.ref.id, club.fixture.lineupB.lastIndex), own.first { it.ref.id == club.ref.id }.ref)
     }
 
     @Test

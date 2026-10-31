@@ -310,6 +310,40 @@ class MatchLogTest {
     }
 
     @Test
+    fun aPastSeasonIsReadFromItsBlockAndItsArchiveTogether() {
+        val b = book(1, 11L)
+        // A 5-game final whose second game is the season's best; a KO tie whose game is the third best.
+        val final = rec(1, 1, LogClass.FINAL.bit or LogClass.HIGHLIGHT.bit, games = 5, tag = MatchLogBook.TAG_CUP_FINAL)
+        val ko = rec(1, 2, LogClass.KO.bit or LogClass.HIGHLIGHT.bit)
+        b.put(final)
+        b.put(ko)
+        val keep = { l: MatchLog -> if (l.has(LogClass.FINAL)) 0 else -1 }
+        val archive = { l: MatchLog ->
+            if (l.ref.id == 1) listOf(MatchLogBook.ArchiveGame(1, game = 1), MatchLogBook.ArchiveGame(MatchLogBook.TAG_CUP_FINAL)) else listOf(MatchLogBook.ArchiveGame(3, game = 0))
+        }
+        b.rollover(1, 11L, 2, 22L, MatchLogBook.caps(1000), keep, archive)
+        // Last season's block keeps the final's deciding game, the archive its best game too.
+        assertEquals(1, b.count(MatchLogBook.PREVIOUS))
+        assertEquals(listOf(1), b.archivedSeasons)
+        val got = assertNotNull(b[MatchRef(1, Comp.CUP, 1, 0, 1)])
+        assertEquals(final.games.filter { it.index == 1 || it.index == 4 }, got.games)
+        assertEquals(MatchLogBook.TAG_CUP_FINAL, got.tag)
+        // The KO tie is only in the archive: found, and its boards listed.
+        assertEquals(listOf(0), b[MatchRef(1, Comp.CUP, 2)]?.games?.map { it.index })
+        assertEquals(listOf(MatchRef(1, Comp.CUP, 2, 0)), b.boards(MatchRef(1, Comp.CUP, 2)).map { it.ref })
+        assertEquals(listOf(1, 4), b.boards(MatchRef(1, Comp.CUP, 1)).single().games.map { it.index })
+        assertTrue(b.addClass(MatchRef(1, Comp.CUP, 2), LogClass.NEWS))
+        assertTrue(b[MatchRef(1, Comp.CUP, 2)]!!.has(LogClass.NEWS))
+        // The same from the file.
+        val back = MatchLogBook.decode(b.encode())
+        assertEquals(b[MatchRef(1, Comp.CUP, 1)], back[MatchRef(1, Comp.CUP, 1)])
+        assertEquals(b[MatchRef(1, Comp.CUP, 2)], back[MatchRef(1, Comp.CUP, 2)])
+        // Once last season's block is gone, the archive alone.
+        b.rollover(2, 22L, 3, 33L, MatchLogBook.caps(1000), keep, archive)
+        assertEquals(listOf(1, 4), b[MatchRef(1, Comp.CUP, 1)]?.games?.map { it.index })
+    }
+
+    @Test
     fun theArchiveKeepsThirtySeasons() {
         val b = book(1, 1L)
         for (s in 1..35) {
@@ -387,6 +421,27 @@ class MatchLogTest {
         assertEquals(emptyList(), other.archivedSeasons)
         assertNull(other[MatchRef(2, Comp.CUP, 1)])
         assertEquals(0, other.season)
+        // A book saved before season 2's close, the league after it: its season-2 block is kept
+        // for the caller to roll over; one two closes behind, or of another seed, is not.
+        val behind = book(1, first.seed).also { x ->
+            x.put(rec(1, 1, LogClass.FINAL.bit))
+            x.rollover(1, first.seed, 2, second.seed, MatchLogBook.caps(1000), { 0 }) { listOf(MatchLogBook.ArchiveGame(1)) }
+            x.put(rec(2, 1, LogClass.FINAL.bit))
+        }
+        val saved = behind.encode()
+        val late = MatchLogBook.decode(saved).also { it.dropForeign(3, third.seed) }
+        assertEquals(2 to second.seed, late.season to late.seed)
+        assertNotNull(late[MatchRef(2, Comp.CUP, 1)])
+        late.rollover(2, second.seed, 3, third.seed, MatchLogBook.caps(1000), { 0 }) { listOf(MatchLogBook.ArchiveGame(1)) }
+        assertEquals(listOf(1, 2), late.archivedSeasons)
+        assertEquals(3, late.season)
+        assertNotNull(late[MatchRef(2, Comp.CUP, 1)])
+        val older = MatchLogBook.decode(saved).also { it.dropForeign(4, MatchLogBook.nextSeed(third.seed, 4)) }
+        assertEquals(0, older.season)
+        assertEquals(listOf(1), older.archivedSeasons)
+        val wrong = MatchLogBook.decode(saved).also { it.dropForeign(3, third.seed + 1) }
+        assertEquals(0, wrong.season)
+        assertEquals(emptyList(), wrong.archivedSeasons)
         // One block of another seed among ours goes alone.
         val mixed = ours()
         mixed.dropForeign { s -> if (s == 1) first.seed + 1 else listOf(first, second, third)[s - 1].seed }
