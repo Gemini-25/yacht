@@ -2180,11 +2180,12 @@ class LeagueController(
     }
 
     /**
-     * The best-rated followed player's latest result as the league's notification says it
-     * ("★ 홍길동 · 김철수에게 2:0 승 · 한국 1부"), from the home's last build; null without one.
+     * The newest result of the followed players as the league's notification says it ("★ 홍길동 ·
+     * 김철수에게 2:0 승 · 한국 1부"): of the latest week, the best-rated player's (the home's order); from
+     * the home's last build; null without one.
      */
     fun followedLine(): String? {
-        val card = home.view?.followed?.firstOrNull { it.kind == FollowKind.PLAYER && it.last?.result != null } ?: return null
+        val card = home.view?.followed?.filter { it.kind == FollowKind.PLAYER && it.last?.result != null }?.maxByOrNull { it.last!!.week } ?: return null
         val m = card.last ?: return null
         val word = when (m.result) {
             1 -> "승"
