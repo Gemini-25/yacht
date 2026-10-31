@@ -151,13 +151,21 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     private fun rank(p: SeasonPlan) {
         if (!p.league.leagues.national) return
         runCatching {
-            val seeded = (p.competition(Comp.CUP) as? Cup)?.entries?.associate { it.key to if (it.rating.isNaN()) it.rating else Math.round(it.rating).toDouble() }
-            val start = { k: String ->
-                seeded?.get(k) ?: if (stats.season == p.number) stats.startRating(k) else ladder.rating(k).let { if (it.isNaN()) it else Math.rint(it) }
-            }
-            p.ranking = Coefficients.ranking(federation, p.league.leagues, p.number - 1, strengths(p, start), p.config)
+            p.ranking = Coefficients.ranking(federation, p.league.leagues, p.number - 1, strengths(p, drawn(p)), p.config)
             if (federation.top(p.number) == null) federation.putTop(p.number, NationalLeagues.bestRanked(p, Federation.TOP))
         }
+    }
+
+    /**
+     * The ratings season [p] was drawn with: the 요트컵's seeds (every member, whole points in
+     * season.txt), else the start ratings stats.txt keeps, else the ladder's (whole points). They
+     * do not move during the season or its close, so the rankings [p]'s leagues get from them
+     * read the same at the close, at the open and after a restart.
+     */
+    private fun drawn(p: SeasonPlan): (String) -> Double {
+        val seeded = (p.competition(Comp.CUP) as? Cup)?.entries?.associate { it.key to if (it.rating.isNaN()) it.rating else Math.round(it.rating).toDouble() }
+        val started = stats.season == p.number
+        return { k -> seeded?.get(k) ?: if (started) stats.startRating(k) else ladder.rating(k).let { if (it.isNaN()) it else Math.rint(it) } }
     }
 
     /** Each league of [p]'s strength ([Coefficients.strength]: the average [rating] of its best 5). */
@@ -167,9 +175,15 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         return { id -> byId[id] ?: Double.NaN }
     }
 
-    /** The league ranking after national season [p] (its coefficients stored) under [rules]; null after a legacy season. */
+    /**
+     * The league ranking after national season [p] (its coefficients stored) under [rules]; null
+     * after a legacy season. Leagues level on coefficients go by their strength in the ratings
+     * [p] was drawn with, as in [p]'s own ranking: so the ranking the close publishes is the one
+     * the next season's places are drawn by (evolution moves the ratings in between), a league's
+     * climb is counted from the ranking [p] was played under, and a replayed close ranks the same.
+     */
     private fun rankingAfter(p: SeasonPlan, rules: LeagueConfig): LeagueRanking? =
-        if (!p.league.leagues.national) null else runCatching { Coefficients.ranking(federation, p.league.leagues, p.number, strengths(p, ::rating), rules) }.getOrNull()
+        if (!p.league.leagues.national) null else runCatching { Coefficients.ranking(federation, p.league.leagues, p.number, strengths(p, drawn(p)), rules) }.getOrNull()
 
     /** Traits of a generated or evolved player in Korean (메타 리포트), null for the others. */
     private fun traits(key: String): Map<String, String>? =
@@ -426,7 +440,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             { honours.of(it) }, childShare = config.childShare / 100.0, played = played,
             accept = { s -> !config.onlyFlawed || s.flawed }, fashion = fashion, aging = config.aging,
         )
-        out += r.events
+        // A national retiree's article counts every title it won (the major ones only decide who
+        // is kept as a legend): a champion of a league outside the best-ranked did win one.
+        out += if (national) r.events.map { e -> if (e.kind == "retired" && e.args.size > 1) e.copy(args = e.args.toMutableList().also { it[1] = honours.titles(e.keys.first()).toString() }) else e } else r.events
         // Everyone a year older plays a little differently: their old results count half from
         // now on, so ratings follow who they are (careers and head-to-heads stay).
         if (config.aging) runCatching {

@@ -4,6 +4,7 @@ import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
 import yacht.engine.league.SeasonCalendar
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -24,6 +25,7 @@ class NewsVolumeTest {
     @Test
     fun aNationalRolloverAt1000PlayersMakesAtMost60Events() {
         val run = WorldRun(config)
+        var retiredTitles = 0
         run.w.openFirstSeason(5L)
         assertTrue(run.w.plan!!.league.leagues.list.size >= 20, run.w.plan!!.league.leagues.toString())
         for (season in 1..2) {
@@ -34,16 +36,27 @@ class NewsVolumeTest {
             val (players, world) = news.partition { it.kind in PLAYER_KINDS }
             val kinds = news.groupingBy { it.kind }.eachCount().toSortedMap()
             assertTrue(world.size <= MAX, "season $season: ${world.size} events of the world (${news.size} in all) $kinds")
+            // With the players' own news the whole rollover stays near it (the news desk, S17, picks from these).
+            assertTrue(news.size <= TOTAL, "season $season: ${news.size} events in all $kinds")
             // No kind floods: one article per player is gone (drafts, transfers, titles, moves, milestones).
             assertTrue(kinds.values.all { it <= 8 }, kinds.toString())
             assertTrue(players.groupingBy { it.kind }.eachCount().values.all { it <= 3 }, kinds.toString())
             // The digests at the source.
             for (k in listOf("league_titles_digest", "lower_tiers", "market_digest", "transfer_window", "milestones")) assertTrue(k in kinds, "season $season: no $k in $kinds")
+            // A retiree's article counts every title it won, not only the major ones (a champion of
+            // a league outside the best-ranked did win).
+            val retired = close.events.filter { it.kind == "retired" }
+            for (e in retired) assertEquals(run.w.honours.titles(e.keys.first()), e.args[1].toInt(), e.toString())
+            retiredTitles += retired.count { e -> e.args[1] != "0" && run.w.honours.majorTitles(e.keys.first(), run.w.federation::isMajor) == 0 }
         }
+        assertTrue(retiredTitles > 0, "no retiree with titles outside the major ones")
     }
 
     private companion object {
         const val MAX = 60
+
+        /** The whole rollover, the players' own news included (measured 59 and 73). */
+        const val TOTAL = 80
 
         /** The rollover's own news that the open writes at PRESEASON. */
         val OPEN_KINDS = setOf("national_reform", "league_formed", "federation_assembly", "federation_decision")

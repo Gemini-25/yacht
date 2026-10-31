@@ -853,13 +853,17 @@ object News {
         "league_titles_digest" -> {
             // [champions] (count, then "league:key" each).
             arg(0)?.let { v["count"] = it }
-            val named = e.args.drop(1).take(3).mapNotNull { p ->
+            val pairs = e.args.drop(1)
+            val named = pairs.take(3).mapNotNull { p ->
                 val id = p.substringBefore(':', "")
                 val k = p.substringAfter(':', "")
                 if (id.isEmpty() || k.isEmpty()) null else "${name(k)}(${LeagueIds.short(id)})"
             }
             if (named.isNotEmpty()) v["list"] = named.joinToString("·")
-            listOf(
+            // A world of few leagues: every other champion is named.
+            if (named.isNotEmpty() && arg(0)?.toIntOrNull() == named.size) listOf(
+                T("다른 리그 챔피언: {list}", "시즌 {season} 다른 리그에서는 {list|이} 정상에 올랐어요. 다음 시즌 국제 무대에서 이들의 활약을 지켜봐요."),
+            ) to 2 else listOf(
                 T("{count}개 리그 챔피언 확정", "{list} 등 {count}개 리그에서 시즌 {season} 챔피언이 가려졌어요. 다음 시즌 국제 무대에서 이들의 활약을 지켜봐요."),
                 T("리그 챔피언 소식: {a} 외", "시즌 {season} 리그 챔피언이 모두 가려졌어요. 각 리그 정상에 오른 선수는 {list} 등 {count}명이에요."),
             ) to 2
@@ -889,9 +893,22 @@ object News {
             val regional = arg(1)?.toIntOrNull() ?: 0
             listOfNotNull(if (own > 0) "국가 리그 ${own}개" else null, if (regional > 0) "연합 리그 ${regional}개" else null)
                 .takeIf { it.isNotEmpty() }?.let { v["formed"] = it.joinToString("와 ") }
-            listOf(
-                T("리그 개편: 국가 리그 시대 개막", "시즌 {season}부터 선수들은 소속 클럽이 있는 나라의 리그에서 뛰어요. {formed|이} 새로 출범했어요. 리그마다 1부부터 차례로 승강이 이어지고, 각 리그 챔피언은 국제 무대에 나가요."),
-            ) to 5
+            // Where the players play: their club's nation's league; nations with few players
+            // share a 연합 리그 (a small world has only those, 강자만 one 국제 연합 리그).
+            when {
+                own == 0 && e.args.drop(2) == listOf(LeagueIds.WORLD) -> listOf(
+                    T("리그 개편: 국제 연합 리그 출범", "시즌 {season}부터 모든 선수가 국제 연합 리그 하나에서 뛰어요. 1부부터 차례로 승강이 이어지고, 리그 챔피언은 국제 무대에 나가요."),
+                )
+                own == 0 -> listOf(
+                    T("리그 개편: 연합 리그 시대 개막", "시즌 {season}부터 선수들은 소속 클럽의 나라가 속한 연합 리그에서 뛰어요. {formed|이} 새로 출범했어요. 리그마다 1부부터 차례로 승강이 이어지고, 각 리그 챔피언은 국제 무대에 나가요."),
+                )
+                regional > 0 -> listOf(
+                    T("리그 개편: 국가 리그 시대 개막", "시즌 {season}부터 선수들은 소속 클럽이 있는 나라의 리그에서 뛰고, 선수가 적은 나라는 연합 리그에 모여요. {formed|이} 새로 출범했어요. 리그마다 1부부터 차례로 승강이 이어지고, 각 리그 챔피언은 국제 무대에 나가요."),
+                )
+                else -> listOf(
+                    T("리그 개편: 국가 리그 시대 개막", "시즌 {season}부터 선수들은 소속 클럽이 있는 나라의 리그에서 뛰어요. {formed|이} 새로 출범했어요. 리그마다 1부부터 차례로 승강이 이어지고, 각 리그 챔피언은 국제 무대에 나가요."),
+                )
+            } to 5
         }
         "league_formed" -> {
             // [] (league, tiers, members).
@@ -907,9 +924,14 @@ object News {
             val top = (0..2).mapNotNull { arg(it) }.map { LeagueIds.label(it) }
             top.firstOrNull()?.let { v["first"] = it }
             if (top.isNotEmpty()) v["top3"] = top.joinToString("·")
+            top.drop(1).takeIf { it.isNotEmpty() }?.let { v["next"] = it.joinToString("·") }
             arg(3)?.let { v["up"] = LeagueIds.label(it) }
             arg(4)?.takeIf { it != "0" }?.let { v["d"] = it }
-            listOf(
+            // The biggest climber climbed to the top.
+            if (v["d"] != null && arg(3) != null && arg(3) == arg(0)) listOf(
+                T("리그 랭킹 발표: {first}, {d}계단 올라 1위", "최근 5시즌 국제 대회 성적으로 매긴 리그 랭킹에서 {first|이} {d}계단 올라 1위가 됐어요. 이 순위로 다음 시즌 대륙 챔피언스 출전권과 챔피언스 리그 직행이 정해져요."),
+                T("시즌 {season} 리그 랭킹: {first} 1위", "요트협회가 리그 랭킹을 발표했어요. 한 시즌 만에 {d}계단을 뛰어오른 {first|이} 1위예요.[[ 그 뒤를 {next|이} 이어요.]]"),
+            ) to 3 else listOf(
                 T("리그 랭킹 발표: 1위 {first}", "최근 5시즌 국제 대회 성적으로 매긴 리그 랭킹에서 {first|이} 1위예요.[[ {up|은} {d}계단 올랐어요.]] 이 순위로 다음 시즌 대륙 챔피언스 출전권과 챔피언스 리그 직행이 정해져요."),
                 T("시즌 {season} 리그 랭킹: {first} 1위", "요트협회가 리그 랭킹을 발표했어요. 1위부터 {top3} 순이에요.[[ {up|은} 한 시즌 만에 {d}계단 뛰었어요.]]"),
             ) to 3
@@ -933,6 +955,9 @@ object News {
                 ) to 2
                 result == "A" && by == "U" -> listOf(
                     T("‘{title}’ 가결", "‘{title}’ 안건이 가결됐어요. 직접 찬성한 안건이에요. 시즌 {from}부터 적용돼요."),
+                ) to 4
+                result == "A" && yes == seats -> listOf(
+                    T("‘{title}’ 가결", "‘{title}’ 안건이 가결됐어요. 선수 위원회 {seats}명 전원이 찬성했어요. 시즌 {from}부터 적용돼요."),
                 ) to 4
                 result == "A" -> listOf(
                     T("‘{title}’ 가결", "‘{title}’ 안건이 가결됐어요. 선수 위원회 {seats}명 가운데 {yes}명이 찬성했어요. 시즌 {from}부터 적용돼요."),
@@ -974,7 +999,9 @@ object News {
         "club_champions" -> {
             // [clubs of the next leagues] (leagues beyond those told).
             arg(0)?.let { v["n"] = it }
-            listOf(
+            if (everyone(e, arg(0))) listOf(
+                T("{n}개 리그 클럽 1위 확정", "다른 리그에서는 {seeds|이} 클럽 1위에 올랐어요. 클럽 순위는 소속 선수들의 리그 성적과 우승으로 매겨요."),
+            ) to 2 else listOf(
                 T("{n}개 리그 클럽 1위 확정", "{seeds} 등 {n}개 리그에서도 클럽 1위가 가려졌어요. 클럽 순위는 소속 선수들의 리그 성적과 우승으로 매겨요."),
             ) to 2
         }
@@ -983,7 +1010,7 @@ object News {
             arg(0)?.let { v["clubs"] = it }
             arg(1)?.let { v["nations"] = it }
             listOf(
-                T("클럽 개편: {nations}개국 {clubs}개 클럽", "클럽이 {nations}개국 {clubs}개 클럽으로 새로 태어났어요. 이제 모든 선수가 자기 나라 클럽에 속하고, 클럽의 나라 리그에서 뛰어요."),
+                T("클럽 개편: {nations}개국 {clubs}개 클럽", "클럽이 {nations}개국 {clubs}개 클럽으로 새로 태어났어요. 이제 모든 선수가 자기 나라 클럽에 속하고, 클럽이 속한 리그에서 뛰어요."),
             ) to 4
         }
         "club_founded" -> {
@@ -1011,7 +1038,9 @@ object News {
             }
             v["nf"] = founded.toString()
             v["nd"] = dissolved.toString()
-            listOf(
+            if (everyone(e, (founded + dissolved).toString())) listOf(
+                T("클럽 재편: 창단 {nf}곳·해체 {nd}곳", "이번 오프시즌에 {change}. 나라마다 선수 수에 맞춰 클럽 수를 조정했어요.[[ 바뀐 클럽은 {seeds|이에요}.]]"),
+            ) to 2 else listOf(
                 T("클럽 재편: 창단 {nf}곳·해체 {nd}곳", "이번 오프시즌에 {change}. 나라마다 선수 수에 맞춰 클럽 수를 조정했어요.[[ 바뀐 클럽에는 {seeds} 등이 있어요.]]"),
             ) to 2
         }
@@ -1044,7 +1073,9 @@ object News {
                 else -> "${home}명이 고국으로 돌아왔어요"
             }
             v["n"] = (abroad + home).toString()
-            listOf(
+            if (everyone(e, v["n"])) listOf(
+                T("해외 이적 시장 결산: {n}명 이동", "이번 오프시즌에 {moves}. 리그를 옮긴 선수는 다음 시즌 새 리그에서 뛰어요.[[ 주인공은 {seeds|이에요}.]]"),
+            ) to 2 else listOf(
                 T("해외 이적 시장 결산: {n}명 이동", "이번 오프시즌에 {moves}. 리그를 옮긴 선수는 다음 시즌 새 리그에서 뛰어요.[[ {seeds} 등이 새 무대에 서요.]]"),
             ) to 2
         }
@@ -1088,30 +1119,38 @@ object News {
             // [≤ 6 players] (count, first titles): a national close's title milestones beyond the best-rated.
             arg(0)?.let { v["n"] = it }
             arg(1)?.takeIf { it != "0" }?.let { v["firsts"] = it }
+            // "등" only when there are more than it names.
+            v["seeds"]?.let { names -> v["who"] = if (everyone(e, arg(0))) names else "$names 등" }
             if (arg(1) == arg(0)) listOf(
-                T("첫 우승의 기쁨, {n}명", "이번 시즌 {n}명이 데뷔 첫 우승을 차지했어요. {seeds} 등이 처음으로 트로피를 들어 올렸어요."),
+                T("첫 우승의 기쁨, {n}명", "이번 시즌 {n}명이 데뷔 첫 우승을 차지했어요. {who|이} 처음으로 트로피를 들어 올렸어요."),
             ) to 2 else listOf(
-                T("우승 이정표 {n}건", "이번 시즌 {n}명이 우승으로 새 이정표를 세웠어요.[[ 그중 {firsts}명은 데뷔 첫 우승이에요.]] {seeds} 등이 이름을 올렸어요."),
+                T("우승 이정표 {n}건", "이번 시즌 {n}명이 우승으로 새 이정표를 세웠어요.[[ 그중 {firsts}명은 데뷔 첫 우승이에요.]] {who|이} 이름을 올렸어요."),
             ) to 2
         }
         "dynasties" -> {
             // [≤ 6 players] (count): a national close's runs and unbeaten seasons in titles that are not major.
             arg(0)?.let { v["n"] = it }
-            listOf(
-                T("각 리그의 왕조 {n}곳", "{seeds} 등 {n}명이 각 리그에서 연속 우승이나 무패 우승을 이어 갔어요. 리그마다 새 강자가 자리를 굳히고 있어요."),
+            if (everyone(e, arg(0))) listOf(
+                T("리그 곳곳의 왕조, {n}명", "{seeds|이} 각자 리그에서 연속 우승이나 무패 우승을 이어 갔어요. 리그마다 새 강자가 자리를 굳히고 있어요."),
+            ) to 2 else listOf(
+                T("리그 곳곳의 왕조, {n}명", "{seeds} 등 {n}명이 각 리그에서 연속 우승이나 무패 우승을 이어 갔어요. 리그마다 새 강자가 자리를 굳히고 있어요."),
             ) to 2
         }
         "pupils" -> {
             // [≤ 6 pupils] (count): a national close's debuts of pupils beyond the best-rated.
             arg(0)?.let { v["n"] = it }
-            listOf(
+            if (everyone(e, arg(0))) listOf(
+                T("제자 {n}명 데뷔", "스승에게 배운 제자 {seeds|이} 리그에 데뷔해요. 모두 자기 나라 리그의 가장 낮은 부에서 첫 시즌을 시작해요."),
+            ) to 1 else listOf(
                 T("제자 {n}명 데뷔", "{seeds} 등 스승에게 배운 제자 {n}명이 리그에 데뷔해요. 모두 자기 나라 리그의 가장 낮은 부에서 첫 시즌을 시작해요."),
             ) to 1
         }
         "learned_rules" -> {
             // [≤ 6 players] (count): a national close's players who stopped misreading a rule, beyond the best-rated.
             arg(0)?.let { v["n"] = it }
-            listOf(
+            if (everyone(e, arg(0))) listOf(
+                T("규칙 착각에서 벗어난 {n}명", "{seeds|이} 잘못 알던 규칙을 바로잡았어요. 다음 시즌 진짜 실력이 나올지 지켜봐요."),
+            ) to 1 else listOf(
                 T("규칙 착각에서 벗어난 {n}명", "{seeds} 등 {n}명이 잘못 알던 규칙을 바로잡았어요. 다음 시즌 진짜 실력이 나올지 지켜봐요."),
             ) to 1
         }
@@ -1125,6 +1164,12 @@ object News {
         }
         else -> emptyList<T>() to 1
     }
+
+    /**
+     * Whether digest [e] names everyone its [count] counts (a small world, a quiet off-season):
+     * its article then lists them without "등".
+     */
+    private fun everyone(e: LeagueEvent, count: String?): Boolean = count?.toIntOrNull()?.let { it in 1..e.keys.count { k -> k != "-" } } == true
 
     private fun milestone(kind: String, value: String?, v: MutableMap<String, String>): Pair<List<T>, Int> {
         val n = value?.toIntOrNull()

@@ -353,6 +353,15 @@ class MediaTest {
             e("dynasties", three, listOf("9")),
             e("pupils", listOf("e3_1", "e3_2"), listOf("14")),
             e("learned_rules", two, listOf("11")),
+            // Digests that name everyone they count (a small world, a quiet off-season).
+            e("milestones", two, listOf("2", "2")), e("milestones", three, listOf("3", "1")), e("dynasties", two, listOf("2")),
+            e("pupils", listOf("e3_1", "e3_2"), listOf("2")), e("learned_rules", three, listOf("3")),
+            e("league_titles_digest", listOf("ai3"), listOf("1", "CN:ai3"), Comp.LEAGUE),
+            e("club_champions", listOf("c2"), listOf("1"), Comp.CLUB), e("club_digest", listOf("c1", "c2"), listOf("1", "1"), Comp.CLUB),
+            e("transfer_window", two, listOf("1", "1"), Comp.CLUB),
+            e("league_ranking", emptyList(), listOf("XAS", "XAF", "XAM", "XAS", "2")),
+            e("national_reform", emptyList(), listOf("0", "1", "XWO")),
+            e("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "A", "C", "9", "0", "4")),
             // The national forms of older kinds.
             e("title_race", two, listOf("1", "lead", "KR"), Comp.LEAGUE), e("title_race", two, listOf("0", "close", "JP"), Comp.LEAGUE),
             e("title_race", two, listOf("2", "close", "XAS"), Comp.LEAGUE),
@@ -403,6 +412,38 @@ class MediaTest {
         val moves = text("league_moves", listOf("ai1", "ai2", "ai3"), listOf("KR", "2", "1"))
         assertTrue("김민준·승률 AI (앱 기본) 선수가 1부로" in moves && "목표 180점 선수가 2부로" in moves, moves)
         assertTrue("국가 리그 12개와 연합 리그 3개가" in text("national_reform", emptyList(), listOf("12", "3", "KR")))
+    }
+
+    @Test
+    fun aSmallWorldsNewsReadsAsItIs() {
+        val name = { k: String -> names[k] ?: k }
+        val club = { k: String -> clubs[k] ?: k }
+        fun texts(kind: String, keys: List<String>, args: List<String>, comp: Comp? = null) =
+            (1..8).map { s -> News.article(LeagueEvent(kind, s, keys, args, comp), name, club).let { it.headline + " / " + it.body } }
+        // A digest that names everyone it counts says no "등" ("A·B 등 2명").
+        val all = listOf(
+            texts("dynasties", listOf("ai1", "ai2"), listOf("2")), texts("pupils", listOf("e3_1", "e3_2"), listOf("2")),
+            texts("learned_rules", listOf("ai1", "ai3"), listOf("2")), texts("milestones", listOf("ai1", "ai2"), listOf("2", "2")),
+            texts("milestones", listOf("ai1", "ai2"), listOf("2", "1")), texts("league_titles_digest", listOf("ai3"), listOf("1", "CN:ai3"), Comp.LEAGUE),
+            texts("club_champions", listOf("c2"), listOf("1"), Comp.CLUB), texts("club_digest", listOf("c1", "c2"), listOf("1", "1"), Comp.CLUB),
+            texts("transfer_window", listOf("ai1", "ai2"), listOf("1", "1"), Comp.CLUB),
+        )
+        for (t in all.flatten()) assertFalse(" 등" in t, t)
+        assertTrue(all[1].all { "제자 박하람·최별이 리그에" in it }, all[1].toString())
+        assertTrue(all[5].all { "목표 180점(중국)이 정상에" in it }, all[5].toString())
+        // More than it names: "등" stays.
+        assertTrue(texts("dynasties", listOf("ai1", "ai2"), listOf("5")).all { "김민준·승률 AI (앱 기본) 등 5명" in it })
+        assertTrue(texts("transfer_window", listOf("ai1"), listOf("3", "0"), Comp.CLUB).all { "김민준 등이" in it })
+        // The climber that went to the top is told once.
+        val top = texts("league_ranking", emptyList(), listOf("XAS", "XAF", "XAM", "XAS", "2"))
+        assertTrue(top.all { "2계단" in it && Regex("아시아 연합 리그").findAll(it).count() <= 2 && "아시아 연합 리그는 2계단 올랐어요" !in it }, top.toString())
+        // Regional leagues only, or the one 국제 연합 리그: no "나라의 리그".
+        val regional = texts("national_reform", emptyList(), listOf("0", "4", "XAS", "XEU", "XAM", "XAF"))
+        assertTrue(regional.all { "연합 리그 4개가" in it && "나라의 리그" !in it && "국가 리그 시대" !in it }, regional.toString())
+        assertTrue(texts("national_reform", emptyList(), listOf("0", "1", "XWO")).all { "국제 연합 리그 하나에서" in it })
+        assertTrue(texts("national_reform", emptyList(), listOf("20", "4", "KR")).all { "연합 리그에 모여요" in it })
+        // A unanimous committee.
+        assertTrue(texts("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "A", "C", "9", "0", "4")).all { "9명 전원이 찬성" in it })
     }
 
     private val sentenceEnd = Regex("[.?!](?=\\s|$)")

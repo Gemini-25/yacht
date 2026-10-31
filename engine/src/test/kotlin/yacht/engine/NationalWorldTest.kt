@@ -12,6 +12,7 @@ import yacht.engine.league.JobResult
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
+import yacht.engine.league.LeagueRanking
 import yacht.engine.league.LeagueRoster
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.News
@@ -136,7 +137,9 @@ class NationalWorldTest {
      * would make it no replay), for every k: the league read back closes and opens again under the
      * same rules; its national files are those of the first rollover.
      */
-    private fun replaysTheSame(run: WorldRun, before: Map<String, String>, after: Map<String, String>, rulesBefore: LeagueConfig, next: LeagueConfig, step: String) {
+    private fun replaysTheSame(
+        run: WorldRun, before: Map<String, String>, after: Map<String, String>, rulesBefore: LeagueConfig, next: LeagueConfig, step: String, ranking: LeagueRanking,
+    ) {
         val order = after.keys.toList()
         val rulesAfter = run.rules
         val first = run.read(after)
@@ -147,9 +150,12 @@ class NationalWorldTest {
             again.w.family = run.w.family
             again.w.members = again.members()
             again.beforeClose()
-            again.rollover(next)
+            val (closed, _) = again.rollover(next)
             val at = "$step, k $k (${order.take(k)})"
             assertEquals(rulesAfter, again.rules, "$at: rules")
+            // The ranking the close publishes (and the next season's places are drawn by), also
+            // when the ladder read back has already aged.
+            assertEquals(ranks(ranking), ranks(closed.ranking), "$at: ranking")
             val files = again.w.encodeFiles()
             for (name in replayed) same(after.getValue(name), files.getValue(name), "$at: $name")
             assertEquals(first.players.alive.map { it.key }, again.w.players.alive.map { it.key }, "$at: players")
@@ -157,6 +163,14 @@ class NationalWorldTest {
                 assertEquals(first.archive.lines(key).map { listOf(it.season, it.division, it.position, it.league, it.club) }, again.w.archive.lines(key).map { listOf(it.season, it.division, it.position, it.league, it.club) }, "$at: $key's lines")
             }
         }
+    }
+
+    private fun ranks(r: LeagueRanking) = r.rows.map { listOf(it.id, it.rank.toString(), it.change.toString(), it.cclSlots.toString()) }
+
+    /** Each league's climb in the ranking after a season is counted from the ranking [played] the season was played under. */
+    private fun climbsFrom(played: LeagueRanking, after: LeagueRanking) {
+        assertTrue(after.rows.isNotEmpty())
+        for (row in after.rows) assertEquals(played.rank(row.id) - row.rank, row.change, "${row.id}: ${ranks(played)} -> ${ranks(after)}")
     }
 
     @Test
@@ -189,12 +203,14 @@ class NationalWorldTest {
         // The first assembly: structure-free kinds only, voted on in season 2.
         assertTrue(run.w.federation.of(1).all { it.kind.structureFree })
         assertTrue(run.w.federation.assembled == 1 && run.w.federation.resolved == 1)
-        replaysTheSame(run, before, after, legacy, national, "migration")
+        replaysTheSame(run, before, after, legacy, national, "migration", close1.ranking)
 
         // National season 2: the CCL and the world stage, then the first national close.
         run.play()
+        val played2 = run.w.plan!!.ranking
         val before2 = run.beforeClose()
         val (close2, open2) = run.rollover(national)
+        climbsFrom(played2, close2.ranking)
         val after2 = run.w.encodeFiles()
         assertTrue(close2.ranking.rows.isNotEmpty())
         assertTrue(run.w.federation.coefficientSeasons == listOf(2))
@@ -218,12 +234,14 @@ class NationalWorldTest {
         // Season lines carry the club and the league.
         val lines = run.w.archive.lines(run.w.plan!!.league.divisions[0].first()).filter { it.season == 2 }
         assertTrue(lines.all { it.league.isNotEmpty() && it.club != null }, lines.toString())
-        replaysTheSame(run, before2, after2, national, national, "season 2")
+        replaysTheSame(run, before2, after2, national, national, "season 2", close2.ranking)
 
         // National season 3: the club cup is due (an even season after a national one is 4; 3 has none).
         run.play()
+        val played3 = run.w.plan!!.ranking
         run.beforeClose()
         val (close3, _) = run.rollover(national)
+        climbsFrom(played3, close3.ranking)
         assertTrue(run.w.federation.coefficientSeasons == listOf(2, 3))
         assertTrue(run.w.federation.of(2).none { it.pending })
         assertTrue(close3.events.any { it.kind == "league_ranking" })
