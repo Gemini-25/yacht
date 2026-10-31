@@ -40,6 +40,7 @@ import yacht.engine.league.MatchLog
 import yacht.engine.league.MatchLogBook
 import yacht.engine.league.MatchRef
 import yacht.engine.league.Preview
+import yacht.engine.league.RatingScale
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
@@ -641,10 +642,12 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     private fun detailed(quick: MatchReport, r: Resolved): MatchReport {
         val est = host.estimate()
         val ratings = synchronized(host.lock) { host.world()?.let { w -> quick.boards.flatMap { listOf(it.a, it.b) }.associateWith { w.rating(it) } } }.orEmpty()
+        // 평점 on the season's scale, as the stats rate it (a past season's game on this one's).
+        val scale = synchronized(host.lock) { host.world()?.stats?.ratingScale } ?: RatingScale.FALLBACK
         val boards = quick.boards.map { bd ->
             val played = r.boards.firstOrNull { maxOf(0, it.log.ref.board) == bd.board } ?: return@map bd
             val log = played.log
-            val games = log.games.mapIndexed { i, g -> gameReport(log, g, played.turns[i], est, ratings) }
+            val games = log.games.mapIndexed { i, g -> gameReport(log, g, played.turns[i], est, ratings, scale) }
             // A past season's record may keep only some games: the stored ones not played back stay as they were.
             val all = (games + bd.games.orEmpty().filter { o -> games.none { it.index == o.index } }).sortedBy { it.index }
             // The stored result stands (it was decided by the season's format); a tie's from its games.
@@ -663,7 +666,14 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         )
     }
 
-    private fun gameReport(log: MatchLog, g: LoggedGame, turns: List<WatchTurn>, est: yacht.engine.league.WinEstimate?, ratings: Map<String, Double>): GameReport {
+    private fun gameReport(
+        log: MatchLog,
+        g: LoggedGame,
+        turns: List<WatchTurn>,
+        est: yacht.engine.league.WinEstimate?,
+        ratings: Map<String, Double>,
+        scale: RatingScale,
+    ): GameReport {
         val deal = log.deal(g.index)
         val last = turns.last()
         val (ba, bb) = if (deal.aFirst) last.first to last.second else last.second to last.first
@@ -675,7 +685,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val ctx = DramaContext(ratings[first] ?: Double.NaN, ratings[second] ?: Double.NaN, final = Drama.isFinal(f), decider = g.index >= matchGames(f, log.perMatch))
             Drama.of(it, ctx).tags
         }.orEmpty()
-        val (ra, rb) = facts?.ratings?.let { (x, y) -> if (deal.aFirst) x to y else y to x } ?: (null to null)
+        val (ra, rb) = facts?.ratings(scale)?.let { (x, y) -> if (deal.aFirst) x to y else y to x } ?: (null to null)
         return GameReport(
             g.index, gameLabel(f, g.index, log.perMatch, host.name(first)), g.scoreA, g.scoreB, deal.aFirst,
             (ba[Category.YACHT] ?: 0) > 0, (bb[Category.YACHT] ?: 0) > 0, ba.bonus > 0, bb.bonus > 0,
