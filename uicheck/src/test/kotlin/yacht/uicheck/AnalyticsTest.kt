@@ -253,11 +253,20 @@ class AnalyticsTest {
         an.loadMatches(round)
         waitFor { an.matches(round) != null }
         assertEquals((0 until season.fixturesTotal).count { season.fixture(it).round == 0 }, an.matches(round)!!.total)
-        // A club list needs clubs: a legacy world without a national book has none to show.
-        val club = Page.Matches(MatchQuery.OfClub("c01"), "클럽")
-        an.loadMatches(club)
-        Thread.sleep(200)
-        assertNull(an.matches(club))
+        // A week: the league's fixtures of that matchday (no competition in this season).
+        val week = Page.Matches(MatchQuery.OfWeek(1), "1주차")
+        an.loadMatches(week)
+        waitFor { an.matches(week) != null }
+        assertEquals((0 until season.fixturesTotal).filter { season.fixture(it).matchday == 0 }.map { "1:${yacht.engine.league.Comp.LEAGUE.code}:$it" }, an.matches(week)!!.rows.map { it.ref }.sorted())
+        // What the season does not have (clubs in a world without a club book, a league it does not
+        // hold, a group of a competition it does not play) is an empty list, not a page loading for ever.
+        for (q in listOf(MatchQuery.OfClub("c01"), MatchQuery.Round("KR", 0, 0), MatchQuery.Group(yacht.engine.league.Comp.CHAMPIONS, 0, "A조"))) {
+            val page = Page.Matches(q, "없음")
+            an.loadMatches(page)
+            waitFor { an.matches(page) != null }
+            assertEquals(0, an.matches(page)!!.total, q.toString())
+            assertTrue(an.matches(page)!!.rows.isEmpty(), q.toString())
+        }
     }
 
     @Test

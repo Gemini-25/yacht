@@ -357,7 +357,9 @@ internal object ShotsWorld : LeagueShots {
             lg.nav.open(page)
             lg.analytics.loadMatches(page, lg.center)
             waitFor("group matches") { lg.analytics.matches(page) != null }
-            println("$comp ${group.label}: ${lg.analytics.matches(page)!!.total} group matches")
+            val total = lg.analytics.matches(page)!!.total
+            println("$comp ${group.label}: $total group matches")
+            check(total > 0) { "$comp ${group.label}: no group match" }
             shot(c, out, "lg58b_matches_group", heightDp = 1100)
             lg.nav.close(page)
             return

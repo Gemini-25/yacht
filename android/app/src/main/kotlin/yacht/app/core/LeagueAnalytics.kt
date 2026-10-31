@@ -422,14 +422,19 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
 
     // ---- match lists ----------------------------------------------------------------------------------
 
-    /** [q]'s matches this season as [MatchList] rows (under the lock); null without a season or what [q] names. */
+    /**
+     * [q]'s matches this season as [MatchList] rows (under the lock); null without a season. A query
+     * that names nothing this season (no clubs, a league or a group it does not have, say after the
+     * rollover) is an empty list, so its page says so instead of loading for ever.
+     */
     private fun matchListOf(w: LeagueWorld, view: LeagueView?, q: MatchQuery, center: MatchCenter?): MatchList? {
         val plan = w.plan ?: return null
         val season = plan.league
+        val none = MatchList(q, plan.number, emptyList(), 0)
         val found: List<SeasonMatch> = when (q) {
             is MatchQuery.OfPlayer -> SeasonMatches.ofPlayer(plan, q.key)
             is MatchQuery.OfClub -> {
-                val book = w.clubs ?: return null
+                val book = w.clubs ?: return none
                 val squad = book.members(q.id).toSet()
                 // The squad's league fixtures by one scan of the league, then every competition once: a
                 // match a member plays (a team match once, whole) or the club's own (the 클럽 대항전).
@@ -441,7 +446,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
             }
             is MatchQuery.OfWeek -> SeasonMatches.ofWeek(plan, q.week).filter { q.comp == null || it.ref.comp == q.comp }
             is MatchQuery.Round -> {
-                val lg = season.leagues.byId(q.league) ?: return null
+                val lg = season.leagues.byId(q.league) ?: return none
                 val divisions = lg.tiers.groups(q.tier).map { lg.first + it }.toSet()
                 (0 until season.fixturesTotal).map { season.fixture(it) }.filter { it.division in divisions && it.round == q.round }
                     .mapNotNull { SeasonMatches.of(plan, Comp.LEAGUE, it.id) }
@@ -451,12 +456,12 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
                     is CompetitionView.Groups -> v
                     is CompetitionView.Sections -> v.parts.getOrNull(q.part)
                     else -> null
-                } ?: return null
-                val keys = g.groups.firstOrNull { it.label == q.group }?.rows?.map { it.key }?.toSet() ?: return null
+                } ?: return none
+                val keys = g.groups.firstOrNull { it.label == q.group }?.rows?.map { it.key }?.toSet() ?: return none
                 // Its round-robin matches ("A조 2차전"), not a knockout tie the two meet in later.
                 SeasonMatches.ofComp(plan, q.comp).filter { it.fixture.a in keys && it.fixture.b in keys && it.fixture.label.endsWith(GROUP_MATCH) }
             }
-        }
+        }.distinctBy { it.ref.whole } // a row a match (its ref keys the page's list)
         fun weekOf(m: SeasonMatch) = if (m.week == SeasonCalendar.NONE) Int.MAX_VALUE else m.week
         val (played, coming) = found.partition { it.played }
         val ordered = played.sortedByDescending { weekOf(it) } + coming.sortedBy { weekOf(it) }
