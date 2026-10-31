@@ -2510,8 +2510,16 @@ class LeagueController(
                 val w = world ?: return@synchronized null
                 val season = w.plan?.league
                 val profiles = profilesOf(w)
-                // The odds of their league (a national season keeps a few leagues' odds).
-                val odds = w.plan?.let { p -> oddsOf(p, season?.leagueOf(a)?.id ?: season?.leagueOf(b)?.id) }
+                // The odds of their league (a national season keeps a few leagues' odds); two sides
+                // of two leagues (대륙 챔피언스) each with their own league's, where it is kept.
+                val odds = w.plan?.let { p ->
+                    val tables = listOfNotNull(season?.leagueOf(a)?.id, season?.leagueOf(b)?.id).distinct().mapNotNull { oddsOf(p, it) }
+                    when {
+                        !p.league.leagues.national -> oddsOf(p, null)
+                        tables.size < 2 -> tables.firstOrNull()
+                        else -> tables[0].let { t -> OddsTable(t.season, t.played, t.total, t.runs, t.drawRate, tables.flatMap { it.rows }, t.league) }
+                    }
+                }
                 Preview.of(
                     a, b, w.ladder, season, odds, profiles[a], profiles[b],
                     BoxProfile.league(profiles.values), { k -> name(k) },
