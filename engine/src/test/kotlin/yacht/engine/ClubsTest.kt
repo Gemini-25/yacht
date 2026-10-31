@@ -3,7 +3,9 @@ package yacht.engine
 import yacht.engine.league.BoardResult
 import yacht.engine.league.ClubBook
 import yacht.engine.league.ClubLeague
+import yacht.engine.league.ClubMove
 import yacht.engine.league.ClubMoveKind
+import yacht.engine.league.ClubMoveType
 import yacht.engine.league.ClubNames
 import yacht.engine.league.Comp
 import yacht.engine.league.Emblem
@@ -14,10 +16,12 @@ import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
+import yacht.engine.league.Leagues
 import yacht.engine.league.Offseason
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.TieRule
+import yacht.engine.league.Tiers
 import java.security.MessageDigest
 import java.util.Random
 import kotlin.test.Test
@@ -594,6 +598,46 @@ class ClubsTest {
         assertEquals(picks.size, picks.toSet().size, picks.toString())
         assertTrue(picks.max() > first)
         assertTrue(book.clubs.none { gone in it.squad })
+    }
+
+    @Test
+    fun theClubLeagueIsForLegacySeasonsOnly() {
+        val ranking = keys(40)
+        val rating = { k: String -> 1300.0 + strength(k) }
+        val book = ClubBook.create(ranking, 4, 6, 2L, cities)
+        fun start(national: Boolean) = SeasonStart(
+            1, 11L, LeagueConfig(clubs = 4, national = national), ranking, rating, listOf(ranking.take(20), ranking.drop(20)), emptyList(), emptyList(), { null }, { "서울" },
+            leagues = if (national) Leagues.national(listOf("KR"), listOf(2)) else Leagues.legacy(Tiers.linear(2)),
+        )
+        assertNotNull(ClubLeague.factory({ book })(start(false)))
+        // National leagues: the clubs are every player's, and meet in the club cup instead.
+        assertNull(ClubLeague.factory({ book })(start(true)))
+        var made: ClubBook? = null
+        assertNull(ClubLeague.factory({ made }, { s -> ClubBook.create(s.ranking, 4, 6, s.seed, cities).also { made = it } })(start(true)))
+        assertNull(made)
+        // A national book plays no club league, even in a legacy season.
+        val national = ClubBook.found(ranking, { "KR" }, rating, 0, 1L, LeagueConfig())
+        assertNull(ClubLeague.factory({ national })(start(false)))
+        // The file: both versions read back as they are.
+        assertTrue(book.encode().startsWith("clubs 1\n"))
+        assertEquals(ClubBook.CLUB_LEAGUE, ClubBook.decode(book.encode()).format)
+        assertEquals(ClubBook.AFFILIATION, ClubBook.decode(national.encode()).format)
+        assertEquals(national.encode(), ClubBook.decode(national.encode()).encode())
+        // The club league's off-season leaves a national book as it is, but for members who left.
+        val gone = national.clubs.first().squad.first()
+        val version = national.version
+        assertEquals(emptyList(), national.offseason(1, emptyList(), emptyList(), rating, ranking.toSet() - gone, 4, 6, 1L))
+        assertNull(national.clubOf(gone))
+        assertEquals(ranking.toSet() - gone, national.clubs.flatMap { it.squad }.toSet())
+        assertNotEquals(version, national.version)
+        assertEquals(0, national.season)
+        // The moves of national leagues belong to the card's four kinds.
+        assertEquals(
+            listOf(ClubMoveKind.TRANSFER, ClubMoveKind.DRAFT, ClubMoveKind.RELEASED, ClubMoveKind.RETIRED, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.DRAFT),
+            ClubMoveType.entries.map { it.kind },
+        )
+        assertEquals("TDRXFHY", ClubMoveType.entries.joinToString("") { it.code.toString() })
+        assertEquals(ClubMoveKind.TRANSFER, ClubMove(2, ClubMoveType.ABROAD, "a", "c01", "c02", 50).kind)
     }
 
     /**

@@ -236,11 +236,14 @@ class ClubLeague private constructor(
          * season, each fielding its [lineup] by the season-start ratings. Null when
          * [LeagueConfig.clubs] is 0 or fewer than 2 clubs can play. When [book] gives null and
          * [create] is set, [create] makes the book first (the first season with clubs; the app
-         * keeps what it returns).
+         * keeps what it returns). A season of national leagues has no club league (its clubs are
+         * every player's affiliation, [ClubBook.AFFILIATION], and meet in the [ClubCup]); nor has
+         * a national book's season.
          */
         fun factory(book: () -> ClubBook?, create: ((SeasonStart) -> ClubBook?)? = null): (SeasonStart) -> Competition? = f@{ s ->
-            if (s.config.clubs == 0) return@f null
+            if (s.config.clubs == 0 || s.leagues.national) return@f null
             val b = book() ?: create?.invoke(s) ?: return@f null
+            if (b.format != ClubBook.CLUB_LEAGUE) return@f null
             val alive = s.ranking.toHashSet()
             val lineups = LinkedHashMap<String, List<String>>()
             for (c in b.clubs) {

@@ -2,6 +2,8 @@ package yacht.engine.league
 
 import yacht.engine.DiceStream
 import java.util.Random
+import java.util.TreeMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * A club's badge: a [shape] (0 until [SHAPES]; the screen picks the outlines, e.g. shield,
@@ -15,9 +17,11 @@ data class Emblem(val shape: Int, val colour1: Int, val colour2: Int, val initia
 }
 
 /**
- * A club of the club league (docs/LEAGUE_SPEC.md section 2.2), as an immutable snapshot.
- * [squad] holds its AIs (no AI is in two clubs), [budget] its money for the transfer window and
- * [honours] its club league titles.
+ * A club, as an immutable snapshot. In a book of the club league (`clubs 1`, docs/LEAGUE_SPEC.md
+ * section 2.2) [squad] holds the club's few AIs and [honours] its club league titles; in a book of
+ * national leagues (`clubs 2`, [ClubBook.AFFILIATION]) every member of the league is in one club
+ * of its [nation], [squad] holds them all, and [honours] counts its league's club-table titles
+ * ([ClubTable]). No AI is in two clubs; [budget] is its money for the transfer window.
  */
 data class Club(
     val id: String,
@@ -29,9 +33,28 @@ data class Club(
     val squad: List<String>,
     val budget: Int,
     val honours: Int,
+    /** The nation it belongs to (its members play in that nation's league); "" in the club league. */
+    val nation: String = "",
+    /** The first season it played; 0 when unknown (a club from the club league's book). */
+    val founded: Int = 0,
 )
 
-/** What a [ClubMove] was; [label] is shown on the club card. */
+/**
+ * A club dissolved after season [dissolved] (해체): kept so its id stays resolvable (honours,
+ * season lines and moves name it), until the id is given to a new club ([ClubBook.MAX_ID]).
+ */
+data class GoneClub(
+    val id: String,
+    val nation: String,
+    val name: String,
+    val emblem: Emblem,
+    val honours: Int,
+    /** The first season it played (0: unknown). */
+    val founded: Int,
+    val dissolved: Int,
+)
+
+/** What a [ClubMove] was, as the club card groups it ([ClubMoveType.kind]); [label] is shown on the card. */
 enum class ClubMoveKind(val code: Char, val label: String) {
     /** Bought in the transfer window (from another club or as a free agent). */
     TRANSFER('T', "이적"),
@@ -52,23 +75,131 @@ enum class ClubMoveKind(val code: Char, val label: String) {
 }
 
 /**
+ * What a [ClubMove] was, in full: the saved [code]. The moves between leagues and the youth
+ * placements of national leagues ([ABROAD], [HOME], [YOUTH]) belong to one of the four
+ * [ClubMoveKind]s the club card has always shown.
+ */
+enum class ClubMoveType(val code: Char, val label: String, val kind: ClubMoveKind) {
+    TRANSFER('T', "이적", ClubMoveKind.TRANSFER),
+    DRAFT('D', "드래프트", ClubMoveKind.DRAFT),
+    RELEASED('R', "방출", ClubMoveKind.RELEASED),
+    RETIRED('X', "은퇴", ClubMoveKind.RETIRED),
+
+    /** To a club of a stronger league abroad (해외 이적, [Transfers]); the amount is the fee. */
+    ABROAD('F', "해외 이적", ClubMoveKind.TRANSFER),
+
+    /** Back from abroad to a club of its own nation (귀국); no fee. */
+    HOME('H', "귀국", ClubMoveKind.TRANSFER),
+
+    /** A pupil placed at its mentor's club (유스 입단). */
+    YOUTH('Y', "유스 입단", ClubMoveKind.DRAFT),
+    ;
+
+    companion object {
+        fun of(code: Char): ClubMoveType? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/**
  * One line of the clubs' history, for the club card: AI [ai] moved from club [from] (null: a
  * free agent) to club [to] (null: nowhere) after season [season]. [amount] is the fee of a
  * transfer and the pick number of a draft pick (0 otherwise).
  */
-data class ClubMove(val season: Int, val kind: ClubMoveKind, val ai: String, val from: String?, val to: String?, val amount: Int = 0)
+data class ClubMove(val season: Int, val type: ClubMoveType, val ai: String, val from: String?, val to: String?, val amount: Int = 0) {
+    /** The card's group of [type]. */
+    val kind: ClubMoveKind get() = type.kind
+}
+
+/** The best clubs of league [league] in a season's club table (`cs` line): [clubs] the top 3, [points] the champion's. */
+data class ClubPlaces(val league: String, val clubs: List<String>, val points: Double)
+
+/**
+ * The last club off-season of a national league in numbers (`od` line), with the players its
+ * news named, so a replayed rollover tells the same news ([ClubBook.offseason]).
+ */
+data class ClubDigest(
+    val season: Int,
+    /** Players new to the league placed in a club (draft and youth). */
+    val rookies: Int,
+    /** Transfers between clubs of one nation. */
+    val domestic: Int,
+    val abroad: Int,
+    val returns: Int,
+    /** The biggest domestic fee: the AI, from, to (null without a transfer). */
+    val biggest: ClubMove?,
+    /** The best rated rookies (named in `draft` and `youth` news). */
+    val drafted: List<String>,
+    /** The biggest domestic fees (named in `transfer` news). */
+    val bought: List<String>,
+    /** The biggest fees abroad (named in `transfer_abroad` news). */
+    val abroadNamed: List<Named>,
+    /** Holders of a major title back home (named in `return_home` news). */
+    val homeNamed: List<Named>,
+    /** The off-season that made the book a national one ([ClubBook.migrate]). */
+    val reform: Boolean = false,
+) {
+    /** A player of a move between leagues, with the leagues of the closing season ("" when none). */
+    data class Named(val key: String, val fromLeague: String, val toLeague: String)
+}
+
+/**
+ * What a national league's club off-season ([ClubBook.offseason], [ClubBook.migrate]) knows about
+ * the league next season.
+ */
+class ClubInput(
+    /** Every AI in the league next season (me excluded). */
+    val members: Collection<String>,
+    val rating: (String) -> Double,
+    /** Each AI's nation (generated, evolved and made players; null for the guest, base AIs and mine). */
+    val nation: (String) -> String?,
+    /** The next season's config: [LeagueConfig.clubSize], [LeagueConfig.transfers]. */
+    val config: LeagueConfig,
+    /** Every honour so far, the closing season's included: prize money, the club table, notable players. */
+    val honours: List<Honour> = emptyList(),
+    /** Age in the coming season (null: unknown; such a player is never transferred nor sent home by age). */
+    val age: (String) -> Int? = { null },
+    val origin: (String) -> Origin = Origin::of,
+    /** A new evolved player's first parent, whose club takes it in first (유스 입단). */
+    val mentor: (String) -> String? = { null },
+    /** The league ranking after the closing season (transfers abroad: none with [LeagueRanking.EMPTY]). */
+    val ranking: LeagueRanking = LeagueRanking.EMPTY,
+    /** Whether a league's title counted as major in a season ([HonourBook.majorTitles]). */
+    val major: (season: Int, league: String) -> Boolean = { _, _ -> true },
+)
 
 /**
  * Club names and badges: deterministic from the club id and the book's seed, so a club keeps its
  * name and a club added later (a bigger league) never renames the others.
  */
 object ClubNames {
-    /** Mascots, one per club (at least as many as the largest club league). */
+    /** Mascots, one per club of a nation (the club league dealt from the first 32). */
     val MASCOTS = listOf(
         "호랑이", "독수리", "돌고래", "반달곰", "늑대", "여우", "송골매", "사자",
         "표범", "상어", "고래", "불사조", "황소", "백마", "까치", "두루미",
         "부엉이", "해달", "펭귄", "코뿔소", "치타", "수달", "갈매기", "노루",
         "거북", "물개", "전사", "번개", "폭풍", "파도", "혜성", "유니콘",
+        "흑룡", "청룡", "백호", "불곰", "흰수리", "바다사자", "범고래", "가오리",
+        "제비", "참매", "들소", "순록", "하마", "코끼리", "기린", "판다",
+    )
+
+    /** The club league's mascots (its names stay as they were dealt). */
+    private val LEAGUE_MASCOTS = MASCOTS.take(32)
+
+    /**
+     * Cities for clubs only (players' hometowns stay as they are drawn), after a nation's own,
+     * so every nation has at least 10.
+     */
+    val EXTRA_CITIES: Map<String, List<String>> = mapOf(
+        "SN" to listOf("루가", "콜다", "탐바쿤다"),
+        "ZA" to listOf("폴로콰네", "음봄벨라", "킴벌리"),
+        "NG" to listOf("조스", "아베오쿠타"),
+        "CO" to listOf("산타마르타", "쿠쿠타"),
+        "EG" to listOf("기자", "이스마일리아"),
+        "MA" to listOf("케니트라", "테투안"),
+        "SA" to listOf("하일", "알코바르"),
+        "AU" to listOf("뉴캐슬", "울런공"),
+        "AR" to listOf("네우켄", "바이아블랑카"),
+        "SE" to listOf("우메오", "칼스타드"),
     )
 
     /** Main colours: deep, saturated tones that carry a light accent and a white initial. */
@@ -86,20 +217,50 @@ object ClubNames {
     /** A club's city, mascot, name and badge. */
     data class Identity(val city: String, val mascot: String, val name: String, val emblem: Emblem)
 
+    private val citiesOf = HashMap<String, List<String>>()
+
+    /** A nation's club cities: its own by weight (then name), then its [EXTRA_CITIES]. */
+    fun cities(nation: Nation): List<String> = synchronized(citiesOf) {
+        citiesOf.getOrPut(nation.code) {
+            nation.cities.names.sortedWith(compareByDescending<String> { nation.cities.weight(it) }.thenBy { it }) + EXTRA_CITIES[nation.code].orEmpty()
+        }
+    }
+
     /**
-     * The identity of club [id] ("c01", "c02", ...) in a book seeded with [seed]. Mascots and
-     * the first 12 main colours are dealt without repeats, and [cities] (the hometowns) go round
-     * once before any city gets a second club, so names stay unique (up to 32 clubs).
+     * The identity of club [id] ("c01", "c02", ...) of the club league in a book seeded with
+     * [seed]. Mascots and the first 12 main colours are dealt without repeats, and [cities] (the
+     * hometowns) go round once before any city gets a second club, so names stay unique (up to 32
+     * clubs).
      */
     fun identity(id: String, seed: Long, cities: List<String>): Identity {
         val i = indexOf(id)
-        fun deal(size: Int, salt: Long) = (0 until size).shuffled(Random(DiceStream.mix(seed, SALT, salt)))[i % size]
-        val mascot = MASCOTS[deal(MASCOTS.size, 1)]
-        val city = if (cities.isEmpty()) "" else cities[deal(cities.size, 2)]
-        val rng = Random(DiceStream.mix(seed, SALT, 3, i.toLong()))
-        val emblem = Emblem(rng.nextInt(Emblem.SHAPES), PRIMARY[deal(PRIMARY.size, 4)], ACCENT[rng.nextInt(ACCENT.size)], mascot.first())
+        val mascot = LEAGUE_MASCOTS[deal(i, LEAGUE_MASCOTS.size, seed, 1)]
+        val city = if (cities.isEmpty()) "" else cities[deal(i, cities.size, seed, 2)]
         val name = if (city.isEmpty()) mascot else "$city $mascot"
-        return Identity(city, mascot, name, emblem)
+        return Identity(city, mascot, name, emblem(i, seed, mascot.first()))
+    }
+
+    /**
+     * The identity of club [id] of [nation], its [k]-th club founded there (0-based), in a book
+     * seeded with [seed]: city `k` of [cities] (round again after the last), the first mascot of
+     * the nation's seeded order that is not in [taken] (the nation's clubs' mascots) and makes no
+     * name of [names] (a club of another nation in a city of the same name), the badge from the id.
+     */
+    fun identity(id: String, nation: Nation, k: Int, seed: Long, taken: Set<String>, names: Set<String> = emptySet()): Identity {
+        val pool = cities(nation)
+        val city = pool[Math.floorMod(k, pool.size)]
+        val order = MASCOTS.shuffled(Random(DiceStream.mix(seed, SALT, 5, Nations.ALL.indexOf(nation).toLong())))
+        val mascot = order.firstOrNull { it !in taken && "$city $it" !in names } ?: order.firstOrNull { "$city $it" !in names } ?: order.first()
+        return Identity(city, mascot, "$city $mascot", emblem(indexOf(id), seed, mascot.first()))
+    }
+
+    private fun deal(i: Int, size: Int, seed: Long, salt: Long): Int = (0 until size).shuffled(Random(DiceStream.mix(seed, SALT, salt)))[i % size]
+
+    private fun emblem(i: Int, seed: Long, initial: Char): Emblem {
+        val rng = Random(DiceStream.mix(seed, SALT, 3, i.toLong()))
+        val shape = rng.nextInt(Emblem.SHAPES)
+        val primary = PRIMARY[deal(i, PRIMARY.size, seed, 4)]
+        return Emblem(shape, primary, ACCENT[rng.nextInt(ACCENT.size)], initial)
     }
 
     /** "c07" is club 6 (0-based); an id of another shape gets a place from its hash. */
@@ -108,25 +269,73 @@ object ClubNames {
 }
 
 /**
- * Every club of the club league, kept between seasons (league/clubs.txt): squads, budgets,
- * titles and the newest [HISTORY] moves. Built once by [create] (a snake draft), then changed
- * only by [offseason] (prize money, retirements, the transfer window and the draft; spec
- * section 5 step 4). Invariant: no AI is in two clubs. Not thread-safe: callers synchronise.
+ * Every club, kept between seasons (league/clubs.txt). Not thread-safe: callers synchronise.
+ *
+ * A book of the club league ([format] [CLUB_LEAGUE], `clubs 1`): squads, budgets, titles and the
+ * newest [HISTORY] moves. Built once by [create] (a snake draft), then changed only by the
+ * off-season of [offseason] (season, table, ...) (prize money, retirements, the transfer window and
+ * the draft; spec section 5 step 4).
+ *
+ * A book of national leagues ([format] [AFFILIATION], `clubs 2`): every member of the league is in
+ * exactly one club of the nation it plays for ([playNation]), and every club's nation has members
+ * in the league. `C(n) = clamp(round(n / clubSize), 1, 16)` clubs per nation of n members. Built by
+ * [found] (a new league) or converted from a club league's book by [migrate], then changed by the
+ * national off-season ([offseason] with a [ClubInput]): the season's club tables, departures,
+ * returns home and transfers abroad ([Transfers]), the domestic window, new and dissolved clubs,
+ * the draft. Its accessors ([clubOf], [club], [clubsOf], [members], [playNation]) cost no copies of
+ * the book, and [version] changes with every change of a club or its members.
  */
 class ClubBook private constructor(
     /** Seed of the club names and badges (clubs added later are named from it too). */
     val seed: Long,
-    /** Hometowns the clubs are named after. */
-    val cities: List<String>,
-) {
+    /** Hometowns the club league's clubs are named after (empty in a national book). */
+    cities: List<String>,
+    format: Int,
+) : ClubSource {
     /** A club as the book changes it. */
-    private class Entry(val id: String, val identity: ClubNames.Identity, val squad: MutableList<String>, var budget: Int, var honours: Int) {
-        fun snapshot() = Club(id, identity.name, identity.city, identity.mascot, identity.emblem, squad.toList(), budget, honours)
+    private class Entry(
+        val id: String,
+        var nation: String,
+        val identity: ClubNames.Identity,
+        val squad: MutableList<String>,
+        var budget: Int,
+        var honours: Int,
+        val founded: Int = 0,
+    ) {
+        fun snapshot() = Club(id, identity.name, identity.city, identity.mascot, identity.emblem, squad.toList(), budget, honours, nation, founded)
     }
 
+    var cities: List<String> = cities
+        private set
+
+    /** [CLUB_LEAGUE] (`clubs 1`) or [AFFILIATION] (`clubs 2`). */
+    var format: Int = format
+        private set
+
     private val entries = ArrayList<Entry>()
+    private val byId = HashMap<String, Entry>()
     private val memberOf = HashMap<String, String>()
     private val moves = ArrayDeque<ClubMove>()
+    private val goneList = ArrayList<GoneClub>()
+    private val placeLines = TreeMap<Int, List<ClubPlaces>>()
+
+    /** The number of the next new club's id (a national book). */
+    private var next = 1
+
+    /** The last national off-season in numbers, null before one (or in the club league's book). */
+    var digest: ClubDigest? = null
+        private set
+
+    /**
+     * Changes with every change of a club or its members (different from every other book's
+     * number too), so the app rebuilds what it shows from the book only when this moves.
+     */
+    var version: Int = VERSIONS.incrementAndGet()
+        private set
+
+    private fun changed() {
+        version = VERSIONS.incrementAndGet()
+    }
 
     /** The last season whose off-season was applied (0 before any): a repeat changes nothing. */
     var season: Int = 0
@@ -151,23 +360,67 @@ class ClubBook private constructor(
     /** Every club, by id. */
     val clubs: List<Club> get() = entries.map { it.snapshot() }
 
+    /** Dissolved clubs whose ids are still theirs, by id. */
+    val gone: List<GoneClub> get() = goneList.toList()
+
+    /** Members in all. */
+    val size: Int get() = memberOf.size
+
     /**
-     * The newest moves, oldest first: [HISTORY] lines, or more when the last off-season alone
-     * made more (it is kept whole, so a repeated rollover tells the same news).
+     * The newest moves, oldest first: [HISTORY] lines ([historyCap] in a national book), or more
+     * when the last off-season alone made more (it is kept whole, so a repeated rollover tells
+     * the same news).
      */
     val history: List<ClubMove> get() = moves.toList()
 
     fun club(id: String): Club? = entry(id)?.snapshot()
 
+    /** A dissolved club, by id. */
+    fun gone(id: String): GoneClub? = goneList.firstOrNull { it.id == id }
+
     /** The club AI [key] plays for, or null for a free agent. */
     fun clubOf(key: String): String? = memberOf[key]
+
+    /** The nation of club [id], also of a dissolved one; null for an unknown id or a club league's club. */
+    fun nationOf(id: String): String? = (entry(id)?.nation ?: gone(id)?.nation)?.ifEmpty { null }
+
+    /** The name of club [id], also of a dissolved one. */
+    fun nameOf(id: String): String? = entry(id)?.identity?.name ?: gone(id)?.name
+
+    /** The nation AI [key] plays for next: its club's; null without a club (then its own nation's, [NationalLeagues.home]). */
+    fun playNation(key: String): String? = memberOf[key]?.let { nationOf(it) }
+
+    /** The clubs of [nation], by id. */
+    fun clubsOf(nation: String): List<Club> = entries.filter { it.nation == nation }.map { it.snapshot() }
+
+    /** Club [club]'s members now (empty for a club that is gone). */
+    override fun members(club: String): List<String> = entry(club)?.squad?.toList().orEmpty()
+
+    /** The club-table champion of every league of season [season] (the `cs` line), best-ranked league first. */
+    override fun champions(season: Int): List<String> = placeLines[season].orEmpty().mapNotNull { it.clubs.firstOrNull() }
+
+    /** Season [season]'s best clubs per league (the newest [PLACE_SEASONS] seasons are kept), best-ranked league first. */
+    fun places(season: Int): List<ClubPlaces> = placeLines[season].orEmpty()
+
+    /** The AIs that made a move of [type] in the off-season after [season] ([ClubMoveType.ABROAD]: the transfers in for [Offseason.Context]). */
+    fun moved(season: Int, type: ClubMoveType): Set<String> = moves.filter { it.season == season && it.type == type }.mapTo(LinkedHashSet()) { it.ai }
 
     /** Moves into or out of club [id], newest last. */
     fun history(id: String): List<ClubMove> = moves.filter { it.from == id || it.to == id }
 
-    private fun entry(id: String): Entry? = entries.firstOrNull { it.id == id }
+    private fun entry(id: String): Entry? = byId[id]
 
-    private fun newEntry(id: String) = Entry(id, ClubNames.identity(id, seed, cities), ArrayList(), START_BUDGET, 0)
+    private fun add(e: Entry) {
+        entries += e
+        byId[e.id] = e
+    }
+
+    private fun drop(e: Entry) {
+        entries.remove(e)
+        byId.remove(e.id)
+    }
+
+    private fun newEntry(id: String) = Entry(id, "", ClubNames.identity(id, seed, cities), ArrayList(), START_BUDGET, 0)
 
     private fun reindex() {
         memberOf.clear()
@@ -178,12 +431,14 @@ class ClubBook private constructor(
         moves.addLast(m)
     }
 
-    /** Drops the oldest moves beyond [HISTORY], never those of the last off-season. */
+    /** Drops the oldest moves beyond [HISTORY] ([historyCap]), never those of the last off-season. */
     private fun trim() {
-        while (moves.size > HISTORY && moves.first().season < season) moves.removeFirst()
+        val cap = if (format == AFFILIATION) historyCap(memberOf.size) else HISTORY
+        while (moves.size > cap && moves.first().season < season) moves.removeFirst()
+        while (placeLines.size > PLACE_SEASONS) placeLines.pollFirstEntry()
     }
 
-    // ---- the off-season --------------------------------------------------------------------------
+    // ---- the club league's off-season ----------------------------------------------------------
 
     /**
      * The clubs' off-season after season [season] (spec section 5 step 4), once: a repeated call
@@ -217,6 +472,9 @@ class ClubBook private constructor(
      * With [clubs] = 0 (club league off) the clubs stay as they are after the money and the
      * departures, so turning the league back on resumes them. Events: `transfer`
      * [ai, fromClub or "-", toClub] (fee) and `draft` [ai, club] (pick number).
+     *
+     * A national book ([AFFILIATION]) is changed only by its own off-season ([offseason] with a
+     * [ClubInput]): here its members not in [alive] leave, and nothing else changes.
      */
     fun offseason(
         season: Int,
@@ -228,8 +486,49 @@ class ClubBook private constructor(
         squad: Int,
         seed: Long,
     ): List<LeagueEvent> {
+        if (format == AFFILIATION) {
+            if (entries.any { e -> e.squad.any { it !in alive } }) {
+                for (e in entries) e.squad.retainAll(alive)
+                reindex()
+                changed()
+            }
+            return emptyList()
+        }
         if (season == this.season && (lastSeed == null || lastSeed == seed)) return again(season, table, rating, alive, clubs, squad)
         if (season <= this.season) moves.removeAll { it.season >= season }
+        leagueMoney(season, table, honours, alive)
+        val events = ArrayList<LeagueEvent>()
+        if (clubs > 0) {
+            val order = ratingOrder(rating)
+            val place = table.distinct().withIndex().associate { it.value to it.index }
+            resize(season, place, clubs.coerceAtMost(MAX_CLUBS), squad, order)
+            window(season, rating, order, alive, squad, seed, events)
+            draft(season, place, order, alive, squad, events)
+        }
+        this.season = season
+        lastSeed = seed
+        trim()
+        changed()
+        return events
+    }
+
+    /**
+     * [offseason] for a finished [plan]: its club league's final table and every competition's
+     * honours, the club count and squad size of the next season's [config], and the plan's seed.
+     */
+    fun offseason(plan: SeasonPlan, rating: (String) -> Double, alive: Set<String>, config: LeagueConfig): List<LeagueEvent> {
+        val table = (plan.competition(Comp.CLUB) as? ClubLeague)?.order().orEmpty()
+        return offseason(plan.number, table, leagueHonours(plan), rating, alive, config.clubs, config.squad, plan.seed)
+    }
+
+    /** Every competition's honours of [plan] (the club league's off-season pays by them). */
+    private fun leagueHonours(plan: SeasonPlan): List<Honour> = (plan.comps + plan.post).flatMap { c -> runCatching { c.honours() }.getOrDefault(emptyList()) }
+
+    /**
+     * The club league's money and departures after [season]: prize money by [table], honour
+     * money and the "CLUB" title, members not in [alive] leave (each a [ClubMoveType.RETIRED]).
+     */
+    private fun leagueMoney(season: Int, table: List<String>, honours: List<Honour>, alive: Set<String>) {
         val final = table.distinct()
         for ((i, id) in final.withIndex()) entry(id)?.let { it.budget += prize(i + 1) }
         for (h in honours) {
@@ -241,31 +540,9 @@ class ClubBook private constructor(
         for (e in entries) {
             val gone = e.squad.filter { it !in alive }
             e.squad.removeAll(gone.toSet())
-            for (k in gone) log(ClubMove(season, ClubMoveKind.RETIRED, k, e.id, null))
+            for (k in gone) log(ClubMove(season, ClubMoveType.RETIRED, k, e.id, null))
         }
         reindex()
-        val events = ArrayList<LeagueEvent>()
-        if (clubs > 0) {
-            val order = ratingOrder(rating)
-            val place = final.withIndex().associate { it.value to it.index }
-            resize(season, place, clubs.coerceAtMost(MAX_CLUBS), squad, order)
-            window(season, rating, order, alive, squad, seed, events)
-            draft(season, place, order, alive, squad, events)
-        }
-        this.season = season
-        lastSeed = seed
-        trim()
-        return events
-    }
-
-    /**
-     * [offseason] for a finished [plan]: its club league's final table and every competition's
-     * honours, the club count and squad size of the next season's [config], and the plan's seed.
-     */
-    fun offseason(plan: SeasonPlan, rating: (String) -> Double, alive: Set<String>, config: LeagueConfig): List<LeagueEvent> {
-        val table = (plan.competition(Comp.CLUB) as? ClubLeague)?.order().orEmpty()
-        val honours = (plan.comps + plan.post).flatMap { c -> runCatching { c.honours() }.getOrDefault(emptyList()) }
-        return offseason(plan.number, table, honours, rating, alive, config.clubs, config.squad, plan.seed)
     }
 
     /**
@@ -282,24 +559,25 @@ class ClubBook private constructor(
             if (gone.isEmpty()) continue
             left = true
             e.squad.removeAll(gone.toSet())
-            for (k in gone) log(ClubMove(season, ClubMoveKind.RETIRED, k, e.id, null))
+            for (k in gone) log(ClubMove(season, ClubMoveType.RETIRED, k, e.id, null))
         }
         if (!left) return events
         reindex()
         if (clubs > 0) {
             val place = table.distinct().withIndex().associate { it.value to it.index }
-            val picked = moves.filter { it.season == season && it.kind == ClubMoveKind.DRAFT }.maxOfOrNull { it.amount } ?: 0
+            val picked = moves.filter { it.season == season && it.type == ClubMoveType.DRAFT }.maxOfOrNull { it.amount } ?: 0
             draft(season, place, ratingOrder(rating), alive, squad, events, picked)
         }
         trim()
+        changed()
         return events
     }
 
     /** The news of an off-season already applied, from the history (as far as it reaches back). */
     private fun replay(season: Int): List<LeagueEvent> = moves.filter { it.season == season }.mapNotNull { m ->
-        when (m.kind) {
-            ClubMoveKind.TRANSFER -> LeagueEvent("transfer", season, listOf(m.ai, m.from ?: "-", m.to ?: "-"), listOf(m.amount.toString()), Comp.CLUB)
-            ClubMoveKind.DRAFT -> LeagueEvent("draft", season, listOf(m.ai, m.to ?: "-"), listOf(m.amount.toString()), Comp.CLUB)
+        when (m.type) {
+            ClubMoveType.TRANSFER -> LeagueEvent("transfer", season, listOf(m.ai, m.from ?: "-", m.to ?: "-"), listOf(m.amount.toString()), Comp.CLUB)
+            ClubMoveType.DRAFT -> LeagueEvent("draft", season, listOf(m.ai, m.to ?: "-"), listOf(m.amount.toString()), Comp.CLUB)
             else -> null
         }
     }
@@ -308,7 +586,7 @@ class ClubBook private constructor(
         e.squad.removeAll(keys.toSet())
         for (k in keys) {
             memberOf.remove(k)
-            log(ClubMove(season, ClubMoveKind.RELEASED, k, e.id, null))
+            log(ClubMove(season, ClubMoveType.RELEASED, k, e.id, null))
         }
     }
 
@@ -318,13 +596,13 @@ class ClubBook private constructor(
                 .take(entries.size - clubs)
             for (e in doomed) {
                 release(season, e, e.squad.toList())
-                entries.remove(e)
+                drop(e)
             }
         }
         var n = 1
         while (entries.size < clubs) {
             val id = idOf(n++)
-            if (entries.none { it.id == id }) entries += newEntry(id)
+            if (entries.none { it.id == id }) add(newEntry(id))
         }
         entries.sortBy { it.id }
         for (e in entries) if (e.squad.size > squad) release(season, e, e.squad.sortedWith(order).drop(squad))
@@ -375,7 +653,7 @@ class ClubBook private constructor(
                 buyer.squad += o.key
                 memberOf[o.key] = buyer.id
                 sold += o.key
-                log(ClubMove(season, ClubMoveKind.TRANSFER, o.key, o.seller?.id, buyer.id, o.fee))
+                log(ClubMove(season, ClubMoveType.TRANSFER, o.key, o.seller?.id, buyer.id, o.fee))
                 events += LeagueEvent("transfer", season, listOf(o.key, o.seller?.id ?: "-", buyer.id), listOf(o.fee.toString()), Comp.CLUB)
             }
         }
@@ -395,19 +673,455 @@ class ClubBook private constructor(
                 memberOf[k] = e.id
                 pick++
                 any = true
-                log(ClubMove(season, ClubMoveKind.DRAFT, k, null, e.id, pick))
+                log(ClubMove(season, ClubMoveType.DRAFT, k, null, e.id, pick))
                 events += LeagueEvent("draft", season, listOf(k, e.id), listOf(pick.toString()), Comp.CLUB)
             }
         } while (any)
     }
 
+    // ---- national leagues: the off-season ---------------------------------------------------------
+
+    /**
+     * The clubs' off-season of a national league after [closing] (design ENG 3.5), once per
+     * season and plan seed: a repeat (a rollover replayed after a kill) changes nothing but
+     * removing members who are no longer in the league and drafting members without a club, and
+     * returns the same news, rebuilt from the named moves and the [digest]. A club league's book
+     * is converted first ([migrate]). An older season, or the same with another seed, is a league
+     * that started over: applied to the clubs as they are (the abandoned timeline's moves go).
+     *
+     * In order:
+     * 1. the season's club tables ([ClubTable], every league of [closing]): the `cs` line ([places]),
+     *    [prize] money by place, a title for each champion, and money for the cup, CL, 대륙 챔피언스
+     *    and 클럽 대항전 places ([honourMoney]);
+     * 2. members not in [ClubInput.members] leave (a [ClubMoveType.RETIRED] move only for a notable
+     *    one: a major title, or the 1부 at the close);
+     * 3. and 4. returns home and transfers abroad ([Transfers], with [ClubInput.ranking]);
+     * 5. the domestic window of each nation, worst club first: at most `C / 2` deals, each buyer one
+     *    player from the top 3 of a club placed above it, better than its weakest counted member,
+     *    at [fee] (the seller keeps at least the size floor, a buyer at the ceiling releases its
+     *    weakest member);
+     * 6. clubs founded (창단) and dissolved (해체) where the club count no longer fits the members;
+     * 7. the draft of each nation: pupils first at their mentor's club when it is of their nation
+     *    and below the ceiling, then every member without a club, best rated first, each to the
+     *    club with the fewest members (then the lower club-table place, then id).
+     *
+     * News (comp [Comp.CLUB], keys are AIs and club ids): `club_title` [club] (league, points) for
+     * the 4 best-ranked leagues and one `club_champions` [≤ 3 clubs] (other leagues); `return_home`
+     * [ai, from, to] (fromLeague, toLeague) for up to 3 holders of a major title, `transfer_abroad`
+     * [ai, from, to] (fromLeague, toLeague, fee) for the 3 biggest fees and one `transfer_window`
+     * [≤ 6 of them] (abroad, returns); `transfer` [ai, from, to] (fee) for the 3 biggest domestic
+     * fees; `club_dissolved` [club] (members released) and `club_founded` [club] (nation); `draft`
+     * [ai, club] (pick within its nation) or `youth` [ai, club] for the 3 best rated rookies; one
+     * `market_digest` [≤ 6 of them] (domestic, rookies, biggest-fee ai, from, to, fee).
+     */
+    fun offseason(closing: SeasonPlan, input: ClubInput): List<LeagueEvent> {
+        if (format == CLUB_LEAGUE) return migrate(closing, input)
+        val s = closing.number
+        if (s == season && (lastSeed == null || lastSeed == closing.seed)) return againNational(closing, input)
+        if (s <= season) restart(s)
+        val alive = input.members.toHashSet()
+        val majors = majorHolders(input)
+        val inSeason = closing.league.standings.keys
+        val place = record(closing, input)
+        // 2. Departures.
+        depart(s, alive) { k -> k in majors || tierOf(closing.league, k) == 0 }
+        // 3 and 4. Returns home and transfers abroad.
+        val moved = HashSet<String>()
+        val sizes = nationSizes(alive, input)
+        val plan = Transfers.plan(
+            TransferInput(
+                closing.league, input.ranking, alive, input.rating, input.age, input.nation, input.origin, clubs,
+                { id -> entry(id)?.let { maxSize(sizes[it.nation] ?: 0, clubCountOf(it.nation)) } ?: 0 }, input.config,
+            ),
+        )
+        for (t in plan) {
+            val from = entry(t.fromClub) ?: continue
+            val to = entry(t.toClub)
+            from.squad.remove(t.key)
+            from.budget += t.fee
+            memberOf.remove(t.key)
+            to?.let {
+                it.budget -= t.fee
+                it.squad += t.key
+                memberOf[t.key] = it.id
+            }
+            moved += t.key
+            log(ClubMove(s, if (t.home) ClubMoveType.HOME else ClubMoveType.ABROAD, t.key, from.id, to?.id, t.fee))
+        }
+        // 5. The domestic window.
+        window(s, input, place, moved)
+        // 6. Clubs founded and dissolved.
+        resize(s, alive, input, place)
+        // 7. The draft.
+        val placed = draftNational(s, alive, input, place)
+        // The digest: what the news names, so a replay names the same.
+        val newcomers = placed.filter { it.key !in inSeason }
+        val drafted = newcomers.sortedWith(compareByDescending<Placement> { score(input.rating, it.key) }.thenBy { it.key }).take(NAMED)
+        logPlacements(s, placed, drafted.mapTo(HashSet()) { it.key })
+        val ms = moves.filter { it.season == s }
+        val domestic = ms.filter { it.type == ClubMoveType.TRANSFER }.sortedWith(compareByDescending<ClubMove> { it.amount }.thenBy { it.ai })
+        fun named(t: Transfer) = ClubDigest.Named(t.key, t.fromLeague, t.toLeague)
+        val homes = plan.filter { it.home && it.key in majors }.sortedWith(compareByDescending<Transfer> { score(input.rating, it.key) }.thenBy { it.key }).take(NAMED)
+        digest = ClubDigest(
+            s, newcomers.size, domestic.size, plan.count { !it.home }, plan.count { it.home }, domestic.firstOrNull(),
+            drafted.map { it.key }, domestic.take(NAMED).map { it.ai },
+            plan.filter { !it.home }.sortedWith(compareByDescending<Transfer> { it.fee }.thenBy { it.key }).take(NAMED).map(::named), homes.map(::named),
+        )
+        season = s
+        lastSeed = closing.seed
+        trim()
+        changed()
+        return news(s)
+    }
+
+    /**
+     * A club league's book becomes a national one at the open of the first national season
+     * (design ENG 3.7), once per season and plan seed (a repeat goes to [offseason]): the club
+     * league's money and departures of [closing] as before (unless that off-season was applied
+     * already); Korea keeps the best `C(KR)` clubs by (titles, budget, id) with their ids, names,
+     * badges, money and titles and their members who play for Korea, the other clubs are dissolved
+     * ([gone]); every nation gets its clubs (ids after the old ones), and everyone without a club
+     * goes through the drafts. News: one `club_reform` [] (clubs, nations).
+     */
+    fun migrate(closing: SeasonPlan, input: ClubInput): List<LeagueEvent> {
+        if (format == AFFILIATION) return offseason(closing, input)
+        val s = closing.number
+        val alive = input.members.toHashSet()
+        if (!(s == season && (lastSeed == null || lastSeed == closing.seed))) {
+            if (s <= season) moves.removeAll { it.season >= s }
+            val table = (closing.competition(Comp.CLUB) as? ClubLeague)?.order().orEmpty()
+            leagueMoney(s, table, leagueHonours(closing), alive)
+        }
+        for (e in entries) e.squad.retainAll(alive)
+        val place = (closing.competition(Comp.CLUB) as? ClubLeague)?.order().orEmpty().withIndex().associate { it.value to it.index + 1 }
+        val counts = alive.groupingBy { homeOf(input.nation(it)) }.eachCount()
+        val korea = clubCount(counts[Nations.KR.code] ?: 0, input.config.clubSize)
+        val kept = entries.sortedWith(compareByDescending<Entry> { it.honours }.thenByDescending { it.budget }.thenBy { it.id }).take(korea).mapTo(HashSet()) { it.id }
+        next = (entries.mapNotNull { number(it.id) } + goneList.mapNotNull { number(it.id) }).maxOrNull()?.plus(1) ?: 1
+        for (e in entries.toList()) {
+            if (e.id in kept) {
+                e.nation = Nations.KR.code
+                e.squad.retainAll { homeOf(input.nation(it)) == Nations.KR.code }
+            } else {
+                goneList += GoneClub(e.id, Nations.KR.code, e.identity.name, e.identity.emblem, e.honours, e.founded, s)
+                drop(e)
+            }
+        }
+        format = AFFILIATION
+        cities = emptyList()
+        reindex()
+        for (nation in Nations.ALL) {
+            val want = clubCount(counts[nation.code] ?: 0, input.config.clubSize)
+            while (clubCountOf(nation.code) < want) newClub(nation.code, s) ?: break
+        }
+        sortEntries()
+        val placed = draftNational(s, alive, input, place)
+        val inSeason = closing.league.standings.keys
+        logPlacements(s, placed, emptySet())
+        digest = ClubDigest(s, placed.count { it.key !in inSeason }, 0, 0, 0, null, emptyList(), emptyList(), emptyList(), emptyList(), reform = true)
+        season = s
+        lastSeed = closing.seed
+        trim()
+        changed()
+        return news(s)
+    }
+
+    /** A national off-season already applied, asked for again: its news; members who left go, members without a club are drafted. */
+    private fun againNational(closing: SeasonPlan, input: ClubInput): List<LeagueEvent> {
+        val s = closing.number
+        val events = news(s)
+        val alive = input.members.toHashSet()
+        val majors = majorHolders(input)
+        val left = entries.any { e -> e.squad.any { it !in alive } }
+        if (left) depart(s, alive) { k -> k in majors || tierOf(closing.league, k) == 0 }
+        val free = alive.any { it !in memberOf }
+        if (free) {
+            val counts = nationSizes(alive, input)
+            for (nation in Nations.ALL) if (clubCountOf(nation.code) == 0 && (counts[nation.code] ?: 0) > 0) {
+                repeat(clubCount(counts.getValue(nation.code), input.config.clubSize)) { newClub(nation.code, s) }
+            }
+            sortEntries()
+            logPlacements(s, draftNational(s, alive, input, emptyMap()), null)
+        }
+        if (left || free) {
+            trim()
+            changed()
+        }
+        return events
+    }
+
+    /** A league that started over at season [s]: the abandoned timeline's moves, tables and digest go. */
+    private fun restart(s: Int) {
+        moves.removeAll { it.season >= s }
+        placeLines.tailMap(s, true).clear()
+        if ((digest?.season ?: Int.MIN_VALUE) >= s) digest = null
+    }
+
+    /** The keys holding a major title ([HonourBook.isMajor]) among [ClubInput.honours]. */
+    private fun majorHolders(input: ClubInput): Set<String> =
+        input.honours.filter { HonourBook.isMajor(it, input.major) }.mapTo(HashSet()) { it.key }
+
+    /** Step 1: the club tables of [closing]'s leagues, the `cs` line, prize and honour money, titles; each club's place in its table. */
+    private fun record(closing: SeasonPlan, input: ClubInput): Map<String, Int> {
+        val s = closing.number
+        val season = closing.league
+        val honours = input.honours.filter { it.season == s }
+        val ids = season.leagues.list.map { it.id }
+        val strength = ids.associateWith { id ->
+            Coefficients.strength(season.leagues.byId(id)?.divisions?.flatMap { season.divisions[it] }.orEmpty(), input.rating)
+        }
+        val place = HashMap<String, Int>()
+        val lines = ArrayList<ClubPlaces>()
+        for (id in Coefficients.order(ids, closing.ranking) { strength.getValue(it) }) {
+            val table = ClubTable.of(season, this, id, honours)
+            for ((i, row) in table.withIndex()) {
+                place[row.club] = i + 1
+                entry(row.club)?.let { it.budget += prize(i + 1) }
+            }
+            val top = table.firstOrNull() ?: continue
+            entry(top.club)?.let { it.honours++ }
+            lines += ClubPlaces(id, table.take(3).map { it.club }, top.points)
+        }
+        placeLines[s] = lines
+        for (h in honours) {
+            val money = honourMoney(h.kind)
+            if (money <= 0) continue
+            val club = if (HonourKind.base(h.kind) in CLUB_HONOURS) entry(h.key) else memberOf[h.key]?.let { entry(it) }
+            club?.let { it.budget += money }
+        }
+        return place
+    }
+
+    /** Members not in [alive] leave; a [ClubMoveType.RETIRED] move for the [notable] ones. */
+    private fun depart(s: Int, alive: Set<String>, notable: (String) -> Boolean) {
+        for (e in entries) {
+            val gone = e.squad.filter { it !in alive }
+            if (gone.isEmpty()) continue
+            e.squad.removeAll(gone.toSet())
+            for (k in gone) {
+                memberOf.remove(k)
+                if (notable(k)) log(ClubMove(s, ClubMoveType.RETIRED, k, e.id, null))
+            }
+        }
+    }
+
+    /** Members next season per nation: those of its clubs and those without a club who play for it. */
+    private fun nationSizes(alive: Set<String>, input: ClubInput): Map<String, Int> {
+        val out = HashMap<String, Int>()
+        for (e in entries) out.merge(e.nation, e.squad.size, Int::plus)
+        for (k in alive) if (k !in memberOf) out.merge(homeOf(input.nation(k)), 1, Int::plus)
+        return out
+    }
+
+    private fun clubCountOf(nation: String): Int = entries.count { it.nation == nation }
+
+    /** Step 5: each nation's window, worst club first. */
+    private fun window(s: Int, input: ClubInput, place: Map<String, Int>, moved: Set<String>) {
+        val order = ratingOrder(input.rating)
+        val sizes = nationSizes(input.members.toHashSet(), input)
+        for (nation in Nations.ALL) {
+            val clubs = entries.filter { it.nation == nation.code }
+            if (clubs.size < 2) continue
+            val n = sizes[nation.code] ?: 0
+            val min = minSize(n, clubs.size)
+            val max = maxSize(n, clubs.size)
+            var deals = 0
+            val sold = HashSet<String>()
+            val buyers = clubs.sortedWith(compareByDescending<Entry> { place[it.id] ?: Int.MAX_VALUE }.thenBy { it.budget }.thenComparing({ it.id }, ID_ORDER))
+            for (buyer in buyers) {
+                if (deals >= clubs.size / 2) break
+                val at = place[buyer.id] ?: Int.MAX_VALUE
+                val counted = buyer.squad.sortedWith(order).take(ClubTable.COUNTED)
+                val floor = if (counted.size < ClubTable.COUNTED) Double.NEGATIVE_INFINITY else score(input.rating, counted.last())
+                var best: Offer? = null
+                for (seller in clubs) {
+                    if (seller === buyer || (place[seller.id] ?: Int.MAX_VALUE) >= at || seller.squad.size <= min) continue
+                    for (k in seller.squad.sortedWith(order).take(Transfers.TOP)) {
+                        if (k in moved || k in sold) continue
+                        val r = score(input.rating, k)
+                        val price = fee(value(input.rating(k)))
+                        if (r <= floor || price > buyer.budget) continue
+                        val b = best
+                        if (b == null || r > b.rating || (r == b.rating && (price < b.fee || (price == b.fee && k < b.key)))) best = Offer(k, seller, price, r)
+                    }
+                }
+                val o = best ?: continue
+                val seller = o.seller!!
+                seller.squad.remove(o.key)
+                seller.budget += o.fee
+                buyer.budget -= o.fee
+                if (buyer.squad.size >= max) buyer.squad.sortedWith(order).lastOrNull()?.let { release(s, buyer, listOf(it)) }
+                buyer.squad += o.key
+                memberOf[o.key] = buyer.id
+                sold += o.key
+                deals++
+                log(ClubMove(s, ClubMoveType.TRANSFER, o.key, seller.id, buyer.id, o.fee))
+            }
+        }
+    }
+
+    /**
+     * Step 6: per nation, clubs founded (more members) or dissolved (fewer, or none left: the
+     * fewest titles, then the lowest place); only when `round(n / clubSize)` moved and the clubs
+     * are more than 2 members off the size, so the count does not churn.
+     */
+    private fun resize(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>) {
+        val sizes = nationSizes(alive, input)
+        val size = input.config.clubSize
+        for (nation in Nations.ALL) {
+            val code = nation.code
+            val n = sizes[code] ?: 0
+            val c = clubCountOf(code)
+            val want = clubCount(n, size)
+            if (want == c || (c > 0 && n > 0 && Math.abs(n.toDouble() / c - size) <= 2)) continue
+            if (want > c) {
+                repeat(want - c) { newClub(code, s) }
+                continue
+            }
+            val doomed = entries.filter { it.nation == code }
+                .sortedWith(compareBy<Entry> { it.honours }.thenByDescending { place[it.id] ?: Int.MAX_VALUE }.thenComparing({ it.id }, ID_ORDER.reversed()))
+                .take(c - want)
+            for (e in doomed) {
+                release(s, e, e.squad.toList())
+                goneList += GoneClub(e.id, e.nation, e.identity.name, e.identity.emblem, e.honours, e.founded, s)
+                drop(e)
+            }
+        }
+        sortEntries()
+    }
+
+    /** A new club of nation [code] after season [s] (null when no id is free, [MAX_ID]). */
+    private fun newClub(code: String, s: Int): Entry? {
+        val nation = Nations.of(code) ?: return null
+        val id = nextId(s) ?: return null
+        val own = entries.filter { it.nation == code }
+        val k = own.size + goneList.count { it.nation == code }
+        val identity = ClubNames.identity(id, nation, k, seed, own.mapTo(HashSet()) { it.identity.mascot }, entries.mapTo(HashSet()) { it.identity.name })
+        return Entry(id, code, identity, ArrayList(), START_BUDGET, 0, s + 1).also { add(it) }
+    }
+
+    /**
+     * The next id: `c<next>` up to [MAX_ID], then the lowest id of a club dissolved more than
+     * [Archive.LINE_SEASONS] seasons before [s] (no season line can point at it any more), whose
+     * [gone] line goes; null when there is none.
+     */
+    private fun nextId(s: Int): String? {
+        while (next <= MAX_ID) {
+            val id = idOf(next++)
+            if (entry(id) == null && gone(id) == null) return id
+        }
+        val old = goneList.filter { s - it.dissolved > Archive.LINE_SEASONS }.minWithOrNull(compareBy(ID_ORDER) { it.id }) ?: return null
+        goneList.remove(old)
+        return old.id
+    }
+
+    private fun sortEntries() {
+        entries.sortWith(compareBy(ID_ORDER) { it.id })
+    }
+
+    /** A member placed by the draft ([pick] within its nation's draft) or at its mentor's club ([youth]). */
+    private class Placement(val key: String, val club: String, val pick: Int, val youth: Boolean)
+
+    /** Step 7: every member without a club, nation by nation: pupils at their mentor's club first, then the draft. */
+    private fun draftNational(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>): List<Placement> {
+        val order = ratingOrder(input.rating)
+        val sizes = nationSizes(alive, input)
+        val free = alive.filter { it !in memberOf }.groupBy { homeOf(input.nation(it)) }
+        val out = ArrayList<Placement>()
+        for (nation in Nations.ALL) {
+            val pool = free[nation.code]?.sortedWith(order) ?: continue
+            val clubs = entries.filter { it.nation == nation.code }
+            if (clubs.isEmpty()) continue
+            val max = maxSize(sizes[nation.code] ?: 0, clubs.size)
+            val left = ArrayList<String>()
+            for (k in pool) {
+                val mentor = if (input.origin(k) == Origin.EVOLVED) input.mentor(k) else null
+                val club = mentor?.let { memberOf[it] }?.let { entry(it) }?.takeIf { it.nation == nation.code && it.squad.size < max }
+                if (club == null) {
+                    left += k
+                    continue
+                }
+                club.squad += k
+                memberOf[k] = club.id
+                out += Placement(k, club.id, 0, true)
+            }
+            val turn = compareBy<Entry> { it.squad.size }.thenByDescending { place[it.id] ?: Int.MAX_VALUE }.thenComparing({ it.id }, ID_ORDER)
+            for ((i, k) in left.withIndex()) {
+                val club = clubs.minWith(turn)
+                club.squad += k
+                memberOf[k] = club.id
+                out += Placement(k, club.id, i + 1, false)
+            }
+        }
+        return out
+    }
+
+    /**
+     * The moves of [placed]: every youth placement; a draft pick when it is its club's first of
+     * the window or one of [named] (every pick when [named] is null).
+     */
+    private fun logPlacements(s: Int, placed: List<Placement>, named: Set<String>?) {
+        val picked = moves.filter { it.season == s && it.type == ClubMoveType.DRAFT }.mapNotNullTo(HashSet()) { it.to }
+        for (p in placed) {
+            when {
+                p.youth -> log(ClubMove(s, ClubMoveType.YOUTH, p.key, null, p.club))
+                named == null || picked.add(p.club) || p.key in named -> log(ClubMove(s, ClubMoveType.DRAFT, p.key, null, p.club, p.pick))
+            }
+        }
+    }
+
+    /** The news of the national off-season after [s], from what the book keeps: its places, moves, clubs and [digest]. */
+    private fun news(s: Int): List<LeagueEvent> {
+        val d = digest?.takeIf { it.season == s } ?: return emptyList()
+        val out = ArrayList<LeagueEvent>()
+        fun event(kind: String, keys: List<String>, args: List<String> = emptyList()) {
+            out += LeagueEvent(kind, s, keys, args, Comp.CLUB)
+        }
+        val lines = places(s).filter { it.clubs.isNotEmpty() }
+        for (p in lines.take(NEWS_LEAGUES)) event("club_title", listOf(p.clubs.first()), listOf(p.league.ifEmpty { "-" }, points(p.points)))
+        if (lines.size > NEWS_LEAGUES) event("club_champions", lines.drop(NEWS_LEAGUES).take(NAMED).map { it.clubs.first() }, listOf((lines.size - NEWS_LEAGUES).toString()))
+        if (d.reform) {
+            event("club_reform", emptyList(), listOf(entries.size.toString(), entries.map { it.nation }.distinct().size.toString()))
+            return out
+        }
+        val ms = moves.filter { it.season == s }
+        fun move(type: ClubMoveType, key: String) = ms.lastOrNull { it.type == type && it.ai == key }
+        for (t in d.homeNamed) move(ClubMoveType.HOME, t.key)?.let { m ->
+            event("return_home", listOf(t.key, m.from ?: "-", m.to ?: "-"), listOf(t.fromLeague.ifEmpty { "-" }, t.toLeague.ifEmpty { "-" }))
+        }
+        for (t in d.abroadNamed) move(ClubMoveType.ABROAD, t.key)?.let { m ->
+            event("transfer_abroad", listOf(t.key, m.from ?: "-", m.to ?: "-"), listOf(t.fromLeague.ifEmpty { "-" }, t.toLeague.ifEmpty { "-" }, m.amount.toString()))
+        }
+        if (d.abroad + d.returns > 0) event("transfer_window", (d.abroadNamed + d.homeNamed).map { it.key }.distinct(), listOf(d.abroad.toString(), d.returns.toString()))
+        for (k in d.bought) move(ClubMoveType.TRANSFER, k)?.let { m -> event("transfer", listOf(k, m.from ?: "-", m.to ?: "-"), listOf(m.amount.toString())) }
+        for (g in goneList.filter { it.dissolved == s }.sortedWith(compareBy(ID_ORDER) { it.id })) {
+            event("club_dissolved", listOf(g.id), listOf(ms.count { it.type == ClubMoveType.RELEASED && it.from == g.id }.toString()))
+        }
+        for (e in entries) if (e.founded == s + 1) event("club_founded", listOf(e.id), listOf(e.nation))
+        for (k in d.drafted) {
+            val youth = move(ClubMoveType.YOUTH, k)
+            if (youth != null) event("youth", listOf(k, youth.to ?: "-")) else move(ClubMoveType.DRAFT, k)?.let { m -> event("draft", listOf(k, m.to ?: "-"), listOf(m.amount.toString())) }
+        }
+        if (d.domestic + d.rookies > 0) {
+            val b = d.biggest
+            event(
+                "market_digest", (d.drafted + d.bought).distinct(),
+                listOf(d.domestic.toString(), d.rookies.toString(), b?.ai ?: "-", b?.from ?: "-", b?.to ?: "-", (b?.amount ?: 0).toString()),
+            )
+        }
+        return out
+    }
+
     // ---- saving ----------------------------------------------------------------------------------
 
     /**
-     * league/clubs.txt: a header, the meta line (seed, last season, cities, the last season's
-     * plan seed), one line per club and per history move.
+     * league/clubs.txt. The club league's (`clubs 1`): a header, the meta line (seed, last season,
+     * cities, the last season's plan seed), one line per club and per history move. A national
+     * book's (`clubs 2`): the meta line (seed, last season, plan seed, next id number), one line
+     * per club (with its nation, founding season and members) and per dissolved club, the newest
+     * seasons' club-table places (`cs`), the last off-season's digest (`od`) and the moves.
      */
-    fun encode(): String = buildString {
+    fun encode(): String = if (format == AFFILIATION) encodeNational() else buildString {
         append("$HEADER\n")
         append("meta $seed $season ${if (cities.isEmpty()) "-" else cities.joinToString(",") { esc(it) }} ${lastSeed ?: "-"}\n")
         for (e in entries) {
@@ -416,11 +1130,48 @@ class ClubBook private constructor(
             append("club ${e.id} ${esc(id.city)} ${esc(id.mascot)} ${esc(id.name)} ${em.shape} ${hex(em.colour1)} ${hex(em.colour2)} ")
             append("${esc(em.initial.toString())} ${e.budget} ${e.honours} ${e.squad.joinToString(",").ifEmpty { "-" }}\n")
         }
-        for (m in moves) append("move ${m.season} ${m.kind.code} ${m.ai} ${m.from ?: "-"} ${m.to ?: "-"} ${m.amount}\n")
+        for (m in moves) append("move ${m.season} ${m.type.code} ${m.ai} ${m.from ?: "-"} ${m.to ?: "-"} ${m.amount}\n")
+    }
+
+    private fun encodeNational(): String = buildString {
+        append("$HEADER_NATIONAL\n")
+        append("meta $seed $season ${lastSeed ?: "-"} $next\n")
+        for (e in entries) {
+            val id = e.identity
+            val em = id.emblem
+            append("club ${e.id} ${e.nation} ${esc(id.city)} ${esc(id.mascot)} ${esc(id.name)} ${em.shape} ${hex(em.colour1)} ${hex(em.colour2)} ")
+            append("${esc(em.initial.toString())} ${e.budget} ${e.honours} ${e.founded} ${e.squad.joinToString(",").ifEmpty { "-" }}\n")
+        }
+        for (g in goneList) {
+            val em = g.emblem
+            append("gone ${g.id} ${g.nation} ${esc(g.name)} ${em.shape} ${hex(em.colour1)} ${hex(em.colour2)} ${esc(em.initial.toString())} ${g.honours} ${g.founded} ${g.dissolved}\n")
+        }
+        for ((n, lines) in placeLines) {
+            if (lines.isEmpty()) continue
+            append("cs $n ").append(lines.joinToString(";") { p -> "${p.league.ifEmpty { "-" }}:${p.clubs.joinToString(",")}:${Math.round(p.points * 10)}" }).append('\n')
+        }
+        digest?.let { d ->
+            fun keys(l: List<String>) = l.joinToString(",").ifEmpty { "-" }
+            fun named(l: List<ClubDigest.Named>) = l.joinToString(",") { "${it.key}:${it.fromLeague.ifEmpty { "-" }}:${it.toLeague.ifEmpty { "-" }}" }.ifEmpty { "-" }
+            val b = d.biggest
+            append("od ${d.season} ${d.rookies} ${d.domestic} ${d.abroad} ${d.returns} ${b?.ai ?: "-"} ${b?.from ?: "-"} ${b?.to ?: "-"} ${b?.amount ?: 0} ")
+            append("${keys(d.drafted)} ${keys(d.bought)} ${named(d.abroadNamed)} ${named(d.homeNamed)} ${if (d.reform) 1 else 0}\n")
+        }
+        for (m in moves) append("move ${m.season} ${m.type.code} ${m.ai} ${m.from ?: "-"} ${m.to ?: "-"} ${m.amount}\n")
     }
 
     companion object {
         const val HEADER = "clubs 1"
+
+        /** The header of a national book. */
+        const val HEADER_NATIONAL = "clubs 2"
+
+        /** [format] of the club league's book (`clubs 1`). */
+        const val CLUB_LEAGUE = 1
+
+        /** [format] of national leagues' book (`clubs 2`): clubs as every member's affiliation. */
+        const val AFFILIATION = 2
+
         const val START_BUDGET = 100
 
         /** Lineup size: boards in a club fixture. */
@@ -429,14 +1180,34 @@ class ClubBook private constructor(
         /** Buys per club in a transfer window. */
         const val BUYS = 2
 
-        /** History moves kept for the screen. */
+        /** History moves the club league's book keeps for the screen ([historyCap] in a national book). */
         const val HISTORY = 100
 
-        /** Ids go up to "c99". */
+        /** The club league's ids go up to "c99". */
         const val MAX_CLUBS = 99
+
+        /** A national book's ids go up to "c1295" (two base-36 digits in the archive's `sx` entries). */
+        const val MAX_ID = Archive.MAX_CLUB
+
+        /** Clubs per nation at most. */
+        const val MAX_PER_NATION = 16
+
+        /** Seasons of `cs` lines kept. */
+        const val PLACE_SEASONS = 20
+
+        /** Leagues whose club-table champion gets an article (`club_title`). */
+        const val NEWS_LEAGUES = 4
+
+        /** Players named in each kind of off-season news. */
+        const val NAMED = 3
 
         private const val DRAFT_SALT = 0xD2AF7L
         private const val WINDOW_SALT = 0x7A45FL
+
+        /** Honours keyed by a club id (their money goes to that club). */
+        private val CLUB_HONOURS = setOf("CLUB", "CLUB2", "CLUBCUP", "CLUBCUP2")
+
+        private val VERSIONS = AtomicInteger()
 
         /** An AI's transfer value: `max(1, (rating - 1100) / 10)`, whole units. */
         fun value(rating: Double): Int = if (rating.isNaN()) 1 else maxOf(1, ((rating - 1100) / 10).toInt())
@@ -447,17 +1218,42 @@ class ClubBook private constructor(
         /** Prize money for final place [position] (1 = champion): `40 - 2 * position`, never below 0. */
         fun prize(position: Int): Int = maxOf(0, 40 - 2 * position)
 
-        /** Money a club gets for a member's cup or CL place (honour [kind]); 0 for other honours. */
-        fun honourMoney(kind: String): Int = when (kind) {
+        /** Money a club gets for a member's (or its own) cup, CL, 대륙 챔피언스 or 클럽 대항전 place (honour [kind]); 0 for other honours. */
+        fun honourMoney(kind: String): Int = when (HonourKind.base(kind)) {
             "CUP" -> 20
             "CUP2" -> 10
             "CL" -> 30
             "CL2" -> 15
+            "CCL" -> 25
+            "CCL2" -> 12
+            "CLUBCUP" -> 30
+            "CLUBCUP2" -> 15
             else -> 0
         }
 
-        /** "c01" for club 1. */
+        /** "c01" for club 1, "c100" for club 100. */
         fun idOf(n: Int): String = "c" + n.toString().padStart(2, '0')
+
+        /** The number of a "c<n>" id; null for another shape. */
+        fun number(id: String): Int? = id.takeIf { it.startsWith("c") }?.drop(1)?.toIntOrNull()?.takeIf { it > 0 }
+
+        /** Club ids by number ("c99" before "c100"), other ids after them by text. */
+        val ID_ORDER: Comparator<String> = compareBy<String> { number(it) ?: Int.MAX_VALUE }.thenBy { it }
+
+        /** Clubs for a nation of [members]: `clamp(round(members / size), 1, 16)`, none without members. */
+        fun clubCount(members: Int, size: Int): Int = if (members <= 0) 0 else Math.round(members.toDouble() / size).toInt().coerceIn(1, MAX_PER_NATION)
+
+        /** The fewest members a club of a nation of [members] in [clubs] clubs keeps in the window: `floor(0.75 n / C)`. */
+        fun minSize(members: Int, clubs: Int): Int = if (clubs <= 0) 0 else Math.floorDiv(3 * members, 4 * clubs)
+
+        /** The most members a club of a nation of [members] in [clubs] clubs takes: `ceil(1.25 n / C) + 1`. */
+        fun maxSize(members: Int, clubs: Int): Int = if (clubs <= 0) 0 else -Math.floorDiv(-5 * members, 4 * clubs) + 1
+
+        /** History moves a national book of [members] keeps: `clamp(members / 4, 60, 300)`. */
+        fun historyCap(members: Int): Int = (members / 4).coerceIn(60, 300)
+
+        /** The nation a member plays for without a club: its own when this version knows it, else Korea's. */
+        fun homeOf(nation: String?): String = nation?.takeIf { Nations.of(it) != null } ?: Nations.KR.code
 
         /**
          * A new club league: [clubs] clubs named after [cities] (the app's hometowns), each with
@@ -466,8 +1262,8 @@ class ClubBook private constructor(
          * over are free agents; with too few AIs the last squads are short.
          */
         fun create(ranking: List<String>, clubs: Int, squad: Int, seed: Long, cities: List<String>): ClubBook {
-            val book = ClubBook(seed, cities.toList())
-            for (n in 1..clubs.coerceIn(0, MAX_CLUBS)) book.entries += book.newEntry(idOf(n))
+            val book = ClubBook(seed, cities.toList(), CLUB_LEAGUE)
+            for (n in 1..clubs.coerceIn(0, MAX_CLUBS)) book.add(book.newEntry(idOf(n)))
             val turns = book.entries.shuffled(Random(DiceStream.mix(seed, DRAFT_SALT)))
             val pool = ranking.distinct()
             var next = 0
@@ -481,20 +1277,54 @@ class ClubBook private constructor(
         }
 
         /**
-         * Reads league/clubs.txt; lines that cannot be read are skipped, so a cut file keeps
-         * the clubs before the cut. Throws when the header or the meta line is missing (the
-         * caller then makes a new book with [create]). An AI listed in two clubs stays in the
-         * first.
+         * The clubs of a new national league (a new league, a renewed one, a league whose book is
+         * missing): per nation (each member's own, [homeOf]) `C(n)` clubs ([clubCount] with
+         * [LeagueConfig.clubSize]) named after its cities, each with [START_BUDGET], and a snake
+         * draft of its members by [rating] whose pick order is drawn from [seed]. Its off-season
+         * after [season] counts as applied (a repeat changes nothing); its clubs first play in
+         * season `season + 1`.
+         */
+        fun found(members: Collection<String>, nation: (String) -> String?, rating: (String) -> Double, season: Int, seed: Long, config: LeagueConfig): ClubBook {
+            val book = ClubBook(seed, emptyList(), AFFILIATION)
+            val byNation = members.distinct().groupBy { homeOf(nation(it)) }
+            val order = ratingOrder(rating)
+            for ((index, n) in Nations.ALL.withIndex()) {
+                val pool = byNation[n.code]?.sortedWith(order) ?: continue
+                val clubs = (0 until clubCount(pool.size, config.clubSize)).mapNotNull { book.newClub(n.code, season) }
+                if (clubs.isEmpty()) continue
+                val turns = clubs.shuffled(Random(DiceStream.mix(seed, DRAFT_SALT, index.toLong())))
+                for ((i, k) in pool.withIndex()) {
+                    val round = i / turns.size
+                    val e = if (round % 2 == 0) turns[i % turns.size] else turns[turns.size - 1 - i % turns.size]
+                    e.squad += k
+                }
+            }
+            book.sortEntries()
+            book.reindex()
+            book.season = season
+            book.lastSeed = seed
+            book.changed()
+            return book
+        }
+
+        /**
+         * Reads league/clubs.txt (`clubs 1` or `clubs 2`); lines that cannot be read are skipped,
+         * so a cut file keeps the clubs before the cut. Throws when the header or the meta line is
+         * missing (the caller then makes a new book). An AI listed in two clubs stays in the
+         * first; a club of a nation this version does not know is left out (its members are
+         * drafted at the next off-season).
          */
         fun decode(text: String): ClubBook {
             val lines = text.lines()
-            require(lines.firstOrNull()?.trim() == HEADER) { "not a clubs file" }
+            val header = lines.firstOrNull()?.trim()
+            if (header == HEADER_NATIONAL) return decodeNational(lines)
+            require(header == HEADER) { "not a clubs file" }
             val book = lines.firstNotNullOfOrNull { l ->
                 runCatching {
                     val f = l.trim().split(' ')
                     if (f[0] != "meta") return@runCatching null
                     val cities = if (f.getOrNull(3).let { it == null || it == "-" }) emptyList() else f[3].split(',').map { unesc(it) }
-                    ClubBook(f[1].toLong(), cities).apply {
+                    ClubBook(f[1].toLong(), cities, CLUB_LEAGUE).apply {
                         season = f[2].toInt()
                         lastSeed = f.getOrNull(4)?.toLongOrNull()
                     }
@@ -509,16 +1339,12 @@ class ClubBook private constructor(
                             require(f.size >= 12)
                             val id = f[1]
                             if (book.entry(id) != null) return@runCatching
-                            val initial = unesc(f[8]).firstOrNull() ?: '?'
-                            val emblem = Emblem(Math.floorMod(f[5].toInt(), Emblem.SHAPES), f[6].toLong(16).toInt(), f[7].toLong(16).toInt(), initial)
+                            val emblem = emblemOf(f, 5)
                             val identity = ClubNames.Identity(unesc(f[2]), unesc(f[3]), unesc(f[4]), emblem)
                             val squad = f[11].split(',').filter { it.isNotEmpty() && it != "-" && seen.add(it) }
-                            book.entries += Entry(id, identity, squad.toMutableList(), maxOf(0, f[9].toInt()), maxOf(0, f[10].toInt()))
+                            book.add(Entry(id, "", identity, squad.toMutableList(), maxOf(0, f[9].toInt()), maxOf(0, f[10].toInt())))
                         }
-                        "move" -> {
-                            val kind = ClubMoveKind.of(f[2].single()) ?: return@runCatching
-                            book.moves += ClubMove(f[1].toInt(), kind, f[3], f[4].takeIf { it != "-" }, f[5].takeIf { it != "-" }, f[6].toInt())
-                        }
+                        "move" -> book.moves += moveOf(f) ?: return@runCatching
                     }
                 }
             }
@@ -528,11 +1354,86 @@ class ClubBook private constructor(
             return book
         }
 
+        private fun decodeNational(lines: List<String>): ClubBook {
+            val book = lines.firstNotNullOfOrNull { l ->
+                runCatching {
+                    val f = l.trim().split(' ')
+                    if (f[0] != "meta") return@runCatching null
+                    ClubBook(f[1].toLong(), emptyList(), AFFILIATION).apply {
+                        season = f[2].toInt()
+                        lastSeed = f.getOrNull(3)?.toLongOrNull()
+                        next = f.getOrNull(4)?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                    }
+                }.getOrNull()
+            } ?: error("no meta line in the clubs file")
+            val seen = HashSet<String>()
+            for (l in lines) {
+                runCatching {
+                    val f = l.trim().split(' ')
+                    when (f[0]) {
+                        "club" -> {
+                            require(f.size >= 14 && Nations.of(f[2]) != null)
+                            val id = f[1]
+                            if (book.entry(id) != null) return@runCatching
+                            val identity = ClubNames.Identity(unesc(f[3]), unesc(f[4]), unesc(f[5]), emblemOf(f, 6))
+                            val squad = f[13].split(',').filter { it.isNotEmpty() && it != "-" && seen.add(it) }
+                            book.add(Entry(id, f[2], identity, squad.toMutableList(), maxOf(0, f[10].toInt()), maxOf(0, f[11].toInt()), f[12].toInt()))
+                        }
+                        "gone" -> {
+                            require(f.size >= 11)
+                            if (book.gone(f[1]) != null) return@runCatching
+                            book.goneList += GoneClub(f[1], f[2], unesc(f[3]), emblemOf(f, 4), maxOf(0, f[8].toInt()), f[9].toInt(), f[10].toInt())
+                        }
+                        "cs" -> book.placeLines[f[1].toInt()] = f[2].split(';').map { part ->
+                            val p = part.split(':')
+                            ClubPlaces(if (p[0] == "-") "" else p[0], p[1].split(',').filter { it.isNotEmpty() }, p[2].toLong() / 10.0)
+                        }
+                        "od" -> {
+                            fun keys(s: String) = if (s == "-") emptyList() else s.split(',').filter { it.isNotEmpty() }
+                            fun named(s: String) = keys(s).map { e ->
+                                val p = e.split(':')
+                                ClubDigest.Named(p[0], if (p[1] == "-") "" else p[1], if (p[2] == "-") "" else p[2])
+                            }
+                            val biggest = f[6].takeIf { it != "-" }?.let { ClubMove(f[1].toInt(), ClubMoveType.TRANSFER, it, f[7].takeIf { x -> x != "-" }, f[8].takeIf { x -> x != "-" }, f[9].toInt()) }
+                            book.digest = ClubDigest(
+                                f[1].toInt(), f[2].toInt(), f[3].toInt(), f[4].toInt(), f[5].toInt(), biggest,
+                                keys(f[10]), keys(f[11]), named(f[12]), named(f[13]), f[14] == "1",
+                            )
+                        }
+                        "move" -> book.moves += moveOf(f) ?: return@runCatching
+                    }
+                }
+            }
+            // A next id number at or below an id in use (a hand-edited or cut file) moves past it.
+            val used = (book.entries.map { it.id } + book.goneList.map { it.id }).mapNotNull { number(it) }.maxOrNull() ?: 0
+            if (book.next <= MAX_ID && book.next <= used) book.next = used + 1
+            book.sortEntries()
+            book.reindex()
+            book.trim()
+            return book
+        }
+
+        private fun emblemOf(f: List<String>, at: Int): Emblem {
+            val initial = unesc(f[at + 3]).firstOrNull() ?: '?'
+            return Emblem(Math.floorMod(f[at].toInt(), Emblem.SHAPES), f[at + 1].toLong(16).toInt(), f[at + 2].toLong(16).toInt(), initial)
+        }
+
+        private fun moveOf(f: List<String>): ClubMove? {
+            val type = ClubMoveType.of(f[2].single()) ?: return null
+            return ClubMove(f[1].toInt(), type, f[3], f[4].takeIf { it != "-" }, f[5].takeIf { it != "-" }, f[6].toInt())
+        }
+
         /** Best rated first (an unrated AI last), then by key. */
         internal fun ratingOrder(rating: (String) -> Double): Comparator<String> =
             compareByDescending<String> { score(rating, it) }.thenBy { it }
 
         private fun score(rating: (String) -> Double, key: String): Double = rating(key).let { if (it.isNaN()) Double.NEGATIVE_INFINITY else it }
+
+        /** Club points as written in the news: one decimal. */
+        private fun points(p: Double): String = String.format(java.util.Locale.ROOT, "%.1f", p)
+
+        /** The tier of [key]'s division in [season]; null when it did not play in it. */
+        private fun tierOf(season: Season, key: String): Int? = season.divisionOf(key)?.let { season.leagues.tier(it) }
 
         private fun hex(c: Int): String = (c.toLong() and 0xFFFFFFFFL).toString(16).padStart(8, '0')
 
