@@ -11,6 +11,7 @@ import yacht.app.core.ReportState
 import yacht.app.core.Screen
 import yacht.app.core.WatchKind
 import yacht.app.core.WatchPace
+import yacht.app.core.WatchView
 import yacht.app.ui.MatchReportBody
 import yacht.app.ui.WatchActions
 import yacht.app.ui.WatchBody
@@ -138,6 +139,8 @@ internal object ShotsWatch : LeagueShots {
 
         // The watch screen playing the report's match again, then at its end.
         val rules = c.tables?.rules ?: RuleSet.NINTENDO
+        // The replay's game as shown, for the channel's drawn shots when its first pick is still to be played.
+        var replayed: WatchView? = null
         if (played != null) {
             center.setPace(WatchPace.FAST)
             center.watch(played.ref.encode())
@@ -146,6 +149,7 @@ internal object ShotsWatch : LeagueShots {
             center.pause()
             shot(c, out, "lg64_watch", heightDp = 1300)
             shot(c, out, "lg64_watch_360", heightDp = 1300, widthDp = 360)
+            replayed = lg.watch?.takeIf { it.message == null && it.steps.isNotEmpty() }
             println("watch: replay ${lg.watch?.ref}: ${lg.watch?.games?.size} games, ${lg.watch?.message}")
             lg.watch?.games?.lastOrNull()?.let { center.pickGame(it.index) }
             waitFor("replay's last game", 180_000) { lg.watch?.complete == true || lg.watch?.message != null }
@@ -162,7 +166,10 @@ internal object ShotsWatch : LeagueShots {
         }
         center.pause()
         shot(c, out, "lg66_broadcast", heightDp = 1300)
-        lg.watch?.takeIf { it.message == null && it.steps.isNotEmpty() }?.let { w ->
+        // Its own game, else (its first pick still to be played: lg66 shows the wait) the replay's as the channel would.
+        val channel = lg.watch?.takeIf { it.message == null && it.steps.isNotEmpty() }
+        if (channel == null) println("watch: the channel's first pick waits (${lg.watch?.waiting}); lg66b-d drawn from the replay")
+        (channel ?: replayed?.copy(kind = WatchKind.BROADCAST, title = "📺 이번 주 중계", playing = false))?.let { w ->
             val names = top.take(10).map { it.name }
             shotOf(out, "lg66b_countdown", heightDp = 1300) {
                 WatchBody(w.copy(shown = w.steps.size, complete = true, playing = true, queue = BroadcastQueue(1, 6, "요트컵 8강, ${names.getOrElse(2) { "김민준" }} 대 ${Ko.ieyo(names.getOrElse(3) { "이서연" })}", 3)), rules, WatchActions())
