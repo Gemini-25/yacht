@@ -98,5 +98,17 @@ class FileOrderTest {
         for (bad in listOf("garbage", "world 9\nguards 1 1 1 1\n")) {
             assertEquals("world 1\nguards 0 0 0 0\n", LeagueWorld.decode(before + (LeagueWorld.WORLD to bad), w.ladder.keys, emptySet()).encodeFiles().getValue(LeagueWorld.WORLD))
         }
+        // In season 2: a book that closed season 1 is this league's and kept whole; one that closed a
+        // season not played yet is another league's (its guards would skip this league's closes): empty.
+        assertEquals(2, back.plan!!.number)
+        val ours = "world 1\nguards 1 1 1 2\nera 1 B 1 0 190\nev 1 BOOM X 1 2 0 NZ - -\n"
+        assertEquals(ours, LeagueWorld.decode(before + (LeagueWorld.WORLD to ours), w.ladder.keys, emptySet()).encodeFiles().getValue(LeagueWorld.WORLD))
+        for (theirs in listOf("world 1\nguards 7 7 7 7\nera 1 B 3 0 190\n", "world 1\nguards 1 1 1 3\nera 1 B 1 0 190\n", "world 1\nguards 0 3 0 0\n")) {
+            assertEquals("world 1\nguards 0 0 0 0\n", LeagueWorld.decode(before + (LeagueWorld.WORLD to theirs), w.ladder.keys, emptySet()).encodeFiles().getValue(LeagueWorld.WORLD), theirs)
+        }
+        // Stats of a season ahead (another league's, as before): the world book goes with them.
+        val ahead = before + (LeagueWorld.STATS to before.getValue(LeagueWorld.STATS).replaceFirst(Regex("(?m)^book (\\d+) \\d+ "), "book $1 9 ")) + (LeagueWorld.WORLD to ours)
+        assertTrue(ahead.getValue(LeagueWorld.STATS) != before.getValue(LeagueWorld.STATS), "the stats name a later close")
+        assertEquals("world 1\nguards 0 0 0 0\n", LeagueWorld.decode(ahead, w.ladder.keys, emptySet()).encodeFiles().getValue(LeagueWorld.WORLD))
     }
 }

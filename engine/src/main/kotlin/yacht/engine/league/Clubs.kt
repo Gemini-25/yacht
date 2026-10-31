@@ -474,8 +474,11 @@ class ClubBook private constructor(
         )
     }
 
-    /** Member [key]'s contract at its club; null without a club world or terms. */
-    fun terms(key: String): Terms? = world?.terms?.get(key)
+    /**
+     * Member [key]'s contract at its club; null without a club world, without terms or without a
+     * club (the `sq` lines keep the terms of club members only, so this reads as the file would).
+     */
+    fun terms(key: String): Terms? = world?.terms?.get(key)?.takeIf { key in memberOf }
 
     /** Club [club]'s rivals (at most 2), strongest kind first. */
     fun rivals(club: String): List<Rival> = world?.history?.rivalsOf(club).orEmpty()

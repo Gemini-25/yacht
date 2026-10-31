@@ -171,8 +171,12 @@ data class LeagueConfig(
      */
     fun encode(): String = encode(full = false)
 
-    /** [encode], with every key written when [full] ([valueOf] and [with] read the rules from it). */
-    private fun encode(full: Boolean): String = buildString {
+    /**
+     * [encode], with every key written when [full] ([valueOf] and [with] read the rules from it).
+     * Code that compares two rule sets line by line reads the full form: in [encode]'s a key at its
+     * default is missing, so a rule set back to a default would look unchanged there.
+     */
+    fun encode(full: Boolean): String = buildString {
         append("config $VERSION\n")
         append("divisions $divisions\n")
         append("double ${flag(doubleRoundRobin)}\n")

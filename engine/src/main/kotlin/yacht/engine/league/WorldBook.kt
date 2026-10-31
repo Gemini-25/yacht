@@ -38,6 +38,15 @@ class WorldBook {
     fun stale(season: Int): Boolean = closeSeason > 0 && season - closeSeason > 1
 
     /**
+     * Whether a guard of this book is past season [season] in play: a close or checkpoint of a
+     * season this league has not reached, so the book is another league's (an older build's
+     * 리그 초기화 leaves world.txt behind, as it did the stats). Its guards would skip this
+     * league's own steps, so [LeagueWorld.decode] starts an empty book instead. Equal is not
+     * ahead: the season's own close, read again after a kill.
+     */
+    fun ahead(season: Int): Boolean = maxOf(closeSeason, metaSeason, arcClose, arcWinter) > season
+
+    /**
      * The stale rule: when [stale] for [season], drops the arcs under way, the ranking's bottom
      * quarters (the merger's trigger) and the World Cup votes after the last close it saw, and keeps
      * the history (eras, style shares, finals, league history, career weeks at #1, scorecards,

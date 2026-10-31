@@ -68,7 +68,7 @@ data class EraCandidate(val family: StyleFamily?, val held: Int)
 data class StyleShares(val season: Int, val elite: List<Int>, val all: List<Int>)
 
 /** Points of family [f]'s members against [g]'s in a season's league matches, and their points above expectation. */
-data class Matchup(val f: StyleFamily, val g: StyleFamily, val points: Int, val matches: Int, val excess: Double)
+data class FamilyMatchup(val f: StyleFamily, val g: StyleFamily, val points: Int, val matches: Int, val excess: Double)
 
 /**
  * What a close measures of the style families (`fm` in stats.txt, design ENG 4.2): members per
@@ -82,7 +82,7 @@ data class FamilyStats(
     val all: List<Int>,
     val bigTitles: List<StyleFamily?>,
     val residuals: List<Double>,
-    val matchups: List<Matchup>,
+    val matchups: List<FamilyMatchup>,
     val leagues: Map<String, StyleFamily>,
 ) {
     /** The `fm` line (with its '\n'). */
@@ -107,7 +107,7 @@ data class FamilyStats(
             val matchups = LineParts.items(f[6]).map { e ->
                 val (pair, rest) = e.split(':')
                 val p = rest.split('/')
-                Matchup(StyleFamily.ofCode(pair[0])!!, StyleFamily.ofCode(pair[2])!!, p[0].toInt(), p[1].toInt(), p[2].toInt() / 100.0)
+                FamilyMatchup(StyleFamily.ofCode(pair[0])!!, StyleFamily.ofCode(pair[2])!!, p[0].toInt(), p[1].toInt(), p[2].toInt() / 100.0)
             }
             val leagues = LinkedHashMap<String, StyleFamily>()
             for (e in LineParts.items(f[7])) leagues[Field.unesc(e.substringBefore(':'))] = StyleFamily.ofCode(e.substringAfter(':').single())!!
@@ -122,9 +122,16 @@ data class FamilyStats(
  * (`era`) and the candidate for the next (`cand`). The logic is P9's, in this file.
  */
 class MetaBook {
-    /** Newcomer weights per family; null before the first update (every weight 1.0). */
+    /**
+     * Newcomer weights per family; null before the first update (every weight 1.0). Held as the
+     * `meta` line saves them (every family, to the thousandth; a missing or non-number weight is
+     * 1.0), so the next update and the rookie draw read the same weights whether or not the league
+     * was read back in between (a restart, a close replayed after a kill).
+     */
     var weights: Map<StyleFamily, Double>? = null
-        internal set
+        internal set(v) {
+            field = v?.let { ws -> StyleFamily.entries.associateWith { f -> ws[f]?.takeIf { it.isFinite() }?.let { LineParts.fixed(it, 1000) } ?: 1.0 } }
+        }
 
     internal val shareLines = TreeMap<Int, StyleShares>()
     internal val eraList = ArrayList<Era>()
@@ -156,7 +163,7 @@ class MetaBook {
         const val CHAOS = "춘추전국 시대"
 
         private val META = LineParts.of<WorldBook>("meta", { w, out ->
-            w.meta.weights?.let { ws -> out.append("meta ").append(StyleFamily.entries.joinToString(",") { Math.round((ws[it] ?: 1.0) * 1000).toString() }).append('\n') }
+            w.meta.weights?.let { ws -> out.append("meta ").append(StyleFamily.entries.joinToString(",") { Math.round(ws.getValue(it) * 1000).toString() }).append('\n') }
         }) { w, f ->
             val xs = f[1].split(',').map { it.toInt() / 1000.0 }
             require(xs.size == StyleFamily.entries.size)

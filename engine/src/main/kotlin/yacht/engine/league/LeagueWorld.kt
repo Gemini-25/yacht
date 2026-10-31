@@ -976,7 +976,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 if (w.stats.ended > p.number || (w.archive.summaries.maxOfOrNull { it.season } ?: 0) > p.number) {
                     w.stats = StatsBook()
                     w.archive = Archive()
+                    w.world = WorldBook()
                 }
+                // So is a world book whose guards are ahead: they would skip this league's own closes.
+                if (w.world.ahead(p.number)) w.world = WorldBook()
                 if (w.stats.season != p.number && w.stats.ended < p.number) {
                     val keys = p.league.standings.keys
                     w.stats.startSeason(p.number, keys.associateWith { ladder.rating(it) }, keys.filter { w.players[it]?.born == p.number })

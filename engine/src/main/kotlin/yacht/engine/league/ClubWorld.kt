@@ -53,6 +53,13 @@ object LineParts {
     internal fun opt(s: String?): String = if (s.isNullOrEmpty()) "-" else Field.esc(s)
 
     internal fun bit(b: Boolean): String = if (b) "1" else "0"
+
+    /**
+     * [x] to the [per]-th its line saves it in (`× per`, rounded; 0 for a value that is not a
+     * number). A state's number that its file keeps rounded is held rounded, so what a step reads
+     * after a restart or a kill is what it read before.
+     */
+    internal fun fixed(x: Double, per: Int): Double = Math.round(x * per) / per.toDouble()
 }
 
 /** Owner types (design ENG 1b.5); [code] is saved. 국부 펀드 comes only by a takeover arc. */
@@ -162,7 +169,15 @@ internal class ClubState(val id: String) {
     var balance = 0
     var fans = 0
     var mood = 50
+
+    /**
+     * The coach's pressure, held in tenths as the `cl` line saves it: a value set here is what the
+     * file gives back, so a league read again after a restart or a kill decides as one that never was.
+     */
     var pressure = 0.0
+        set(v) {
+            field = LineParts.fixed(v, 10)
+        }
     var coach: String? = null
     var captain: String? = null
     var trouble = 0
@@ -209,9 +224,15 @@ class ClubWorld internal constructor(book: ClubBook) {
     var dissolvedBy = 0
         internal set
 
-    /** The median ladder rating of the alive generated players at the last close (values are anchored at it, [Valuation]). */
+    /**
+     * The median ladder rating of the alive generated players at the last close (values are
+     * anchored at it, [Valuation]), held to the tenth the `cw` line saves (a value that is not a
+     * number keeps the probe's anchor), so values priced before and after a restart agree.
+     */
     var anchor = Valuation.ANCHOR
-        internal set
+        internal set(v) {
+            field = if (v.isFinite()) LineParts.fixed(v, 10) else Valuation.ANCHOR
+        }
 
     internal val clubs = TreeMap<String, ClubState>(ClubBook.ID_ORDER)
     internal val terms = HashMap<String, Terms>()

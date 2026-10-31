@@ -32,7 +32,7 @@ import yacht.engine.league.LeagueHistory
 import yacht.engine.league.LeagueScorecard
 import yacht.engine.league.Leagues
 import yacht.engine.league.MarketStory
-import yacht.engine.league.Matchup
+import yacht.engine.league.FamilyMatchup
 import yacht.engine.league.NotableMove
 import yacht.engine.league.Owner
 import yacht.engine.league.OwnerType
@@ -263,6 +263,55 @@ class ClubWorldCodecTest {
         assertEquals(FeeRecord("g1", "c02", "c01", 450, 3), book.worldRecord)
         assertEquals(listOf(2, 3), book.rankLines.map { it.season })
         assertEquals(mapOf("KR" to 450, "JP" to 120), book.rankLines.last().leagueRecords)
+    }
+
+    @Test
+    fun numbersAreHeldAsTheirLinesSaveThem() {
+        // What a step sets is what the file gives back: a league read again (a restart, a replayed close) decides the same.
+        val book = worldBook()
+        val w = book.world!!
+        w.anchor = 1491.537
+        assertEquals(1491.5, w.anchor)
+        w.anchor = Double.NaN
+        assertEquals(yacht.engine.league.Valuation.ANCHOR, w.anchor)
+        w.anchor = 1503.26
+        w.state("c01").pressure = 1.27
+        w.state("c02").pressure = 0.04
+        assertEquals(1.3, book.life("c01")!!.pressure)
+        assertEquals(0.0, book.life("c02")!!.pressure)
+        val back = ClubBook.decode(book.encode())
+        assertEquals(1503.3, back.world!!.anchor)
+        assertEquals(w.anchor, back.world!!.anchor)
+        assertEquals(book.life("c01"), back.life("c01"))
+        assertEquals(book.encode(), back.encode())
+        // The meta's weights: every family, to the thousandth; one not given (or not a number) is 1.0.
+        val wb = WorldBook()
+        wb.meta.weights = mapOf(StyleFamily.BONUS to 1.23456, StyleFamily.ODD to Double.NaN)
+        assertEquals(StyleFamily.entries.toSet(), wb.meta.weights!!.keys)
+        assertEquals(1.235, wb.meta.weight(StyleFamily.BONUS))
+        assertEquals(1.0, wb.meta.weight(StyleFamily.ODD))
+        assertEquals(1.0, wb.meta.weight(StyleFamily.EV))
+        assertEquals(wb.meta.weights, WorldBook.decode(wb.encode()).meta.weights)
+        // The family stats kept are the line's: residuals to the tenth, excess to the hundredth.
+        val s = StatsBook()
+        val fs = FamilyStats(
+            4, List(8) { 10 }, List(8) { 100 }, listOf(StyleFamily.EV), listOf(1.234, -0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 7.77),
+            listOf(FamilyMatchup(StyleFamily.EV, StyleFamily.ODD, 50, 41, 0.1567)), emptyMap(),
+        )
+        val kept = s.putFamilies(fs, 10)
+        assertEquals(listOf(1.2, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 7.8), kept.residuals)
+        assertEquals(0.16, kept.matchups.single().excess)
+        assertEquals(kept, s.families(4))
+        assertEquals(kept, StatsBook.decode(s.encode()).families(4))
+        assertTrue(runCatching { s.putFamilies(fs.copy(residuals = listOf(1.0)), 10) }.isFailure, "a line it cannot write is refused")
+        assertEquals(kept, s.families(4))
+        // A member who left every club keeps no terms (its line is not written), before the file as after.
+        book.world!!.terms["g5"] = yacht.engine.league.Terms(4, 9, 0, 9, 3, 0, null, null, 0)
+        assertNotNull(book.terms("g5"))
+        assertTrue(book.place("g5", null))
+        assertNull(book.terms("g5"))
+        assertNull(ClubBook.decode(book.encode()).terms("g5"))
+        assertNull(book.terms("gone-key"))
     }
 
     @Test
@@ -508,6 +557,12 @@ class ClubWorldCodecTest {
         assertEquals(3, w.media.careerTop["g1"])
         assertEquals(1, w.enc.allFinals.size)
         assertFalse(w.dropStale(7), "nothing left to drop")
+        // Ahead of the season in play: another league's book (its own close read again is not ahead).
+        assertFalse(w.ahead(5))
+        assertTrue(w.ahead(4))
+        assertFalse(WorldBook().ahead(1))
+        assertTrue(WorldBook().also { it.arcWinter = 3 }.ahead(2))
+        assertFalse(WorldBook().also { it.arcWinter = 3 }.ahead(3), "the winter of the season in play")
     }
 
     @Test
@@ -516,7 +571,7 @@ class ClubWorldCodecTest {
         val fs = FamilyStats(
             3, listOf(50, 40, 30, 20, 10, 9, 6, 5), listOf(280, 210, 160, 110, 100, 80, 40, 20), listOf(StyleFamily.BONUS, null, StyleFamily.COMBO),
             listOf(1.2, -3.4, 0.0, 12.5, -0.1, 0.0, 0.0, 0.0),
-            listOf(Matchup(StyleFamily.YACHT, StyleFamily.COMBO, 120, 40, 0.15), Matchup(StyleFamily.COMBO, StyleFamily.YACHT, 98, 40, -0.15)),
+            listOf(FamilyMatchup(StyleFamily.YACHT, StyleFamily.COMBO, 120, 40, 0.15), FamilyMatchup(StyleFamily.COMBO, StyleFamily.YACHT, 98, 40, -0.15)),
             linkedMapOf("KR" to StyleFamily.BONUS, "XAS" to StyleFamily.EV),
         )
         s.putFamilies(fs, 10)

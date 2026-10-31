@@ -482,10 +482,18 @@ class StatsBook(
 
     fun pressVotes(season: Int): List<PressTally> = voteLines[season].orEmpty()
 
-    /** Keeps [fs] in place of its season's, and the newest [keep] seasons. */
-    internal fun putFamilies(fs: FamilyStats, keep: Int) {
-        familyLines[fs.season] = fs
+    /**
+     * Keeps [fs] in place of its season's, and the newest [keep] seasons. What is kept, and
+     * returned, is [fs] as its `fm` line gives it back (residuals to the tenth, excess to the
+     * hundredth): the meta's update reads that copy, so a close replayed after a kill (which finds
+     * the line in stats.txt) weighs the families as the first run did. Throws for numbers the line
+     * cannot hold (not 8 counts or residuals).
+     */
+    internal fun putFamilies(fs: FamilyStats, keep: Int): FamilyStats {
+        val kept = requireNotNull(FamilyStats.decode(fs.encode().trimEnd('\n').split(' '))) { "family stats of ${fs.season}" }
+        familyLines[kept.season] = kept
         while (familyLines.size > keep.coerceAtLeast(1)) familyLines.pollFirstEntry()
+        return kept
     }
 
     /** Keeps [tallies] as [season]'s press votes in place of any before, and the newest [keep] seasons. */
