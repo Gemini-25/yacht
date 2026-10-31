@@ -544,6 +544,7 @@ private fun ClubPageContent(lg: LeagueController, v: LeagueView, p: ClubPage, on
                 ).joinToString(" · "),
             )
             if (a.over300 > 0 || a.comebacks > 0 || a.sweeps > 0) Small("300점 이상 ${a.over300}판 · 역전승 ${a.comebacks}판 · 완승 ${a.sweeps}번")
+            GroupStyleLine(lg, "c:${p.badge.id}")
         }
     }
 }

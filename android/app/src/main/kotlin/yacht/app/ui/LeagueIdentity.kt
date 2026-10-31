@@ -321,6 +321,7 @@ fun NationPage(lg: yacht.app.core.LeagueController, code: String, onOpen: (Strin
                 lg.nav.open(yacht.app.core.Page.League(id))
             }
         }
+        NationStatsLine(lg, code)
         Heading("🏆 국가대항전")
         Small(
             if (n.editions == 0) "아직 국가대항전에 나간 적이 없어요."

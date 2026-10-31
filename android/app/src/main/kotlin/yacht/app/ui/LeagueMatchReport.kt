@@ -30,10 +30,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import yacht.app.core.Accuracy
 import yacht.app.core.AppController
 import yacht.app.core.BoardReport
 import yacht.app.core.ClockView
@@ -307,6 +309,12 @@ private fun GameDetail(r: MatchReport, bd: BoardReport, g: GameReport) {
         Section("⭐ 평점")
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                matchMvp(r)?.let { (name, rating) ->
+                    Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("🏅 경기 MVP · $name  ", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        RatingText(rating, tagged = true, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
                 Row {
                     Text("", Modifier.weight(1.4f))
                     Text(bd.nameA, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, maxLines = 1)
@@ -314,17 +322,63 @@ private fun GameDetail(r: MatchReport, bd: BoardReport, g: GameReport) {
                 }
                 for (x in games) Rating(x.label.substringBefore(" ·"), x.ratingA!!, x.ratingB!!, x.index == g.index)
                 if (games.size > 1) Rating("경기 평균", games.map { it.ratingA!! }.average(), games.map { it.ratingB!! }.average(), false, bold = true)
+                Text("8.0 이상 월드클래스(파랑) · 7.0 이상 초록 · 5.0 미만 빨강", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
             }
         }
     }
+    val accA = g.accuracyA
+    val accB = g.accuracyB
+    if (accA != null && accB != null) {
+        Section("🎯 정확도 · ${g.label.substringBefore(" ·")}")
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                AccuracyLine(bd.nameA, accA, gameColors.me)
+                AccuracyLine(bd.nameB, accB, gameColors.opp)
+                Text(
+                    "남기기와 칸 고르기마다 기대 점수가 가장 높은 수와 비교했어요. 승부를 보고 일부러 다르게 둔 수도 손실로 세요.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** One side's 정확도: "96.2% · 실수 2개 (−7.4점)", or "실수 없음". */
+@Composable
+private fun AccuracyLine(name: String, a: Accuracy, color: Color) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(name, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1, modifier = Modifier.weight(1f))
+        Text(
+            "%.1f%%".format(a.percent), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.ExtraBold,
+            color = if (a.percent >= 95) gameColors.good else if (a.percent < 85) cs.error else cs.onSurface,
+        )
+        Text(
+            "  " + if (a.mistakes == 0) "실수 없음" else "실수 ${a.mistakes}개 (−${"%.1f".format(a.mistakeLoss)}점)",
+            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+        )
+    }
+}
+
+/** The match's MVP (경기 MVP): the side of any board with the higher average 평점 (its shown name and rating); null before ratings. */
+internal fun matchMvp(r: MatchReport): Pair<String, Double>? {
+    var best: Pair<String, Double>? = null
+    for (b in r.boards) {
+        val rated = b.games.orEmpty().filter { it.ratingA != null && it.ratingB != null }
+        if (rated.isEmpty()) continue
+        for ((name, avg) in listOf(b.nameA to rated.map { it.ratingA!! }.average(), b.nameB to rated.map { it.ratingB!! }.average())) {
+            if (best == null || avg > best.second) best = name to avg
+        }
+    }
+    return best
 }
 
 @Composable
 private fun Rating(label: String, a: Double, b: Double, selected: Boolean, bold: Boolean = false) {
     Row {
         Text(label, Modifier.weight(1.4f), style = MaterialTheme.typography.labelSmall, fontWeight = if (bold || selected) FontWeight.Bold else FontWeight.Normal)
-        Text("%.1f".format(a), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, fontWeight = if (a > b) FontWeight.ExtraBold else FontWeight.Normal, textAlign = TextAlign.Center)
-        Text("%.1f".format(b), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, fontWeight = if (b > a) FontWeight.ExtraBold else FontWeight.Normal, textAlign = TextAlign.Center)
+        Text("%.1f".format(a), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = ratingColor(a), fontWeight = if (a > b) FontWeight.ExtraBold else FontWeight.Normal, textAlign = TextAlign.Center)
+        Text("%.1f".format(b), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = ratingColor(b), fontWeight = if (b > a) FontWeight.ExtraBold else FontWeight.Normal, textAlign = TextAlign.Center)
     }
 }
 

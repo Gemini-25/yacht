@@ -49,6 +49,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
 import yacht.app.core.LadderRow
+import yacht.app.core.LeaderArea
+import yacht.app.core.LeaderFilter
+import yacht.app.core.LeaderKind
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
@@ -97,7 +100,7 @@ private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player
     val lg = c.league
     val nav = lg.nav
     val live = v.rows.firstOrNull { it.key == page.key }
-    LaunchedEffect(page.loadKey, live?.games, v.season?.number) { lg.analytics.loadPlayer(page.key, page.scope) }
+    LaunchedEffect(page.loadKey, live?.games, v.season?.number) { lg.analytics.loadPlayer(page.key, page.scope, lg.center) }
     val loaded = lg.analytics.player(page)
     // While another scope loads, everything but its numbers is drawn from the scope loaded before.
     val p = loaded ?: StatScope.entries.firstNotNullOfOrNull { lg.analytics.player(page.copy(scope = it)) }
@@ -112,7 +115,7 @@ private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PlayerHeader(lg, v, p, row)
             // I play no league matches: no buttons to them.
-            if (page.key != Ladder.ME) QuickButtons(lg, p)
+            if (page.key != Ladder.ME) QuickButtons(c, p)
         }
         TabRow(selectedTabIndex = page.tab.ordinal, containerColor = MaterialTheme.colorScheme.background) {
             for (t in PlayerTab.entries) {
@@ -122,8 +125,8 @@ private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             when (page.tab) {
                 PlayerTab.OVERVIEW -> OverviewTab(lg, p, row, open)
-                PlayerTab.STATS -> StatsTab(lg, page, loaded, row)
-                PlayerTab.MATCHES -> MatchesTab(lg, v, p, open)
+                PlayerTab.STATS -> StatsTab(lg, v, page, loaded, row)
+                PlayerTab.MATCHES -> MatchesTab(c, v, p, open)
                 PlayerTab.HONOURS -> HonoursTab(lg, p)
             }
         }
@@ -266,29 +269,40 @@ private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row
     }
 }
 
-/** 순위 › 리그 at division [d] (its tier and group), the table view. */
+/** 순위 › 리그 at the season's division [d] (its league, tier and group), the table view. */
 private fun openDivision(lg: LeagueController, v: LeagueView, d: Int) {
     val nav = lg.nav
     val season = v.season ?: return
     nav.go(LeagueTab.TABLES)
     nav.tables = TablesView.LEAGUE
     nav.tableMode = TableMode.TABLE
-    nav.showDivision(season.tiers.takeIf { it.size == season.divisions.size } ?: yacht.engine.league.Tiers.linear(season.divisions.size), d)
+    nav.showSeasonDivision(season, d)
 }
 
-/** "▶ 최근 경기" and "🔮 다음 경기", side by side: the last played league match's page and the next one's. */
+/**
+ * "▶ 최근 경기" and "🔮 다음 경기", side by side: the last played league match played again (its
+ * page when it cannot be) and the next one's page.
+ */
 @Composable
-private fun QuickButtons(lg: LeagueController, p: PlayerPage) {
-    val last = p.matches.firstOrNull { it.ref != null && it.result != null }
+private fun QuickButtons(c: AppController, p: PlayerPage) {
+    val lg = c.league
+    val last = p.matches.firstOrNull { it.ref != null && it.result != null && it.comp == Comp.LEAGUE }
     val next = p.next
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { last?.let { openMatch(lg, p, it.ref, it.week) } }, enabled = last != null, modifier = Modifier.weight(1f)) {
+        OutlinedButton(onClick = { last?.let { if (it.replay) watchMatch(c, it.ref) else openMatch(lg, p, it.ref, it.week) } }, enabled = last != null, modifier = Modifier.weight(1f)) {
             Text("▶ 최근 경기", maxLines = 1)
         }
         OutlinedButton(onClick = { next?.let { openMatch(lg, p, it.ref, it.week) } }, enabled = next != null, modifier = Modifier.weight(1f)) {
             Text("🔮 다음 경기", maxLines = 1)
         }
     }
+}
+
+/** Plays match [ref] again on the watch screen. */
+private fun watchMatch(c: AppController, ref: String?) {
+    ref ?: return
+    c.league.center.watch(ref)
+    c.screen = Screen.WATCH
 }
 
 /** A league match's page ([week] its league week): its round is read first, so the page finds the fixture. */
@@ -357,11 +371,18 @@ private fun ColumnScope.OverviewTab(lg: LeagueController, p: PlayerPage, row: La
     profile.season?.takeIf { it.matches > 0 }?.let { s ->
         Column {
             Text("이번 시즌 ${s.matches}경기 ${s.matchWins}승 ${s.matchDraws}무 ${s.matchLosses}패", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-            Text(
-                "평균 ${"%.1f".format(s.avgScore)}점" + if (s.avgRating.isNaN()) "" else " · 평점 ${"%.2f".format(s.avgRating)}",
-                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("평균 ${"%.1f".format(s.avgScore)}점" + if (s.avgRating.isNaN()) "" else " · 평점 ", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                if (!s.avgRating.isNaN()) RatingText(s.avgRating, digits = 2, tagged = true, style = MaterialTheme.typography.bodySmall)
+            }
         }
+    }
+    // Its style in a word (a tap: 기록, where the radar is).
+    p.style?.let { st ->
+        Text(
+            "🎨 스타일: $st" + (p.styleNote?.let { " · $it" } ?: "") + " ›", style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.clickable { lg.nav.replaceTop(Page.Player(profile.key, PlayerTab.STATS, p.scope)) },
+        )
     }
     // The nickname is in the header, the rival (tappable) below.
     profile.identity?.let { IdentityPart(it.copy(nickname = null, rival = null), alive = profile.retired == null, onOpen = open) }
@@ -452,7 +473,7 @@ private fun RatingLine(points: List<Int>) {
  * [p] is the page of [page]'s own scope (null while it loads).
  */
 @Composable
-private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: PlayerPage?, row: LadderRow?) {
+private fun ColumnScope.StatsTab(lg: LeagueController, v: LeagueView, page: Page.Player, p: PlayerPage?, row: LadderRow?) {
     val cs = MaterialTheme.colorScheme
     // My games are ranked games and friendlies, never official ones: my ladder line's numbers, as before the page.
     if (page.key == Ladder.ME) {
@@ -481,17 +502,25 @@ private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: Pla
         }
         Text(none, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
     } else {
-        Text("공식 경기 기준이에요. 순위는 같은 리그 선수들 사이에서 매겨요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-        CellGrid(p.cells.take(FIRST_CELLS))
+        Text("공식 경기 기준이에요. 순위는 같은 리그 선수들 사이에서 매겨요. 칸을 누르면 그 리더보드로 가요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        // A cell's place is among its league's members: its board opens on that league and scope.
+        val league = p.division?.let { d -> v.season?.leagues?.firstOrNull { d in it.first until it.first + it.tiers }?.id }
+        val onBoard: (LeaderKind) -> Unit = { k ->
+            lg.nav.leaders = LeaderFilter(scope = page.scope, league = league, area = LeaderArea.LEAGUE)
+            lg.nav.open(Page.Leaderboard(k))
+        }
+        CellGrid(p.cells.take(FIRST_CELLS), onBoard)
         if (p.cells.size > FIRST_CELLS) {
             var more by remember(page.key) { mutableStateOf(false) }
-            if (more) CellGrid(p.cells.drop(FIRST_CELLS))
+            if (more) CellGrid(p.cells.drop(FIRST_CELLS), onBoard)
             Text(
                 if (more) "접기 ▴" else "기록 더 보기 ▾", style = MaterialTheme.typography.labelMedium, color = cs.primary,
                 modifier = Modifier.clickable { more = !more }.padding(vertical = 2.dp),
             )
         }
     }
+    if (p.radar.size >= 3) StyleRadar(p)
+    p.seats?.takeIf { page.scope == StatScope.SEASON }?.let { SeatTable(it) }
     if (p.box.isNotEmpty()) BoxTable(p)
     p.histogram?.takeIf { h -> h.any { it > 0 } }?.let { h ->
         SectionLabel("📊 점수 분포")
@@ -501,6 +530,7 @@ private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: Pla
             style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
         )
     }
+    RatingTrend(p)
     SeasonLines(p)
     p.profile.identity?.takeIf { it.caps > 0 }?.let { id ->
         SectionLabel("🎽 국가대표")
@@ -524,15 +554,19 @@ private fun ladderCells(r: LadderRow): List<StatCell> = listOf(
     StatCell("보너스", "%.0f%%".format(100.0 * r.bonuses / r.games), null, null),
 )
 
-/** Stat cells three to a row: label, value, and its place in the league. */
+/** Stat cells three to a row: label, value, and its place in the league; a cell with a board opens it ([onBoard]). */
 @Composable
-private fun CellGrid(cells: List<StatCell>) {
+private fun CellGrid(cells: List<StatCell>, onBoard: ((LeaderKind) -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for (row in cells.chunked(3)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (cell in row) {
-                    Column(Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(cs.surfaceVariant).padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    val board = cell.board?.takeIf { onBoard != null }
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(cs.surfaceVariant)
+                            .let { m -> if (board != null) m.clickable { onBoard?.invoke(board) } else m }.padding(horizontal = 8.dp, vertical = 6.dp),
+                    ) {
                         Text(cell.label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1)
                         Text(cell.value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(cell.rank?.let { "리그 ${it}위" } ?: " ", style = MaterialTheme.typography.labelSmall, color = if (cell.rank != null && cell.rank <= 3) cs.primary else cs.onSurfaceVariant)
@@ -542,6 +576,95 @@ private fun CellGrid(cells: List<StatCell>) {
             }
         }
     }
+}
+
+/**
+ * 스타일: the radar of its six box groups against its league's (the league's polygon at the middle
+ * ring), its style in a word and a sentence, each axis's ratio below.
+ */
+@Composable
+private fun StyleRadar(p: PlayerPage) {
+    val cs = MaterialTheme.colorScheme
+    SectionLabel("🎨 스타일" + (p.style?.let { " · $it" } ?: ""))
+    p.styleNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    val axes = p.radar
+    val own = gameColors.me
+    val league = cs.outline
+    val grid = cs.outlineVariant
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Canvas(Modifier.width(150.dp).height(150.dp)) {
+            val c = Offset(size.width / 2, size.height / 2)
+            val radius = size.minDimension / 2 * 0.92f
+            fun at(i: Int, r: Double): Offset {
+                val a = -Math.PI / 2 + 2 * Math.PI * i / axes.size
+                return Offset(c.x + (radius * r * Math.cos(a)).toFloat(), c.y + (radius * r * Math.sin(a)).toFloat())
+            }
+            for (ring in listOf(0.5, 1.0)) for (i in axes.indices) drawLine(grid, at(i, ring), at((i + 1) % axes.size, ring), strokeWidth = 1f)
+            for (i in axes.indices) drawLine(grid, c, at(i, 1.0), strokeWidth = 1f)
+            fun polygon(value: (Int) -> Double, color: Color, width: Float) {
+                for (i in axes.indices) drawLine(color, at(i, value(i)), at((i + 1) % axes.size, value((i + 1) % axes.size)), strokeWidth = width)
+            }
+            polygon({ axes[it].league }, league, 3f)
+            polygon({ axes[it].value }, own, 5f)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            for (a in axes) {
+                Row {
+                    Text(a.label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.width(78.dp), maxLines = 1)
+                    Text(a.text, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = if (a.value > 0.54) gameColors.good else if (a.value < 0.46) cs.error else Color.Unspecified)
+                }
+            }
+            Text("진한 선: 이 선수 · 회색 선: 리그 평균", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
+    }
+}
+
+/** 선공·후공 and 1판·2판: this season's league games split by seat and by game, with the win rate and the average. */
+@Composable
+private fun SeatTable(s: yacht.app.core.SeatSplit) {
+    val cs = MaterialTheme.colorScheme
+    SectionLabel("🪑 선공·후공 (이번 시즌 리그)")
+    val num = MaterialTheme.typography.labelMedium
+    @Composable
+    fun line(label: String, l: yacht.app.core.SeatLine?, head: Boolean = false) {
+        val color = if (head) cs.onSurfaceVariant else Color.Unspecified
+        Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+            Text(label, style = num, color = color, modifier = Modifier.width(84.dp))
+            Text(if (head) "판" else "${l?.games ?: 0}", style = num, color = color, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+            Text(if (head) "승률" else fmt(100 * (l?.rate ?: Double.NaN), "%.0f%%"), style = num, color = color, fontWeight = if (head) FontWeight.Normal else FontWeight.Bold, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+            Text(if (head) "평균" else fmt(l?.avg ?: Double.NaN, "%.1f"), style = num, color = color, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+        }
+    }
+    line("", null, head = true)
+    line("선공", s.first)
+    line("후공", s.second)
+    if (s.game2.games > 0) {
+        line("1판", s.game1)
+        line("2판", s.game2)
+    }
+}
+
+/** 평점 추이: its average 평점 season by season (this season's last), its latest and its best in their grades' colours. */
+@Composable
+private fun RatingTrend(p: PlayerPage) {
+    val t = p.ratingTrend
+    if (t.isEmpty()) return
+    val cs = MaterialTheme.colorScheme
+    SectionLabel("⭐ 평점 추이")
+    if (t.size >= 2) LineChart(t.map { it.second }, labels = "시즌 ${t.first().first}" to "시즌 ${t.last().first}")
+    // The last point is this season's while it runs (no season line yet), else the latest season closed.
+    val running = p.profile.lines.none { it.season == t.last().first }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(if (running) "이번 시즌 평균 " else "최근 시즌 평균 ", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        RatingText(t.last().second, digits = 2, tagged = true, style = MaterialTheme.typography.labelMedium)
+        t.maxByOrNull { it.second }?.takeIf { t.size >= 2 && it.first != t.last().first }?.let { (s, r) ->
+            Text("  · 최고 ", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            RatingText(r, digits = 2, style = MaterialTheme.typography.labelMedium)
+            Text(" (시즌 $s)", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
+    }
+    Text("8.0 이상 월드클래스(파랑) · 7.0 이상 초록 · 5.0 미만 빨강", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
 }
 
 /**
@@ -654,7 +777,8 @@ private enum class MatchFilter(val label: String) { ALL("전체"), LEAGUE("리�
  * knockout ties, then its highlights and the news about it (3, "더 보기" for the rest).
  */
 @Composable
-private fun ColumnScope.MatchesTab(lg: LeagueController, v: LeagueView, p: PlayerPage, open: (String) -> Unit) {
+private fun ColumnScope.MatchesTab(c: AppController, v: LeagueView, p: PlayerPage, open: (String) -> Unit) {
+    val lg = c.league
     val cs = MaterialTheme.colorScheme
     val nav = lg.nav
     var filter by remember(p.profile.key) { mutableStateOf(MatchFilter.ALL) }
@@ -672,15 +796,23 @@ private fun ColumnScope.MatchesTab(lg: LeagueController, v: LeagueView, p: Playe
             p.profile.retired != null -> if (p.highlights.isEmpty()) "은퇴한 선수예요." else "은퇴한 선수예요. 남은 하이라이트를 볼 수 있어요."
             p.profile.key == Ladder.ME -> "리그 경기에는 나가지 않아요."
             filter == MatchFilter.LEAGUE -> "이번 시즌 치른 리그 경기가 아직 없어요."
-            filter == MatchFilter.COMPS -> "이번 시즌 대회 토너먼트에서 치른 경기가 아직 없어요."
+            filter == MatchFilter.COMPS -> "이번 시즌 대회에서 치른 경기가 아직 없어요."
             else -> "이번 시즌 치른 경기가 아직 없어요."
         }
         Text(none, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
     }
-    for (m in shownLeague) MatchRow(m, "${m.week}주차 · ${compIcon(Comp.LEAGUE)} ${m.where}") { openMatch(lg, p, m.ref, m.week) }
+    val watch: (PlayerMatch) -> Unit = { m -> watchMatch(c, m.ref) }
+    for (m in shownLeague) MatchRow(m, "${m.week}주차 · ${compIcon(Comp.LEAGUE)} ${m.where}", { openMatch(lg, p, m.ref, m.week) }, watch)
     if (shownTies.isNotEmpty()) {
-        SectionLabel("🏆 대회 토너먼트")
-        for (m in shownTies) MatchRow(m, "${m.comp?.let { compIcon(it) + " " } ?: ""}${m.where}", null)
+        SectionLabel("🏆 대회")
+        for (m in shownTies) {
+            val wk = if (m.week > 0 && m.week != yacht.engine.league.SeasonCalendar.NONE) "${m.week}주차 · " else ""
+            MatchRow(m, "$wk${m.comp?.let { compIcon(it) + " " } ?: ""}${m.where}", m.ref?.let { r -> { nav.open(Page.Match(r)) } }, watch)
+        }
+    }
+    if (p.previous.isNotEmpty()) {
+        SectionLabel("📼 지난 시즌 명경기")
+        for (m in p.previous) MatchRow(m, "${m.comp?.let { compIcon(it) + " " } ?: ""}${m.where}", m.ref?.let { r -> { nav.open(Page.Match(r)) } }, watch)
     }
     if (p.highlights.isNotEmpty()) {
         SectionLabel("✨ 하이라이트")
@@ -699,9 +831,12 @@ private fun ColumnScope.MatchesTab(lg: LeagueController, v: LeagueView, p: Playe
     }
 }
 
-/** A match of the list: [where] above, the opponent and the result with its score below; [onClick] null for one that cannot be opened. */
+/**
+ * A match of the list: [where] above, the opponent and the result with its score below; [onClick]
+ * null for one that cannot be opened; a ▶ at its end plays it again ([onWatch]) when it can be.
+ */
 @Composable
-private fun MatchRow(m: PlayerMatch, where: String, onClick: (() -> Unit)?) {
+private fun MatchRow(m: PlayerMatch, where: String, onClick: (() -> Unit)?, onWatch: ((PlayerMatch) -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     val (word, color) = when (m.result) {
         1 -> "승" to gameColors.good
@@ -721,6 +856,12 @@ private fun MatchRow(m: PlayerMatch, where: String, onClick: (() -> Unit)?) {
                     Text(word, style = MaterialTheme.typography.labelMedium, color = color, fontWeight = FontWeight.Bold)
                 }
                 Text("  ${m.score}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                if (m.replay && m.ref != null && onWatch != null) {
+                    Text(
+                        "▶", color = cs.primary, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 10.dp).clickable { onWatch(m) }.clearAndSetSemantics { contentDescription = "다시 보기" },
+                    )
+                }
             }
         }
     }
@@ -761,6 +902,11 @@ private fun ColumnScope.HonoursTab(lg: LeagueController, p: PlayerPage) {
     if (weeks > 0) {
         any = true
         SectionLabel("⭐ 이 주의 선수 ${weeks}회")
+    }
+    if (p.clubHonours.isNotEmpty()) {
+        any = true
+        SectionLabel("🏟 클럽")
+        for (line in p.clubHonours) HonourLine(line)
     }
     if (p.milestones.isNotEmpty()) {
         any = true

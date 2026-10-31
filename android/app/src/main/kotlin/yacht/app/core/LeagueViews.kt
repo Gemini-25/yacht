@@ -4,6 +4,7 @@ import yacht.engine.Category
 import yacht.engine.league.AiOdds
 import yacht.engine.league.AiStats
 import yacht.engine.league.Article
+import yacht.engine.league.ChaseLine
 import yacht.engine.league.Club
 import yacht.engine.league.ClubDigest
 import yacht.engine.league.ClubMatch
@@ -28,8 +29,12 @@ import yacht.engine.league.MatchFormat
 import yacht.engine.league.MatchPreview
 import yacht.engine.league.MetaReport
 import yacht.engine.league.Origin
+import yacht.engine.league.RecordBreak
+import yacht.engine.league.RecordGroup
+import yacht.engine.league.RecordKind
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonLine
+import yacht.engine.league.SeasonReview
 import yacht.engine.league.SeasonSummary
 import yacht.engine.league.Tier
 import yacht.engine.league.WeekStage
@@ -763,7 +768,18 @@ data class GameReport(
     val ratingA: Double?,
     val ratingB: Double?,
     val tags: List<DramaTag>,
+    /** Each side's 정확도 against the expected-score best play (worked out once the game is played back; null before or without the tables). */
+    val accuracyA: Accuracy? = null,
+    val accuracyB: Accuracy? = null,
 )
+
+/**
+ * A side's decisions in one game against the expected-score best ([Accuracies]): [percent] =
+ * 100 × (1 − [lost] / [Accuracies.REFERENCE]) clipped to 0..100, [lost] the expected points given
+ * away over [decisions] keep and box decisions, [mistakes] those that gave away at least
+ * [Accuracies.MISTAKE] points ([mistakeLoss] of them).
+ */
+data class Accuracy(val percent: Double, val lost: Double, val decisions: Int, val mistakes: Int, val mistakeLoss: Double)
 
 /**
  * A match in a player's or club's list; [ref] null for one that cannot be opened; [result] from
@@ -783,19 +799,147 @@ data class PlayerMatch(
     val comp: Comp? = null,
 )
 
-/** One line of a leaderboard. */
+/** One line of a leaderboard: [text] the value as shown ("248.3점"), [sub] its sample ("38경기"); [league] the player's league label (national leagues). */
 data class LeaderLine(val key: String, val shown: String, val badge: ClubBadge?, val league: String?, val value: Double, val text: String, val sub: String)
 
-data class LeadersView(val filter: LeaderFilter, val boards: List<Pair<LeaderKind, List<LeaderLine>>>)
+/**
+ * 기록 › 리더 ([LeagueAnalytics.loadLeaders]): the top [LeagueAnalytics.HUB_TOP] of every board for
+ * [filter], the hub's boards first ([LeagueAnalytics.HUB]); [area] names whose boards they are ("한국
+ * 리그", "전체", "🇰🇷 한국 선수", "서울 호랑이"); [missing] the boards without data in that scope (최근
+ * 10경기 keeps no 평점, 역전 or 이변); [season] the season they were read in.
+ */
+data class LeadersView(
+    val filter: LeaderFilter,
+    val boards: List<Pair<LeaderKind, List<LeaderLine>>>,
+    val area: String = "",
+    val missing: Set<LeaderKind> = emptySet(),
+    val season: Int = 0,
+)
 
-/** A whole leaderboard; [followed]: followed players outside the top lines, with their place. */
+/**
+ * A whole leaderboard ([Page.Leaderboard]); [followed]: followed players outside the top lines, with
+ * their place; [eligible] the players on the board (all of it, not only [lines]); [missing] when the
+ * scope keeps no data for it.
+ */
 data class LeaderBoardView(
     val kind: LeaderKind,
     val filter: LeaderFilter,
     val rule: String,
     val lines: List<LeaderLine>,
     val followed: List<Pair<Int, LeaderLine>>,
+    val area: String = "",
+    val eligible: Int = 0,
+    val missing: Boolean = false,
 )
+
+/** A record of the 기록실 with its earlier holders (newest first); [fresh] when it was set this season. */
+data class RoomRecord(val record: LeagueRecord, val history: List<LeagueRecord>, val fresh: Boolean)
+
+/**
+ * 기록 › 기록실 ([LeagueAnalytics.loadRoom]) in [season]: the records broken this season ([fresh]),
+ * every record still offered by group ([groups], kinds in order), who chases which ([chase],
+ * [yacht.engine.league.RecordChase]), the latest record news, and the retired kinds as they were
+ * last held (예전 기록).
+ */
+data class RoomView(
+    val season: Int,
+    val fresh: List<RecordBreak>,
+    val groups: List<Pair<RecordGroup, List<RoomRecord>>>,
+    val chase: List<Pair<RecordKind, List<ChaseLine>>>,
+    val news: List<Article>,
+    val retired: List<LeagueRecord>,
+)
+
+/** A champion in the hall of fame: [label] its league or tier ("🇰🇷 한국 리그", "1부"), [tier] 0 for a league's title. */
+data class HallChampion(val label: String, val key: String, val tier: Int)
+
+/**
+ * A season of 기록 › 전당: the champions of its leagues ([champions]: a national season's 8
+ * best-ranked leagues, a pyramid's 1부-3부) and how many more there were ([more]), the world titles
+ * and awards ([titles], [awards]), the promotions and relegations counted.
+ */
+data class HallSeason(
+    val season: Int,
+    val national: Boolean,
+    val champions: List<HallChampion>,
+    val more: Int,
+    val titles: List<Honour>,
+    val awards: List<Honour>,
+    val promoted: Int,
+    val relegated: Int,
+)
+
+/** 기록 › 전당 ([LeagueAnalytics.loadHall]): seasons newest first, the hall of fame, dynasties, and the most league titles ([most]: key, titles). */
+data class HallView(val seasons: List<HallSeason>, val members: List<HallOfFameEntry>, val dynasties: List<Dynasty>, val most: List<Pair<String, Int>>)
+
+/** A line of the chronicle: [icon], [text] (names written in) and the player it is about ([key], tappable). */
+data class ChronicleLine(val icon: String, val text: String, val key: String? = null)
+
+/** One season of the chronicle (연대기), its lines in order: champions, the MVP, the ranking's no. 1, the best rated player, dynasties completed. */
+data class ChronicleSeason(val season: Int, val lines: List<ChronicleLine>)
+
+/** [Page.Chronicle] ([LeagueAnalytics.loadChronicle]): the seasons newest first, and the eras (the longest runs, the most titles). */
+data class ChronicleView(val seasons: List<ChronicleSeason>, val eras: List<ChronicleLine>)
+
+/** A season of 기록 › 결산: [lines] in short (champions, MVP, numbers), [kept] when its full review is there to open, [avgScore] for the chart. */
+data class ReviewListItem(val season: Int, val kept: Boolean, val lines: List<String>, val avgScore: Double, val games: Int)
+
+/** 기록 › 결산 ([LeagueAnalytics.loadReviews]): every finished season the archive keeps, newest first. */
+data class ReviewList(val items: List<ReviewListItem>)
+
+/**
+ * A game the review points at, ready to show: its [ref], both sides' shown names, the score ("247 :
+ * 198"), what it was ([note]: "평점 9.4", "레이팅 214점 차 이변") and whether ▶ can play it again ([replay]).
+ */
+data class ReviewGameView(val ref: String, val a: String, val b: String, val score: String?, val note: String, val replay: Boolean)
+
+/** A followed player's season in the review (Season Wrapped's last cards): "한국 1부 3위 · 21승 5무 12패" and "평점 6.92 · 레이팅 1,612". */
+data class FollowedSeason(val key: String, val text: String, val sub: String)
+
+/**
+ * [Page.Review] ([LeagueAnalytics.loadReview]); [key] equals the page's load key. [review] null for
+ * a season older than the kept reviews ([summary] only). [names] are the shown names of every
+ * player it names; [champions] the leagues' champions (best-ranked first), [world] the world titles,
+ * [best] / [topRated] / [upset] its games, [followed] my followed players' seasons, [leagueLabels]
+ * the labels of the leagues in its ranking moves.
+ */
+data class ReviewPage(
+    val key: String,
+    val season: Int,
+    val review: SeasonReview?,
+    val summary: SeasonSummary?,
+    val names: Map<String, String>,
+    val champions: List<HallChampion>,
+    val world: List<Honour>,
+    val best: List<ReviewGameView>,
+    val topRated: ReviewGameView?,
+    val upset: ReviewGameView?,
+    val followed: List<FollowedSeason>,
+    val leagueLabels: Map<String, String>,
+)
+
+/** A line of a fun fact: [text] with names written in, the players it is about ([keys], the first tappable) and the match it points at ([ref]). */
+data class FactLine(val text: String, val keys: List<String> = emptyList(), val ref: String? = null)
+
+/** A fun fact (탐구): its [icon], [title], a one-line [rule] and its lines. */
+data class FunFact(val icon: String, val title: String, val rule: String, val lines: List<FactLine>)
+
+/** A league of the league comparison (리그 비교): its numbers this season and its style in a sentence. */
+data class LeagueAggregate(val id: String, val label: String, val icon: String, val agg: AggregateStats, val style: String)
+
+/** [Page.Facts] ([LeagueAnalytics.loadFacts]): this season's fun facts, the leagues compared and the whole world's numbers ([world]). */
+data class FactsView(val season: Int, val facts: List<FunFact>, val leagues: List<LeagueAggregate>, val world: AggregateStats?)
+
+/** One axis of the player page's style radar: [value] the player's and [league] the league's, as shares of the axis (the league at 0.5); [text] the ratio in words. */
+data class RadarAxis(val label: String, val value: Double, val league: Double, val text: String)
+
+/** Games of one kind (a seat, a game of the match) in this season's league matches: games, wins, draws and the average score. */
+data class SeatLine(val games: Int, val wins: Int, val draws: Int, val avg: Double) {
+    val rate: Double get() = if (games == 0) Double.NaN else (wins + 0.5 * draws) / games
+}
+
+/** A player's league games this season split by seat (moving first or second) and by the match's first or second game. */
+data class SeatSplit(val first: SeatLine, val second: SeatLine, val game1: SeatLine, val game2: SeatLine)
 
 /** A statistic of the player page, with its leaderboard place when it has one. */
 data class StatCell(val label: String, val value: String, val rank: Int?, val board: LeaderKind?)
@@ -851,6 +995,16 @@ data class PlayerPage(
     val dynasties: List<Dynasty> = emptyList(),
     /** The names of the clubs its season lines name, by id. */
     val clubNames: Map<String, String> = emptyMap(),
+    /** The style radar against its league ([RadarAxis]; empty without carded games) and its style in a word and a sentence ("요트 사냥꾼"). */
+    val radar: List<RadarAxis> = emptyList(),
+    val style: String? = null,
+    val styleNote: String? = null,
+    /** First and second seat, game 1 and game 2 of this season's league matches (null before its first). */
+    val seats: SeatSplit? = null,
+    /** Its average 평점 season by season (oldest first; this season's last while it plays). */
+    val ratingTrend: List<Pair<Int, Double>> = emptyList(),
+    /** Its clubs' top-3 places in the club table, newest first ("클럽 1위 (서울 호랑이, 시즌 12)"). */
+    val clubHonours: List<String> = emptyList(),
 )
 
 /** A season review in the 결산 list; [kept] when its full review is still there to open. */
