@@ -159,7 +159,7 @@ class ClubInput(
     /** Age in the coming season (null: unknown; such a player is never transferred nor sent home by age). */
     val age: (String) -> Int? = { null },
     val origin: (String) -> Origin = Origin::of,
-    /** A new evolved player's first parent, whose club takes it in first (유스 입단). */
+    /** An evolved player's first parent, whose club takes it in first when it is new to the league (유스 입단). */
     val mentor: (String) -> String? = { null },
     /** The league ranking after the closing season (transfers abroad: none with [LeagueRanking.EMPTY]). */
     val ranking: LeagueRanking = LeagueRanking.EMPTY,
@@ -701,9 +701,12 @@ class ClubBook private constructor(
      *    at [fee] (the seller keeps at least the size floor, a buyer at the ceiling releases its
      *    weakest member);
      * 6. clubs founded (창단) and dissolved (해체) where the club count no longer fits the members;
-     * 7. the draft of each nation: pupils first at their mentor's club when it is of their nation
-     *    and below the ceiling, then every member without a club, best rated first, each to the
-     *    club with the fewest members (then the lower club-table place, then id).
+     *    where the members without a club cannot bring every club up to the size floor, the
+     *    biggest clubs release their weakest;
+     * 7. the draft of each nation: pupils (evolved players new to the league) first at their
+     *    mentor's club when it is of their nation and below the ceiling, then every member without
+     *    a club, best rated first, each to the club with the fewest members (then the lower
+     *    club-table place, then id).
      *
      * News (comp [Comp.CLUB], keys are AIs and club ids): `club_title` [club] (league, points) for
      * the 4 best-ranked leagues and one `club_champions` [≤ 3 clubs] (other leagues); `return_home`
@@ -750,10 +753,11 @@ class ClubBook private constructor(
         }
         // 5. The domestic window.
         window(s, input, place, moved)
-        // 6. Clubs founded and dissolved.
+        // 6. Clubs founded and dissolved, and room for the draft to bring every club up to the floor.
         resize(s, alive, input, place)
+        balance(s, alive, input, place)
         // 7. The draft.
-        val placed = draftNational(s, alive, input, place)
+        val placed = draftNational(s, alive, input, place, inSeason)
         // The digest: what the news names, so a replay names the same.
         val newcomers = placed.filter { it.key !in inSeason }
         val drafted = newcomers.sortedWith(compareByDescending<Placement> { score(input.rating, it.key) }.thenBy { it.key }).take(NAMED)
@@ -815,8 +819,8 @@ class ClubBook private constructor(
             while (clubCountOf(nation.code) < want) newClub(nation.code, s) ?: break
         }
         sortEntries()
-        val placed = draftNational(s, alive, input, place)
         val inSeason = closing.league.standings.keys
+        val placed = draftNational(s, alive, input, place, inSeason)
         logPlacements(s, placed, emptySet())
         digest = ClubDigest(s, placed.count { it.key !in inSeason }, 0, 0, 0, null, emptyList(), emptyList(), emptyList(), emptyList(), reform = true)
         season = s
@@ -841,7 +845,7 @@ class ClubBook private constructor(
                 repeat(clubCount(counts.getValue(nation.code), input.config.clubSize)) { newClub(nation.code, s) }
             }
             sortEntries()
-            logPlacements(s, draftNational(s, alive, input, emptyMap()), null)
+            logPlacements(s, draftNational(s, alive, input, emptyMap(), closing.league.standings.keys), null)
         }
         if (left || free) {
             trim()
@@ -962,8 +966,9 @@ class ClubBook private constructor(
 
     /**
      * Step 6: per nation, clubs founded (more members) or dissolved (fewer, or none left: the
-     * fewest titles, then the lowest place); only when `round(n / clubSize)` moved and the clubs
-     * are more than 2 members off the size, so the count does not churn.
+     * fewest titles, then the lowest place); only when `round(n / clubSize)` moved, the clubs are
+     * more than 2 members off the size, and the new count brings them closer to it, so the count
+     * does not churn (a nation of 11 keeps its second club; one of 10 folds it into one of 10).
      */
     private fun resize(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>) {
         val sizes = nationSizes(alive, input)
@@ -973,7 +978,8 @@ class ClubBook private constructor(
             val n = sizes[code] ?: 0
             val c = clubCountOf(code)
             val want = clubCount(n, size)
-            if (want == c || (c > 0 && n > 0 && Math.abs(n.toDouble() / c - size) <= 2)) continue
+            fun off(clubs: Int) = Math.abs(n.toDouble() / clubs - size)
+            if (want == c || (c > 0 && n > 0 && (off(c) <= 2 || off(want) >= off(c)))) continue
             if (want > c) {
                 repeat(want - c) { newClub(code, s) }
                 continue
@@ -990,13 +996,44 @@ class ClubBook private constructor(
         sortEntries()
     }
 
+    /**
+     * Step 6, after the resize: a nation whose members without a club cannot bring every club up
+     * to the size floor ([minSize]: a club just founded, or one thinned by retirements) has its
+     * biggest clubs (then the better placed, then id) let their weakest member of the nation go
+     * ([ClubMoveType.RELEASED]), one at a time, until they can; the draft then gives each pick to
+     * the smallest club.
+     */
+    private fun balance(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>) {
+        val sizes = nationSizes(alive, input)
+        val free = HashMap<String, Int>()
+        for (k in alive) if (k !in memberOf) free.merge(homeOf(input.nation(k)), 1, Int::plus)
+        val order = ratingOrder(input.rating)
+        val biggest = compareByDescending<Entry> { it.squad.size }.thenBy { place[it.id] ?: Int.MAX_VALUE }.thenComparing({ it.id }, ID_ORDER)
+        for (nation in Nations.ALL) {
+            val code = nation.code
+            val clubs = entries.filter { it.nation == code }
+            if (clubs.size < 2) continue
+            val min = minSize(sizes[code] ?: 0, clubs.size)
+            var short = clubs.sumOf { maxOf(0, min - it.squad.size) } - (free[code] ?: 0)
+            while (short > 0) {
+                val big = clubs.minWith(biggest)
+                if (big.squad.size <= min) break
+                val weakest = big.squad.filter { homeOf(input.nation(it)) == code }.sortedWith(order).lastOrNull() ?: break
+                release(s, big, listOf(weakest))
+                short--
+            }
+        }
+    }
+
     /** A new club of nation [code] after season [s] (null when no id is free, [MAX_ID]). */
     private fun newClub(code: String, s: Int): Entry? {
         val nation = Nations.of(code) ?: return null
         val id = nextId(s) ?: return null
         val own = entries.filter { it.nation == code }
         val k = own.size + goneList.count { it.nation == code }
-        val identity = ClubNames.identity(id, nation, k, seed, own.mapTo(HashSet()) { it.identity.mascot }, entries.mapTo(HashSet()) { it.identity.name })
+        // No name of a club now, nor of a dissolved one whose id still stands (a new club is no refounded one).
+        val names = entries.mapTo(HashSet()) { it.identity.name }.apply { goneList.mapTo(this) { it.name } }
+        val identity = ClubNames.identity(id, nation, k, seed, own.mapTo(HashSet()) { it.identity.mascot }, names)
         return Entry(id, code, identity, ArrayList(), START_BUDGET, 0, s + 1).also { add(it) }
     }
 
@@ -1022,8 +1059,12 @@ class ClubBook private constructor(
     /** A member placed by the draft ([pick] within its nation's draft) or at its mentor's club ([youth]). */
     private class Placement(val key: String, val club: String, val pick: Int, val youth: Boolean)
 
-    /** Step 7: every member without a club, nation by nation: pupils at their mentor's club first, then the draft. */
-    private fun draftNational(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>): List<Placement> {
+    /**
+     * Step 7: every member without a club, nation by nation: pupils (evolved players new to the
+     * league: not in [played], the closing season's members) at their mentor's club first, then
+     * the draft. An evolved player released or set free by a dissolved club is drafted like anyone.
+     */
+    private fun draftNational(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>, played: Set<String>): List<Placement> {
         val order = ratingOrder(input.rating)
         val sizes = nationSizes(alive, input)
         val free = alive.filter { it !in memberOf }.groupBy { homeOf(input.nation(it)) }
@@ -1035,7 +1076,7 @@ class ClubBook private constructor(
             val max = maxSize(sizes[nation.code] ?: 0, clubs.size)
             val left = ArrayList<String>()
             for (k in pool) {
-                val mentor = if (input.origin(k) == Origin.EVOLVED) input.mentor(k) else null
+                val mentor = if (input.origin(k) == Origin.EVOLVED && k !in played) input.mentor(k) else null
                 val club = mentor?.let { memberOf[it] }?.let { entry(it) }?.takeIf { it.nation == nation.code && it.squad.size < max }
                 if (club == null) {
                     left += k
