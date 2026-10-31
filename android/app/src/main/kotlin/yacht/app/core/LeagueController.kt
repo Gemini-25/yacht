@@ -964,11 +964,14 @@ class LeagueController(
         if (closing.rosterChanged) rebuildRoster()
         // The next season: members and clubs as closed (they must replay the same), its shape
         // (divisions, format, competitions) from the rules as they are now, with the 요트협회's
-        // changes adopted at this close. Those are saved before it opens: a close replayed after a
-        // kill finds them in the rules already, and applying them again changes nothing.
+        // changes adopted at this close. Those are saved after the finished season and before the
+        // next one (the writes go in order): a close replayed after a kill finds the season's own
+        // closing rules, and the adopted changes in the rules already or not yet, and applying
+        // them again changes nothing.
         val (next, opening) = rulesAfterClose(config, rules, closing)
         if (next != config) {
-            runCatching { configFile.writeTextAtomically(next.encode()) }
+            val text = next.encode()
+            scope.launch(fileWrites) { runCatching { configFile.writeTextAtomically(text) } }
             scope.launch { adopt(closing.ruleChanges) }
         }
         configureWorld(w, opening)
