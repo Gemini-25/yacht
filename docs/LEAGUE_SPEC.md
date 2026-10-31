@@ -850,10 +850,12 @@ followed players), then leaders, numbers, the 요트협회's decisions, transfer
   moves. **League** (`Page.League`): its tiers and champions, ranking line, statistics per tier with
   one sentence of style meta, clubs, history. **Nation** (`Page.Nation`): the national team, its
   league, cups, core squad, most capped, legends, its players' numbers.
-- **Matches** (`Page.Matches`, `MatchQuery`): this season's matches of a club's squad, a group, a
-  week or a league round; played ones newest first, then the ones to come (at most 150 rows);
-  each row: the sides with the games (boards) won, a league match's two game scores under them; it opens its
-  report, ▶ where it can be replayed.
+- **Matches** (`Page.Matches`, `MatchQuery`): this season's matches of a club's squad (the club page,
+  a followed club's card) or of a group (its card's "이 조 경기 ›"); the loader also lists a week or a
+  league round, which no screen links yet. Played ones newest first, then the ones to come (at most
+  150 rows); each row: the sides with the games (boards) won, a league match's two game scores under
+  them; it opens its report, ▶ where it can be replayed. A query the season cannot answer (a club
+  without a club book, a group or league it does not have) lists nothing.
 - **News** (`Page.News`, `ui/LeagueNews.kt`): filters 전체 / 주요 (importance ≥ 4) / 리그 / 국제 /
   이적·협회, "☆ 전체 / ★ 응원만" in the bar; a lead article on top, then articles by week under week
   headings; digests (cup rounds, groups, milestones) as one card with "+n명"; an article with a match
