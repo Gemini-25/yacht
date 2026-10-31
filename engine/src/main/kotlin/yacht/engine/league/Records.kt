@@ -63,7 +63,11 @@ enum class RecordKind(
     TITLES("최다 우승", RecordGroup.TITLE),
     PEAK_RATING("역대 최고 레이팅", RecordGroup.RATING, running = true),
     RATING_GAIN("한 시즌 최대 레이팅 상승", RecordGroup.RATING),
-    UPSET("최대 이변", RecordGroup.RATING),
+    /** The biggest rating gap a winner overcame, any ratings: set by new players' unsettled ones, so never broken again ([UPSET2]). */
+    UPSET("최대 이변 (옛 기준)", RecordGroup.RATING, retired = true),
+
+    /** The biggest rating gap a winner overcame, both players past [StatsBook.PEAK_GAMES] games. */
+    UPSET2("최대 이변", RecordGroup.RATING),
     LOW_WIN("가장 낮은 점수로 이긴 판", RecordGroup.GAME, lowerIsBetter = true),
     BEST_PAIR("한 판 두 선수 합계 최고", RecordGroup.GAME),
     SEASON_SCORE("한 시즌 최고 평균 점수", RecordGroup.SEASON),
@@ -102,7 +106,7 @@ enum class RecordKind(
         TITLES -> "우승 ${plain(v)}회"
         PEAK_RATING -> "레이팅 ${plain(v)}"
         RATING_GAIN -> "레이팅 +${plain(v)}"
-        UPSET -> "레이팅 ${plain(v)} 높은 상대를 꺾음"
+        UPSET, UPSET2 -> "레이팅 ${plain(v)} 높은 상대를 꺾음"
         LOW_WIN -> "${plain(v)}점으로 승리"
         BEST_PAIR -> "두 선수 합계 ${plain(v)}점"
         SEASON_SCORE -> "평균 ${plain(v)}점"
@@ -135,7 +139,7 @@ enum class RecordKind(
         TITLES -> "우승 ${plain(v)}회"
         PEAK_RATING -> "레이팅 ${grouped(v)}"
         RATING_GAIN -> "레이팅 +${grouped(v)}"
-        UPSET -> "레이팅 차 ${grouped(v)}"
+        UPSET, UPSET2 -> "레이팅 차 ${grouped(v)}"
         SEASON_SCORE -> "평균 ${plain(v)}점"
         SEASON_WINRATE -> "승률 ${plain(v)}%"
         CAREER_GAMES -> "${grouped(v)}판"

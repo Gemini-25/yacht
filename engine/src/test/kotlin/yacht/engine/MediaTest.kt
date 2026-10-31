@@ -426,6 +426,9 @@ class MediaTest {
         // Its assembly and decisions, with the seasons they apply from.
         val assembly = text("federation_assembly", emptyList(), listOf("2", "3", "4", "2:0 완승 보너스 없애기", "긴 토너먼트 끄기"))
         assertTrue("‘긴 토너먼트 끄기’" in assembly && "시즌 4" in assembly, assembly)
+        // An empty agenda says no more than that: rules adopted at the same close still apply.
+        val none = text("federation_assembly", emptyList(), listOf("0", "7", "8"))
+        assertTrue("새로 올린 안건이 없어요" in none && "시즌 7이 끝난 뒤에" in none && "그대로" !in none, none)
         assertTrue("선수 위원회 9명 가운데 6명이 찬성했어요" in text("federation_decision", emptyList(), listOf("자동 승강 인원 2명 → 1명", "A", "C", "6", "3", "4")))
         assertTrue("직접 반대한" in text("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "R", "U", "0", "0", "4")))
         assertTrue("무효" in text("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "V", "C", "6", "3", "4")))
@@ -623,6 +626,16 @@ class MediaTest {
         // League upsets name the division and the score; a legacy league's has no league name.
         val league = texts("league_upset", listOf("ai1", "ai2"), listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE)
         assertTrue(league.any { "한국 1부에서" in it && "2-0으로" in it }, league.toString())
+        // A sentence whose subject lost gives its own side first ("0-2로 졌어요"), the winner's never.
+        val lost = (league + texts("league_upset", listOf("ai1", "ai2"), listOf("160", "KR", "1", "합계 431-420", "0"), Comp.LEAGUE)).filter { " 졌어요" in it }
+        assertTrue(lost.isNotEmpty() && lost.all { "0-2로 졌어요" in it || "합계 420-431로 졌어요" in it }, lost.toString())
+        val ko = (texts("cup_round", listOf("ai1", "ai2"), listOf("16강", "3-1"), Comp.CUP) + texts("final", listOf("ai1", "ai2"), listOf("2.5-1.5"), Comp.CUP))
+            .filter { " 졌어요" in it || " 져 " in it }
+        assertTrue(ko.isNotEmpty() && ko.all { "1-3으로" in it || "1.5-2.5로" in it }, ko.toString())
+        assertEquals("1-3", News.loserFirst("3-1"))
+        assertEquals("합계 420-431", News.loserFirst("합계 431-420"))
+        assertEquals("무승부", News.loserFirst("무승부"))
+        assertEquals("레이팅 차 514", News.recordValue(RecordKind.UPSET2, 514.0))
         assertTrue(texts("league_upset", listOf("ai1", "ai2"), listOf("160", "-", "1", "합계 431-420", "0"), Comp.LEAGUE).none { "한국" in it || "null" in it })
         assertEquals(3, News.article(LeagueEvent("league_upset", 2, listOf("ai1", "ai2"), listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE), name).importance)
         assertEquals(2, News.article(LeagueEvent("league_upset", 2, listOf("ai1", "ai2"), listOf("214", "KR", "1", "2-0", "0"), Comp.LEAGUE), name).importance)

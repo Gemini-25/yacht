@@ -177,12 +177,15 @@ class CoefficientsTest {
         assertEquals(listOf(4.0, 4.0, 4.0, 4.0, 4.0), r.of("XAS")!!.seasons)
         // XWO earns its own; no line, no inheritance: 0.
         assertEquals(listOf(7.0, 7.0, 0.0, 0.0, 0.0), r.of("XWO")!!.seasons)
-        assertEquals(listOf("KR", "XAS", "VN", "JP", "XWO"), r.rows.map { it.id })
+        // XAS (20) has no line for season 7 while the others have one: formed again for season 8, it
+        // goes after them (where the draws put it), though its inherited sum is the second best.
+        assertEquals(20.0, r.of("XAS")!!.coefficient)
+        assertEquals(listOf("KR", "VN", "JP", "XWO", "XAS"), r.rows.map { it.id })
         assertEquals(listOf(0, 1, 2, 3, 4), r.rows.map { it.rank })
         assertEquals(listOf(true, true, false, false, false), r.rows.map { it.clDirect })
         // Asia has 4 leagues (a section of 16: 4 each); the 국제 연합 리그 is European, alone (no section).
-        assertEquals(listOf(4, 4, 4, 4, 0), r.rows.map { it.cclSlots })
-        assertEquals(listOf(0, 1, 2, 3, 0), r.rows.map { it.confedRank })
+        assertEquals(listOf(4, 4, 4, 0, 4), r.rows.map { it.cclSlots })
+        assertEquals(listOf(0, 1, 2, 0, 3), r.rows.map { it.confedRank })
         assertEquals(Confed.EUROPE, r.of("XWO")!!.confed)
         assertEquals(0, Coefficients.ranking(store, leagues, 7, { 0.0 }, LeagueConfig(national = true, continentalCl = false)).rows.sumOf { it.cclSlots })
         // The store keeps 10 seasons.
@@ -227,6 +230,37 @@ class CoefficientsTest {
         assertEquals(listOf(2, 0, -2), first.rows.map { it.change })
         // Leagues of a season without national leagues: no ranking rows.
         assertTrue(Coefficients.ranking(store, Leagues.legacy(yacht.engine.league.Tiers.linear(2)), 2, { 0.0 }, LeagueConfig()).rows.isEmpty())
+    }
+
+    @Test
+    fun aLeagueNewThisSeasonIsRankedWhereTheDrawsPutIt() {
+        // Season 2's leagues KR, JP, CN, XAS; season 3 adds VN, which played in XAS (the best) before.
+        val store = MemoryCoefficients()
+        store.putCoefficients(1, mapOf("KR" to intArrayOf(4, 1), "JP" to intArrayOf(2, 1), "CN" to intArrayOf(1, 1), "XAS" to intArrayOf(9, 1)))
+        store.putCoefficients(2, mapOf("KR" to intArrayOf(4, 1), "JP" to intArrayOf(3, 1), "CN" to intArrayOf(1, 1), "XAS" to intArrayOf(9, 1)))
+        val strength = mapOf("KR" to 1500.0, "JP" to 1500.0, "CN" to 1400.0, "XAS" to 1300.0, "VN" to 1450.0)
+        val cfg = LeagueConfig(national = true, clDirect = 3)
+        val before = Leagues.national(listOf("KR", "JP", "CN", "XAS"), listOf(1, 1, 1, 1))
+        val next = Leagues.national(listOf("KR", "JP", "CN", "VN", "XAS"), listOf(1, 1, 1, 1, 1))
+        // The ranking published at season 2's close (the draws of season 3 use it).
+        val published = Coefficients.ranking(store, before, 2, { strength.getValue(it) }, cfg)
+        assertEquals(listOf("XAS", "KR", "JP", "CN"), published.rows.map { it.id })
+        val drawn = Coefficients.order(next.list.map { it.id }, published) { strength.getValue(it) }
+        // Season 3's own ranking: VN inherits XAS's 9 twice (18, the best sum) but is ranked last, as drawn.
+        val played = Coefficients.ranking(store, next, 2, { strength.getValue(it) }, cfg)
+        assertEquals(18.0, played.of("VN")!!.coefficient)
+        assertEquals(drawn, played.rows.map { it.id })
+        assertEquals(listOf("XAS", "KR", "JP", "CN", "VN"), played.rows.map { it.id })
+        // The 챔스 직행 places and the 대륙 챔피언스 shares follow the drawn order (16 among 5: 4, 3, 3, 3, 3).
+        assertEquals(listOf(true, true, true, false, false), played.rows.map { it.clDirect })
+        assertEquals(listOf(4, 3, 3, 3, 3), played.rows.map { it.cclSlots })
+        // Restarted: the same.
+        assertEquals(played.rows, Coefficients.ranking(store, next, 2, { strength.getValue(it) }, cfg).rows)
+        // At season 3's close VN has its line: by coefficient, its climb counted from last place.
+        store.putCoefficients(3, mapOf("KR" to intArrayOf(0, 1), "JP" to intArrayOf(0, 1), "CN" to intArrayOf(0, 1), "XAS" to intArrayOf(0, 1), "VN" to intArrayOf(9, 1)))
+        val after = Coefficients.ranking(store, next, 3, { strength.getValue(it) }, cfg)
+        assertEquals("VN", after.rows[0].id)
+        assertEquals(4, after.rows[0].change)
     }
 
     /** Season [s]'s lines of [this] store as a map (to add to). */

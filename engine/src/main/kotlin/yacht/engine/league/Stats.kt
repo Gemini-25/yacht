@@ -485,7 +485,8 @@ class StatsBook(
     private val yachtRuns = HashMap<String, Int>()
 
     // The season's best-rated official game (by its rating before the bounds, so the best of
-    // several 10.0s), its biggest upset and its upsets of UPSET_COUNT or more (시즌 결산).
+    // several 10.0s), its biggest upset and its upsets of UPSET_COUNT or more, between players
+    // past PEAK_GAMES games (시즌 결산).
     private var topGame: ReviewGame? = null
     private var topRaw = Double.NEGATIVE_INFINITY
     private var topUpset: ReviewGame? = null
@@ -675,14 +676,15 @@ class StatsBook(
                 }
             }
             if (official) {
-                // Ratings before the match: the best ever (once the rating has settled) and the
-                // biggest gap a winner overcame (the season's too, and its upsets).
+                // Ratings before the match, once both have settled ([PEAK_GAMES] games: a new
+                // player's rating still swings hundreds of points): the best ever and the biggest
+                // gap a winner overcame (the season's too, and its upsets).
                 peakRecord(b.a, ra, ca, ctx.season, f.comp, events)
                 peakRecord(b.b, rb, cb, ctx.season, f.comp, events)
-                if (!ra.isNaN() && !rb.isNaN() && result != 0) {
+                if (!ra.isNaN() && !rb.isNaN() && result != 0 && ca.games >= PEAK_GAMES && cb.games >= PEAK_GAMES) {
                     val (w, l, gap) = if (result > 0) Triple(b.a, b.b, rb - ra) else Triple(b.b, b.a, ra - rb)
                     val g = gap.roundToInt().toDouble()
-                    if (g > 0 && records.beats(RecordKind.UPSET, g)) offer(LeagueRecord(RecordKind.UPSET, w, g, ctx.season, l, f.comp), events)
+                    if (g > 0 && records.beats(RecordKind.UPSET2, g)) offer(LeagueRecord(RecordKind.UPSET2, w, g, ctx.season, l, f.comp), events)
                     if (g >= UPSET_COUNT) upsets++
                     if (g > 0 && g > (topUpset?.value ?: 0.0)) topUpset = ReviewGame(w, l, g, MatchRef(ctx.season, f.comp, f.id, bi).encode())
                 }
@@ -1098,7 +1100,7 @@ class StatsBook(
     /**
      * The season in numbers (숫자로 본 시즌), label and value ready to show: official games, the
      * average score, Yacht and upper-bonus rates per game, 300-point games, upsets (a winner rated
-     * [UPSET_COUNT] or more below), comeback wins, and the share of two-game league matches won 2-0.
+     * [UPSET_COUNT] or more below, both past [PEAK_GAMES] games), comeback wins, and the share of two-game league matches won 2-0.
      */
     private fun numbers(league: Season, report: MetaReport): List<Pair<String, String>> {
         val out = ArrayList<Pair<String, String>>()
@@ -1192,7 +1194,7 @@ class StatsBook(
         /** A winner rated this much below the loser is an upset the season review counts (league-match news uses 150 too). */
         const val UPSET_COUNT = 150.0
 
-        /** Games before a player's rating counts for 역대 최고 레이팅 (a new one still moves a lot). */
+        /** Games before a player's rating counts for 역대 최고 레이팅 and upsets (a new one still moves a lot). */
         const val PEAK_GAMES = 60
         const val MAX_MILESTONES = 100
         const val MAX_TRAITS = 32

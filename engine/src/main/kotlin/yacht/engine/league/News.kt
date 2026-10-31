@@ -358,7 +358,7 @@ object News {
         }
         "cup_round" -> {
             arg(0)?.let { v["round"] = it }
-            arg(1)?.let { v["score"] = it }
+            arg(1)?.let { scores(v, it) }
             val gap = upsetGap?.takeIf { !it.isNaN() && it >= Drama.UPSET_GAP } ?: rating?.let { r ->
                 val w = e.keys.getOrNull(0)
                 val l = e.keys.getOrNull(1)
@@ -375,7 +375,7 @@ object News {
                     v["gap"] = Math.round(gap).toString()
                     listOf(
                         T("자이언트 킬링! {a}, {b} 잡아", "레이팅이 {gap}점 낮은 {a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. {b|은} 패자조로 떨어졌어요."),
-                        T("{comp}의 이변: 강호 {b}, 패자조로", "강호 {b|이} {round}에서 {a}에게[[ {score|으로}]] 졌어요. 패자조에서 다시 올라올 수 있을지 관심이 모여요."),
+                        T("{comp}의 이변: 강호 {b}, 패자조로", "강호 {b|이} {round}에서 {a}에게[[ {lscore|으로}]] 졌어요. 패자조에서 다시 올라올 수 있을지 관심이 모여요."),
                     ) to if (LAST_EIGHT.containsMatchIn(arg(0).orEmpty())) 3 else 2
                 }
                 drop -> listOf(
@@ -384,7 +384,7 @@ object News {
                 ) to 2
                 e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL -> listOf(
                     T("{comp} {round}: {a}, {b} 꺾고 진출", "{a|이} {comp} {round}에서 {b|을}[[ 보드 {score|으로}]] 물리쳤어요. 대표팀의 도전이 다음 라운드로 이어져요."),
-                    T("{b}, {comp} {round}에서 탈락", "{b|은} {a}에[[ 보드 {score|으로}]] 져 이번 {comp|을} 마쳤어요. {a|은} 다음 라운드로 향해요."),
+                    T("{b}, {comp} {round}에서 탈락", "{b|은} {a}에[[ 보드 {lscore|으로}]] 져 이번 {comp|을} 마쳤어요. {a|은} 다음 라운드로 향해요."),
                 ) to if (e.comp == Comp.WORLD_CUP) 3 else 2
                 e.comp == Comp.PROMOTION_PLAYOFF -> listOf(
                     T("{round}: {a}의 승리", "{a|이} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. 다음 시즌 어느 부에서 뛸지가 이 승부로 갈렸어요."),
@@ -394,13 +394,13 @@ object News {
                     v["gap"] = Math.round(gap).toString()
                     listOf(
                         T("자이언트 킬링! {a}, {b} 잡고 {round} 통과", "레이팅이 {gap}점 낮은 {a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. 컵 대회다운 반전이에요."),
-                        T("{comp}의 이변: 강호 {b} 탈락", "강호 {b|이} {round}에서 {a}에게[[ {score|으로}]] 졌어요. {a|은} 레이팅 {gap}점 차를 뛰어넘었어요."),
+                        T("{comp}의 이변: 강호 {b} 탈락", "강호 {b|이} {round}에서 {a}에게[[ {lscore|으로}]] 졌어요. {a|은} 레이팅 {gap}점 차를 뛰어넘었어요."),
                     ) to if (LAST_EIGHT.containsMatchIn(arg(0).orEmpty())) 3 else 2
                 }
                 else -> listOf(
                     T("{comp} {round}: {a}, {b} 꺾고 진출", "{a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 물리쳤어요. 다음 라운드에서 또 한 번 승리를 노려요."),
                     T("{a}, {round} 관문 통과", "{a|이} {b|과} 맞붙은 {comp} {round}에서[[ {score|으로}]] 이겼어요. 우승까지 한 걸음 더 다가갔어요."),
-                    T("{b}, {comp} {round}에서 멈춰", "{b|은} {a}에게[[ {score|으로}]] 져 {comp} 여정을 마쳤어요. {a|은} 다음 라운드로 향해요."),
+                    T("{b}, {comp} {round}에서 멈춰", "{b|은} {a}에게[[ {lscore|으로}]] 져 {comp} 여정을 마쳤어요. {a|은} 다음 라운드로 향해요."),
                 ) to 2
             }
         }
@@ -424,7 +424,7 @@ object News {
             ) to 2
         }
         "final" -> {
-            arg(0)?.let { v["score"] = it }
+            arg(0)?.let { scores(v, it) }
             when (e.comp) {
                 Comp.SUPER -> listOf(
                     T("{a}, 슈퍼컵 들어 올려", "{a|이} 슈퍼컵에서 {b|을}[[ {score|으로}]] 꺾었어요. 새 시즌 첫 트로피의 주인공이에요."),
@@ -441,7 +441,7 @@ object News {
                 else -> listOf(
                     T("{comp} 결승: {a}, {b} 꺾고 정상", "{a|이} {comp} 결승에서 {b|을}[[ {score|으로}]] 꺾었어요. 시즌 {season} {comp} 트로피를 들어 올렸어요."),
                     T("{a}, {comp} 제패", "결승에서 {a|과} {b|이} 맞붙었고, {a|이} 웃었어요.[[ 최종 스코어는 {score|이에요}.]] {b|은} 준우승에 만족해야 했어요."),
-                    T("{b}, 결승에서 아쉬운 준우승", "{b|은} {comp} 결승에서 {a}에게[[ {score|으로}]] 졌어요. 우승은 {a}의 몫이 됐어요."),
+                    T("{b}, 결승에서 아쉬운 준우승", "{b|은} {comp} 결승에서 {a}에게[[ {lscore|으로}]] 졌어요. 우승은 {a}의 몫이 됐어요."),
                 ) to 4
             }
         }
@@ -1009,7 +1009,8 @@ object News {
             val titles = e.args.drop(3).filter { it.isNotBlank() }
             if (titles.isNotEmpty()) v["items"] = titles.joinToString(", ") { "‘$it’" }
             if (titles.isEmpty()) listOf(
-                T("요트협회 총회, 규칙은 그대로", "요트협회 총회는 이번에 규칙을 그대로 두기로 했어요. 다음 총회는 시즌 {vote|이} 끝난 뒤에 열려요."),
+                // The assembly only tables proposals: rules adopted at this close still apply.
+                T("요트협회 총회, 새 안건 없음", "이번 요트협회 총회에는 새로 올린 안건이 없어요. 다음 총회는 시즌 {vote|이} 끝난 뒤에 열려요."),
             ) to 2 else listOf(
                 T("요트협회 총회, 안건 {n}개 상정", "요트협회 정기 총회가 안건 {n}개를 올렸어요. 안건은 {items|이에요}. 시즌 {vote} 동안 투표를 받아 시즌 {apply}부터 적용해요."),
                 T("요트협회, 규칙 변경 안건 {n}개 투표", "요트협회가 {items|을} 투표에 부쳤어요. 시즌 {vote} 동안 찬반을 모아 가결되면 시즌 {apply}부터 적용해요."),
@@ -1211,11 +1212,11 @@ object News {
             val tier = arg(2)?.toIntOrNull() ?: 0
             v["div"] = LeagueIds.division(id, tier)
             v["lg"] = LeagueIds.label(id)
-            arg(3)?.let { v["score"] = it }
+            arg(3)?.let { scores(v, it) }
             val rank = arg(4)?.toIntOrNull() ?: Int.MAX_VALUE
             listOf(
                 T("이변! {a}, {b} 격파", "{div}에서 레이팅이 {gap}점 낮은 {a|이} {b|을} {score|으로} 꺾었어요. 이번 주 손꼽히는 이변이에요."),
-                T("{b}, {a}에게 덜미", "{b|은} {div}에서 한참 아래로 본 {a}에게 {score|으로} 졌어요. 레이팅 차는 {gap}점이었어요."),
+                T("{b}, {a}에게 덜미", "{b|은} {div}에서 한참 아래로 본 {a}에게 {lscore|으로} 졌어요. 레이팅 차는 {gap}점이었어요."),
                 T("약자의 반란: {a}", "{a|이} 레이팅 {gap}점 차를 뒤집고 {b|을} 눌렀어요. {lg} 순위 싸움이 더 뜨거워졌어요."),
             ) to if (tier == 0 && (id == LeagueIds.LEGACY || rank < LeagueWorld.LEAGUE_TITLES)) 3 else 2
         }
@@ -1445,6 +1446,22 @@ object News {
         val x = s.toDoubleOrNull() ?: return s
         val p = if (s.contains('.') && x < 1.0) x * 100 else x
         return Math.round(p).toString()
+    }
+
+    /**
+     * A winner-first score ([TieScore.text], "2-0", "2.5-1.5", "합계 450-430") as `score`, and as
+     * `lscore` the loser's side first, for the sentences whose subject lost ("0-2로 졌어요").
+     */
+    private fun scores(v: MutableMap<String, String>, score: String) {
+        v["score"] = score
+        v["lscore"] = loserFirst(score)
+    }
+
+    /** [score] with its two sides swapped ("2-0" → "0-2", "합계 450-430" → "합계 430-450"); as it is when it is no "x-y". */
+    internal fun loserFirst(score: String): String {
+        val pre = if (score.startsWith("합계 ")) "합계 " else ""
+        val p = score.removePrefix(pre).split('-')
+        return if (p.size == 2 && p.all { it.isNotEmpty() }) "$pre${p[1]}-${p[0]}" else score
     }
 
     /** Whole numbers with thousands separators, others as they are. */

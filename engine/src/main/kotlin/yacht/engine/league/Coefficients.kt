@@ -151,20 +151,29 @@ object Coefficients {
      * The league ranking after season [closed] of [leagues]' national leagues: by the sum of the
      * newest [SEASONS] values (with inheritance), then the newest value, then [strength] (the
      * average rating of a league's best 5, [Coefficients.strength]), then id. With no values yet
-     * (the first national season) the ranking is by strength. [LeagueRank.change] compares with
-     * the ranking the same leagues had after season [closed] - 1.
+     * (the first national season) the ranking is by strength. A league with no line for [closed]
+     * while others have one (formed in the season after it) goes after every league with a line,
+     * by strength: where [order] puts it for the draws of that season, so the places this ranking
+     * shows ([LeagueRank.cclSlots], [LeagueRank.clDirect]) are the ones drawn. [LeagueRank.change]
+     * compares with the ranking the same leagues had after season [closed] - 1.
      */
     fun ranking(store: CoefficientStore, leagues: Leagues, closed: Int, strength: (String) -> Double, config: LeagueConfig): LeagueRanking {
         val ids = leagues.list.filter { it.national }.map { it.id }
         if (ids.isEmpty()) return LeagueRanking(closed, emptyList())
         val strengths = ids.associateWith { strength(it).let { x -> if (x.isNaN()) Double.NEGATIVE_INFINITY else x } }
-        fun ranked(at: Int): List<Pair<String, List<Double>>> = ids.map { it to values(store, it, at) }
-            .sortedWith(
-                compareByDescending<Pair<String, List<Double>>> { it.second.sum() }
-                    .thenByDescending { it.second.firstOrNull() ?: 0.0 }
-                    .thenByDescending { strengths.getValue(it.first) }
-                    .thenBy { it.first },
-            )
+        fun ranked(at: Int): List<Pair<String, List<Double>>> {
+            // New in season [at] + 1: no line of its own while the others have one (not the first national season).
+            val anyLine = ids.any { store.coefficient(it, at) != null }
+            val fresh = if (!anyLine) emptySet() else ids.filterTo(HashSet()) { store.coefficient(it, at) == null }
+            return ids.map { it to values(store, it, at) }
+                .sortedWith(
+                    compareBy<Pair<String, List<Double>>> { it.first in fresh }
+                        .thenByDescending { if (it.first in fresh) 0.0 else it.second.sum() }
+                        .thenByDescending { if (it.first in fresh) 0.0 else it.second.firstOrNull() ?: 0.0 }
+                        .thenByDescending { strengths.getValue(it.first) }
+                        .thenBy { it.first },
+                )
+        }
         val now = ranked(closed)
         val before = ranked(closed - 1).withIndex().associate { (i, r) -> r.first to i }
         val confedOf = ids.associateWith { leagues.confedOf(it) }

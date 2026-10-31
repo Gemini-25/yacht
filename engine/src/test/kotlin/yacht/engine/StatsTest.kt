@@ -238,14 +238,15 @@ class StatsTest {
         val ratings = HashMap(mapOf("low" to 1400.0, "high" to 1800.0, "x" to 1700.0))
         val ctx = StatsContext(1, { ratings[it] ?: 1500.0 })
         val events = ArrayList<LeagueEvent>()
-        // The lower rated wins: the biggest upset, a low winning score and the best two-player total.
+        // The lower rated wins: a low winning score and the best two-player total, but no upset
+        // yet: neither has 60 games (a new rating still swings hundreds of points).
         events += book.record(job("low", "high", GameScore(150, 140), GameScore(160, 150)), ctx)
-        val upset = book.records[RecordKind.UPSET]!!
-        assertEquals(listOf("low", "high"), listOf(upset.holder, upset.other))
-        assertEquals(400.0, upset.value)
+        assertNull(book.records[RecordKind.UPSET2])
+        assertNull(book.records[RecordKind.UPSET])
         assertEquals(150.0, book.records[RecordKind.LOW_WIN]!!.value)
         assertEquals(310.0, book.records[RecordKind.BEST_PAIR]!!.value)
-        assertEquals("레이팅 400 높은 상대를 꺾음", RecordKind.UPSET.text(400.0))
+        assertEquals("레이팅 400 높은 상대를 꺾음", RecordKind.UPSET2.text(400.0))
+        assertEquals(RecordKind.UPSET2.text(400.0), RecordKind.UPSET.text(400.0))
         // No peak before 60 games: a new rating still moves a lot.
         assertNull(book.records[RecordKind.PEAK_RATING])
         // x plays 40 matches (80 games) climbing to 1739: its peak counts from its 60th game.
@@ -266,6 +267,32 @@ class StatsTest {
         // Every kind has a section, a label and a text.
         for (k in RecordKind.entries) assertTrue(k.label.isNotBlank() && k.text(12.0).isNotBlank(), k.name)
         assertEquals("12,345판", RecordKind.CAREER_GAMES.text(12345.0))
+    }
+
+    @Test
+    fun upsetsCountBetweenSettledPlayersOnlyAndTheOldRecordIsRetired() {
+        val book = StatsBook(recordWarmup = 10)
+        val ratings = HashMap(mapOf("low" to 1400.0, "high" to 1800.0, "new" to 1100.0))
+        val ctx = StatsContext(1, { ratings[it] ?: 1500.0 })
+        // A rookie (2 games) beats a player rated 700 above: no record, no review upset.
+        repeat(30) { i -> book.record(job("high", "o${i % 5}", GameScore(250, 200), GameScore(240, 210)), ctx) }
+        book.record(job("new", "high", GameScore(250, 200), GameScore(240, 210)), ctx)
+        assertNull(book.records[RecordKind.UPSET2])
+        assertTrue(book.encode().lines().none { it.startsWith("upset") }, "the review's biggest upset and count wait too")
+        // low settles (30 matches, 60 games), then beats high (60 games and more): 400.
+        repeat(30) { i -> book.record(job("low", "p${i % 5}", GameScore(150, 200), GameScore(140, 210)), ctx) }
+        book.record(job("low", "high", GameScore(250, 200), GameScore(240, 210)), ctx)
+        val upset = book.records[RecordKind.UPSET2]!!
+        assertEquals(listOf("low", "high", 400.0), listOf(upset.holder, upset.other, upset.value))
+        val lines = book.encode().lines()
+        assertTrue(lines.any { it.startsWith("upset low high 400") }, lines.filter { it.startsWith("upset") }.toString())
+        assertTrue("upsets 1" in lines)
+        // A save of a league that kept the old record: it is decoded, kept and no longer offered.
+        val old = StatsBook.decode(book.encode() + "rec UPSET new 700 1 high L\n", recordWarmup = 10)
+        assertEquals(700.0, old.records[RecordKind.UPSET]!!.value)
+        assertEquals(400.0, old.records[RecordKind.UPSET2]!!.value)
+        assertTrue(RecordKind.UPSET.retired && RecordKind.UPSET !in RecordKind.current && RecordKind.UPSET2 in RecordKind.current)
+        assertEquals("최대 이변", RecordKind.UPSET2.label)
     }
 
     @Test
@@ -898,11 +925,12 @@ class StatsTest {
         // stage adds (경기당 승점, 완승, 평점 2.0, 연속 요트) and retires (승리 확률 역전승, 한 경기
         // 요트), the holders' history, the review's new parts and the stats file's rating lines.
         // Honours, titles, the hall of fame, dynasties and every job are as before, and so is every
-        // season line but its average 평점.
+        // season line but its average 평점. Then once more for the upsets between settled players
+        // only (최대 이변 UPSET2, the review's biggest upset and count): nothing else changed.
         val pyramid = PlayedLeague(600, LeagueConfig(), 11L).apply { play(3) }
-        assertEquals("c69373415f90df425d16c009ddf3a94dc28d18bd8b57fb59fa77602fde8d5e99", pyramid.sha(pyramid.closes.toString()))
+        assertEquals("eafa2eb41fc39b8694c55106f310dea87eb11304b7c1fe3e9e5fbb90948e2414", pyramid.sha(pyramid.closes.toString()))
         val linear = PlayedLeague(60, LeagueConfig(divisions = 3, matchFormat = MatchFormat.MIRRORED, doubleElimination = false, longKnockouts = false), 12L).apply { play(3) }
-        assertEquals("4cd152eb64dbbbe7d68572f376b84e9a1ea972d5afde369fa870c3e71287b0f8", linear.sha(linear.closes.toString()))
+        assertEquals("9a80720afcdaf2c3ccc9bc87f2d1a095df053c0c75d3436c1f47c0464163a455", linear.sha(linear.closes.toString()))
     }
 }
 
