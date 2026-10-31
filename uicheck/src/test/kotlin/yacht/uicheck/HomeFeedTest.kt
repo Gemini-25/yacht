@@ -3,7 +3,9 @@ package yacht.uicheck
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import yacht.app.core.ClubBadge
+import yacht.app.core.FollowCard
 import yacht.app.core.FollowKind
+import yacht.app.core.FollowMatch
 import yacht.app.core.HomeBanner
 import yacht.app.core.HomeFeed
 import yacht.app.core.LeagueHost
@@ -11,6 +13,7 @@ import yacht.app.core.LeagueSelector
 import yacht.app.core.LeagueView
 import yacht.app.core.UiPrefs
 import yacht.app.core.rulesAfterClose
+import yacht.app.ui.followLine
 import yacht.engine.OppModel
 import yacht.engine.Tables
 import yacht.engine.league.BoardResult
@@ -27,6 +30,8 @@ import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.MatchRef
 import yacht.engine.league.Preview
+import yacht.engine.league.SeasonCalendar
+import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
 import yacht.engine.league.TieRule
 import yacht.engine.league.WinEstimate
@@ -43,8 +48,9 @@ import kotlin.test.assertTrue
  * The home's feed (`lg.home`, UX design 2): a followed player's row shows its last and next
  * match as the season's matches have them, every followed kind gets its card in order, the one
  * banner goes by its priority (a season's end > the first national season > a reform to come >
- * an empty league) and each can be closed for its season, and the followed fixture index is
- * built once a season.
+ * an empty league) and each can be closed for its season, the followed fixture index is
+ * built once a season, a team match's row is the teams' (named by the other club), the home's
+ * line names weeks as the schedule does, and a burst of followed results builds the home once.
  */
 class HomeFeedTest {
     @Test
@@ -169,6 +175,80 @@ class HomeFeedTest {
         assertTrue(refs.isNotEmpty() && refs.all { MatchRef.decode(it)?.season == w.plan!!.number }, "a new season's rows are its own: $refs")
     }
 
+    @Test
+    fun aTeamMatchIsTheTeamsAndNamedByTheOtherClub() {
+        // Season 2 of national leagues holds the club cup: a followed member's board in it.
+        val w = national()
+        play(w)
+        rollover(w, w.config)
+        var board: Pair<String, SeasonMatch>? = null
+        play(w) { x ->
+            val p = x.plan!!
+            board = SeasonMatches.ofComp(p, Comp.CLUB_CUP).filter { it.played }.firstNotNullOfOrNull { m ->
+                // A board player whose latest match is this one (its own board of it).
+                m.fixture.players.firstOrNull { k -> SeasonMatches.ofPlayer(p, k).lastOrNull { it.played }?.ref?.whole == m.ref.whole }?.let { it to m }
+            }
+            board != null
+        }
+        val (key, m) = assertNotNull(board, "no club cup board played in season 2")
+        val f = m.fixture
+        val first = key in f.lineupA
+        val other = if (first) f.b else f.a
+        val host = Host(w, setOf(key))
+        val last = assertNotNull(HomeFeed(host).build(w).followed.single().last)
+        val i = (if (first) f.lineupA else f.lineupB).indexOf(key)
+        assertEquals(m.ref.copy(board = i).encode(), last.ref, "the followed player's own board")
+        assertEquals((if (first) f.lineupB else f.lineupA)[i], last.opponent, "its board's opponent")
+        // The teams' result and score, named by the other club (by its name, not its id).
+        val clubName = assertNotNull(w.clubs!!.nameOf(other))
+        assertEquals(clubName, last.opponentName)
+        assertTrue(last.opponentName != other, "a club cup side by its name: ${last.opponentName}")
+        val s = assertNotNull(m.score)
+        assertEquals(if (first) s.winner else -s.winner, last.result)
+        fun num(x: Double) = if (x == Math.floor(x)) x.toInt().toString() else String.format(java.util.Locale.ROOT, "%.1f", x)
+        assertEquals(if (first) "${num(s.scoreA)}:${num(s.scoreB)}" else "${num(s.scoreB)}:${num(s.scoreA)}", last.score)
+        // The home's line says so: "최근 {club}에게 3:1 승".
+        val card = HomeFeed(host).build(w).followed.single()
+        assertTrue(followLine(card, w.plan!!.leagueWeeks) { it }.startsWith("최근 ${clubName}에게 "), followLine(card, w.plan!!.leagueWeeks) { it })
+    }
+
+    @Test
+    fun theHomeLineNamesWeeksAsTheScheduleDoes() {
+        fun next(week: Int) = FollowMatch("2:L:5", week, "한국 1부", "b", "B", null, null, false, 55)
+        fun card(m: FollowMatch) = FollowCard(FollowKind.PLAYER, "a", "a", "A", null, "", null, null, m, "", null)
+        assertEquals("다음 12주차 b 55%", followLine(card(next(12)), 30) { it })
+        assertEquals("다음 포스트시즌 1주차 b 55%", followLine(card(next(31)), 30) { it })
+        assertEquals("다음 개막 전 b 55%", followLine(card(next(SeasonCalendar.PRESEASON)), 30) { it })
+        assertEquals("다음 b 55%", followLine(card(next(SeasonCalendar.NONE)), 30) { it })
+    }
+
+    @Test
+    fun resultsInARowBuildTheHomeOnce() {
+        val w = national()
+        play(w) { it.plan!!.league.progress >= 0.05 }
+        val feed = HomeFeed(Host(w, setOf(w.members.first())))
+        // A burst of followed results (a club's round): one build, a little later.
+        repeat(50) { feed.refreshSoon() }
+        assertEquals(0L, feed.buildCount, "not at once")
+        waitUntil { feed.buildCount >= 1 }
+        Thread.sleep(HomeFeed.RESULT_REFRESH_MS + 500)
+        assertEquals(1L, feed.buildCount)
+        assertNotNull(feed.view)
+        // A later result: one more.
+        feed.refreshSoon()
+        waitUntil { feed.buildCount >= 2 }
+        Thread.sleep(300)
+        assertEquals(2L, feed.buildCount)
+    }
+
+    private fun waitUntil(ok: () -> Boolean) {
+        val end = System.currentTimeMillis() + 20_000
+        while (!ok()) {
+            check(System.currentTimeMillis() < end) { "timed out" }
+            Thread.sleep(20)
+        }
+    }
+
     /** A national league of 300 generated players, its first season open. */
     private fun national(): LeagueWorld = world(LeagueConfig.DEFAULT.copy(generated = 300)).also { assertTrue(it.plan!!.league.leagues.national) }
 
@@ -218,7 +298,7 @@ class HomeFeedTest {
         JobKind.TEAM -> f.lineupA.zip(f.lineupB).mapIndexed { i, (x, y) -> BoardResult(x, y, games(f, x, y, 2, i + 1), emptyList()) }.let { JobResult(f, it, TieRule.team(it), 0) }
     }
 
-    /** A host of world [w] alone (no snapshot, names as keys) with favourites [favs] and preferences [prefs]; a league match of this season plays again. */
+    /** A host of world [w] alone (no snapshot, names as keys, a club by its name) with favourites [favs] and preferences [prefs]; a league match of this season plays again. */
     private class Host(var w: LeagueWorld, var favs: Set<String>, var prefs: UiPrefs = UiPrefs()) : LeagueHost {
         override val scope = CoroutineScope(Dispatchers.Unconfined)
         override val lock = Any()
@@ -230,7 +310,7 @@ class HomeFeedTest {
         override fun ai(key: String): LeagueAi? = null
         override fun aiFrom(key: String, spec: CustomAiSpec): LeagueAi? = null
         override fun adaptive(key: String) = false
-        override fun name(key: String) = key
+        override fun name(key: String) = w.clubs?.nameOf(key) ?: key
         override fun shown(key: String) = key
         override fun badge(key: String): ClubBadge? = null
         override fun leagueLabel(key: String): String? = null
