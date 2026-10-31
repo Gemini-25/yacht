@@ -152,11 +152,12 @@ class FederationCalibration {
 
     companion object {
         /**
-         * Assemblies that should table at least one proposal. ENG 6.4 asked for 2 in 80%; with
-         * four statistics that tell seasons apart and none of them past its floor in more than
-         * half the seasons, two or more come in about a third to a half (S20 hand-off).
+         * Assemblies that should table at least one proposal (about two in three did in the
+         * calibration runs, quiet seasons none). ENG 6.4 asked for 2 in 80%; with four
+         * statistics that tell seasons apart and none of them past its floor in more than half
+         * the seasons, two or more come in about two in five (docs/LEAGUE_SPEC.md 11.4).
          */
-        const val ONE_SHARE = 0.6
+        const val ONE_SHARE = 0.5
 
         /** The statistic of [kind] in [s] (as [Federation.candidates] reads it). */
         fun x(kind: ProposalKind, s: FederationStats): Double = when (kind) {

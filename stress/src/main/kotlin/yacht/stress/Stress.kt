@@ -422,7 +422,7 @@ private fun watch(c: AppController, rng: Random) {
         }
         1 -> onMain { center.startBroadcast() }
         else -> {
-            val ref = lg.view?.feed?.mapNotNull { it.ref }?.randomOrNull(rng) ?: return
+            val ref = lg.view?.feed?.mapNotNull { it.ref }?.pick(rng) ?: return
             val page = Page.Match(ref)
             onMain { center.loadReport(page) }
             Thread.sleep(rng.nextInt(3_000).toLong())
@@ -460,10 +460,10 @@ private fun watch(c: AppController, rng: Random) {
 private fun pages(c: AppController, rng: Random) {
     val lg = c.league
     val keys = lg.view?.rows?.filter { !it.isMe }?.map { it.key }.orEmpty()
-    val league = lg.view?.season?.leagues?.randomOrNull(rng)?.id
+    val league = lg.view?.season?.leagues?.pick(rng)?.id
     onMain {
         when (rng.nextInt(7)) {
-            0 -> keys.randomOrNull(rng)?.let { k -> lg.nav.open(Page.Player(k)); lg.analytics.loadPlayer(k, StatScope.SEASON, lg.center) }
+            0 -> keys.pick(rng)?.let { k -> lg.nav.open(Page.Player(k)); lg.analytics.loadPlayer(k, StatScope.SEASON, lg.center) }
             1 -> lg.analytics.loadLeaders(LeaderFilter())
             2 -> lg.analytics.loadRoom()
             3 -> lg.analytics.loadReviews()
@@ -538,6 +538,9 @@ private fun <T> onMain(block: () -> T): T = runBlocking(Main) {
 
 /** The last actions, for a failure report. */
 private val lastActions = ArrayDeque<String>()
+
+/** An element picked with [rng] (the run's seeded generator); null for an empty list. */
+private fun <T> List<T>.pick(rng: Random): T? = if (isEmpty()) null else this[rng.nextInt(size)]
 
 private fun <T> act(name: String, block: () -> T): T {
     synchronized(lastActions) {

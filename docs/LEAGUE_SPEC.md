@@ -6,7 +6,8 @@ says otherwise. The league is in its fifth shape: national leagues, clubs as the
 affiliation, a continental and a world stage, league coefficients and a 요트협회 (federation)
 that proposes rule changes (rules version 3, `LeagueConfig.VERSION`). A season saved under an
 older shape plays to its end as it began (section 7.3); the older shapes are kept where such a
-season needs them and are described where they still apply (2.1.7, 2.2.6).
+season needs them and are described where they still apply (2.1.7, 2.2.6). Section 8 still
+describes the screens before the redesign (home and four tabs); the screen docs replace it.
 
 Ground rules for all code:
 - Engine code (`engine/src/main/kotlin/yacht/engine/league/`) is pure Kotlin: no threads, no
@@ -124,8 +125,8 @@ contiguous from division 0, each league a linear ladder: one division per tier).
 #### 2.1.2 One calendar for every league: the aligned schedule (`season 5`)
 Leagues of different sizes would end weeks apart (30-42 rounds). A national season spreads each
 division's rounds over the R weeks of its longest division so that every league plays its first
-round in week 1 and its last in week R: round j of division d (r_d rounds) is played in week
-`round(j × (R - 1) / (r_d - 1))`. The pairs of each round are the same as an unaligned build
+round in week 1 and its last in week R: round j of division d (r_d rounds, both 0-based) is
+played on matchday `round(j × (R - 1) / (r_d - 1))` (week = matchday + 1). The pairs of each round are the same as an unaligned build
 (same random draws); only weeks change; a league idles in a gap week. `LeagueFixture.round` is the
 league's own round ("12라운드"); the 일정 labels weeks "12주차". A season is aligned exactly when
 it is national and is then written as `season 5`:
@@ -357,8 +358,8 @@ total, deciders, the higher seed; one loss out. Each competition saves `long 1`,
 - **슈퍼컵** (from season 2): after a national season the 챔피언스 리그 winner (its runner-up when
   the winner left) against the cup winner (runner-up when the same); else the league champion
   against the cup winner. One knockout tie.
-- **올스타전** (mid-season): national: the 5 best of every league's 1부 against the 5 best of the
-  rest; a team match, a friendly.
+- **올스타전** (mid-season): national: the 5 best-rated players of all the leagues' 1부s together
+  ("모든 리그의 1부") against the 5 best of every other division; a team match, a friendly.
 - **클럽 대항전** (`ClubCup`, `Comp.CLUB_CUP` 'U', `clubcup 1`, `clubCup`, even seasons after a
   national season): last season's club-table champions (`ClubSource.champions`), the 12 strongest
   by the average of their best 5 still in the world (3 needed): groups, semis and a final of
