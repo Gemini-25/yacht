@@ -144,9 +144,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * Sets national season [p]'s league ranking, the one it is played under ([SeasonPlan.ranking]:
      * the coefficients of the seasons before it, by strength in the first national season), and
      * records its best-ranked leagues ([Federation.putTop]) once. The strength reads the ratings
-     * the season was drawn with: the 요트컵's seeds (every member, kept in season.txt as whole
-     * points), else the start ratings stats.txt keeps. So a league read back after a restart, or
-     * a finished season read back after a kill in its rollover's save, is ranked as it was.
+     * the season was drawn with ([drawn]), so a league read back after a restart, or a finished
+     * season read back after a kill in its rollover's save, is ranked as it was.
      */
     private fun rank(p: SeasonPlan) {
         if (!p.league.leagues.national) return
