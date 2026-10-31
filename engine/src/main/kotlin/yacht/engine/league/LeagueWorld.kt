@@ -785,9 +785,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         return made
     }
 
-    /** Keeps and writes up events the news desk made or let go: [note] without the desk. */
+    /**
+     * Writes up events the news desk made or let go ([note] without the desk), keeping its own:
+     * those it held were kept when they came.
+     */
     private fun told(e: List<LeagueEvent>) {
-        keep(e)
+        keep(e.filter { it.kind in NewsDesk.KINDS })
         write(e)
     }
 
@@ -818,7 +821,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             "league_title", "league_moves", "league_formed", "club_title", "club_race" -> id(0)
             "league_upset", "transfer_abroad", "return_home" -> id(1)
             "title_race" -> id(2)
-            "comeback" -> if (e.comp == Comp.LEAGUE) id(3) else ""
+            // A knockout's by its competition (a 대륙 챔피언스 tie by the winner's confederation).
+            "comeback" -> when (e.comp) {
+                Comp.LEAGUE -> id(3)
+                Comp.CONT_CHAMPIONS -> e.keys.firstOrNull()?.let { p.league.leagueOf(it)?.id }?.let { leagues.confedOf(it)?.name }.orEmpty()
+                else -> null
+            }
             "player_of_week" -> id(4)
             else -> null
         }

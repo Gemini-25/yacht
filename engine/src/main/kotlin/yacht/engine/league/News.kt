@@ -376,7 +376,7 @@ object News {
                     listOf(
                         T("자이언트 킬링! {a}, {b} 잡아", "레이팅이 {gap}점 낮은 {a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. {b|은} 패자조로 떨어졌어요."),
                         T("{comp}의 이변: 강호 {b}, 패자조로", "강호 {b|이} {round}에서 {a}에게[[ {score|으로}]] 졌어요. 패자조에서 다시 올라올 수 있을지 관심이 모여요."),
-                    ) to 3
+                    ) to if (LAST_EIGHT.containsMatchIn(arg(0).orEmpty())) 3 else 2
                 }
                 drop -> listOf(
                     T("{comp} {round}: {a}, {b} 꺾어", "{a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 물리쳤어요. {b|은} 패자조에서 한 번 더 기회를 노려요."),
@@ -1251,18 +1251,18 @@ object News {
             ).let { all -> if (v["rest"] == null) listOf(T("국제 무대 결산: {l1} 강세", "{comp} {stage}에서 {l1} 선수들이 국제 성적 점수 {p1}점을 벌었어요. 다른 리그는 이번 단계에서 점수를 보태지 못했어요.")) else all } to 2
         }
         "cup_digest" -> {
-            // [≤ 8 notable winners] (stage, ties, upsets, the top seed out or "-", next week or "-").
+            // [≤ 8 giant killers not told alone, or a top seed's] (stage, ties, upsets, the top seed out or "-", next week or "-").
             arg(0)?.let { v["stage"] = it }
             arg(1)?.let { v["n"] = number(it) }
             val upsets = arg(2)?.toIntOrNull() ?: 0
             val out = arg(3)?.let { name(it) }
-            // The winners it names beat better seeds (the stage's other notable ties).
+            // The winners it names beat players rated well above them (or a top seed).
             val who = shortList(e.keys, name, 2)?.let { if (e.keys.size > 2) "$it 등" else it }
             val gone = out?.let { "톱시드 ${it}도 짐을 쌌어요" }
             v["surprise"] = when {
-                upsets > 0 && who != null -> "${who + Josa.after(who, "이")} 높은 시드를 꺾는 등 이변이 ${upsets}번 나왔" + (gone?.let { "고, $it." } ?: "어요.")
+                upsets > 0 && who != null -> "${who + Josa.after(who, "이")} 강호를 꺾으며 이변이 ${upsets}번 나왔" + (gone?.let { "고, $it." } ?: "어요.")
                 upsets > 0 -> "이변이 ${upsets}번 나왔" + (gone?.let { "고, $it." } ?: "어요.")
-                who != null -> "${who + Josa.after(who, "이")} 높은 시드를 꺾었" + (gone?.let { "고, $it." } ?: "어요.")
+                who != null -> "${who + Josa.after(who, "이")} 강호를 꺾었" + (gone?.let { "고, $it." } ?: "어요.")
                 out != null -> "톱시드 ${out + Josa.after(out, "이")} 탈락했어요."
                 else -> "큰 이변 없이 시드 순서대로 흘러갔어요."
             }
@@ -1274,12 +1274,13 @@ object News {
             ).let { all -> if (v["next"] != null) all.take(1) else all.drop(1) } to 2
         }
         "group_digest" -> {
-            // [≤ 8 group winners] (stage, qualified, eliminated, top seeds among them).
+            // [≤ 8, group winners first] (stage, qualified, eliminated, top seeds among them, how many of the keys won their group).
             arg(0)?.let { v["stage"] = it }
             arg(1)?.let { v["q"] = it }
             arg(2)?.let { v["out"] = it }
             arg(3)?.takeIf { it != "0" }?.let { v["fallen"] = it }
-            shortList(e.keys, name, DIGEST_SHOWN)?.let { v["firsts"] = if (e.keys.size > DIGEST_SHOWN) "$it 등" else it }
+            val firsts = e.keys.take(arg(4)?.toIntOrNull() ?: e.keys.size)
+            shortList(firsts, name, DIGEST_SHOWN)?.let { v["firsts"] = if (firsts.size > DIGEST_SHOWN) "$it 등" else it }
             listOf(
                 T("{comp} {stage} 결과", "{q}명이 토너먼트에 올랐[[고, {out}명은 여기서 멈췄]]어요.[[ 톱시드 {fallen}명도 짐을 쌌어요.]][[ {firsts|이} 조 1위로 다음 단계에 나서요.]]"),
             ) to 2

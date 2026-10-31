@@ -630,12 +630,24 @@ class MediaTest {
         assertTrue(intl.all { "한국 리그 선수들이 국제 성적 점수 2.3점을" in it && "일본 리그(1.5점), 중국 리그(0.8점)가 뒤를" in it }, intl.toString())
         // Digests count what they hold and name a few.
         val cup = texts("cup_digest", listOf("ai4", "ai3"), listOf("128강", "64", "7", "ai1", "9"), Comp.CUP)
-        assertTrue(cup.all { "64경기가 모두 끝났어요" in it && "이변이 7번" in it && "톱시드 김민준도" in it && "9주차" in it && "이서연·목표 180점이" in it }, cup.toString())
+        assertTrue(cup.all { "64경기가 모두 끝났어요" in it && "이변이 7번" in it && "톱시드 김민준도" in it && "9주차" in it && "이서연·목표 180점이 강호를 꺾으며" in it }, cup.toString())
         assertTrue(texts("cup_digest", emptyList(), listOf("256강", "1024", "0", "-", "-"), Comp.CUP).all { "1,024경기" in it && "다음 라운드를 기다려요" in it })
         val week = texts("milestones_week", listOf("ai1", "ai2", "ai3", "ai4"), listOf("yachts:100:7", "wins:100:4"))
         assertTrue(week.all { "이정표 11개" in it && "통산 요트 100개 7명, 통산 100승 4명이에요" in it && " 등이 이름을" in it }, week.toString())
         assertTrue(texts("milestones_week", listOf("ai1", "ai2"), listOf("games:1000:2")).all { "김민준·승률 AI (앱 기본)이 이름을" in it })
         assertTrue(texts("group_digest", listOf("ai1", "ai2"), listOf("조별 리그", "16", "16"), Comp.CONT_CHAMPIONS).all { "대륙 챔피언스 조별 리그 결과" in it && "16명은 여기서" in it })
+        // Only the group winners among its names are called 조 1위.
+        val firsts = texts("group_digest", listOf("ai1", "ai2", "ai3"), listOf("조별 리그", "8", "8", "1", "2"), Comp.CONT_CHAMPIONS)
+        assertTrue(firsts.all { "김민준·승률 AI (앱 기본)이 조 1위로" in it && "목표 180점" !in it && "톱시드 1명도" in it }, firsts.toString())
+        // A giant killing is major news from the 8강 on, in a double elimination's winners' side too.
+        fun killing(round: String) = News.article(
+            LeagueEvent("cup_round", 2, listOf("ai1", "ai2"), listOf(round, "4-2"), Comp.CUP), name, rating = { k -> if (k == "ai1") 1500.0 else 1700.0 },
+        )
+        for ((round, importance) in listOf("128강" to 2, "8강" to 3, "승자조 128강" to 2, "승자조 8강" to 3, "승자조 결승" to 3, "패자조 2R" to 2)) {
+            val a = killing(round)
+            assertEquals(importance, a.importance, "$round: ${a.headline}")
+            assertTrue("자이언트 킬링" in a.headline || "이변" in a.headline, a.headline)
+        }
         assertTrue(texts("club_race", listOf("c1", "c2"), listOf("KR", "25", "lead"), Comp.CLUB).all { "서울 타이거즈" in it && "2.5점" in it })
         // Near a record: how far it is, and whose it is.
         val chase = texts("record_chase", listOf("ai1", "ai2"), listOf("CAREER_YACHTS", "통산 최다 요트까지 4개", "1230", "1233"))

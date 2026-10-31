@@ -56,7 +56,7 @@ class NewsDesk {
     /** Held group qualifiers by competition, then week. */
     private val groups = java.util.TreeMap<String, Qualifiers>()
 
-    /** Each international competition's stages over and its leagues' points when last told. */
+    /** Each international competition's stages over and its leagues' points at the end of the last stage told. */
     private val snapshots = java.util.TreeMap<Comp, Snapshot>()
 
     /** The club race: each watched league's leader and its lead (x 10) when last looked at. */
@@ -220,7 +220,8 @@ class NewsDesk {
         for (t in singles) out += t.events
         val ties = stageCount(plan, s)?.total ?: 0
         val next = plan.calendar.week(s.comp, s.stage + 1).takeIf { it != SeasonCalendar.NONE && it > 0 }
-        val named = rest.mapNotNull { it.winner }.distinct().take(DIGEST_KEYS)
+        // The winners not told alone that beat a much better-rated player or put a top seed out (a favourite's win names no one).
+        val named = rest.filter { t -> t.gap >= KnockoutNews.UPSET_GAP || t.events.any { it.kind == "eliminated" } }.mapNotNull { it.winner }.distinct().take(DIGEST_KEYS)
         out += LeagueEvent(
             "cup_digest", season, named, listOf(s.label, ties.toString(), s.upsets.toString(), s.out ?: "-", next?.toString() ?: "-"), s.comp, s.week,
         )
@@ -378,11 +379,13 @@ class NewsDesk {
         var sums: Map<String, IntArray>? = null
         for (c in p.comps) {
             if (c !is International) continue
+            // The points since the last stage told: a stage played over two weeks counts whole.
             val done = stagesDone(c)
-            val now = pointsByLeague(p, c)
             val snap = snapshots[c.comp]
+            if (snap != null && done <= snap.done) continue
+            val now = pointsByLeague(p, c)
             snapshots[c.comp] = Snapshot(done, now)
-            if (snap == null || done <= snap.done) continue
+            if (snap == null) continue
             val all = sums ?: Coefficients.season(p).also { sums = it }
             val gains = now.mapNotNull { (id, pts) ->
                 val entries = all[id]?.get(1)?.takeIf { it > 0 } ?: return@mapNotNull null
@@ -431,10 +434,13 @@ class NewsDesk {
             digested += q.sections
             out += q.gone.take(GROUP_SINGLES)
             if (q.keys.isEmpty()) continue
-            val named = (q.firsts + q.keys).distinct().take(DIGEST_KEYS)
+            // The group winners first (how many of the names they are is the last argument).
+            val firsts = q.firsts.take(DIGEST_KEYS)
+            val named = (firsts + q.keys).distinct().take(DIGEST_KEYS)
             // Groups of 4, 2 through: as many stay behind as go through.
             out += LeagueEvent(
-                "group_digest", season, named, listOf(GROUP_STAGE, q.keys.size.toString(), q.keys.size.toString(), q.gone.size.toString()), q.comp, q.week,
+                "group_digest", season, named,
+                listOf(GROUP_STAGE, q.keys.size.toString(), q.keys.size.toString(), q.gone.size.toString(), firsts.size.toString()), q.comp, q.week,
             )
         }
         return out
@@ -575,15 +581,17 @@ class NewsDesk {
         }
     }
 
-    /** The 요트컵's seeds, read once a season. */
+    /** The 요트컵's seeds, read once a season (once it has its entries). */
     private var seeds: Map<String, Int>? = null
     private var seedsSeason = -1
 
     private fun seedsOf(plan: SeasonPlan): Map<String, Int> {
         if (seedsSeason == plan.number) seeds?.let { return it }
         val s = (plan.competition(Comp.CUP) as? BracketCompetition)?.entries?.associate { it.key to it.seed }.orEmpty()
-        seeds = s
-        seedsSeason = plan.number
+        if (s.isNotEmpty()) {
+            seeds = s
+            seedsSeason = plan.number
+        }
         return s
     }
 

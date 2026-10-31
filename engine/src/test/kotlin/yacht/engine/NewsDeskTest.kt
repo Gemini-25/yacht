@@ -2,19 +2,26 @@ package yacht.engine
 
 import yacht.engine.league.BoardResult
 import yacht.engine.league.Comp
+import yacht.engine.league.Competition
+import yacht.engine.league.Confed
 import yacht.engine.league.Cup
 import yacht.engine.league.Fixture
 import yacht.engine.league.GameFacts
 import yacht.engine.league.GameScore
+import yacht.engine.league.Honour
+import yacht.engine.league.International
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeagueEvent
+import yacht.engine.league.Leagues
 import yacht.engine.league.MatchRef
 import yacht.engine.league.NewsDesk
 import yacht.engine.league.Season
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
+import yacht.engine.league.Stage
+import yacht.engine.league.StageCount
 import yacht.engine.league.StatsBook
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -129,6 +136,7 @@ class NewsDeskTest {
         val desk = NewsDesk()
         desk.begin(p)
         val written = ArrayList<List<LeagueEvent>>()
+        val raw = ArrayList<LeagueEvent>()
         // The lower seed wins every third tie (a giant killing with these ratings).
         fun play(stage: Int): List<LeagueEvent> {
             val out = ArrayList<LeagueEvent>()
@@ -141,6 +149,7 @@ class NewsDeskTest {
                 val under = f.id % 3 == 0
                 val g = List(2 * f.legs) { if (under) GameScore(190, 230) else GameScore(230, 190) }
                 val e = p.record(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), if (under) -1 else 1, 0))
+                raw += e
                 val shown = desk.sift(e, p, f)
                 written += shown
                 out += shown
@@ -164,6 +173,9 @@ class NewsDeskTest {
         assertTrue(killings > NewsDesk.SINGLES, digest.toString())
         assertTrue(rounds.all { r -> first.any { it.kind == "upset" && it.keys == r.keys } })
         assertEquals("cup_digest", first.last().kind)
+        // The digest names giant killers not told alone, never a favourite that won.
+        val killers = raw.filter { it.kind == "upset" }.map { it.keys.first() }.toSet()
+        assertTrue(digest.keys.isNotEmpty() && digest.keys.all { it in killers && it !in rounds.map { r -> r.keys.first() } }, digest.toString())
         // Played again after a kill, the stage's last tie tells nothing new.
         val replay = desk.sift(first.filter { it.kind == "cup_round" }.take(1), p, Fixture(Comp.CUP, 0, "x", "y", 0L, JobKind.TIE))
         assertTrue(replay.none { it.kind == "cup_digest" })
@@ -174,6 +186,42 @@ class NewsDeskTest {
         val late = play(small)
         assertTrue(late.none { it.kind == "cup_digest" }, late.toString())
         assertTrue(late.isNotEmpty())
+    }
+
+    @Test
+    fun aCupDigestNamesItsGiantKillersNotTheFavouritesThatWon() {
+        val p = plan(64, cup = true)
+        val cup = p.competition(Comp.CUP)!!
+        val desk = NewsDesk()
+        desk.begin(p)
+        // The stage of the winners' 16강 (with the losers' round beside it): every 16강 tie is told
+        // (a late round), most of them a favourite's win.
+        val stage = cup.stages().indexOfFirst { "16강" in it.label }
+        assertTrue(stage > 0 && cup.stageCounts()[stage].total > NewsDesk.SMALL_STAGE, cup.stages().toString())
+        val raw = ArrayList<LeagueEvent>()
+        val shown = ArrayList<LeagueEvent>()
+        // The winners of the stage's giant killings and of its ties that put a top seed out.
+        val beat = HashSet<String>()
+        var guard = 0
+        while (!cup.stageCounts()[stage].done) {
+            check(++guard < 1000)
+            val f = cup.next(1.0, emptySet()) ?: break
+            val s = cup.stageOf(f)
+            val under = f.id % 5 == 0
+            val g = List(2 * f.legs) { if (under) GameScore(190, 230) else GameScore(230, 190) }
+            val e = p.record(JobResult(f, listOf(BoardResult(f.a, f.b, g, emptyList())), if (under) -1 else 1, 0))
+            val told = desk.sift(e, p, f)
+            if (s != stage) continue
+            raw += e
+            shown += told
+            val winner = if (under) f.b else f.a
+            if (e.any { it.kind == "upset" || it.kind == "eliminated" }) beat += winner
+        }
+        val digest = shown.single { it.kind == "cup_digest" }
+        val alone = shown.filter { it.kind == "cup_round" }.map { it.keys.first() }.toSet()
+        // Favourites' wins were held with the rest; the digest names none of them.
+        assertTrue(raw.filter { it.kind == "cup_round" }.any { it.keys.first() !in beat && it.keys.first() !in alone }, raw.toString())
+        assertTrue(digest.keys.all { it in beat && it !in alone }, "$digest; beat $beat")
     }
 
     @Test
@@ -212,13 +260,54 @@ class NewsDeskTest {
         assertEquals(listOf(out), week.filter { it.kind == "eliminated" })
         val group = week.single { it.kind == "group_digest" }
         assertEquals(listOf("p00", "p02", "p04", "p06", "p01", "p03", "p05", "p07"), group.keys)
-        assertEquals(listOf(NewsDesk.GROUP_STAGE, "8", "8", "1"), group.args)
+        assertEquals(listOf(NewsDesk.GROUP_STAGE, "8", "8", "1", "4"), group.args)
         assertTrue(desk.sift(qualified + out, p).isEmpty())
         assertTrue(desk.close(ctx(p), 3).none { it.kind == "group_digest" })
         // A desk of no season writes nothing; another season's lines are not this one's.
         assertEquals("", NewsDesk().encode())
         val other = NewsDesk.decode(text.replace("desk 1 ", "desk 9 "))
         assertTrue(other.sift(ms, p) == ms && other.close(ctx(p), 5).isEmpty())
+    }
+
+    /** An international competition of one stage of [total] matches, its points and progress set by the test. */
+    private class Stages(override val comp: Comp, private val total: Int) : Competition, International {
+        val points = LinkedHashMap<String, Int>()
+        var played = 0
+        override fun next(p: Double, busy: Set<String>): Fixture? = null
+        override fun release(f: Fixture) {}
+        override fun record(r: JobResult): List<LeagueEvent> = emptyList()
+        override val finished: Boolean get() = played >= total
+        override val fixturesLeft: Int get() = total - played
+        override val fixturesTotal: Int get() = total
+        override fun honours(): List<Honour> = emptyList()
+        override fun stages(): List<Stage> = listOf(Stage("조별 1차전", 0.1), Stage("조별 2차전", 0.2))
+        override fun stageCounts(): List<StageCount> = listOf(StageCount(played, total), StageCount(0, total))
+        override fun encode(out: StringBuilder) {}
+        override fun coefficientPoints(): Map<String, Int> = points
+        override fun entrantKeys(): List<String> = points.keys.toList()
+    }
+
+    @Test
+    fun anInternationalStagePlayedOverTwoWeeksIsToldWithAllItEarned() {
+        val divisions = listOf(listOf("k1", "k2", "k3", "k4"), listOf("j1", "j2", "j3", "j4"))
+        val p = SeasonPlan(Season.start(2, 9L, divisions, true, Leagues.national(listOf("KR", "JP"), listOf(1, 1), Confed.ASIA)), LeagueConfig(national = true))
+        val cl = Stages(Comp.CHAMPIONS, 2)
+        cl.points += mapOf("k1" to 2, "j1" to 2)
+        p.comps += cl
+        val desk = NewsDesk()
+        desk.begin(p)
+        // Half the stage in week 1 (k1 wins), the rest in week 2 (j1 wins): told once, whole.
+        cl.points["k1"] = 4
+        cl.played = 1
+        assertTrue(desk.close(ctx(p), 2).none { it.kind == "intl_week" })
+        cl.points["j1"] = 4
+        cl.played = 2
+        val told = desk.close(ctx(p), 3).single { it.kind == "intl_week" }
+        assertEquals(listOf("E", "조별 1차전"), told.args.take(2))
+        assertEquals(setOf("KR:2.0", "JP:2.0"), told.args.drop(2).filter { ':' in it }.toSet(), told.toString())
+        // Read back, nothing is told again; the next stage counts from this one's end.
+        val back = NewsDesk.decode(desk.encode())
+        assertTrue(back.close(ctx(p), 4).isEmpty())
     }
 
     @Test
