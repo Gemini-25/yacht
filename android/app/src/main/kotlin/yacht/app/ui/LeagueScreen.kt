@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.IconButton
@@ -42,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueNav
+import yacht.app.core.LeagueSelector
 import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
 import yacht.app.core.MatchesView
@@ -53,6 +52,7 @@ import yacht.app.core.Sheet
 import yacht.app.core.TableMode
 import yacht.app.core.TablesView
 import yacht.engine.league.Comp
+import yacht.engine.league.LeagueIds
 import yacht.engine.league.Nations
 import yacht.engine.league.WeekStage
 
@@ -109,6 +109,7 @@ fun LeagueScreen(c: AppController) {
             nav.sheet = Sheet.NONE
             resetAsk = true
         }
+        WorldSheets(c)
         PlayerActionsSheet(c)
     }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
@@ -190,7 +191,7 @@ private fun TabBody(c: AppController, v: LeagueView, onRanked: () -> Unit) {
                 when (nav.tables) {
                     TablesView.LEAGUE -> SeasonList(lg, v.season, open)
                     TablesView.COMPS -> CompsTab(lg, v)
-                    TablesView.CLUBS -> ClubsTab(lg, v.clubs, v.season?.format)
+                    TablesView.CLUBS -> ClubsTab(lg, v)
                     TablesView.RANKING -> RankingTab(lg)
                     TablesView.LADDER -> LadderList(lg, v, open)
                 }
@@ -223,19 +224,6 @@ private fun showComp(nav: LeagueNav, comp: Comp) {
     }
 }
 
-/** 순위 › 랭킹: the league ranking comes with the national leagues; the national teams' ranking is a page. */
-@Composable
-private fun RankingTab(lg: LeagueController) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("리그 랭킹", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
-        Text(
-            "나라마다 리그가 열리면 국제 대회 성적으로 리그 랭킹을 매겨요. 지금은 모든 선수가 한 리그에서 겨뤄서 리그 랭킹이 없어요.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        LinkLine("🏳 국가대표 랭킹", "나라별 대표팀의 대회 성적과 전력") { lg.nav.open(Page.Nations) }
-    }
-}
-
 /** A page's bar (56 dp): ←, its title, its actions, and 🔴 while the league runs (a tap: back to the tab). */
 @Composable
 private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
@@ -250,6 +238,9 @@ private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
                 val fav = nationFavourite(page.code) in lg.favourites
                 TextButton(onClick = { lg.toggleFavourite(nationFavourite(page.code)) }) { Text(if (fav) "★ 응원 중" else "☆ 응원") }
             }
+            // A national club or league is followed by its key ("club:c07", "league:KR").
+            is Page.Club -> if (v?.badges?.containsKey(page.id) == true) FollowButton(lg, LeagueSelector.CLUB + page.id)
+            is Page.League -> FollowButton(lg, LeagueSelector.LEAGUE + page.id)
             Page.News -> TextButton(onClick = { nav.newsFollowed = !nav.newsFollowed }) { Text(if (nav.newsFollowed) "★ 응원만" else "☆ 전체") }
             is Page.Player -> PlayerBarActions(lg, page)
             is Page.Match -> MatchBarAction(c, page)
@@ -261,11 +252,18 @@ private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
     }
 }
 
+/** ☆ 응원 / ★ 응원 중 for favourite [key] (a club's or a league's). */
+@Composable
+private fun FollowButton(lg: LeagueController, key: String) {
+    val fav = key in lg.favourites
+    TextButton(onClick = { lg.toggleFavourite(key) }) { Text(if (fav) "★ 응원 중" else "☆ 응원") }
+}
+
 /** A page's title in its bar. */
 private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String = when (page) {
     is Page.Competition -> v?.comps?.firstOrNull { it.first == page.comp }?.second?.title ?: page.comp.label
     is Page.Match -> "경기 리포트"
-    is Page.Club -> v?.clubs?.clubs?.firstOrNull { it.id == page.id }?.name ?: "클럽"
+    is Page.Club -> v?.clubs?.clubs?.firstOrNull { it.id == page.id }?.name ?: v?.badges?.get(page.id)?.name ?: "클럽"
     Page.Market -> "이적·드래프트"
     is Page.Nation -> Nations.of(page.code)?.let { "${it.flag} ${it.name} 대표팀" } ?: page.code
     Page.Nations -> "국가대표 랭킹"
@@ -282,7 +280,7 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     is Page.Leaderboard -> page.kind.label
     is Page.Review -> "시즌 ${page.season} 결산"
     is Page.Matches -> page.title
-    is Page.League -> page.id
+    is Page.League -> LeagueIds.label(page.id)
     is Page.Player -> lg.name(page.key)
 }
 
@@ -296,8 +294,10 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Player -> PlayerPageBody(c, v, page)
         is Page.Competition -> CompetitionScreen(lg, v, page, open)
         is Page.Match -> MatchReportPage(c, v, page)
-        is Page.Club -> ClubPageBody(lg, v.clubs, page.id, open)
-        Page.Market -> MarketBody(lg, v.clubs)
+        is Page.Club -> ClubPageBody(lg, v, page, open)
+        Page.Market -> MarketBody(lg, v)
+        is Page.League -> LeaguePageBody(lg, v, page, open)
+        Page.Federation -> FederationPage(lg, v)
         is Page.Nation -> NationPage(lg, page.code, open)
         Page.Nations -> NationRanking(lg)
         is Page.Compare -> ComparePage(lg, page, v.rows)
@@ -311,7 +311,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
             androidx.compose.runtime.LaunchedEffect(v.season?.number) { lg.loadRecords() }
             MetaReportView(lg.records)
         }
-        // The followed players, the federation, the leaderboards, the reviews, match lists and the league pages come later.
+        // The followed players, the leaderboards, the reviews and match lists come later.
         else -> CenterText("곧 볼 수 있어요.")
     }
 }

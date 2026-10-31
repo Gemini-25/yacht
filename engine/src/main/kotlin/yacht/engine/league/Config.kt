@@ -214,18 +214,15 @@ data class LeagueConfig(
 
         /**
          * Version of [encode]'s rules: 2 brought 판 승점제 and the series and double-elimination
-         * knockouts (see [decode] for older ones). It stays 2 while national leagues are built:
-         * the keys added since (from [national] on) are written and read, and a file without
-         * them keeps the constructor's values (no national leagues, the sweep bonus on), so no
-         * league is moved on to national leagues before the app can show them.
+         * knockouts, 3 national leagues (from [national] on; see [decode] and [migrated] for
+         * older ones).
          */
-        const val VERSION = 2
+        const val VERSION = 3
 
         /**
-         * The rules of a new league once national leagues are offered: national leagues of
-         * divisions playing home and away, every competition. A literal (it reads no
-         * [LeaguePreset], whose [LeaguePreset.REAL] points at it), so neither class waits on the
-         * other's initialisation.
+         * The rules of a new league: national leagues of divisions playing home and away, every
+         * competition. A literal (it reads no [LeaguePreset], whose [LeaguePreset.REAL] points at
+         * it), so neither class waits on the other's initialisation.
          */
         val DEFAULT = LeagueConfig(national = true, doubleRoundRobin = true)
 
@@ -236,8 +233,9 @@ data class LeagueConfig(
         /**
          * Reads a saved config; missing or bad values keep the defaults. One saved before version 2
          * keeps the rules it was played with where it says nothing: the two-game total
-         * ([MatchFormat.MIRRORED]) and knockouts of legs, one loss out (a season in progress, or
-         * one in the archive, plays on as it began; [migrated] moves a league's own settings on).
+         * ([MatchFormat.MIRRORED]) and knockouts of legs, one loss out; one saved before version 3
+         * has no national leagues (the constructor's [national]). So a season in progress, or one
+         * in the archive, plays on as it began; [migrated] moves a league's own settings on.
          */
         fun decode(text: String): LeagueConfig {
             var c = LeagueConfig()
@@ -295,42 +293,56 @@ data class LeagueConfig(
         }
 
         /**
-         * A league's own settings saved before version 2, moved to version 2's rules: 판 승점제
-         * where it played the two-game total, series and double-elimination knockouts. The season
-         * in play keeps its own copy (SeasonPlan.config): these apply from the next season.
+         * A league's own settings saved before the current version, moved on to its rules. From
+         * before version 2: 판 승점제 where it played the two-game total, series and
+         * double-elimination knockouts. From before version 3: national leagues for every league
+         * (강자만's few players form one 국제 연합 리그), home and away unless it plays 단판, and the
+         * other rules of national leagues as [DEFAULT] has them. The season in play keeps its own
+         * copy (SeasonPlan.config): these apply from the next season.
          */
         fun migrated(text: String): LeagueConfig {
-            val c = decode(text)
-            if (versionOf(text) >= 2) return c
-            return c.copy(
-                matchFormat = if (c.matchFormat == MatchFormat.MIRRORED) MatchFormat.GAMES else c.matchFormat,
-                seriesKnockouts = true, doubleElimination = true,
-            )
+            var c = decode(text)
+            val version = versionOf(text)
+            if (version < 2) {
+                c = c.copy(
+                    matchFormat = if (c.matchFormat == MatchFormat.MIRRORED) MatchFormat.GAMES else c.matchFormat,
+                    seriesKnockouts = true, doubleElimination = true,
+                )
+            }
+            if (version < 3) {
+                val d = DEFAULT
+                c = c.copy(
+                    national = true, doubleRoundRobin = c.matchFormat != MatchFormat.SINGLE,
+                    divisionSize = d.divisionSize, leagueMin = d.leagueMin, sweepBonus = d.sweepBonus, transfers = d.transfers,
+                    continentalCl = d.continentalCl, clDirect = d.clDirect, clubSize = d.clubSize, clubCup = d.clubCup, federation = d.federation,
+                )
+            }
+            return c
         }
     }
 }
 
-/** Ready-made rule sets (리그 프리셋). */
+/** Ready-made rule sets (리그 프리셋), all of national leagues (the regional pyramid is not offered for new seasons). */
 enum class LeaguePreset(val label: String, val desc: String, val config: LeagueConfig) {
     REAL(
-        "현실 축구형", "선수 1000명의 지역 리그 피라미드(조당 50명), 같은 주사위 두 판 판 승점제(2:0 완승 +1), 선승제·패자부활 토너먼트, 승강·우승 플레이오프, 컵·챔스·클럽 리그·국가대항전, 나이와 은퇴 모두",
-        // Today's single league until national leagues are offered (config version 3): then DEFAULT itself.
-        LeagueConfig.DEFAULT.copy(national = false, doubleRoundRobin = false),
+        "현실 축구형",
+        "선수 1000명이 28개국 국가 리그(부당 20명, 홈·원정 두 번씩)에서 뛰어요. 승강·플레이오프, 요트컵, 대륙 챔피언스, 챔피언스 리그, 국가대항전, 클럽, 요트협회까지 모두 있어요.",
+        LeagueConfig.DEFAULT,
     ),
     FAST(
-        "빠른 시즌", "단판 경기, 한 번 지면 끝나는 토너먼트, 플레이오프·클럽 리그·국가대항전 없이 시즌이 빨리 돌아요 (선수가 적으면 2부까지)",
-        LeagueConfig(
-            divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false, longKnockouts = false,
-            seriesKnockouts = false, doubleElimination = false,
+        "빠른 시즌", "국가 리그를 한 번씩만 붙고(약 21주), 단판 경기와 한 번 지면 끝나는 토너먼트로 시즌이 빨리 돌아요.",
+        LeagueConfig.DEFAULT.copy(
+            doubleRoundRobin = false, matchFormat = MatchFormat.SINGLE, titlePlayoff = false, promotionPlayoff = false, longKnockouts = false,
+            seriesKnockouts = false, doubleElimination = false, nationCup = false, clubCup = false, familyCup = false, federation = false,
         ),
     ),
     CHAOS(
         "대혼돈", "실수하는 선수만 남기고 제자 비율을 높여요: 이변이 쏟아져요",
-        LeagueConfig(onlyFlawed = true, childShare = 70, guests = false),
+        LeagueConfig.DEFAULT.copy(onlyFlawed = true, childShare = 70, guests = false),
     ),
     ELITE(
-        "강자만", "레이팅 상위 48명만 2개 부에서, 정상급 싸움만",
+        "강자만", "가장 강한 선수 48명만 국제 연합 리그 하나(1부·2부·3부)에서 뛰어요.",
         // The same players season after season: rookies would never get the rating to be picked.
-        LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false, aging = false, guests = false),
+        LeagueConfig.DEFAULT.copy(onlyTop = 48, familyCup = false, nationCup = false, aging = false, guests = false),
     ),
 }

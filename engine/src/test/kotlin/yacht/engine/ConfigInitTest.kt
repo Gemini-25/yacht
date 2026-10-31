@@ -37,8 +37,8 @@ private object FreshEngine {
         assertNotSame<Class<*>>(LeagueConfig::class.java, assertNotNull(default).javaClass, "a fresh copy of the classes")
         assertEquals(LeagueConfig.DEFAULT.encode(), encode(default))
         assertEquals(LeaguePreset.REAL.config.encode(), encode(real))
-        // Before the flip to national leagues the preset is the default without them.
-        assertEquals(LeagueConfig.DEFAULT.copy(national = false, doubleRoundRobin = false), LeaguePreset.REAL.config)
+        // The preset is the default itself.
+        assertEquals(LeagueConfig.DEFAULT, LeaguePreset.REAL.config)
     }
 }
 

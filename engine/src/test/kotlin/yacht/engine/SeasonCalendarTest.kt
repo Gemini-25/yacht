@@ -533,7 +533,7 @@ class SeasonCalendarTest {
 
     @Test
     fun aFastNationalSeasonFitsItsLanes() {
-        val fast = LeaguePreset.FAST.config.copy(national = true)
+        val fast = LeaguePreset.FAST.config
         for (number in listOf(2, 3)) {
             val p = nationalPlan(1000, number, fast)
             val cal = p.calendar
@@ -620,7 +620,7 @@ class SeasonCalendarTest {
 
         /** [aFastNationalSeasonFitsItsLanes] at 1000 players, by season. */
         private val FAST_LANES = mapOf(
-            2 to "R 21 last 21 | A C:2,4,6,7,9,12,13,15,17,19 S:1 A:11 | B E:3,5,7,9,12,13,15,17,20 T:2,4,6,8,10,11,14,16,18 | D U:3,8,12,17,19",
+            2 to "R 21 last 21 | A C:2,4,6,7,9,12,13,15,17,19 S:1 A:11 | B E:3,5,7,9,12,13,15,17,20 T:2,4,6,8,10,11,14,16,18",
             3 to "R 21 last 21 | A C:2,4,6,7,9,12,14,15,17,19 S:1 A:11 G:13 | B E:3,5,7,9,12,13,15,17,20 T:2,4,6,8,10,11,14,16,18",
         )
 
