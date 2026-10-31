@@ -37,7 +37,11 @@ class GameFacts(
             return f to s
         }
 
-    /** Match ratings (평점 2.0, [rating]) of the first and the second player on the fallback scale ([RatingScale.FALLBACK]). */
+    /**
+     * Match ratings (평점 2.0, [rating]) of the first and the second player on the fallback scale
+     * ([RatingScale.FALLBACK]), which a league of generated players is far from: the stats and the
+     * match report rate on the season's ([ratings] of [StatsBook.ratingScale]).
+     */
     val ratings: Pair<Double, Double> get() = ratings(RatingScale.FALLBACK)
 
     /** Match ratings of the first and the second player on [scale] (the season's: [StatsBook.ratingScale]). */

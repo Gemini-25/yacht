@@ -377,7 +377,7 @@ class HighlightBook {
     private val current = ArrayList<Highlight>()
     private val best = ArrayList<Highlight>()
 
-    // The best of the season before, until its archive lines are taken (or the next rollover).
+    // The best of the season before ([best] of it), until the next rollover.
     private var previousSeason = 0
     private val previous = ArrayList<Highlight>()
 
