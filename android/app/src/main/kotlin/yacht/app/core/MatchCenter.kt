@@ -564,7 +564,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             else -> ReportState.SCHEDULED
         }
         val team = f.kind == JobKind.TEAM
-        fun side(k: String) = if (team || f.comp.byTeams) Competitions.teamLabel(k) else host.shown(k)
+        fun side(k: String) = if (team || f.comp.byTeams) teamName(k) else host.shown(k)
         fun rating(k: String) = if (team) null else w.rating(k).takeIf { !it.isNaN() }?.roundToInt()
         fun place(k: String): String? {
             if (f.comp != Comp.LEAGUE || s == null) return null
@@ -1037,7 +1037,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val bonus = f.comp == Comp.LEAGUE && p?.number == ref.season && p.league.bonus
             WMatch(
                 kind, ref, titleOf(p, f, ref.season), boards, intro(w, f, ref, boards, ratings, kind), f.firstTo, team,
-                any.teamA?.let { Competitions.teamLabel(it) }, any.teamB?.let { Competitions.teamLabel(it) }, bonus, ratings, r.source,
+                any.teamA?.let { teamName(it) }, any.teamB?.let { teamName(it) }, bonus, ratings, r.source,
                 tie = f.kind == JobKind.TIE, format = p?.takeIf { it.number == ref.season }?.config?.matchFormat,
             ) to null
         }
@@ -1059,8 +1059,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     private fun intro(w: LeagueWorld, f: Fixture, ref: MatchRef, boards: List<WBoard>, ratings: Map<String, Double>, kind: WatchKind): List<String> {
         if (kind == WatchKind.HIGHLIGHT || kind == WatchKind.FRIENDLY) return emptyList()
         val team = f.kind == JobKind.TEAM
-        val a = if (team) Competitions.teamLabel(f.a) else host.name(f.a)
-        val b = if (team) Competitions.teamLabel(f.b) else host.name(f.b)
+        val a = if (team) teamName(f.a) else host.name(f.a)
+        val b = if (team) teamName(f.b) else host.name(f.b)
         val p = w.plan?.takeIf { it.number == ref.season }
         val title = titleOf(w.plan, f, ref.season)
         val out = ArrayList<String>()
@@ -1424,7 +1424,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         val p = host.world()?.plan ?: return null
         val f = SeasonMatches.of(p, ref)?.fixture ?: return null
         val team = f.kind == JobKind.TEAM || f.comp.byTeams
-        fun side(k: String) = if (team) Competitions.teamLabel(k) else host.name(k)
+        fun side(k: String) = if (team) teamName(k) else host.name(k)
         return "${titleOf(p, f, ref.season)}, ${side(f.a)} 대 ${Ko.ieyo(side(f.b))}"
     }
 
@@ -1680,7 +1680,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val f = m.fixture
             val c = candidates[week]?.firstOrNull { it.ref == ref }
             val team = f.kind == JobKind.TEAM || f.comp.byTeams
-            fun side(k: String) = if (team) Competitions.teamLabel(k) else host.shown(k)
+            fun side(k: String) = if (team) teamName(k) else host.shown(k)
             val result = m.score?.let { s ->
                 "${num(s.scoreA)} : ${num(s.scoreB)}" + if (f.kind == JobKind.TEAM) " (보드)" else ""
             }
@@ -1698,6 +1698,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     }
 
     // ---- shared ---------------------------------------------------------------------------------------
+
+    /** A team's name: a club's (legacy club league, club cup), else a nation's or a family's ([Competitions.teamLabel] through the host). */
+    private fun teamName(id: String): String = host.name(id)
 
     /** "요트컵 8강 · 19주차", "1부 12라운드 · 12주차", "한국 1부 3라운드 · 5주차": where [f] is played. */
     private fun titleOf(p: SeasonPlan?, f: Fixture, season: Int): String {
