@@ -93,7 +93,9 @@ class ClubBookV2Test {
         for ((nation, clubs) in book.clubs.groupBy { it.nation }) {
             val n = clubs.sumOf { it.squad.size }
             val c = clubs.size
-            assertTrue(c == ClubBook.clubCount(n, config.clubSize) || Math.abs(n.toDouble() / c - config.clubSize) <= 2, "$nation: $c clubs for $n")
+            val want = ClubBook.clubCount(n, config.clubSize)
+            fun off(clubs: Int) = Math.abs(n.toDouble() / clubs - config.clubSize)
+            assertTrue(c == want || off(c) <= 2 || off(want) >= off(c), "$nation: $c clubs for $n")
             for (club in clubs) assertTrue(club.squad.size in ClubBook.minSize(n, c)..ClubBook.maxSize(n, c), "${club.id} of $nation: ${club.squad.size} of $n in $c")
         }
     }
@@ -428,6 +430,93 @@ class ClubBookV2Test {
         assertEquals(LeagueEvent("club_title", 1, listOf("c01"), listOf("KR", "156.0"), Comp.CLUB), events[0])
         assertEquals(listOf("2", "4", "a1", "c01", "c04", t[0].amount.toString()), events.last().args)
         assertEquals(listOf(LeagueEvent("draft", 1, listOf("e2_3", "c01"), listOf("1"), Comp.CLUB)), events.filter { it.kind == "draft" })
+    }
+
+    @Test
+    fun clubCountsHoldNearTheEdgeAndNewClubsReachTheFloor() {
+        // KR: one club of 13 (two would be 6.5 each: a second club). JP: two clubs of 11 (one of 11
+        // would be no closer to 8 than two of 5.5: both stay). CN: two of 10 (one of 10 is closer
+        // than two of 5: one goes). Nobody new, so the new Korean club is filled from c01.
+        val squads = mapOf("c01" to ("KR" to (1..13).map { "k$it" }), "c02" to ("JP" to (1..6).map { "j$it" }), "c03" to ("JP" to (7..11).map { "j$it" }))
+            .plus(mapOf("c04" to ("CN" to (1..5).map { "n$it" }), "c05" to ("CN" to (6..10).map { "n$it" })))
+        val text = buildString {
+            append("clubs 2\nmeta 3 0 - 6\n")
+            for ((id, p) in squads) append("club $id ${p.first} 도시 $id 도시%20$id 0 ffc62828 ffffffff 가 0 0 1 ${p.second.joinToString(",")}\n")
+        }
+        for ((_, p) in squads) for ((i, k) in p.second.withIndex()) {
+            extraNation[k] = p.first
+            extraRating[k] = 1500.0 - 10 * i
+        }
+        val book = ClubBook.decode(text)
+        val members = squads.values.flatMap { it.second }
+        fun closing(n: Int) = SeasonPlan(
+            Season.start(n, 5L + n, listOf("KR", "JP", "CN").map { c -> members.filter { extraNation[it] == c } }, false, Leagues.national(listOf("KR", "JP", "CN"), listOf(1, 1, 1))),
+            config,
+        )
+        val events = book.offseason(closing(1), ClubInput(members, ::rating, ::nation, config))
+        assertWhole(book, members)
+        assertSizes(book)
+        val kr = book.clubsOf("KR")
+        assertEquals(2, kr.size)
+        assertEquals(listOf(9, 4), kr.map { it.squad.size })
+        // c01 let its four weakest go, and the new club drafted them.
+        val moves = book.history.filter { it.season == 1 }
+        assertEquals((10..13).map { "k$it" }.toSet(), moves.filter { it.type == ClubMoveType.RELEASED && it.from == "c01" }.map { it.ai }.toSet())
+        assertEquals((10..13).map { "k$it" }.toSet(), kr[1].squad.toSet())
+        assertEquals(listOf("c02", "c03"), book.clubsOf("JP").map { it.id })
+        assertEquals(listOf("c04"), book.clubsOf("CN").map { it.id })
+        assertEquals(listOf("c05"), book.gone.map { it.id })
+        assertEquals(listOf(kr[1].id), events.filter { it.kind == "club_founded" }.map { it.keys.single() })
+        assertEquals(listOf(LeagueEvent("club_dissolved", 1, listOf("c05"), listOf("5"), Comp.CLUB)), events.filter { it.kind == "club_dissolved" })
+        // A season later the same members keep the same clubs.
+        val again = book.offseason(closing(2), ClubInput(members, ::rating, ::nation, config))
+        assertEquals(kr.map { it.id }, book.clubsOf("KR").map { it.id })
+        assertEquals(2, book.clubsOf("JP").size)
+        assertEquals(1, book.clubsOf("CN").size)
+        assertTrue(again.none { it.kind == "club_founded" || it.kind == "club_dissolved" }, again.toString())
+    }
+
+    @Test
+    fun onlyPlayersNewToTheLeagueJoinTheirMentorsClub() {
+        // Korea, two clubs; an evolved veteran who played the closing season is without a club (a
+        // cut file), and so is a pupil new to the league: both have a mentor in c01.
+        val text = "clubs 2\nmeta 3 0 - 3\n" +
+            "club c01 KR 도시 c01 도시%20c01 0 ffc62828 ffffffff 가 0 0 1 ${(1..8).joinToString(",") { "a$it" }}\n" +
+            "club c02 KR 도시 c02 도시%20c02 0 ffc62828 ffffffff 가 0 0 1 ${(1..7).joinToString(",") { "b$it" }}\n"
+        val book = ClubBook.decode(text)
+        val old = (1..8).map { "a$it" } + (1..7).map { "b$it" } + "e1_1"
+        for ((i, k) in (old + "e3_1").withIndex()) {
+            extraNation[k] = "KR"
+            extraRating[k] = 1500.0 - i
+        }
+        val closing = SeasonPlan(Season.start(1, 6L, listOf(old), false, Leagues.national(listOf("KR"), listOf(1))), config)
+        val mentors = mapOf("e1_1" to "a1", "e3_1" to "a1")
+        book.offseason(closing, ClubInput(old + "e3_1", ::rating, ::nation, config, mentor = { mentors[it] }))
+        val moves = book.history.filter { it.season == 1 }
+        assertEquals(listOf("e3_1" to "c01"), moves.filter { it.type == ClubMoveType.YOUTH }.map { it.ai to it.to })
+        assertEquals("c02", book.clubOf("e1_1"))
+        assertEquals(ClubMoveType.DRAFT, moves.single { it.ai == "e1_1" }.type)
+    }
+
+    @Test
+    fun aNewClubTakesNoNameOfADissolvedOne() {
+        val jp = Nations.of("JP")!!
+        // Japan's first new club after one dissolved one: city 1 and the first mascot of Japan's order.
+        val first = ClubNames.identity("c03", jp, 1, 3L, emptySet())
+        val text = "clubs 2\nmeta 3 4 - 3\n" +
+            "club c01 KR 도시 c01 도시%20c01 0 ffc62828 ffffffff 가 100 0 1 ${(1..8).joinToString(",") { "k$it" }}\n" +
+            "gone c02 JP ${first.name.replace(" ", "%20")} 0 ffc62828 ffffffff 가 3 1 4\n"
+        val kr = (1..8).map { "k$it" }
+        val jpKeys = (1..8).map { "j$it" }
+        for (k in kr) extraNation[k] = "KR"
+        for (k in jpKeys) extraNation[k] = "JP"
+        val book = ClubBook.decode(text)
+        val closing = SeasonPlan(Season.start(5, 7L, listOf(kr), false, Leagues.national(listOf("KR"), listOf(1))), config)
+        book.offseason(closing, ClubInput(kr + jpKeys, ::rating, ::nation, config))
+        val club = book.clubsOf("JP").single()
+        assertEquals(first.city, club.city)
+        assertNotEquals(first.name, club.name)
+        assertNotEquals(first.mascot, club.mascot)
     }
 
     @Test
