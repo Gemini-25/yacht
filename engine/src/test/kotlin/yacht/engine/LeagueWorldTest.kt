@@ -287,6 +287,41 @@ class LeagueWorldTest {
     }
 
     @Test
+    fun everyFileIsListedAndTheFederationIsWrittenAfterTheClubs() {
+        val config = LeagueConfig(divisions = 2, generated = 10, aging = false, clubs = 8, squad = 5, familyCup = false)
+        val w = world(config)
+        w.openFirstSeason(15L)
+        // Feed lines lead to their match: the fixture and the board.
+        val f = w.next(emptySet(), 0, 2)!!
+        val recorded = w.recordJob(play(f))
+        assertEquals(recorded.matches.indices.map { yacht.engine.league.MatchRef(1, f.comp, f.id, it) }, recorded.matches.map { it.ref })
+        assertTrue(recorded.matches.isNotEmpty())
+        season(w)
+        rollover(w)
+        val files = w.encodeFiles()
+        assertEquals(LeagueWorld.FILES.toSet(), files.keys)
+        assertEquals(
+            listOf(
+                LeagueWorld.HONOURS, LeagueWorld.ARCHIVE, LeagueWorld.STATS, LeagueWorld.ROSTER, LeagueWorld.CLUBS, LeagueWorld.FEDERATION,
+                LeagueWorld.HIGHLIGHTS, LeagueWorld.NEWS, LeagueWorld.LAB, LeagueWorld.NATIONS, LeagueWorld.LADDER, LeagueWorld.SEASON,
+            ),
+            files.keys.toList(),
+        )
+        // A legacy league: the 요트협회 keeps the season's statistics and tables nothing; no
+        // national news; the club league goes on. Read back as it was written.
+        assertTrue(w.federation.proposals.isEmpty() && w.federation.assembled == 1 && w.federation.stats(1) != null)
+        assertTrue(w.news.all.none { it.kind.startsWith("federation") || it.kind.startsWith("league_") || it.kind == "national_reform" })
+        assertEquals(yacht.engine.league.ClubBook.CLUB_LEAGUE, w.clubs!!.format)
+        assertTrue(w.plan!!.comps.any { it.comp == Comp.CLUB })
+        val back = LeagueWorld.decode(files, w.ladder.keys, emptyList(), config)
+        assertEquals(config, back.config)
+        assertEquals(files.getValue(LeagueWorld.FEDERATION), back.federation.encode())
+        // An older backup has no federation.txt: an empty 요트협회.
+        val old = LeagueWorld.decode(files - LeagueWorld.FEDERATION, w.ladder.keys, emptyList())
+        assertEquals(yacht.engine.league.Federation().encode(), old.federation.encode())
+    }
+
+    @Test
     fun olderSeasonFilesCountGamesFromTheirResults() {
         val w = world(LeagueConfig(divisions = 1, matchFormat = yacht.engine.league.MatchFormat.SINGLE, generated = 0, aging = false, clubs = 0))
         w.openFirstSeason(11L)

@@ -89,6 +89,11 @@ object News {
         "wc_open", "cc_open", "draw_wc", "draw_cc", "nation_squad", "ko_set", "rivalry", "nation_awards", "style_trend", "draw_legend", "player_of_week",
         "hall_of_fame", "dynasty", "legend_match", "draw_cup", "draw_cl", "draw_super", "draw_allstar",
         "draw_family", "season_review",
+        // National leagues, clubs, the international stage and the 요트협회.
+        "league_title", "league_titles_digest", "league_moves", "national_reform", "league_formed", "league_ranking",
+        "federation_decision", "federation_assembly", "club_title", "club_champions", "club_reform", "club_founded",
+        "club_dissolved", "club_digest", "transfer_abroad", "return_home", "transfer_window", "youth", "market_digest",
+        "draw_ccl", "draw_clubcup", "milestones", "dynasties", "pupils", "learned_rules",
     )
 
     /** Titles of cups held every few seasons: a run of them is counted in editions (대회). */
@@ -96,6 +101,12 @@ object News {
 
     /** Headline of the plain article for a kind without templates (or an event missing its keys). */
     const val PLAIN_HEADLINE = "리그 소식"
+
+    /** The last argument that marks an event of a national season (its awards, the lower tiers' digest). */
+    const val NATIONAL = "national"
+
+    /** The last argument of a transfer abroad of a league champion or award winner (bigger news). */
+    const val STAR = "star"
 
     /** Korean names of the record codes (other record names are shown as they are). */
     val RECORD_LABELS: Map<String, String> = mapOf(
@@ -143,7 +154,7 @@ object News {
         e.args.lastOrNull()?.takeIf { it.startsWith("@") }?.let { v["comp"] = it.drop(1) }
         // Keys are AIs, or club and team ids in the club and team competitions (and the clubs of a
         // transfer or draft): an id the club or team names do not know is an AI's.
-        val clubKeys = e.comp == Comp.CLUB
+        val clubKeys = e.comp == Comp.CLUB || e.comp == Comp.CLUB_CUP
         val teamKeys = e.comp == Comp.FAMILY || e.comp == Comp.ALL_STAR ||
             (e.comp == Comp.WORLD_CUP || e.comp == Comp.CONTINENTAL) && e.kind != "nation_squad" && e.kind != "nation_awards"
         fun who(i: Int, k: String): String {
@@ -282,8 +293,8 @@ object News {
             val importance = when {
                 e.comp == Comp.LEAGUE || e.comp == Comp.TITLE_PLAYOFF -> if (division == 0) 5 else 3
                 e.comp == Comp.CHAMPIONS || e.comp == Comp.WORLD_CUP -> 5
-                e.comp == Comp.CONTINENTAL -> 4
-                e.comp == Comp.CUP || e.comp == Comp.FAMILY || e.comp == Comp.CLUB -> 4
+                e.comp == Comp.CONTINENTAL || e.comp == Comp.CONT_CHAMPIONS -> 4
+                e.comp == Comp.CUP || e.comp == Comp.FAMILY || e.comp == Comp.CLUB || e.comp == Comp.CLUB_CUP -> 4
                 e.comp == Comp.ALL_STAR -> 2
                 else -> 3
             }
@@ -538,20 +549,34 @@ object News {
             ) to 5
         }
         "lower_tiers" -> {
-            // A pyramid's lower tiers in one article: (group champions, players promoted, first tier, last tier).
+            // A pyramid's lower tiers in one article: (group champions, players promoted, first tier, last tier);
+            // national leagues' (champions of every lower tier, players promoted, 1, deepest tier, "national").
             arg(0)?.let { v["count"] = it }
             arg(1)?.let { v["up"] = it }
             arg(2)?.toIntOrNull()?.let { v["from"] = "${it + 1}부" }
             arg(3)?.toIntOrNull()?.let { v["to"] = "${it + 1}부" }
-            listOf(
-                T("지역 리그 결산: {from}~{to}", "{from}부터 {to}까지 지역 리그 {count}개 조의 우승자가 가려졌어요. {seeds|이} 조 1위에 올랐고, 모두 {up}명이 한 단계 위로 올라가요."),
-                T("{seeds}, 지역 리그 정상", "시즌 {season} 지역 리그({from}~{to})에서 {count}명이 조 우승을 차지했어요. 다음 시즌에는 {up}명이 윗 리그에서 새 도전을 시작해요."),
-            ) to 2
+            if (arg(4) == NATIONAL) {
+                v["range"] = if (v["from"] == v["to"]) v["from"].orEmpty() else "${v["from"].orEmpty()}~${v["to"].orEmpty()}"
+                listOf(
+                    T("각 리그 하위 부 결산", "각 리그의 {range}에서 우승자 {count}명이 가려졌어요. {seeds|이} 그중 돋보였고, 모두 {up}명이 한 단계 위로 올라가요."),
+                    T("{seeds}, 하위 부 정상", "시즌 {season} 각 리그의 {range}에서 {count}명이 우승을 차지했어요. 다음 시즌에는 {up}명이 한 단계 위에서 새 도전을 시작해요."),
+                ) to 2
+            } else {
+                listOf(
+                    T("지역 리그 결산: {from}~{to}", "{from}부터 {to}까지 지역 리그 {count}개 조의 우승자가 가려졌어요. {seeds|이} 조 1위에 올랐고, 모두 {up}명이 한 단계 위로 올라가요."),
+                    T("{seeds}, 지역 리그 정상", "시즌 {season} 지역 리그({from}~{to})에서 {count}명이 조 우승을 차지했어요. 다음 시즌에는 {up}명이 윗 리그에서 새 도전을 시작해요."),
+                ) to 2
+            }
         }
         "award" -> {
             val kind = arg(0)
-            kind?.let { v["award"] = AWARD_LABELS[it] ?: it }
-            listOf(
+            // A national season's awards are the 요트협회's, and its MVP is the player of the year.
+            val national = arg(1) == NATIONAL
+            kind?.let { v["award"] = if (national && it == "MVP") "올해의 선수" else AWARD_LABELS[it] ?: it }
+            if (national) listOf(
+                T("{a}, 시즌 {season} {award} 수상", "요트협회가 시즌 {season} {award|으로} {a|을} 뽑았어요. 한 시즌 동안 가장 빛난 이름이에요."),
+                T("요트협회 시상: {award} {a}", "요트협회가 시즌 {season} {award} 수상자를 발표했어요. 주인공은 {a|이에요}."),
+            ) to (if (kind == "MVP") 5 else 4) else listOf(
                 T("{a}, 시즌 {season} {award} 수상", "{a|이} 시즌 {season} {award}의 주인공이 됐어요. 한 시즌 동안 가장 빛난 이름이에요."),
                 T("{award|은} {a}", "시즌 {season} {award|은} {a}에게 돌아갔어요. 시상식의 주인공이 된 소감이 궁금해요."),
             ) to if (kind == "MVP") 5 else 4
@@ -573,14 +598,16 @@ object News {
         "title_race" -> {
             val gap = arg(0)
             gap?.let { v["gap"] = it }
+            // A national league's race names its league (the third argument).
+            v["top"] = arg(2)?.let { "${LeagueIds.label(it)} 1부" } ?: "1부 리그"
             when {
                 gap == "0" -> listOf(
                     T("선두 다툼 안갯속: {a}·{b} 승점 동률", "{a|과} {b}의 승점이 같아요. 남은 경기에서 한 번만 미끄러져도 순위가 바뀌어요."),
-                    T("{a}·{b}, 승점 같은 채 선두 경쟁", "1부 리그 1위와 2위의 승점이 같아요. 우승의 향방은 마지막까지 알 수 없어요."),
+                    T("{a}·{b}, 승점 같은 채 선두 경쟁", "{top} 1위와 2위의 승점이 같아요. 우승의 향방은 마지막까지 알 수 없어요."),
                 ) to 3
                 arg(1) == "lead" -> listOf(
-                    T("선두 교체! {a}, 1위로", "{a|이} {b|을} 끌어내리고 1부 리그 선두에 올랐어요. 두 선수의 승점 차는 {gap}점이에요."),
-                    T("{a}, 1부 리그 선두 등극", "{a|이} 1위 자리를 차지했어요. 2위 {b|과} 승점 {gap}점 차라 아직 안심할 수 없어요."),
+                    T("선두 교체! {a}, 1위로", "{a|이} {b|을} 끌어내리고 {top} 선두에 올랐어요. 두 선수의 승점 차는 {gap}점이에요."),
+                    T("{a}, {top} 선두 등극", "{a|이} 1위 자리를 차지했어요. 2위 {b|과} 승점 {gap}점 차라 아직 안심할 수 없어요."),
                 ) to 4
                 else -> listOf(
                     T("우승 경쟁 점입가경: {a}·{b} {gap}점 차", "시즌 막바지, 선두 {a|과} 2위 {b}의 승점 차가 {gap}점으로 좁혀졌어요. 마지막까지 우승의 향방을 알 수 없어요."),
@@ -596,10 +623,25 @@ object News {
             // The stats module sends (RUN, count, title kind) for runs of titles.
             val kind = arg(0).orEmpty().let { if (it == "RUN") arg(2).orEmpty() else it }
             arg(1)?.let { v["count"] = it }
+            // A national league's double, treble or unbeaten title names its league (the title kind, "L0.KR").
+            val league = arg(2)?.takeIf { HonourKind.leagueOf(it) != null }?.let { honourLabel(it) }
+            league?.let { v["lg"] = it }
             when (kind.lowercase(Locale.ROOT)) {
-                "double" -> listOf(T("{a}, 리그·컵 더블 달성", "{a|이} 한 시즌에 리그와 요트컵을 모두 차지했어요. 흔치 않은 더블이에요."))
-                "treble" -> listOf(T("{a}, 꿈의 트레블", "{a|이} 리그, 요트컵, 챔피언스 리그를 모두 들어 올렸어요. 리그 역사에 남을 시즌이에요."))
-                "unbeaten" -> listOf(T("{a}, 무패 우승", "{a|이} 한 경기도 지지 않고 리그 정상에 섰어요. 완벽한 시즌이에요."))
+                "double" -> if (league != null) {
+                    listOf(T("{a}, {lg}·요트컵 더블 달성", "{a|이} 한 시즌에 {lg|과} 요트컵을 모두 차지했어요. 흔치 않은 더블이에요."))
+                } else {
+                    listOf(T("{a}, 리그·컵 더블 달성", "{a|이} 한 시즌에 리그와 요트컵을 모두 차지했어요. 흔치 않은 더블이에요."))
+                }
+                "treble" -> if (league != null) {
+                    listOf(T("{a}, 꿈의 트레블", "{a|이} {lg}, 요트컵에 국제 대회 우승까지 한 시즌에 모두 이뤘어요. 리그 역사에 남을 시즌이에요."))
+                } else {
+                    listOf(T("{a}, 꿈의 트레블", "{a|이} 리그, 요트컵, 챔피언스 리그를 모두 들어 올렸어요. 리그 역사에 남을 시즌이에요."))
+                }
+                "unbeaten" -> if (league != null) {
+                    listOf(T("{a}, {lg} 무패 우승", "{a|이} 한 경기도 지지 않고 {lg} 정상에 섰어요. 완벽한 시즌이에요."))
+                } else {
+                    listOf(T("{a}, 무패 우승", "{a|이} 한 경기도 지지 않고 리그 정상에 섰어요. 완벽한 시즌이에요."))
+                }
                 else -> {
                     v["dyn"] = honourLabel(kind) ?: e.comp?.label ?: Comp.LEAGUE.label
                     // Cups held every few seasons count editions, not seasons.
@@ -736,7 +778,8 @@ object News {
             arg(0)?.let { v["week"] = it }
             arg(1)?.let { v["avg"] = it }
             arg(2)?.let { v["best"] = it }
-            arg(3)?.toIntOrNull()?.let { v["div"] = "${it + 1}부" }
+            // The tier within its league; a national league's pick names the league ("한국 1부").
+            arg(3)?.toIntOrNull()?.let { t -> v["div"] = arg(4)?.let { LeagueIds.division(it, t) } ?: "${t + 1}부" }
             listOf(
                 T("{week}주차 이 주의 선수: {a}", "{a|이} {week}주차 경기에서 {b|을} 꺾으며 평균 {avg}점을 기록했어요. 이번 주 리그에서 가장 빛난 선수예요."),
                 T("이 주의 선수 {a}, 평균 {avg}점", "[[{div} ]]{a|이} {b|을} 상대로 최고 {best}점까지 올렸어요. {week}주차 이 주의 선수로 뽑혔어요."),
@@ -766,15 +809,319 @@ object News {
             ) to 3
         }
         "season_review" -> {
-            // [league champion, cup winner] (either may be "-").
-            if (v["a"] != null) {
-                listOf(
+            // [league champion, cup winner] (either may be "-"); national leagues' (the best-ranked league).
+            arg(0)?.let { v["lg"] = LeagueIds.label(it) }
+            when {
+                v["a"] != null && v["lg"] != null -> listOf(
+                    T("시즌 {season} 결산: {a}의 해", "시즌 {season|이} 막을 내렸어요. {a|이} {lg} 정상에 올랐어요.[[ 요트컵은 {b|이} 가져갔어요.]]"),
+                    T("시즌 {season} 마무리, {lg} 챔피언은 {a}", "치열했던 시즌 {season|이} 끝났어요. {lg} 우승 트로피는 {a}에게 돌아갔고, 다음 시즌 준비가 시작돼요."),
+                )
+                v["a"] != null -> listOf(
                     T("시즌 {season} 결산: {a}의 해", "시즌 {season|이} 막을 내렸어요. {a|이} 1부 리그 정상에 올랐어요.[[ 요트컵은 {b|이} 가져갔어요.]]"),
                     T("시즌 {season} 마무리, 챔피언은 {a}", "치열했던 시즌 {season|이} 끝났어요. 우승 트로피는 {a}에게 돌아갔고, 다음 시즌 준비가 시작돼요."),
                 )
-            } else {
-                listOf(T("시즌 {season} 결산", "시즌 {season|이} 막을 내렸어요. 시상식과 기록은 기록 탭에서 볼 수 있어요."))
+                else -> listOf(T("시즌 {season} 결산", "시즌 {season|이} 막을 내렸어요. 시상식과 기록은 기록 탭에서 볼 수 있어요."))
             } to 5
+        }
+        else -> worldTemplates(e, v, arg, club, name)
+    }
+
+    /**
+     * The national leagues', clubs', international stage's and 요트협회's kinds (design ENG 1.12, 2,
+     * 3, 5.2, 6.8): league ids and the 요트협회's texts come in the arguments, clubs as keys or by
+     * [club], players by [name].
+     */
+    private fun worldTemplates(
+        e: LeagueEvent,
+        v: MutableMap<String, String>,
+        arg: (Int) -> String?,
+        club: (String) -> String,
+        name: (String) -> String,
+    ): Pair<List<T>, Int> = when (e.kind) {
+        "league_title" -> {
+            // [champion] (league, "0", "po" when its title playoff decided it, rank among the best-ranked).
+            arg(0)?.let { v["lg"] = LeagueIds.label(it) }
+            val rank = arg(3)?.toIntOrNull() ?: 0
+            if (arg(2) == "po") listOf(
+                T("{a}, 플레이오프 끝에 {lg} 우승", "{a|이} {lg} 우승 플레이오프를 이겨 내고 시즌 {season} 챔피언이 됐어요. 마지막 고비를 넘은 끝에 들어 올린 트로피예요."),
+                T("{lg} 플레이오프의 승자는 {a}", "시즌 {season} {lg} 우승은 플레이오프 결승에서 웃은 {a}에게 돌아갔어요. 다음 시즌 국제 무대에서도 활약이 기대돼요."),
+            ) to (if (rank < 4) 4 else 3) else listOf(
+                T("{a}, {lg} 우승!", "{a|이} 시즌 {season} {lg} 정상에 올랐어요. 1부 1위로 시즌을 마치며 우승을 확정했어요."),
+                T("{lg}의 주인은 {a}", "시즌 {season} {lg} 우승 트로피는 {a}에게 돌아갔어요. 다음 시즌 국제 무대에서도 활약이 기대돼요."),
+            ) to if (rank < 4) 4 else 3
+        }
+        "league_titles_digest" -> {
+            // [champions] (count, then "league:key" each).
+            arg(0)?.let { v["count"] = it }
+            val named = e.args.drop(1).take(3).mapNotNull { p ->
+                val id = p.substringBefore(':', "")
+                val k = p.substringAfter(':', "")
+                if (id.isEmpty() || k.isEmpty()) null else "${name(k)}(${LeagueIds.short(id)})"
+            }
+            if (named.isNotEmpty()) v["list"] = named.joinToString("·")
+            listOf(
+                T("{count}개 리그 챔피언 확정", "{list} 등 {count}개 리그에서 시즌 {season} 챔피언이 가려졌어요. 다음 시즌 국제 무대에서 이들의 활약을 지켜봐요."),
+                T("리그 챔피언 소식: {a} 외", "시즌 {season} 리그 챔피언이 모두 가려졌어요. 각 리그 정상에 오른 선수는 {list} 등 {count}명이에요."),
+            ) to 2
+        }
+        "league_moves" -> {
+            // [promoted…, relegated…] (league, ups, downs): a league's 1부 moves in one article.
+            arg(0)?.let { v["lg"] = LeagueIds.label(it) }
+            val ups = arg(1)?.toIntOrNull() ?: 0
+            val shown = e.keys.map { name(it) }
+            shown.take(ups).joinToString("·").takeIf { it.isNotEmpty() }?.let { v["ups"] = it }
+            shown.drop(ups).joinToString("·").takeIf { it.isNotEmpty() }?.let { v["downs"] = it }
+            when {
+                v["ups"] != null && v["downs"] != null -> listOf(
+                    T("{lg} 1부 승강 확정", "{ups} 선수가 1부로 올라오고, {downs} 선수가 2부로 내려가요. 다음 시즌 {lg} 1부의 얼굴이 바뀌어요."),
+                )
+                v["ups"] != null -> listOf(
+                    T("{lg} 1부 승격 확정", "{ups} 선수가 1부로 올라와요. 다음 시즌 {lg} 1부에서 새 도전을 시작해요."),
+                )
+                else -> listOf(
+                    T("{lg} 1부 강등 확정", "{downs} 선수가 2부로 내려가요. 한 시즌 만에 돌아올 수 있을지 관심이 모여요."),
+                )
+            } to 3
+        }
+        "national_reform" -> {
+            // [] (national leagues, regional leagues, every id).
+            val own = arg(0)?.toIntOrNull() ?: 0
+            val regional = arg(1)?.toIntOrNull() ?: 0
+            listOfNotNull(if (own > 0) "국가 리그 ${own}개" else null, if (regional > 0) "연합 리그 ${regional}개" else null)
+                .takeIf { it.isNotEmpty() }?.let { v["formed"] = it.joinToString("와 ") }
+            listOf(
+                T("리그 개편: 국가 리그 시대 개막", "시즌 {season}부터 선수들은 소속 클럽이 있는 나라의 리그에서 뛰어요. {formed|이} 새로 출범했어요. 리그마다 1부부터 차례로 승강이 이어지고, 각 리그 챔피언은 국제 무대에 나가요."),
+            ) to 5
+        }
+        "league_formed" -> {
+            // [] (league, tiers, members).
+            arg(0)?.let { v["lg"] = LeagueIds.label(it) }
+            arg(1)?.let { v["tiers"] = it }
+            arg(2)?.let { v["n"] = it }
+            listOf(
+                T("{lg} 출범", "{lg|이} 시즌 {season}에 새로 출범해요. 선수 {n}명이 {tiers}개 부로 나뉘어 첫 시즌을 치러요."),
+            ) to 3
+        }
+        "league_ranking" -> {
+            // [] (the 3 best leagues, the biggest climber or "-", its climb).
+            val top = (0..2).mapNotNull { arg(it) }.map { LeagueIds.label(it) }
+            top.firstOrNull()?.let { v["first"] = it }
+            if (top.isNotEmpty()) v["top3"] = top.joinToString("·")
+            arg(3)?.let { v["up"] = LeagueIds.label(it) }
+            arg(4)?.takeIf { it != "0" }?.let { v["d"] = it }
+            listOf(
+                T("리그 랭킹 발표: 1위 {first}", "최근 5시즌 국제 대회 성적으로 매긴 리그 랭킹에서 {first|이} 1위예요.[[ {up|은} {d}계단 올랐어요.]] 이 순위로 다음 시즌 대륙 챔피언스 출전권과 챔피언스 리그 직행이 정해져요."),
+                T("시즌 {season} 리그 랭킹: {first} 1위", "요트협회가 리그 랭킹을 발표했어요. 1위부터 {top3} 순이에요.[[ {up|은} 한 시즌 만에 {d}계단 뛰었어요.]]"),
+            ) to 3
+        }
+        "federation_decision" -> {
+            // [] (title, result A/R/V, by U/C/-, yes, no, season it applies from).
+            arg(0)?.let { v["title"] = it }
+            arg(5)?.let { v["from"] = it }
+            val yes = arg(3)?.toIntOrNull() ?: 0
+            val seats = yes + (arg(4)?.toIntOrNull() ?: 0)
+            v["seats"] = seats.toString()
+            v["yes"] = yes.toString()
+            val result = arg(1)
+            val by = arg(2)
+            when {
+                result == "V" && by == null -> listOf(
+                    T("‘{title}’ 무효", "요트협회가 쉬고 있어 ‘{title}’ 안건은 투표 없이 무효가 됐어요. 규칙은 그대로예요."),
+                ) to 2
+                result == "V" -> listOf(
+                    T("‘{title}’ 무효", "‘{title}’ 안건은 무효가 됐어요. 규칙이 이미 바뀌어 이 안건은 적용하지 않았어요."),
+                ) to 2
+                result == "A" && by == "U" -> listOf(
+                    T("‘{title}’ 가결", "‘{title}’ 안건이 가결됐어요. 직접 찬성한 안건이에요. 시즌 {from}부터 적용돼요."),
+                ) to 4
+                result == "A" -> listOf(
+                    T("‘{title}’ 가결", "‘{title}’ 안건이 가결됐어요. 선수 위원회 {seats}명 가운데 {yes}명이 찬성했어요. 시즌 {from}부터 적용돼요."),
+                ) to 4
+                by == "U" -> listOf(
+                    T("‘{title}’ 부결", "‘{title}’ 안건이 부결됐어요. 직접 반대한 안건이에요. 규칙은 그대로예요."),
+                ) to 3
+                yes == 0 -> listOf(
+                    T("‘{title}’ 부결", "‘{title}’ 안건이 부결됐어요. 선수 위원회 {seats}명 가운데 아무도 찬성하지 않았어요."),
+                ) to 3
+                else -> listOf(
+                    T("‘{title}’ 부결", "‘{title}’ 안건이 부결됐어요. 선수 위원회 {seats}명 가운데 {yes}명만 찬성했어요. 규칙은 그대로예요."),
+                ) to 3
+            }
+        }
+        "federation_assembly" -> {
+            // [] (count, the season voting, the season they apply from, each proposal's title).
+            arg(0)?.let { v["n"] = it }
+            arg(1)?.let { v["vote"] = it }
+            arg(2)?.let { v["apply"] = it }
+            val titles = e.args.drop(3).filter { it.isNotBlank() }
+            if (titles.isNotEmpty()) v["items"] = titles.joinToString(", ") { "‘$it’" }
+            if (titles.isEmpty()) listOf(
+                T("요트협회 총회, 규칙은 그대로", "요트협회 총회는 이번에 규칙을 그대로 두기로 했어요. 다음 총회는 시즌 {vote|이} 끝난 뒤에 열려요."),
+            ) to 2 else listOf(
+                T("요트협회 총회, 안건 {n}개 상정", "요트협회 정기 총회가 안건 {n}개를 올렸어요. 안건은 {items|이에요}. 시즌 {vote} 동안 투표를 받아 시즌 {apply}부터 적용해요."),
+                T("요트협회, 규칙 변경 안건 {n}개 투표", "요트협회가 {items|을} 투표에 부쳤어요. 시즌 {vote} 동안 찬반을 모아 가결되면 시즌 {apply}부터 적용해요."),
+            ) to 3
+        }
+        "club_title" -> {
+            // [club] (league or "-", the club's points).
+            arg(0)?.let { v["lg"] = LeagueIds.label(it) }
+            arg(1)?.let { v["pts"] = it }
+            listOf(
+                T("{a}, [[{lg} ]]클럽 순위 1위", "{a|이} 시즌 {season}[[ {lg}]] 클럽 순위 1위에 올랐어요. 소속 선수들이 모은 클럽 점수는 {pts}점이에요."),
+                T("[[{lg} ]]최강 클럽은 {a}", "시즌 {season}[[ {lg}]] 클럽 순위 맨 위에 {a|이} 이름을 올렸어요. 상위 선수들의 성적과 우승을 더한 점수가 {pts}점이에요."),
+            ) to 3
+        }
+        "club_champions" -> {
+            // [clubs of the next leagues] (leagues beyond those told).
+            arg(0)?.let { v["n"] = it }
+            listOf(
+                T("{n}개 리그 클럽 1위 확정", "{seeds} 등 {n}개 리그에서도 클럽 1위가 가려졌어요. 클럽 순위는 소속 선수들의 리그 성적과 우승으로 매겨요."),
+            ) to 2
+        }
+        "club_reform" -> {
+            // [] (clubs, nations).
+            arg(0)?.let { v["clubs"] = it }
+            arg(1)?.let { v["nations"] = it }
+            listOf(
+                T("클럽 개편: {nations}개국 {clubs}개 클럽", "클럽이 {nations}개국 {clubs}개 클럽으로 새로 태어났어요. 이제 모든 선수가 자기 나라 클럽에 속하고, 클럽의 나라 리그에서 뛰어요."),
+            ) to 4
+        }
+        "club_founded" -> {
+            // [club] (nation).
+            Nations.of(arg(0))?.let { v["nat"] = it.short }
+            listOf(
+                T("{a} 창단", "[[{nat}에 ]]새 클럽 {a|이} 생겼어요. 드래프트로 선수들을 모아 다음 시즌 첫발을 내디뎌요."),
+            ) to 2
+        }
+        "club_dissolved" -> {
+            // [club] (members released).
+            arg(0)?.takeIf { it != "0" }?.let { v["n"] = it }
+            listOf(
+                T("{a} 해체", "{a|이} 클럽 수 조정으로 해체됐어요.[[ 소속 선수 {n}명은 드래프트로 새 클럽을 찾아요.]] 클럽의 기록은 역사로 남아요."),
+            ) to 2
+        }
+        "club_digest" -> {
+            // [≤ 6 clubs, founded first] (founded, dissolved).
+            val founded = arg(0)?.toIntOrNull() ?: 0
+            val dissolved = arg(1)?.toIntOrNull() ?: 0
+            v["change"] = when {
+                founded > 0 && dissolved > 0 -> "클럽 ${founded}곳이 새로 생기고 ${dissolved}곳이 해체됐어요"
+                founded > 0 -> "클럽 ${founded}곳이 새로 생겼어요"
+                else -> "클럽 ${dissolved}곳이 해체됐어요"
+            }
+            v["nf"] = founded.toString()
+            v["nd"] = dissolved.toString()
+            listOf(
+                T("클럽 재편: 창단 {nf}곳·해체 {nd}곳", "이번 오프시즌에 {change}. 나라마다 선수 수에 맞춰 클럽 수를 조정했어요.[[ 바뀐 클럽에는 {seeds} 등이 있어요.]]"),
+            ) to 2
+        }
+        "transfer_abroad" -> {
+            // [ai, from club, to club] (from league, to league, fee[, "star"]).
+            arg(0)?.let { v["fromLg"] = LeagueIds.label(it) }
+            arg(1)?.let { v["toLg"] = LeagueIds.label(it) }
+            arg(2)?.takeIf { it != "0" }?.let { v["fee"] = number(it) }
+            listOf(
+                T("{a}, {toLg|으로} 해외 이적", "{a|이}[[ {b|을} 떠나]] {toLg} {c|으로} 옮겨요.[[ 이적료는 {fee|이에요}.]] 다음 시즌부터 {toLg} 1부에서 뛰어요."),
+                T("{c}, {fromLg}의 {a} 영입", "{c|이}[[ {fromLg}]] {b}에서 뛰던 {a|을} 데려왔어요.[[ 이적료 {fee|을} 들인 승부수예요.]] {a|은} 다음 시즌 {toLg} 1부에서 뛰어요."),
+            ) to if (arg(3) == STAR) 4 else 3
+        }
+        "return_home" -> {
+            // [ai, from club, to club or "-"] (from league, to league).
+            arg(0)?.let { v["fromLg"] = LeagueIds.label(it) }
+            arg(1)?.let { v["toLg"] = LeagueIds.label(it) }
+            listOf(
+                T("{a}, 고국으로 돌아와요", "{a|이}[[ {fromLg}]] {b} 생활을 마치고[[ {c|으로}]] 돌아와요. 다음 시즌 {toLg}에서 다시 정상을 노려요."),
+                T("돌아온 {a}", "해외 무대를 누빈 {a|이} 고국으로 돌아와요.[[ 새 클럽은 {c|이에요}.]] 우승 경험이 고국 리그에 힘을 보탤 거예요."),
+            ) to 2
+        }
+        "transfer_window" -> {
+            // [≤ 6 of them] (moved abroad, came home).
+            val abroad = arg(0)?.toIntOrNull() ?: 0
+            val home = arg(1)?.toIntOrNull() ?: 0
+            v["moves"] = when {
+                abroad > 0 && home > 0 -> "${abroad}명이 해외 리그로 옮기고 ${home}명이 고국으로 돌아왔어요"
+                abroad > 0 -> "${abroad}명이 해외 리그로 옮겼어요"
+                else -> "${home}명이 고국으로 돌아왔어요"
+            }
+            v["n"] = (abroad + home).toString()
+            listOf(
+                T("해외 이적 시장 결산: {n}명 이동", "이번 오프시즌에 {moves}. 리그를 옮긴 선수는 다음 시즌 새 리그에서 뛰어요.[[ {seeds} 등이 새 무대에 서요.]]"),
+            ) to 2
+        }
+        "youth" -> {
+            // [ai, club]: a pupil joins its mentor's club.
+            v.remove("b")
+            e.keys.getOrNull(1)?.takeIf { it != "-" }?.let { v["club"] = club(it) }
+            listOf(
+                T("{a}, {club} 유스 입단", "스승이 뛰는 {club|이} {a|을} 유스로 받아들였어요. {a|은} 다음 시즌 {club} 유니폼을 입고 데뷔해요."),
+            ) to 1
+        }
+        "market_digest" -> {
+            // [drafted and bought] (domestic deals, rookies, biggest-fee ai, from club, to club, fee).
+            val deals = arg(0)?.toIntOrNull() ?: 0
+            val rookies = arg(1)?.toIntOrNull() ?: 0
+            v["market"] = when {
+                deals > 0 && rookies > 0 -> "국내 이적 ${deals}건이 성사되고 신인 ${rookies}명이 드래프트로 새 클럽을 찾았어요"
+                deals > 0 -> "국내 이적 ${deals}건이 성사됐어요"
+                else -> "신인 ${rookies}명이 드래프트로 새 클럽을 찾았어요"
+            }
+            arg(2)?.let { v["big"] = name(it) }
+            arg(3)?.let { v["bfrom"] = club(it) }
+            arg(4)?.let { v["bto"] = club(it) }
+            arg(5)?.takeIf { it != "0" }?.let { v["fee"] = number(it) }
+            // The players it names when there are any, else the market alone.
+            if (v["seeds"] != null) listOf(
+                T("오프시즌 이적 시장 결산", "이번 오프시즌에 {market}.[[ 가장 큰 이적은 이적료 {fee}에 {bfrom}에서 {bto|으로} 옮긴 {big|이에요}.]] {seeds} 등이 주목받는 이름이에요."),
+            ) to 2 else listOf(
+                T("이적 시장 마감", "이번 오프시즌에 {market}.[[ 가장 큰 이적은 {bfrom}에서 {bto|으로} 옮긴 {big|이에요}.]] 새 시즌 클럽들의 판도가 궁금해요."),
+            ) to 2
+        }
+        "draw_ccl" -> {
+            // [the section's entrants, by seed] (section title).
+            v["title"] = arg(0) ?: v["comp"].orEmpty()
+            listOf(
+                T("{title} 대진 확정", "시즌 {season} {title}에 {count}명이 나서요. 1번 시드 {a|과} {b}·{c} 등이 우승을 노려요."),
+                T("{title} 개막, 1번 시드는 {a}", "각 리그 챔피언과 상위권 선수 {count}명이 {title} 정상을 다퉈요. 조 2위 안에 들어야 토너먼트에 올라요."),
+            ) to 2
+        }
+        "milestones" -> {
+            // [≤ 6 players] (count, first titles): a national close's title milestones beyond the best-rated.
+            arg(0)?.let { v["n"] = it }
+            arg(1)?.takeIf { it != "0" }?.let { v["firsts"] = it }
+            if (arg(1) == arg(0)) listOf(
+                T("첫 우승의 기쁨, {n}명", "이번 시즌 {n}명이 데뷔 첫 우승을 차지했어요. {seeds} 등이 처음으로 트로피를 들어 올렸어요."),
+            ) to 2 else listOf(
+                T("우승 이정표 {n}건", "이번 시즌 {n}명이 우승으로 새 이정표를 세웠어요.[[ 그중 {firsts}명은 데뷔 첫 우승이에요.]] {seeds} 등이 이름을 올렸어요."),
+            ) to 2
+        }
+        "dynasties" -> {
+            // [≤ 6 players] (count): a national close's runs and unbeaten seasons in titles that are not major.
+            arg(0)?.let { v["n"] = it }
+            listOf(
+                T("각 리그의 왕조 {n}곳", "{seeds} 등 {n}명이 각 리그에서 연속 우승이나 무패 우승을 이어 갔어요. 리그마다 새 강자가 자리를 굳히고 있어요."),
+            ) to 2
+        }
+        "pupils" -> {
+            // [≤ 6 pupils] (count): a national close's debuts of pupils beyond the best-rated.
+            arg(0)?.let { v["n"] = it }
+            listOf(
+                T("제자 {n}명 데뷔", "{seeds} 등 스승에게 배운 제자 {n}명이 리그에 데뷔해요. 모두 자기 나라 리그의 가장 낮은 부에서 첫 시즌을 시작해요."),
+            ) to 1
+        }
+        "learned_rules" -> {
+            // [≤ 6 players] (count): a national close's players who stopped misreading a rule, beyond the best-rated.
+            arg(0)?.let { v["n"] = it }
+            listOf(
+                T("규칙 착각에서 벗어난 {n}명", "{seeds} 등 {n}명이 잘못 알던 규칙을 바로잡았어요. 다음 시즌 진짜 실력이 나올지 지켜봐요."),
+            ) to 1
+        }
+        "draw_clubcup" -> {
+            // [clubs] (group).
+            v["group"] = arg(0) ?: "조"
+            listOf(
+                T("클럽 대항전 {group} 편성", "{group}에서 {seeds|이} 맞붙어요. 각 클럽은 소속 선수 가운데 레이팅 상위 5명으로 팀을 꾸려요."),
+                T("클럽 대항전 개막, {group}에 {seeds}", "각 리그 클럽 1위들이 맞붙는 클럽 대항전이 시작돼요. {group}에서는 {seeds|이} 경쟁해요."),
+            ) to 2
         }
         else -> emptyList<T>() to 1
     }
@@ -820,8 +1167,31 @@ object News {
         ) to 2
     }
 
-    /** The Korean name of a competition honour kind ("L0" 1부 리그, "CUP" 요트컵, ...); null when unknown. */
-    private fun honourLabel(kind: String): String? = when {
+    /**
+     * The Korean name of a competition honour kind ("L0" 1부 리그, "CUP" 요트컵, ...), a national
+     * league's by its league ("L0.KR" 한국 리그, "L1.KR" 한국 2부, [HonourKind.leagueOf]) and a
+     * confederation's by its section ("CCL.ASIA" 아시아 챔피언스); null when unknown.
+     */
+    private fun honourLabel(kind: String): String? {
+        val base = HonourKind.base(kind)
+        val league = HonourKind.leagueOf(kind)
+        if (league != null) return when {
+            HonourKind.tier(kind) == 0 -> LeagueIds.label(league)
+            HonourKind.isDivision(kind) -> LeagueIds.division(league, HonourKind.tier(kind)!!)
+            base == "REG" -> "${LeagueIds.short(league)} 정규리그 1위"
+            base == "L0R" -> "${LeagueIds.label(league)} 준우승"
+            base == Awards.LMVP -> "${LeagueIds.label(league)} MVP"
+            else -> null
+        }
+        if (base == "CCL" || base == "CCL2") {
+            val title = HonourKind.qualifier(kind)?.let { q -> Confed.entries.firstOrNull { it.name == q } }?.let { ContinentalChampions.title(it) } ?: Comp.CONT_CHAMPIONS.label
+            return if (base == "CCL") title else "$title 준우승"
+        }
+        if (base == "CLUBCUP" || base == "CLUBCUPW") return Comp.CLUB_CUP.label
+        return legacyLabel(kind)
+    }
+
+    private fun legacyLabel(kind: String): String? = when {
         Regex("L\\d").matches(kind) -> "${kind.drop(1).toInt() + 1}부 리그"
         kind == "REG" -> "정규리그 1위"
         kind == "CUP" -> Comp.CUP.label
@@ -881,28 +1251,44 @@ object News {
 }
 
 /**
- * Watches the 1st division for [News.titleRace]: [check] after every recorded league fixture
- * compares the table at each newly completed matchday with the one at the matchday before.
- * Memory only: after a restart the first completed matchday is the new baseline.
+ * Watches 1st divisions for [News.titleRace]: [check] after every recorded league fixture
+ * compares a division's table at each newly completed round with the one at the round before.
+ * Memory only: after a restart the first completed round is the new baseline.
  */
 class TitleRaceWatch {
     private var season = -1
-    private var matchdays = -1
-    private var last: List<Pair<String, Int>>? = null
 
-    fun check(league: Season): LeagueEvent? {
+    /** Per division watched: its rounds completed when last checked, and its table then. */
+    private val done = HashMap<Int, Int>()
+    private val last = HashMap<Int, List<Pair<String, Int>>>()
+
+    /** The 1st division of a legacy league. */
+    fun check(league: Season): LeagueEvent? = race(league, 0, league.progress, null)
+
+    /**
+     * The 1부 of each national league of [ids] (the best-ranked, in a national season): its race
+     * as far as its own rounds have gone; the event's arguments end with the league's id.
+     */
+    fun check(league: Season, ids: List<String>): List<LeagueEvent> = ids.mapNotNull { id ->
+        val d = league.leagues.byId(id)?.top ?: return@mapNotNull null
+        val rounds = league.roundsOf(d)
+        val played = league.positions.getOrNull(d)?.size ?: 0
+        race(league, d, if (rounds > 0) played.toDouble() / rounds else 0.0, id)
+    }
+
+    private fun race(league: Season, d: Int, progress: Double, id: String?): LeagueEvent? {
         if (league.number != season) {
             season = league.number
-            matchdays = -1
-            last = null
+            done.clear()
+            last.clear()
         }
-        val done = league.positions.firstOrNull()?.size ?: return null
-        if (done == matchdays) return null
-        matchdays = done
-        val now = league.table(0).map { it.key to it.points }
-        val before = last
-        last = now
-        return before?.let { News.titleRace(league.number, it, now, league.progress) }
+        val rounds = league.positions.getOrNull(d)?.size ?: return null
+        if (done[d] == rounds) return null
+        done[d] = rounds
+        val now = league.table(d).map { it.key to it.points }
+        val before = last.put(d, now) ?: return null
+        val e = News.titleRace(league.number, before, now, progress) ?: return null
+        return if (id == null) e else e.copy(args = e.args + id)
     }
 }
 

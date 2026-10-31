@@ -304,7 +304,105 @@ class MediaTest {
             e("draw_allstar", four, listOf("TOP"), Comp.ALL_STAR),
             e("draw_family", listOf("WIN", "EV", "HUMAN"), listOf("A조"), Comp.FAMILY),
             e("season_review", listOf("ai1", "ai2")), e("season_review", listOf("ai1")), e("season_review", emptyList()),
+        ) + worldSamples(s)
+    }
+
+    /** National leagues, clubs, the international stage and the 요트협회 (LeagueWorld's and the club book's kinds). */
+    private fun worldSamples(s: Int): List<LeagueEvent> {
+        fun e(kind: String, keys: List<String>, args: List<String> = emptyList(), comp: Comp? = null) = LeagueEvent(kind, s, keys, args, comp)
+        val two = listOf("ai1", "ai2")
+        val three = listOf("ai1", "ai2", "ai3")
+        val four = listOf("ai1", "ai2", "ai3", "ai4")
+        return listOf(
+            e("league_title", listOf("ai1"), listOf("KR", "0", "", "0"), Comp.LEAGUE), e("league_title", listOf("ai2"), listOf("JP", "0", "po", "5"), Comp.LEAGUE),
+            e("league_titles_digest", listOf("ai3", "ai4"), listOf("20", "CN:ai3", "XEU:ai4"), Comp.LEAGUE),
+            e("league_moves", four, listOf("KR", "2", "2"), Comp.LEAGUE), e("league_moves", listOf("ai1"), listOf("JP", "1", "0"), Comp.LEAGUE),
+            e("league_moves", listOf("ai4"), listOf("XWO", "0", "1"), Comp.LEAGUE),
+            e("lower_tiers", three, listOf("57", "112", "1", "5", "national"), Comp.LEAGUE), e("lower_tiers", three, listOf("28", "56", "1", "1", "national"), Comp.LEAGUE),
+            e("national_reform", emptyList(), listOf("28", "0", "KR", "JP")), e("national_reform", emptyList(), listOf("0", "4", "XAS", "XEU", "XAM", "XAF")),
+            e("national_reform", emptyList(), listOf("12", "3", "KR")),
+            e("league_formed", emptyList(), listOf("SE", "2", "26")),
+            e("league_ranking", emptyList(), listOf("KR", "JP", "CN", "GB", "3")), e("league_ranking", emptyList(), listOf("XAS", "XEU", "-", "-", "0")),
+            e("federation_decision", emptyList(), listOf("자동 승강 인원 2명 → 1명", "A", "C", "6", "3", "4")),
+            e("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "A", "U", "0", "0", "4")),
+            e("federation_decision", emptyList(), listOf("2:0 완승 보너스 없애기", "R", "U", "0", "0", "4")),
+            e("federation_decision", emptyList(), listOf("부 인원 20명 → 22명", "R", "C", "0", "9", "4")),
+            e("federation_decision", emptyList(), listOf("부 인원 20명 → 22명", "R", "C", "3", "6", "4")),
+            e("federation_decision", emptyList(), listOf("우승 플레이오프 없애기", "V", "C", "7", "2", "4")),
+            e("federation_decision", emptyList(), listOf("우승 플레이오프 없애기", "V", "-", "0", "0", "4")),
+            e("federation_assembly", emptyList(), listOf("0", "3", "4")),
+            e("federation_assembly", emptyList(), listOf("2", "3", "4", "2:0 완승 보너스 없애기", "긴 토너먼트 끄기")),
+            e("club_title", listOf("c1"), listOf("KR", "461.0"), Comp.CLUB), e("club_title", listOf("c2"), listOf("-", "120.5"), Comp.CLUB),
+            e("club_champions", listOf("c1", "c2"), listOf("24"), Comp.CLUB),
+            e("club_reform", emptyList(), listOf("131", "28"), Comp.CLUB),
+            e("club_founded", listOf("c1"), listOf("KR"), Comp.CLUB),
+            e("club_dissolved", listOf("c2"), listOf("6"), Comp.CLUB), e("club_dissolved", listOf("c2"), listOf("0"), Comp.CLUB),
+            e("club_digest", listOf("c1", "c2"), listOf("5", "2"), Comp.CLUB), e("club_digest", listOf("c1"), listOf("3", "0"), Comp.CLUB),
+            e("club_digest", listOf("c2"), listOf("0", "4"), Comp.CLUB),
+            e("transfer_abroad", listOf("ai1", "c1", "c2"), listOf("KR", "GB", "120"), Comp.CLUB),
+            e("transfer_abroad", listOf("ai2", "c2", "c1"), listOf("XAS", "KR", "0", "star"), Comp.CLUB),
+            e("return_home", listOf("ai2", "c2", "c1"), listOf("GB", "KR"), Comp.CLUB), e("return_home", listOf("ai3", "c2", "-"), listOf("GB", "KR"), Comp.CLUB),
+            e("transfer_window", two, listOf("4", "2"), Comp.CLUB), e("transfer_window", listOf("ai3"), listOf("3", "0"), Comp.CLUB),
+            e("transfer_window", emptyList(), listOf("0", "2"), Comp.CLUB),
+            e("youth", listOf("ai4", "c1"), emptyList(), Comp.CLUB),
+            e("market_digest", listOf("ai1", "ai3"), listOf("12", "34", "ai2", "c1", "c2", "35"), Comp.CLUB),
+            e("market_digest", emptyList(), listOf("0", "5", "-", "-", "-", "0"), Comp.CLUB),
+            e("draw_ccl", four, listOf("아시아 챔피언스"), Comp.CONT_CHAMPIONS),
+            e("draw_clubcup", listOf("c1", "c2"), listOf("A조"), Comp.CLUB_CUP),
+            e("milestones", three, listOf("40", "31")), e("milestones", three, listOf("5", "0")), e("milestones", three, listOf("12", "12")),
+            e("dynasties", three, listOf("9")),
+            e("pupils", listOf("e3_1", "e3_2"), listOf("14")),
+            e("learned_rules", two, listOf("11")),
+            // The national forms of older kinds.
+            e("title_race", two, listOf("1", "lead", "KR"), Comp.LEAGUE), e("title_race", two, listOf("0", "close", "JP"), Comp.LEAGUE),
+            e("title_race", two, listOf("2", "close", "XAS"), Comp.LEAGUE),
+            e("player_of_week", two, listOf("12", "265.5", "281", "1", "JP"), Comp.LEAGUE),
+            e("season_review", two, listOf("KR")), e("season_review", listOf("ai1", "-"), listOf("JP")),
+            e("award", listOf("ai1"), listOf("MVP", "national")), e("award", listOf("ai2"), listOf("ROOKIE", "national")),
+            e("dynasty", listOf("ai1"), listOf("DOUBLE", "1", "L0.KR")), e("dynasty", listOf("ai1"), listOf("TREBLE", "1", "L0.KR")),
+            e("dynasty", listOf("ai1"), listOf("RUN", "3", "L0.JP")), e("dynasty", listOf("ai1"), listOf("UNBEATEN", "1", "L1.KR")),
+            e("title", listOf("ai1"), listOf("아시아 챔피언스"), Comp.CONT_CHAMPIONS), e("title", listOf("c1"), listOf("클럽 대항전"), Comp.CLUB_CUP),
+            e("title", listOf("ai1"), listOf("L0.KR"), Comp.LEAGUE), e("title", listOf("ai1"), listOf("CCL.EUROPE"), Comp.CONT_CHAMPIONS),
+            e("cup_round", two, listOf("아시아 4강", "2-0", "@아시아 챔피언스"), Comp.CONT_CHAMPIONS),
+            e("final", listOf("c1", "c2"), listOf("3-2"), Comp.CLUB_CUP), e("qualified", listOf("c2"), listOf("4강", "B조 1위"), Comp.CLUB_CUP),
         )
+    }
+
+    @Test
+    fun theNationalWorldsNewsNamesItsLeaguesClubsAndTheFederation() {
+        val name = { k: String -> names[k] ?: k }
+        val club = { k: String -> clubs[k] ?: k }
+        fun text(kind: String, keys: List<String>, args: List<String>, comp: Comp? = null, season: Int = 3) =
+            News.article(LeagueEvent(kind, season, keys, args, comp), name, club).let { it.headline + " / " + it.body }
+        // League ids by their Korean names, with their particles.
+        assertTrue("한국 리그" in text("league_title", listOf("ai1"), listOf("KR", "0", "", "0")))
+        assertTrue("일본 리그 1부" in text("title_race", listOf("ai1", "ai2"), listOf("1", "lead", "JP")))
+        assertTrue((1..8).any { "일본 2부" in text("player_of_week", listOf("ai1", "ai2"), listOf("12", "265.5", "281", "1", "JP"), season = it) })
+        assertTrue("한국 리그와 요트컵을" in text("dynasty", listOf("ai1"), listOf("DOUBLE", "1", "L0.KR")))
+        assertTrue("한국 2부" in text("dynasty", listOf("ai1"), listOf("UNBEATEN", "1", "L1.KR")))
+        assertTrue("한국 리그" in text("title", listOf("ai1"), listOf("L0.KR"), Comp.LEAGUE))
+        assertTrue("유럽 챔피언스" in text("title", listOf("ai1"), listOf("CCL.EUROPE"), Comp.CONT_CHAMPIONS))
+        assertEquals(4, News.article(LeagueEvent("title", 3, listOf("ai1"), listOf("아시아 챔피언스"), Comp.CONT_CHAMPIONS), name).importance)
+        // Clubs of the club cup by their names; transfers abroad to the league they go to.
+        assertTrue("서울 타이거즈" in text("final", listOf("c1", "c2"), listOf("3-2"), Comp.CLUB_CUP))
+        val abroad = (1..8).map { text("transfer_abroad", listOf("ai1", "c1", "c2"), listOf("KR", "GB", "120"), Comp.CLUB, it) }
+        assertTrue(abroad.all { "영국 리그" in it } && abroad.any { "영국 리그로" in it }, abroad.toString())
+        assertEquals(4, News.article(LeagueEvent("transfer_abroad", 3, listOf("ai1", "c1", "c2"), listOf("KR", "GB", "120", News.STAR), Comp.CLUB), name, club).importance)
+        // The 요트협회 announces the awards of national seasons; its MVP is the player of the year.
+        val award = (1..8).map { text("award", listOf("ai1"), listOf("MVP", News.NATIONAL), season = it) }
+        assertTrue(award.all { "요트협회" in it && "올해의 선수" in it }, award.toString())
+        assertTrue(award.any { "올해의 선수로 김민준을" in it }, award.toString())
+        assertTrue((1..8).none { "요트협회" in text("award", listOf("ai1"), listOf("MVP"), season = it) })
+        // Its assembly and decisions, with the seasons they apply from.
+        val assembly = text("federation_assembly", emptyList(), listOf("2", "3", "4", "2:0 완승 보너스 없애기", "긴 토너먼트 끄기"))
+        assertTrue("‘긴 토너먼트 끄기’" in assembly && "시즌 4" in assembly, assembly)
+        assertTrue("선수 위원회 9명 가운데 6명이 찬성했어요" in text("federation_decision", emptyList(), listOf("자동 승강 인원 2명 → 1명", "A", "C", "6", "3", "4")))
+        assertTrue("직접 반대한" in text("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "R", "U", "0", "0", "4")))
+        assertTrue("무효" in text("federation_decision", emptyList(), listOf("긴 토너먼트 끄기", "V", "C", "6", "3", "4")))
+        // Name lists take no particle after a name.
+        val moves = text("league_moves", listOf("ai1", "ai2", "ai3"), listOf("KR", "2", "1"))
+        assertTrue("김민준·승률 AI (앱 기본) 선수가 1부로" in moves && "목표 180점 선수가 2부로" in moves, moves)
+        assertTrue("국가 리그 12개와 연합 리그 3개가" in text("national_reform", emptyList(), listOf("12", "3", "KR")))
     }
 
     private val sentenceEnd = Regex("[.?!](?=\\s|$)")

@@ -14,8 +14,17 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     var honours = HonourBook()
     var players = PlayerBook()
 
-    /** The clubs (club league, transfers); null until the first season with clubs makes them. */
+    /**
+     * The clubs: a legacy league's club league (`clubs 1`), or in national leagues every member's
+     * club (`clubs 2`, [ClubBook.AFFILIATION]); null until the first season with clubs makes them.
+     */
     var clubs: ClubBook? = null
+
+    /**
+     * 요트협회: the league coefficients, each national season's best-ranked leagues and the
+     * proposals of its assemblies (league/federation.txt).
+     */
+    var federation = Federation()
 
     /** Season and career statistics, records, milestones and the league meta. */
     var stats = StatsBook()
@@ -80,31 +89,87 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     /** True once the season and its post-season are over: [closeSeason] is due. */
     val seasonOver: Boolean get() = plan?.finished == true
 
-    private fun context(historyBefore: Int): Offseason.Context = Offseason.Context(
-        members, ::rating, family, ::hometown, config, factories(),
-        honours.all.filter { it.season < historyBefore }, closingGone, { k -> players[k]?.identity?.nation },
-    )
+    /** Each AI's nationality (generated and evolved players; null for the others). */
+    private fun nationOf(key: String): String? = players[key]?.identity?.nation
 
-    /** Every competition of a season: the cups and playoffs, and the club league (making the clubs the first time). */
+    /** The national clubs (null without them, or with a club league's book). */
+    private val affiliation: ClubBook? get() = clubs?.takeIf { it.format == ClubBook.AFFILIATION }
+
+    /**
+     * What the off-season knows. A rollover after season [moved] also tells who moved abroad or
+     * came home in its club off-season, and [ranking], the league ranking after it.
+     */
+    private fun context(historyBefore: Int, ranking: LeagueRanking? = null, moved: Int? = null): Offseason.Context {
+        val book = affiliation
+        return Offseason.Context(
+            members, ::rating, family, ::hometown, config, factories(),
+            honours.all.filter { it.season < historyBefore }, closingGone, ::nationOf,
+            // A member plays in its club's nation (a member without one in its own).
+            playNation = { k -> book?.playNation(k) ?: nationOf(k) },
+            transfersIn = moved?.let { book?.moved(it, ClubMoveType.ABROAD) }.orEmpty(),
+            returned = moved?.let { book?.moved(it, ClubMoveType.HOME) }.orEmpty(),
+            ranking = ranking,
+        )
+    }
+
+    /**
+     * Every competition of a season: the cups and playoffs, a legacy season's club league (making
+     * the clubs the first time) and a national season's 클럽 대항전.
+     */
     private fun factories(): List<(SeasonStart) -> Competition?> = Competitions.factories() + ClubLeague.factory(
         { clubs },
         { s -> ClubBook.create(s.ranking, s.config.clubs, s.config.squad, s.seed, Hometowns.ALL).also { clubs = it } },
-    ) + LegendMatch.factory { players.legends }
+    ) + ClubCup.factory { affiliation } + LegendMatch.factory { players.legends }
 
     /**
      * The first season: divisions by rating; returns the draw news. It comes after the newest
      * season the league already knows (an imported history, a season file that could not be
      * read), so no kept season is written over and the books' per-season guards still run.
+     * National leagues found their clubs first (every member in one club of its nation).
      */
     fun openFirstSeason(leagueSeed: Long): List<LeagueEvent> {
         val known = listOf(
             honours.seasons.maxOrNull() ?: 0, stats.ended, archive.summaries.maxOfOrNull { it.season } ?: 0,
             players.evolvedSeason, clubs?.season ?: 0,
         ).max()
+        if (config.national) clubs = ClubBook.found(members, ::nationOf, ::rating, known, leagueSeed, config)
         val p = Offseason.first(leagueSeed, context(Int.MAX_VALUE), known + 1)
         plan = p
-        return opened(p)
+        val out = opened(p)
+        rank(p)
+        return out
     }
+
+    /**
+     * Sets national season [p]'s league ranking, the one it is played under ([SeasonPlan.ranking]:
+     * the coefficients of the seasons before it, by strength in the first national season), and
+     * records its best-ranked leagues ([Federation.putTop]) once. The strength reads the ratings
+     * the season was drawn with: the 요트컵's seeds (every member, kept in season.txt as whole
+     * points), else the start ratings stats.txt keeps. So a league read back after a restart, or
+     * a finished season read back after a kill in its rollover's save, is ranked as it was.
+     */
+    private fun rank(p: SeasonPlan) {
+        if (!p.league.leagues.national) return
+        runCatching {
+            val seeded = (p.competition(Comp.CUP) as? Cup)?.entries?.associate { it.key to if (it.rating.isNaN()) it.rating else Math.round(it.rating).toDouble() }
+            val start = { k: String ->
+                seeded?.get(k) ?: if (stats.season == p.number) stats.startRating(k) else ladder.rating(k).let { if (it.isNaN()) it else Math.rint(it) }
+            }
+            p.ranking = Coefficients.ranking(federation, p.league.leagues, p.number - 1, strengths(p, start), p.config)
+            if (federation.top(p.number) == null) federation.putTop(p.number, NationalLeagues.bestRanked(p, Federation.TOP))
+        }
+    }
+
+    /** Each league of [p]'s strength ([Coefficients.strength]: the average [rating] of its best 5). */
+    private fun strengths(p: SeasonPlan, rating: (String) -> Double): (String) -> Double {
+        val s = p.league
+        val byId = s.leagues.list.associate { lg -> lg.id to Coefficients.strength(lg.divisions.flatMap { s.divisions[it] }, rating) }
+        return { id -> byId[id] ?: Double.NaN }
+    }
+
+    /** The league ranking after national season [p] (its coefficients stored) under [rules]; null after a legacy season. */
+    private fun rankingAfter(p: SeasonPlan, rules: LeagueConfig): LeagueRanking? =
+        if (!p.league.leagues.national) null else runCatching { Coefficients.ranking(federation, p.league.leagues, p.number, strengths(p, ::rating), rules) }.getOrNull()
 
     /** Traits of a generated or evolved player in Korean (메타 리포트), null for the others. */
     private fun traits(key: String): Map<String, String>? =
@@ -161,7 +226,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             for ((i, b) in r.boards.withIndex()) {
                 if (b.games.isEmpty() || ladder.entry(b.a) == null || ladder.entry(b.b) == null) continue
                 val label = if (f.kind == JobKind.TEAM) "${f.label} · ${i + 1}번 보드".removePrefix(" · ") else f.label
-                matches += ladder.record(b.a, b.b, b.games, comp = f.comp, label = label, week = f.week, season = season)
+                // The fixture and board, so the feed line leads to its match (board 0 of a one-on-one job).
+                matches += ladder.record(b.a, b.b, b.games, comp = f.comp, label = label, week = f.week, season = season, id = f.id, board = i)
             }
         }
         if (r.fixture.comp != Comp.FRIENDLY) {
@@ -170,13 +236,20 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 runCatching {
                     highlights.offer(r, p.number, ::rating, ::derbyTown, version, Drama.titleRace(p.league, r.fixture)) { k -> players[k]?.spec }
                 }
-                if (r.fixture.comp == Comp.LEAGUE) titleRace.check(p.league)?.at(week)?.let { e ->
-                    note(listOf(e))
+                if (r.fixture.comp == Comp.LEAGUE) {
+                    // National leagues: the title races of the best-ranked leagues' 1부.
+                    val races = if (p.league.leagues.national) {
+                        runCatching { titleRace.check(p.league, NationalLeagues.bestRanked(p, RACE_LEAGUES)) }.getOrDefault(emptyList())
+                    } else {
+                        listOfNotNull(titleRace.check(p.league))
+                    }
+                    val e = races.map { it.at(week) }
+                    note(e)
                     out += e
                 }
             }
         }
-        live.add(r, nowMs)
+        live.add(r, nowMs, season)
         return Recorded(matches, out)
     }
 
@@ -195,7 +268,10 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     private var pickedDay = -1
     private var pickedSeason = 0
 
-    /** 이 주의 선수 when [r] finished its matchday: `player_of_week` [player, opponent] (week, average, best, tier). */
+    /**
+     * 이 주의 선수 when [r] finished its matchday: `player_of_week` [player, opponent] (week,
+     * average, best, tier within its league, and in national leagues the league's id).
+     */
     private fun weekPick(r: JobResult): LeagueEvent? {
         val p = plan ?: return null
         if (r.fixture.comp != Comp.LEAGUE) return null
@@ -208,9 +284,11 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         if (day <= pickedDay || !league.dayDone(day)) return null
         pickedDay = day
         val pick = league.playersOfWeek(day..day, closingGone + league.standings.keys.filter { !present(it) })[day] ?: return null
+        val leagues = league.leagues
         return LeagueEvent(
             "player_of_week", p.number, listOf(pick.key, pick.opponent),
-            listOf((day + 1).toString(), String.format(java.util.Locale.ROOT, "%.1f", pick.average), pick.best.toString(), league.tiers.tier(pick.division).toString()),
+            listOf((day + 1).toString(), String.format(java.util.Locale.ROOT, "%.1f", pick.average), pick.best.toString(), leagues.tier(pick.division).toString()) +
+                listOfNotNull(leagues.of(pick.division).id.takeIf { leagues.national }),
             Comp.LEAGUE, day + 1,
         )
     }
@@ -236,44 +314,181 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         return if (gone.debutAge > 0) gone.debutAge + season - gone.born else null
     }
 
-    /** What [closeSeason] did. */
-    class Closing(val season: Int, val honours: List<Honour>, val events: List<LeagueEvent>, val rosterChanged: Boolean)
+    /**
+     * What [closeSeason] did. [ruleChanges] are the 요트협회's proposals adopted at this close (the
+     * app applies them to its rules, [Federation.applyTo], before the next season opens: they shape
+     * the season after next); [ranking] is the league ranking after a national season
+     * ([LeagueRanking.EMPTY] after a legacy one).
+     */
+    class Closing(
+        val season: Int,
+        val honours: List<Honour>,
+        val events: List<LeagueEvent>,
+        val rosterChanged: Boolean,
+        val ruleChanges: List<Proposal> = emptyList(),
+        val ranking: LeagueRanking = LeagueRanking.EMPTY,
+    )
 
     /**
      * End of season, first step: the season's honours (division champions after the playoffs,
      * moves, awards, every competition's titles), then evolution (the lowest rated generated and
-     * evolved players retire, children are born) and generated players up to the config.
-     * Idempotent by season.
+     * evolved players retire, children are born) and generated players up to the config. A
+     * national season also stores its league coefficients, publishes the league ranking, and the
+     * 요트협회 decides the proposals voted on during it. Idempotent by season.
      */
     fun closeSeason(): Closing {
         val p = plan ?: error("no season")
+        // Every national step follows the closing season itself, never the rules (whose closing
+        // copy is the old rules at a migration).
+        val national = p.league.leagues.national
         // AIs deleted during the season (no title, award or move), decided once for both steps.
         // Evolution's retirees are no deletions (a replay after a kill finds them retired).
         val gone = p.league.standings.keys.filter { !present(it) && players.retiredRecord(it) == null }.toSet()
         closingGone = gone
         val moves = Offseason.moves(p, gone)
         val h = Offseason.honours(p, moves, gone)
+        // The league coefficients of the season, and the ranking after it.
+        if (national) runCatching { federation.putCoefficients(p.number, Coefficients.season(p)) }
+        val ranking = rankingAfter(p, config) ?: LeagueRanking.EMPTY
         // Awards, records, hall of fame, dynasties and the season's archive, from the book as it
-        // was before this season; then the season's honours go in once, awards included.
+        // was before this season; then the season's honours go in once, awards included. A
+        // national season's lines carry each player's club, and its hall of fame counts the
+        // titles of the leagues that were among the best-ranked.
+        val book = affiliation.takeIf { national }
         val end = runCatching {
             // The ladder's own ratings: an AI off the ladder (retired by this close, read again
             // after a kill) has none, rather than a made-up starting one that would win awards.
-            stats.endSeason(p, h, honours, archive, { k -> ladder.rating(k) }, family, name, null, ::traits, gone)
+            stats.endSeason(
+                p, h, honours, archive, { k -> ladder.rating(k) }, family, name, null, ::traits, gone,
+                club = { k -> book?.clubOf(k) }, major = federation::isMajor,
+            )
         }.getOrNull()
         // 이 주의 선수 of every week, kept with the season's honours.
         val picks = runCatching { p.league.playersOfWeek(0 until p.league.matchdays, gone).values.sortedBy { it.matchday }.map { Honour(p.number, "POTW", it.key) } }.getOrDefault(emptyList())
         honours.add(h + end?.awards.orEmpty() + picks)
         val out = ArrayList<LeagueEvent>()
-        end?.let { out += it.events }
+        // A national season's awards are the 요트협회's (its MVP is 올해의 선수).
+        end?.let { e -> out += if (national) e.events.map { if (it.kind == "award") it.copy(args = it.args + News.NATIONAL) else it } else e.events }
         out += runCatching { stats.honourRecords(honours, p.number, ::ageAt) }.getOrDefault(emptyList())
         // The season's three best games go to the archive.
         runCatching { archive.putHighlights(p.number, highlights.archiveLines(p.number)) }
+        out += if (national) runCatching { nationalTitles(p, h, moves) }.getOrDefault(emptyList()) else legacyTitles(p, h)
+        // The 요트협회: the ranking it publishes, and the proposals voted on during the season
+        // (P(n - 1)) decided: the user's choice, else the 선수 위원회. Nothing is pending at a
+        // migration's close; the call keeps the season guard.
+        val adopted = runCatching {
+            val committee = if (national) Federation.committee(p, ranking) { k -> ladder.rating(k) } else emptyList()
+            federation.resolve(p.number, p.seed, committee, config.federation)
+        }.getOrDefault(emptyList())
+        if (national) {
+            leagueRankingEvent(p.number, ranking)?.let { out += it }
+            // Void ones only when the federation was off: the others' voids are told at the open.
+            for (x in federation.of(p.number - 1)) if (!x.pending && (x.result != Proposal.VOID || x.by == Proposal.NONE)) out += decision(p.number, x)
+        }
+        // The season's national cups go into the records, and a world champion's favourite style
+        // comes into fashion (newcomers take it up more often for a few seasons).
+        val cups = p.comps.filterIsInstance<NationCup>().filter { it.finished }.mapNotNull { runCatching { it.summary() }.getOrNull() }
+        runCatching { nations.close(p.number, cups) { k -> players[k] != null || players.legend(k) != null } }
+        val fashion = cups.firstOrNull { it.comp == Comp.WORLD_CUP }?.let { wc ->
+            val champion = wc.podiums.firstOrNull()?.winner ?: return@let null
+            val styles = wc.squads[champion].orEmpty().mapNotNull { k -> players[k]?.spec?.play?.primary }
+            val style = styles.groupingBy { it }.eachCount().maxByOrNull { (k, n) -> n * 10 - styles.indexOf(k) }?.key ?: return@let null
+            out += LeagueEvent("style_trend", p.number, listOf(champion), listOf(style), Comp.WORLD_CUP)
+            style
+        }
+        // Titles that count for a career: in national leagues the major ones (the cups and the
+        // best-ranked leagues' titles), counted in one pass over the book.
+        val major = if (national) honours.all.filter { HonourBook.isMajor(it, federation::isMajor) }.groupingBy { it.key }.eachCount() else null
+        val titles: (String) -> Int = if (major != null) { k -> major[k] ?: 0 } else honours::titles
+        // The hand-made AIs' last season when the league is for generated players only: they
+        // leave it as its founders (their records stay; the app leaves them out of the members).
+        if (!config.baseAis) {
+            val founders = p.league.standings.keys.filter { Origin.of(it) == Origin.BASE && present(it) }
+            if (founders.isNotEmpty()) {
+                val named = founders.sortedWith(compareByDescending<String> { titles(it) }.thenByDescending { ladder.rating(it) }.thenBy { it }).take(3)
+                out += LeagueEvent("founders_farewell", p.number, named, listOf(founders.size.toString()))
+            }
+        }
+        // Players age, retire and grow (with aging on), and new ones bring the book back to the
+        // configured size. Players who sat the season out (a preset left them out) sit in the
+        // middle of the ratings; the chaos preset brings in only flawed ones (others would never
+        // play). Played: the share of the most league matches anyone played; in national leagues
+        // the share of the player's own league fixtures (leagues play 30 to 42 rounds).
+        val standings = p.league.standings
+        val most = standings.values.maxOfOrNull { it.played }?.coerceAtLeast(1) ?: 1
+        val played: (String) -> Double = if (national) {
+            { k -> (standings[k]?.played ?: 0).toDouble() / p.league.fixturesOf(k).coerceAtLeast(1) }
+        } else {
+            { k -> (standings[k]?.played ?: 0).toDouble() / most }
+        }
+        val r = Evolution.run(
+            players, p.number, { k -> if (k in standings) ladder.rating(k) else Double.NaN }, titles, p.seed, config.generated,
+            { honours.of(it) }, childShare = config.childShare / 100.0, played = played,
+            accept = { s -> !config.onlyFlawed || s.flawed }, fashion = fashion, aging = config.aging,
+        )
+        out += r.events
+        // Everyone a year older plays a little differently: their old results count half from
+        // now on, so ratings follow who they are (careers and head-to-heads stay).
+        if (config.aging) runCatching {
+            // Not those forever in their prime: they play as they did.
+            ladder.decay(players.alive.filter { it.born <= p.number && !it.keep }.map { it.key }.toSet(), RATING_FADE, p.number)
+            ladder.fit()
+        }
+        val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
+        val closed = (if (national) digested(p.number, out) else out).map { it.at(SeasonCalendar.CLOSING) }
+        note(closed)
+        return Closing(p.number, h + end?.awards.orEmpty() + picks, closed, changed, adopted, ranking)
+    }
+
+    /**
+     * A national close's articles that many leagues multiply, told at the source as digests: of
+     * the title milestones (most players win their first title in one of dozens of lower tiers),
+     * the runs and unbeaten seasons in titles that are not major (lower tiers, leagues outside
+     * the best-ranked), the pupils' debuts and the rules learned, the [SINGLES] best-rated stay
+     * as they are and the rest make one article each: `milestones` [≤ 6] (count, first titles),
+     * `dynasties` [≤ 6] (count), `pupils` [≤ 6] (count), `learned_rules` [≤ 6] (count).
+     */
+    private fun digested(season: Int, events: List<LeagueEvent>): List<LeagueEvent> {
+        fun titleMilestone(e: LeagueEvent) = e.kind == "milestone" && e.args.firstOrNull().let { it == "title" || it == "titles" }
+        fun minorRun(e: LeagueEvent): Boolean {
+            if (e.kind != "dynasty" || e.args.firstOrNull() == Awards.DOUBLE || e.args.firstOrNull() == Awards.TREBLE) return false
+            val title = e.args.getOrNull(2) ?: return false
+            val league = HonourKind.leagueOf(title) ?: return false
+            return !HonourKind.isTopTitle(title) || !federation.isMajor(season, league)
+        }
+        val groups = listOf(
+            "milestones" to ::titleMilestone,
+            "dynasties" to ::minorRun,
+            "pupils" to { e: LeagueEvent -> e.kind == "born" },
+            "learned_rules" to { e: LeagueEvent -> e.kind == "learned_rule" },
+        )
+        val best = compareByDescending<LeagueEvent> { e -> e.keys.firstOrNull()?.let { ladder.rating(it) }?.takeIf { !it.isNaN() } ?: 0.0 }.thenBy { it.keys.firstOrNull() }
+        val dropped = HashSet<LeagueEvent>()
+        val digests = ArrayList<LeagueEvent>()
+        for ((kind, test) in groups) {
+            val all = events.filter(test)
+            if (all.size <= SINGLES + 1) continue
+            val rest = all.sortedWith(best).drop(SINGLES)
+            dropped += rest
+            val args = listOf(rest.size.toString()) + if (kind == "milestones") listOf(rest.count { it.args.getOrNull(1) == "1" }.toString()) else emptyList()
+            digests += LeagueEvent(kind, season, rest.mapNotNull { it.keys.firstOrNull() }.distinct().take(DIGEST_NAMES), args)
+        }
+        if (dropped.isEmpty()) return events
+        return events.filter { it !in dropped } + digests
+    }
+
+    /**
+     * A legacy season's titles and moves that the competitions did not announce themselves, and
+     * the season review. The title playoff announces its champion and the promotion playoff its
+     * moves (read from the season, as the events are not saved); a pyramid's lower tiers (4부
+     * down, and the moves below 3부) make one article: dozens of group titles and hundreds of
+     * moves would flood the news.
+     */
+    private fun legacyTitles(p: SeasonPlan, h: List<Honour>): List<LeagueEvent> {
+        val out = ArrayList<LeagueEvent>()
         val champion = h.firstOrNull { it.kind == "L0" }?.key ?: "-"
         val cup = h.firstOrNull { it.kind == "CUP" }?.key ?: "-"
         out += LeagueEvent("season_review", p.number, listOf(champion, cup))
-        // Titles and moves the competitions did not announce themselves: the title playoff
-        // announces its champion and the promotion playoff its moves (read from the season, as
-        // the events are not saved).
         val playoffChampion = p.competition(Comp.TITLE_PLAYOFF)?.honours()?.firstOrNull { it.kind == "L0" }?.key
         val promo = p.competition(Comp.PROMOTION_PLAYOFF) as? PromotionPlayoff
         val promoUp = promo?.honours()?.filter { it.kind.startsWith("UP") }?.map { it.key }.orEmpty()
@@ -282,9 +497,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             "promoted" -> key in promoUp
             else -> promo?.spots?.any { it.upper == key && it.lower in promoUp } == true
         }
-        // A pyramid's lower tiers (4부 down, and the moves below 3부) in one article: dozens of
-        // group titles and hundreds of moves would flood the news.
-        val grouped = !p.league.tiers.linear
+        // The one league of a legacy season.
+        val tiers = p.league.leagues.list.first().tiers
+        val grouped = !tiers.linear
         val lowerChampions = ArrayList<String>()
         var lowerUp = 0
         for (x in h) {
@@ -292,7 +507,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                 // A pyramid's group title names its group ("2부 A조").
                 DIVISION.matches(x.kind) -> LeagueEvent(
                     "title", p.number, listOf(x.key),
-                    listOf(x.kind.removePrefix("L")) + listOfNotNull(p.league.divisionOf(x.key)?.let { p.league.tiers.groupLabel(it) }?.takeIf { it.isNotEmpty() }),
+                    listOf(x.kind.removePrefix("L")) + listOfNotNull(p.league.divisionOf(x.key)?.let { tiers.groupLabel(it) }?.takeIf { it.isNotEmpty() }),
                     Comp.LEAGUE,
                 )
                 x.kind.startsWith("UP") -> LeagueEvent("promoted", p.number, listOf(x.key), listOf(x.kind.removePrefix("UP")))
@@ -313,79 +528,191 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             val named = lowerChampions.sortedWith(compareByDescending<String> { ladder.rating(it).takeIf { r -> !r.isNaN() } ?: 0.0 }.thenBy { it }).take(3)
             out += LeagueEvent(
                 "lower_tiers", p.number, named,
-                listOf(lowerChampions.size.toString(), lowerUp.toString(), (NEWS_TIERS + 1).toString(), (p.league.tiers.count - 1).toString()), Comp.LEAGUE,
+                listOf(lowerChampions.size.toString(), lowerUp.toString(), (NEWS_TIERS + 1).toString(), (tiers.count - 1).toString()), Comp.LEAGUE,
             )
         }
-        // The season's national cups go into the records, and a world champion's favourite style
-        // comes into fashion (newcomers take it up more often for a few seasons).
-        val cups = p.comps.filterIsInstance<NationCup>().filter { it.finished }.mapNotNull { runCatching { it.summary() }.getOrNull() }
-        runCatching { nations.close(p.number, cups) { k -> players[k] != null || players.legend(k) != null } }
-        val fashion = cups.firstOrNull { it.comp == Comp.WORLD_CUP }?.let { wc ->
-            val champion = wc.podiums.firstOrNull()?.winner ?: return@let null
-            val styles = wc.squads[champion].orEmpty().mapNotNull { k -> players[k]?.spec?.play?.primary }
-            val style = styles.groupingBy { it }.eachCount().maxByOrNull { (k, n) -> n * 10 - styles.indexOf(k) }?.key ?: return@let null
-            out += LeagueEvent("style_trend", p.number, listOf(champion), listOf(style), Comp.WORLD_CUP)
-            style
-        }
-        // The hand-made AIs' last season when the league is for generated players only: they
-        // leave it as its founders (their records stay; the app leaves them out of the members).
-        if (!config.baseAis) {
-            val founders = p.league.standings.keys.filter { Origin.of(it) == Origin.BASE && present(it) }
-            if (founders.isNotEmpty()) {
-                val named = founders.sortedWith(compareByDescending<String> { honours.titles(it) }.thenByDescending { ladder.rating(it) }.thenBy { it }).take(3)
-                out += LeagueEvent("founders_farewell", p.number, named, listOf(founders.size.toString()))
-            }
-        }
-        // Players age, retire and grow (with aging on), and new ones bring the book back to the
-        // configured size. Players who sat the season out (a preset left them out) sit in the
-        // middle of the ratings; the chaos preset brings in only flawed ones (others would never
-        // play). Played: the share of the most league matches anyone played.
-        val standings = p.league.standings
-        val most = standings.values.maxOfOrNull { it.played }?.coerceAtLeast(1) ?: 1
-        val r = Evolution.run(
-            players, p.number, { k -> if (k in standings) ladder.rating(k) else Double.NaN }, honours::titles, p.seed, config.generated,
-            { honours.of(it) }, childShare = config.childShare / 100.0, played = { k -> (standings[k]?.played ?: 0).toDouble() / most },
-            accept = { s -> !config.onlyFlawed || s.flawed }, fashion = fashion, aging = config.aging,
-        )
-        out += r.events
-        // Everyone a year older plays a little differently: their old results count half from
-        // now on, so ratings follow who they are (careers and head-to-heads stay).
-        if (config.aging) runCatching {
-            // Not those forever in their prime: they play as they did.
-            ladder.decay(players.alive.filter { it.born <= p.number && !it.keep }.map { it.key }.toSet(), RATING_FADE, p.number)
-            ladder.fit()
-        }
-        val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
-        val closed = out.map { it.at(SeasonCalendar.CLOSING) }
-        note(closed)
-        return Closing(p.number, h + end?.awards.orEmpty() + picks, closed, changed)
+        return out
     }
 
     /**
+     * A national season's league news at the close (design ENG 1.12), digests at the source:
+     * `league_title` [champion] (league, "0", "po" when its title playoff decided it else "",
+     * rank) for the [LEAGUE_TITLES] best-ranked leagues and one `league_titles_digest` [≤
+     * [DIGEST_CHAMPIONS] champions] (count, then "league:key" each) for the others, best-ranked
+     * first; one `lower_tiers` [3 best-rated lower-tier champions] (count, promotions, first
+     * tier, last tier, "national"); `league_moves` [promoted…, relegated…] (league, ups, downs) at
+     * the 1부 of the [MOVE_LEAGUES] best-ranked; the season review (with the best-ranked league's
+     * champion).
+     */
+    private fun nationalTitles(p: SeasonPlan, h: List<Honour>, moves: List<Offseason.Move>): List<LeagueEvent> {
+        val out = ArrayList<LeagueEvent>()
+        val n = p.number
+        val leagues = p.league.leagues
+        val champions = h.filter { HonourKind.isTopTitle(it.kind) }.associate { (HonourKind.leagueOf(it.kind) ?: "") to it.key }
+        val order = Coefficients.order(leagues.list.map { it.id }, p.ranking, strengths(p, ::rating))
+        val best = NationalLeagues.bestRanked(p, LEAGUE_TITLES)
+        for ((i, id) in best.withIndex()) {
+            val k = champions[id] ?: continue
+            val po = if (h.any { it.kind == HonourKind.of("L0R", id) }) "po" else ""
+            out += LeagueEvent("league_title", n, listOf(k), listOf(id, "0", po, i.toString()), Comp.LEAGUE)
+        }
+        val rest = order.filter { it !in best }.mapNotNull { id -> champions[id]?.let { id to it } }
+        if (rest.isNotEmpty()) {
+            val named = rest.take(DIGEST_CHAMPIONS)
+            out += LeagueEvent("league_titles_digest", n, named.map { it.second }, listOf(rest.size.toString()) + named.map { "${it.first}:${it.second}" }, Comp.LEAGUE)
+        }
+        val lower = h.filter { (HonourKind.tier(it.kind) ?: 0) >= 1 && HonourKind.leagueOf(it.kind) != null }.map { it.key }.distinct()
+        if (lower.isNotEmpty()) {
+            val named = lower.sortedWith(compareByDescending<String> { ladder.rating(it).takeIf { r -> !r.isNaN() } ?: 0.0 }.thenBy { it }).take(3)
+            val deepest = leagues.list.maxOf { it.tiers.count } - 1
+            out += LeagueEvent(
+                "lower_tiers", n, named, listOf(lower.size.toString(), moves.count { it.to < it.from }.toString(), "1", deepest.toString(), News.NATIONAL), Comp.LEAGUE,
+            )
+        }
+        for (id in NationalLeagues.bestRanked(p, MOVE_LEAGUES)) {
+            val ups = moves.filter { it.league == id && it.from == 1 && it.to == 0 }.map { it.key }.distinct()
+            val downs = moves.filter { it.league == id && it.from == 0 && it.to == 1 }.map { it.key }.distinct()
+            if (ups.isEmpty() && downs.isEmpty()) continue
+            out += LeagueEvent("league_moves", n, ups + downs, listOf(id, ups.size.toString(), downs.size.toString()), Comp.LEAGUE)
+        }
+        val top = order.firstOrNull()
+        val cup = h.firstOrNull { it.kind == "CUP" }?.key ?: "-"
+        out += LeagueEvent("season_review", n, listOf(top?.let { champions[it] } ?: "-", cup), listOfNotNull(top))
+        return out
+    }
+
+    /** `league_ranking` [] (the 3 best leagues, "-" for missing ones, the biggest climber or "-", its climb) after a national season; null without rows. */
+    private fun leagueRankingEvent(season: Int, ranking: LeagueRanking): LeagueEvent? {
+        val rows = ranking.rows.sortedBy { it.rank }
+        if (rows.isEmpty()) return null
+        val climber = rows.filter { it.change > 0 }.maxWithOrNull(compareBy<LeagueRank> { it.change }.thenByDescending { it.rank })
+        val top = rows.take(3).map { it.id }
+        return LeagueEvent("league_ranking", season, emptyList(), top + List(3 - top.size) { "-" } + listOf(climber?.id ?: "-", (climber?.change ?: 0).toString()))
+    }
+
+    /**
+     * `federation_decision` [] (title, result, by, yes, no, the season it applies from) of
+     * proposal [x], told in season [season]: result 'A' 가결, 'R' 부결, 'V' 무효; by 'U' the
+     * user, 'C' the 선수 위원회, '-' none (the federation was off).
+     */
+    private fun decision(season: Int, x: Proposal): LeagueEvent = LeagueEvent(
+        "federation_decision", season, emptyList(),
+        listOf(x.title, x.result.toString(), x.by.toString(), x.yes.toString(), x.no.toString(), x.appliesFrom.toString()),
+    )
+
+    /**
      * End of season, second step (after the app set [members] from its rebuilt roster): the
-     * clubs' off-season (prize money, retired members out, transfer window, draft), then the
-     * next season. Returns the news of both.
+     * clubs' off-season, then the next season. Returns the news of both. Before national leagues
+     * (the closing season and the rules to come both legacy): the club league's off-season (prize
+     * money, retired members out, transfer window, draft). Into national leagues: the national
+     * one (club tables, returns and transfers abroad, the domestic window, the draft; a club
+     * league's book is converted at the first, a missing book founded). Then the next season
+     * under the ranking after this one, the next season's own ranking and best-ranked leagues,
+     * and the 요트협회's assembly on this season's statistics against the rules the next season
+     * really uses.
      */
     fun openSeason(): List<LeagueEvent> {
         val p = plan ?: error("no season")
-        val market = clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty().map { it.at(SeasonCalendar.CLOSING) }
+        // Offseason.next makes national leagues after a national season or when the rules ask.
+        val national = p.league.leagues.national || config.national
+        val ranking = rankingAfter(p, config)
+        val market = if (national) {
+            val book = clubs
+            if (book == null) {
+                // No book (a league without the club league, a lost file): founded now, with this off-season done.
+                clubs = ClubBook.found(members, ::nationOf, ::rating, p.number, p.seed, config)
+                emptyList()
+            } else {
+                runCatching { book.offseason(p, clubInput(p, ranking ?: LeagueRanking.EMPTY)) }.getOrDefault(emptyList())
+            }
+        } else {
+            clubs?.let { c -> runCatching { c.offseason(p, ::rating, members.toSet(), config) }.getOrDefault(emptyList()) }.orEmpty()
+        }.let { e -> if (national) starred(p, e) else e }.map { it.at(SeasonCalendar.CLOSING) }
         note(market)
         val hadClubs = clubs != null
-        val (next, _) = Offseason.next(p, context(p.number))
+        val (next, _) = Offseason.next(p, context(p.number, ranking, p.number))
         // Clubs drafted just now (switched on during the season) had this off-season already.
         if (!hadClubs) clubs?.founded(p.number, p.seed)
+        val news = ArrayList<LeagueEvent>()
+        if (next.league.leagues.national) news += formation(p, next)
+        news += runCatching { assembly(p) }.getOrDefault(emptyList())
+        val preseason = news.map { it.at(SeasonCalendar.PRESEASON) }
+        note(preseason)
         closingGone = emptySet()
         plan = next
-        return market + opened(next)
+        val opening = opened(next)
+        rank(next)
+        return market + preseason + opening
     }
 
-    /** Keeps the events and writes them up as news articles. */
+    /**
+     * [events] of the club off-season after [closing], with the transfers abroad of a league
+     * champion or award winner of [closing] marked "star" (bigger news).
+     */
+    private fun starred(closing: SeasonPlan, events: List<LeagueEvent>): List<LeagueEvent> {
+        if (events.none { it.kind == "transfer_abroad" }) return events
+        val stars = honours.of(closing.number).filter { h ->
+            HonourKind.isTopTitle(h.kind) && HonourKind.leagueOf(h.kind) != null || HonourKind.base(h.kind) == Awards.LMVP || h.kind == "MVP"
+        }.mapTo(HashSet()) { it.key }
+        return events.map { if (it.kind == "transfer_abroad" && it.keys.firstOrNull() in stars) it.copy(args = it.args + News.STAR) else it }
+    }
+
+    /** What the national club off-season after [closing] knows: the members, their nations, ages next season and mentors, the honours. */
+    private fun clubInput(closing: SeasonPlan, ranking: LeagueRanking): ClubInput = ClubInput(
+        members, ::rating, ::nationOf, config, honours.all,
+        age = { k -> players[k]?.let { r -> r.identity?.age(closing.number + 1, r.born) } },
+        origin = { k -> players[k]?.origin ?: Origin.of(k) },
+        mentor = { k -> players[k]?.parentA },
+        ranking = ranking, major = federation::isMajor,
+    )
+
+    /**
+     * The leagues of national season [next] in the news: `national_reform` [] (national leagues,
+     * regional leagues, then every id) for the first after a legacy season; later
+     * `league_formed` [] (league, tiers, members) for each league that is new.
+     */
+    private fun formation(closing: SeasonPlan, next: SeasonPlan): List<LeagueEvent> {
+        val n = next.number
+        val list = next.league.leagues.list
+        if (!closing.league.leagues.national) {
+            val own = list.count { Nations.of(it.id) != null }
+            return listOf(LeagueEvent("national_reform", n, emptyList(), listOf(own.toString(), (list.size - own).toString()) + list.map { it.id }))
+        }
+        val before = closing.league.leagues.list.map { it.id }.toSet()
+        return list.filter { it.id !in before }.map { lg ->
+            LeagueEvent("league_formed", n, emptyList(), listOf(lg.id, lg.tiers.count.toString(), lg.divisions.sumOf { next.league.divisions[it].size }.toString()))
+        }
+    }
+
+    /**
+     * The 요트협회 at the open after season [closing]: an adopted proposal whose rule the season to
+     * come does not have was not applied (its rule had been changed by hand) and is void; then
+     * the assembly on [closing]'s statistics against the rules to come (the first after a legacy
+     * season has only the structure-free kinds). Held at every open: a legacy league's keeps the
+     * statistics and tables nothing. News: `federation_decision` for those void ones and, with
+     * national leagues to come and the federation on, `federation_assembly` [] (count, the season
+     * voting, the season they apply from, then each proposal's title).
+     */
+    private fun assembly(closing: SeasonPlan): List<LeagueEvent> {
+        val n = closing.number
+        val out = ArrayList<LeagueEvent>()
+        federation.markVoid(federation.of(n - 1).filter { it.adopted && config.valueOf(it.lever.key) != it.to })
+        for (x in federation.of(n - 1)) if (x.result == Proposal.VOID && x.by != Proposal.NONE) out += decision(n + 1, x)
+        val stats = FederationStats.of(closing, honours.all, federation, config, closingGone)
+        val tabled = federation.assemble(n, stats, config, structureFreeOnly = !closing.league.leagues.national)
+        if (config.federation && config.national) {
+            out += LeagueEvent("federation_assembly", n + 1, emptyList(), listOf(tabled.size.toString(), (n + 1).toString(), (n + 2).toString()) + tabled.map { it.title })
+        }
+        return out
+    }
+
+    /** Keeps the events and writes them up as news articles (a club's id by its name, dissolved clubs too). */
     private fun note(e: List<LeagueEvent>) {
         if (e.isEmpty()) return
         for (x in e) events.addLast(x)
         while (events.size > EVENTS) events.removeFirst()
         runCatching {
-            news.add(News.articles(e, { k -> Nations.flagged(k) ?: name(k) }, { id -> clubs?.club(id)?.name ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }))
+            news.add(News.articles(e, { k -> Nations.flagged(k) ?: name(k) }, { id -> clubs?.nameOf(id) ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }))
         }
     }
 
@@ -398,8 +725,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * guard makes that a replay). The honours and archive go before the stats, the stats before
      * the roster: once the roster has moved on (this season's retirees gone from the ladder), the
      * stats say the season ended and its awards, lines and review are kept as they were. The
-     * clubs come after the roster they were drafted from. No season or clubs: empty files, so an
-     * older one is not read.
+     * clubs come after the roster they were drafted from, the 요트협회 after the clubs. No season
+     * or clubs: empty files, so an older one is not read.
      */
     fun encodeFiles(): Map<String, String> = buildMap {
         put(HONOURS, honours.encode())
@@ -407,6 +734,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         put(STATS, stats.encode())
         put(ROSTER, players.encode())
         put(CLUBS, clubs?.encode() ?: "")
+        put(FEDERATION, federation.encode())
         put(HIGHLIGHTS, highlights.encode())
         put(NEWS, news.encode())
         put(LAB, lab.encode())
@@ -419,11 +747,26 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         /** A pyramid's tiers whose group titles make news of their own (0-based: 1부 to 3부). */
         const val NEWS_TIERS = 2
 
+        /**
+         * National leagues: the best-ranked leagues whose titles are told one by one, the champions
+         * the digest names, the best-ranked leagues whose 1부 moves are told and whose title races
+         * are watched.
+         */
+        const val LEAGUE_TITLES = 8
+        const val DIGEST_CHAMPIONS = 20
+        const val MOVE_LEAGUES = 4
+        const val RACE_LEAGUES = 4
+
+        /** A national close's digested kinds: articles kept as they are, and players a digest names. */
+        const val SINGLES = 2
+        const val DIGEST_NAMES = 6
+
         const val LADDER = "ladder.txt"
         const val SEASON = "season.txt"
         const val HONOURS = "honours.txt"
         const val ROSTER = "roster.txt"
         const val CLUBS = "clubs.txt"
+        const val FEDERATION = "federation.txt"
         const val STATS = "stats.txt"
         const val ARCHIVE = "archive.txt"
         const val HIGHLIGHTS = HighlightBook.FILE
@@ -435,7 +778,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val RATING_FADE = 0.5
 
         /** Files [encodeFiles] writes. */
-        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS)
+        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, FEDERATION, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS)
 
         /** Readers of every competition in season.txt. */
         val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec) + (Comp.LEGEND to LegendMatch.codec)
@@ -450,11 +793,6 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val PRIOR_MID = 50
 
         /**
-         * Reads the saved league. [keys] are the ladder's keys (every AI and me); an unusable
-         * file starts that part fresh. A season file of the first version moves its history into
-         * the honours (the next start begins a season of the new kind).
-         */
-        /**
          * [block], or null when it throws an exception (a file that cannot be read starts that
          * part afresh). An Error is thrown on: running out of memory must not read as an empty
          * file, which the next save would write over the league.
@@ -465,17 +803,24 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             null
         }
 
-        fun decode(texts: Map<String, String?>, keys: List<String>, reserved: Collection<String>): LeagueWorld {
+        /**
+         * Reads the saved league under [config] (the app's rules). [keys] are the ladder's keys
+         * (every AI and me); an unusable file starts that part fresh. A season file of the first
+         * version moves its history into the honours (the next start begins a season of the new
+         * kind). A national season gets back the league ranking it is played under.
+         */
+        fun decode(texts: Map<String, String?>, keys: List<String>, reserved: Collection<String>, config: LeagueConfig = LeagueConfig()): LeagueWorld {
             // An empty file stands for a part not made yet (see encodeFiles).
             val files = texts.mapValues { (_, t) -> t?.takeIf { it.isNotBlank() } }
             val ladder = files[LADDER]?.let { t -> readOrNull { Ladder.decode(keys, t) } } ?: Ladder(keys)
-            val w = LeagueWorld(ladder)
+            val w = LeagueWorld(ladder, config)
             val seasonText = files[SEASON]
             w.plan = seasonText?.let { t -> readOrNull { SeasonPlan.decode(t, keys, CODECS) } }
             w.honours = files[HONOURS]?.let { t -> readOrNull { HonourBook.decode(t) } } ?: HonourBook()
             if (w.plan == null && seasonText != null) w.honours.add(HonourBook.legacy(seasonText))
             w.players = files[ROSTER]?.let { t -> readOrNull { PlayerBook.decode(t, reserved) } } ?: PlayerBook(reserved)
             w.clubs = files[CLUBS]?.let { t -> readOrNull { ClubBook.decode(t) } }
+            w.federation = files[FEDERATION]?.let { t -> readOrNull { Federation.decode(t) } } ?: Federation()
             w.stats = files[STATS]?.let { t -> readOrNull { StatsBook.decode(t) } } ?: StatsBook()
             w.archive = files[ARCHIVE]?.let { t -> readOrNull { Archive.decode(t) } } ?: Archive()
             w.highlights = files[HIGHLIGHTS]?.let { t -> readOrNull { HighlightBook.decode(t) } } ?: HighlightBook()
@@ -496,6 +841,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                     val keys = p.league.standings.keys
                     w.stats.startSeason(p.number, keys.associateWith { ladder.rating(it) }, keys.filter { w.players[it]?.born == p.number })
                 }
+                w.rank(p)
             }
             return w
         }

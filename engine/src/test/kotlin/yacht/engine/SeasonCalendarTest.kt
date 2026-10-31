@@ -590,11 +590,13 @@ class SeasonCalendarTest {
         // Each result knows its season (week names depend on the season's length).
         assertTrue(feed.all { it.season == w.plan!!.number })
         assertEquals(feed.map { it.season }, read.map { it.season })
-        // A line saved before the season was kept (9 fields) reads as season unknown.
-        val noSeason = w.ladder.encode().lines().joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 10) l.substringBeforeLast(' ') else l }
+        // A line saved before the season was kept (9 fields) reads as season unknown. (Lines
+        // written before matches had ids end before the "#id:board" token.)
+        val beforeIds = w.ladder.encode().lines().map { l -> if (l.startsWith("m ") && l.substringAfterLast(' ').startsWith('#')) l.substringBeforeLast(' ') else l }
+        val noSeason = beforeIds.joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 10) l.substringBeforeLast(' ') else l }
         val older = Ladder.decode(w.members + Ladder.ME, noSeason).feed.toList()
         assertTrue(older.all { it.season == 0 && it.comp != null })
-        val stripped = w.ladder.encode().lines().joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 10) l.split(' ').take(8).joinToString(" ") else l }
+        val stripped = beforeIds.joinToString("\n") { l -> if (l.startsWith("m ") && l.split(' ').size == 10) l.split(' ').take(8).joinToString(" ") else l }
         val oldFeed = Ladder.decode(w.members + Ladder.ME, stripped).feed.toList()
         assertEquals(feed.size, oldFeed.size)
         assertTrue(oldFeed.all { it.comp == null && it.week == SeasonCalendar.NONE && it.label == "" })
