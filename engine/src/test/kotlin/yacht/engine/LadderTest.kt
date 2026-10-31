@@ -1,11 +1,13 @@
 package yacht.engine
 
+import yacht.engine.league.Comp
 import yacht.engine.league.GameScore
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LeagueRoster
 import yacht.engine.league.Matchmaker
 import yacht.engine.league.LeagueTables
+import yacht.engine.league.MatchRef
 import yacht.engine.league.Tier
 import yacht.engine.league.TierName
 import java.util.Random
@@ -112,6 +114,38 @@ class LadderTest {
         val next = Ladder.decode(listOf("ev", "a", "b", "d"), ladder.encode())
         assertEquals(0, next.entry("d")!!.games)
         assertTrue(next.rating("d").isNaN())
+    }
+
+    @Test
+    fun feedLinesKeepTheirFixturesBoard() {
+        val keys = listOf("ev", "a", "b")
+        val ladder = Ladder(keys)
+        val g = listOf(GameScore(200, 150), GameScore(180, 190))
+        ladder.record("a", "b", g, time = 1, comp = Comp.LEAGUE, label = "3라운드", week = 3, season = 2, id = 1201, board = 0)
+        ladder.record("ev", "a", g, time = 2, comp = Comp.CLUB_CUP, label = "결승 · 4번 보드", week = 40, season = 2, id = 101, board = 3)
+        // No season known (older callers): the id is kept, the record has no ref.
+        ladder.record("b", "ev", g, time = 3, comp = Comp.CUP, label = "16강", id = 7, board = 0)
+        // A friendly: no fixture.
+        ladder.record("a", "ev", g, time = 4, comp = Comp.FRIENDLY, label = "관전 경기")
+        ladder.record("b", "a", g, time = 5)
+        val back = Ladder.decode(keys, ladder.encode())
+        assertEquals(ladder.feed.toList(), back.feed.toList())
+        val (none, friendly, cup, club, league) = back.feed.toList()
+        assertEquals(MatchRef(2, Comp.LEAGUE, 1201, 0), league.ref)
+        assertEquals(MatchRef(2, Comp.CLUB_CUP, 101, 3), club.ref)
+        assertEquals("결승 · 4번 보드", club.label)
+        assertEquals(7 to 0, cup.id to cup.board)
+        assertNull(cup.ref)
+        assertEquals(-1 to -1, friendly.id to friendly.board)
+        assertNull(friendly.ref)
+        assertEquals(-1, none.id)
+        // The board goes last on its line; a line written before it reads -1 and loses nothing else.
+        val lines = ladder.encode().lines().filter { it.startsWith("m ") }
+        assertTrue(lines[0].endsWith(" L:3:3라운드 2 #1201:0"), lines[0])
+        assertTrue(lines[2].endsWith(" #7:0") && lines.drop(3).none { '#' in it }, lines.toString())
+        val older = ladder.encode().lines().joinToString("\n") { l -> if (l.startsWith("m ") && " #" in l) l.substringBeforeLast(" #") else l }
+        val old = Ladder.decode(keys, older).feed.toList()
+        assertEquals(ladder.feed.map { it.copy(id = -1, board = -1) }, old)
     }
 
     @Test

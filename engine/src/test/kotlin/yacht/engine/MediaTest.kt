@@ -19,6 +19,7 @@ import yacht.engine.league.LeagueEvent
 import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LiveBoard
 import yacht.engine.league.MatchFormat
+import yacht.engine.league.MatchRef
 import yacht.engine.league.News
 import yacht.engine.league.NewsBook
 import yacht.engine.league.Season
@@ -522,5 +523,58 @@ class MediaTest {
         assertEquals(0.0 to 0.0, mid.scoreA to mid.scoreB)
         val done = board.window(s2 + 50 * step, s2).first { it.fixture.id == 200 }
         assertEquals(1.5 to 0.5, done.scoreA to done.scoreB)
+    }
+
+    @Test
+    fun aFeedCurveIsFoundByItsMatchNotByItsPair() {
+        val board = LiveBoard()
+        fun add(f: Fixture, season: Int, first: Int) {
+            val games = listOf(GameScore(first, 150), GameScore(180, 190))
+            board.add(JobResult(f, listOf(BoardResult(f.a, f.b, games, listOf(facts(first, 150, blowout), facts(190, 180, comeback())))), 1, 0), 0L, season)
+        }
+        // The same pair meets three times; the cup tie is played again after a kill.
+        add(Fixture(Comp.LEAGUE, 7, "p", "q", 1L), 2, 201)
+        add(Fixture(Comp.CUP, 7, "q", "p", 2L), 2, 202)
+        add(Fixture(Comp.CUP, 7, "q", "p", 2L), 2, 203)
+        add(Fixture(Comp.LEAGUE, 7, "p", "q", 3L), 3, 204)
+        assertEquals(204, board.curves("p", "q").first().scoreA, "by pair: the newest, whatever it was")
+        assertEquals(listOf(201, 180), board.curveOf(MatchRef(2, Comp.LEAGUE, 7)).map { it.scoreA })
+        assertEquals(listOf(0, 1), board.curveOf(MatchRef(2, Comp.LEAGUE, 7, 0, 1)).map { it.game })
+        assertEquals(203, board.curveOf(MatchRef(2, Comp.CUP, 7)).first().scoreA, "the newest playing of the tie")
+        assertEquals(204, board.curveOf(MatchRef(3, Comp.LEAGUE, 7)).first().scoreA)
+        assertEquals(emptyList(), board.curveOf(MatchRef(1, Comp.LEAGUE, 7)))
+        assertEquals(emptyList(), board.curveOf(MatchRef(2, Comp.LEAGUE, 7, 1)), "no board 1")
+        // A team match's boards by their index; a curve kept without its season matches any.
+        val team = Fixture(Comp.CLUB, 9, "c1", "c2", 5L, JobKind.TEAM, lineupA = listOf("m1", "m2"), lineupB = listOf("n1", "n2"))
+        val g = listOf(GameScore(250, 150), GameScore(150, 250))
+        val fx = listOf(facts(250, 150, blowout), facts(250, 150, blowout))
+        board.add(JobResult(team, listOf(BoardResult("m1", "n1", g, fx), BoardResult("m2", "n2", g, fx)), 0, 0), 0L)
+        assertEquals(listOf("m2", "m2"), board.curveOf(MatchRef(4, Comp.CLUB, 9, 1)).map { it.a })
+        assertEquals(listOf("m1", "m1"), board.curveOf(MatchRef(4, Comp.CLUB, 9)).map { it.a })
+    }
+
+    @Test
+    fun knockoutNewsKeepsItsMatchThroughTheSaveLine() {
+        val ref = MatchRef(4, Comp.CUP, 1029)
+        val plain = LeagueEvent("cup_round", 4, listOf("ai1", "ai2"), listOf("8강", "2-1"), Comp.CUP)
+        val linked = plain.about(ref)
+        assertEquals("4:C:1029", linked.ref)
+        for (e in listOf(linked, linked.at(19), plain, plain.at(19), LeagueEvent("league_reform", 2).about(MatchRef(2, Comp.LEAGUE, 0)))) {
+            val back = assertNotNull(LeagueEvent.decode(e.encode(withRef = true)), e.encode(withRef = true))
+            assertEquals(e, back)
+            assertEquals(e.ref, back.ref)
+            assertEquals(e.week, back.week)
+            // The plain line is the news alone, as before refs.
+            assertNull(LeagueEvent.decode(e.encode())!!.ref)
+            assertEquals(e.copy(ref = null).encode(withRef = true), e.encode())
+        }
+        // Older readers skip the ref: their week is the field after the arguments, and a ref is written after the week.
+        assertEquals("cup_round|4|C|ai1,ai2|8강\u001f2-1|19|@4:C:1029", linked.at(19).encode(withRef = true))
+        assertEquals(19, linked.at(19).encode(withRef = true).split('|')[5].toInt())
+        // The same news wherever it links; the link goes along with a week and new arguments.
+        assertEquals(plain, linked)
+        assertEquals(plain.hashCode(), linked.hashCode())
+        assertEquals(linked.ref, linked.at(3).ref)
+        assertEquals(linked.ref, linked.copy(args = linked.args + "@아시아컵").ref)
     }
 }

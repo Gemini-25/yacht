@@ -102,12 +102,25 @@ class ChampionsBracket(
     operator fun contains(id: Int): Boolean = id in stage || bracket?.contains(id) == true
 
     fun next(p: Double, busy: Set<String>): Fixture? =
-        stage.next(p, busy) { m -> Fixture(comp, m.id, m.a, m.b, Knockout.fixtureSeed(seed, comp, m.id), JobKind.MATCH, label = labelPrefix + stage.matchLabel(m)) }
-            ?: bracket?.let { k ->
-                k.next(p, busy) { t ->
-                    Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = labelPrefix + k.label(t), firstTo = t.firstTo)
-                }
-            }
+        stage.next(p, busy, ::fixture) ?: bracket?.let { k -> k.next(p, busy) { t -> fixture(k, t) } }
+
+    private fun fixture(m: GroupStage.Match): Fixture =
+        Fixture(comp, m.id, m.a, m.b, Knockout.fixtureSeed(seed, comp, m.id), JobKind.MATCH, label = labelPrefix + stage.matchLabel(m))
+
+    private fun fixture(k: Knockout, t: KnockoutTie): Fixture =
+        Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = labelPrefix + k.label(t), firstTo = t.firstTo)
+
+    /** Every group match, then the knockout's ties with both sides known: the fixture and its stored score (null: not played). */
+    fun matches(): List<Pair<Fixture, TieScore?>> =
+        stage.matches.map { fixture(it) to it.result } + bracket?.let { k -> k.matches.map { fixture(k, it) to it.result } }.orEmpty()
+
+    /** Match or tie [id] as [matches] lists it; null when it is none of them. */
+    fun match(id: Int): Pair<Fixture, TieScore?>? {
+        stage.match(id)?.let { return fixture(it) to it.result }
+        val k = bracket ?: return null
+        val t = k.tie(id)?.takeIf { !it.bye && it.a != null && it.b != null } ?: return null
+        return fixture(k, t) to t.result
+    }
 
     fun release(id: Int) {
         if (id in stage) stage.release(id) else bracket?.release(id)
@@ -139,7 +152,7 @@ class ChampionsBracket(
             val y = stage.entry(m.b)
             if (groupUpsets && x != null && y != null && s.winner != 0) {
                 val (w, l) = if (s.winner > 0) x to y else y to x
-                KnockoutNews.upset(season, comp, w, l)?.let { out += tagged(it) }
+                KnockoutNews.upset(season, comp, w, l)?.let { out += tagged(it).about(MatchRef(season, comp, id)) }
             }
             if (stage.finished && bracket == null) out += drawKnockout()
             return out
@@ -150,7 +163,8 @@ class ChampionsBracket(
         if (k.isFinal(t)) out += KnockoutNews.final(season, comp, t, title).map { if (it.kind == "title") it else tagged(it) }
         else out += tagged(KnockoutNews.round(season, comp, t, k.label(t)))
         KnockoutNews.upset(season, comp, t.winner!!, t.loser!!)?.let { out += tagged(it) }
-        return out
+        val ref = MatchRef(season, comp, t.id)
+        return out.map { it.about(ref) }
     }
 
     private fun tagged(e: LeagueEvent): LeagueEvent = if (tag.isEmpty()) e else e.copy(args = e.args + tag)
@@ -274,7 +288,7 @@ class ChampionsLeague private constructor(
     private val double: Boolean = false,
     /** Group tables give a 2-0 sweep a bonus point (판 승점제); saved. */
     private val bonus: Boolean = false,
-) : ViewableCompetition, International {
+) : ViewableCompetition, International, MatchSource {
     override val comp: Comp get() = Comp.CHAMPIONS
 
     private val stage = ChampionsBracket(
@@ -300,6 +314,10 @@ class ChampionsLeague private constructor(
 
     override fun record(r: JobResult): List<LeagueEvent> =
         if (Knockout.current(seed, comp, r)) stage.record(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) else emptyList()
+
+    override fun seasonMatches(): List<SeasonMatch> = stage.matches().map { (f, s) -> matchOf(season, f, s) }
+
+    override fun seasonMatch(id: Int): SeasonMatch? = stage.match(id)?.let { (f, s) -> matchOf(season, f, s) }
 
     override val finished: Boolean get() = stage.finished
     override val fixturesTotal: Int get() = stage.fixturesTotal

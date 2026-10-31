@@ -9,12 +9,29 @@ data class LeagueEvent(
     val comp: Comp? = null,
     /** The week of the season it happened in ([SeasonCalendar]), [SeasonCalendar.NONE] when unknown. */
     val week: Int = SeasonCalendar.NONE,
+    /** The match it is about ([MatchRef.encode]: a knockout tie's news), for the match report; null when none. */
+    val ref: String? = null,
 ) {
-    fun encode(): String =
-        "$kind|$season|${comp?.code ?: '-'}|${keys.joinToString(",")}|${args.joinToString("\u001f")}" + if (week == SeasonCalendar.NONE) "" else "|$week"
+    /**
+     * The event as a save line; [withRef] adds its [ref] as a trailing "@ref" field (older readers
+     * stop before it). Without it the line is the news alone, as before refs.
+     */
+    fun encode(withRef: Boolean = false): String =
+        "$kind|$season|${comp?.code ?: '-'}|${keys.joinToString(",")}|${args.joinToString("\u001f")}" + (if (week == SeasonCalendar.NONE) "" else "|$week") +
+            (if (withRef) ref?.let { "|@$it" } ?: "" else "")
 
     /** This event in [w] when its week is not known yet. */
     fun at(w: Int): LeagueEvent = if (week == SeasonCalendar.NONE && w != SeasonCalendar.NONE) copy(week = w) else this
+
+    /** This event linked to the match [r] (its whole fixture). */
+    fun about(r: MatchRef): LeagueEvent = copy(ref = r.encode())
+
+    // Two events are the same news wherever they link: [ref] says where the report is, not what
+    // happened, so it is left out of equality (as of the plain save line).
+    override fun equals(other: Any?): Boolean =
+        other is LeagueEvent && other.kind == kind && other.season == season && other.keys == keys && other.args == args && other.comp == comp && other.week == week
+
+    override fun hashCode(): Int = ((((kind.hashCode() * 31 + season) * 31 + keys.hashCode()) * 31 + args.hashCode()) * 31 + (comp?.hashCode() ?: 0)) * 31 + week
 
     companion object {
         fun decode(line: String): LeagueEvent? = runCatching {
@@ -22,6 +39,7 @@ data class LeagueEvent(
             LeagueEvent(
                 f[0], f[1].toInt(), f[3].split(',').filter { it.isNotEmpty() }, f[4].split('\u001f').filter { it.isNotEmpty() },
                 f[2].singleOrNull()?.let { Comp.of(it) }, f.getOrNull(5)?.toIntOrNull() ?: SeasonCalendar.NONE,
+                f.drop(5).lastOrNull()?.takeIf { it.startsWith('@') }?.drop(1),
             )
         }.getOrNull()
     }

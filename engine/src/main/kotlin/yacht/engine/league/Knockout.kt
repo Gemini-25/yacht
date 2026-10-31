@@ -421,8 +421,12 @@ class Knockout(
             BracketSide.LOSERS -> if (t.round % 2 == 1) t.bottom?.key else null
             BracketSide.WINNERS -> null
         }
-        return TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs, t.firstTo, fromWinners, t.bye)
+        val id = if (!t.bye && t.a != null && t.b != null) t.id else -1
+        return TieView(a?.key, b?.key, s?.scoreA ?: 0.0, s?.scoreB ?: 0.0, t.winner?.key, s != null, t.legs, t.firstTo, fromWinners, t.bye, id)
     }
+
+    /** Ties with both sides known (ready or played; byes never), in play order: the season's matches of this bracket. */
+    val matches: List<KnockoutTie> get() = ordered.filter { !it.bye && it.a != null && it.b != null }
 
     /**
      * The bracket for the screen: the winners' rounds, then the losers' and the grand final; a
@@ -671,6 +675,9 @@ class GroupStage(
 
     operator fun contains(id: Int): Boolean = id in byId
 
+    /** Match [id]; null when it is not this stage's. */
+    fun match(id: Int): Match? = byId[id]
+
     fun groupLabel(g: Int): String = label?.invoke(g) ?: "${'A' + g}조"
 
     fun matchLabel(m: Match): String = "${groupLabel(m.group)} ${m.round + 1}차전"
@@ -820,7 +827,7 @@ abstract class BracketCompetition(
     protected val seed: Long,
     /** The draw, best seed first. */
     val entries: List<DrawEntry>,
-) : ViewableCompetition {
+) : ViewableCompetition, MatchSource {
     /** The bracket, built by the subclass from [entries]. */
     protected abstract val bracket: Knockout
 
@@ -859,8 +866,19 @@ abstract class BracketCompetition(
         val f = r.fixture
         if (!Knockout.current(seed, comp, r)) return emptyList()
         val t = bracket.record(f.id, f.a, f.b, TieScore.of(r)) ?: return emptyList()
-        return news(t)
+        // All of a tie's news is about the tie.
+        val ref = MatchRef(season, comp, t.id)
+        return news(t).map { it.about(ref) }
     }
+
+    override fun seasonMatches(): List<SeasonMatch> = bracket.matches.map { matchOf(season, fixture(it), it.result) }
+
+    override fun seasonMatch(id: Int): SeasonMatch? =
+        bracket.tie(id)?.takeIf { !it.bye && it.a != null && it.b != null }?.let { matchOf(season, fixture(it), it.result) }
+
+    // A big cup has thousands of ties: only [key]'s become fixtures.
+    override fun seasonMatchesOf(key: String): List<SeasonMatch> =
+        bracket.matches.filter { it.a?.key == key || it.b?.key == key }.map { matchOf(season, fixture(it), it.result) }
 
     override val finished: Boolean get() = bracket.finished
     override val fixturesLeft: Int get() = bracket.fixturesLeft

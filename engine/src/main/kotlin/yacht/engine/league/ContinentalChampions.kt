@@ -33,7 +33,7 @@ class ContinentalChampions private constructor(
     private val double: Boolean,
     /** A 2-0 sweep's bonus point in the group tables; saved. */
     private val bonus: Boolean,
-) : ViewableCompetition, International {
+) : ViewableCompetition, International, MatchSource {
     override val comp: Comp get() = Comp.CONT_CHAMPIONS
 
     /** One confederation's tournament: its groups (4 or 2), each in pot order. */
@@ -116,6 +116,10 @@ class ContinentalChampions private constructor(
         val f = r.fixture
         return brackets.getOrNull(sectionOf(f.id))?.record(f.id, f.a, f.b, TieScore.of(r)).orEmpty()
     }
+
+    override fun seasonMatches(): List<SeasonMatch> = brackets.flatMap { b -> b.matches().map { (f, s) -> matchOf(season, f, s) } }
+
+    override fun seasonMatch(id: Int): SeasonMatch? = brackets.getOrNull(sectionOf(id))?.match(id)?.let { (f, s) -> matchOf(season, f, s) }
 
     override val finished: Boolean get() = brackets.all { it.finished }
     override val fixturesTotal: Int get() = brackets.sumOf { it.fixturesTotal }

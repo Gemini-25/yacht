@@ -84,7 +84,7 @@ class LeagueTitlePlayoffs private constructor(
     private val long: Boolean,
     private val series: Boolean,
     private val double: Boolean,
-) : ViewableCompetition {
+) : ViewableCompetition, MatchSource {
     override val comp: Comp get() = Comp.TITLE_PLAYOFF
 
     private val brackets = entries.mapIndexed { i, e -> TitlePlayoff.bracket(e, long, series, double, i * SLOT_IDS) }
@@ -115,6 +115,16 @@ class LeagueTitlePlayoffs private constructor(
         if (!Knockout.current(seed, comp, r)) return emptyList()
         k.record(f.id, f.a, f.b, TieScore.of(r))
         return emptyList()
+    }
+
+    override fun seasonMatches(): List<SeasonMatch> =
+        brackets.withIndex().flatMap { (i, k) -> k.matches.map { t -> matchOf(season, fixture(i, k, t), t.result) } }
+
+    override fun seasonMatch(id: Int): SeasonMatch? {
+        val i = brackets.indexOfFirst { id in it }
+        if (i < 0) return null
+        val t = brackets[i].matches.firstOrNull { it.id == id } ?: return null
+        return matchOf(season, fixture(i, brackets[i], t), t.result)
     }
 
     /** Every bracket's stages (the same rules: the same stages). */
@@ -231,7 +241,7 @@ class PromotionPlayoff private constructor(
     private val long: Boolean = true,
     /** National leagues whose 1·2부 tie makes news (the best-ranked when the playoff was drawn); saved. */
     val newsLeagues: Set<String> = emptySet(),
-) : ViewableCompetition {
+) : ViewableCompetition, MatchSource {
     /**
      * A tie of boundary [division]/[division]+1 (tiers of its [league]; "" the legacy league),
      * its bracket ids from [slot] (a linear legacy league's: the boundary).
@@ -251,8 +261,17 @@ class PromotionPlayoff private constructor(
         )
     }
 
-    override fun next(p: Double, busy: Set<String>): Fixture? = brackets.firstNotNullOfOrNull { k ->
-        k.next(p, busy) { t -> Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = k.label(0), firstTo = t.firstTo) }
+    override fun next(p: Double, busy: Set<String>): Fixture? = brackets.firstNotNullOfOrNull { k -> k.next(p, busy) { t -> fixture(k, t) } }
+
+    private fun fixture(k: Knockout, t: KnockoutTie): Fixture =
+        Fixture(comp, t.id, t.a!!.key, t.b!!.key, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TIE, legs = t.legs, label = k.label(0), firstTo = t.firstTo)
+
+    override fun seasonMatches(): List<SeasonMatch> = brackets.flatMap { k -> k.matches.map { t -> matchOf(season, fixture(k, t), t.result) } }
+
+    override fun seasonMatch(id: Int): SeasonMatch? {
+        val k = brackets.firstOrNull { id in it } ?: return null
+        val t = k.matches.firstOrNull { it.id == id } ?: return null
+        return matchOf(season, fixture(k, t), t.result)
     }
 
     override fun release(f: Fixture) {
@@ -273,8 +292,9 @@ class PromotionPlayoff private constructor(
         if (i < 0 || !Knockout.current(seed, comp, r)) return emptyList()
         val t = brackets[i].record(f.id, f.a, f.b, TieScore.of(r)) ?: return emptyList()
         val s = spots[i]
+        val ref = MatchRef(season, comp, t.id)
         if (national) {
-            return if (s.division == 0 && s.league in newsLeagues) listOf(KnockoutNews.round(season, comp, t, label(s.division, s.league))) else emptyList()
+            return if (s.division == 0 && s.league in newsLeagues) listOf(KnockoutNews.round(season, comp, t, label(s.division, s.league)).about(ref)) else emptyList()
         }
         if (grouped && s.division > NEWS_BOUNDARIES) return emptyList()
         val out = arrayListOf(KnockoutNews.round(season, comp, t, label(s.division)))
@@ -282,7 +302,7 @@ class PromotionPlayoff private constructor(
             out += LeagueEvent("promoted", season, listOf(s.lower), listOf("${s.division + 1}", "${s.division}"), comp)
             out += LeagueEvent("relegated", season, listOf(s.upper), listOf("${s.division}", "${s.division + 1}"), comp)
         }
-        return out
+        return out.map { it.about(ref) }
     }
 
     override val finished: Boolean get() = brackets.all { it.finished }

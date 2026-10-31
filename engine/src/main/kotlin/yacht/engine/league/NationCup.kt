@@ -104,7 +104,7 @@ class NationCup private constructor(
     private val announced: List<LeagueEvent>,
     /** Knockouts of 4 or more are double elimination (패자부활); saved. */
     private val double: Boolean = false,
-) : ViewableCompetition {
+) : ViewableCompetition, MatchSource {
     private val world = comp == Comp.WORLD_CUP
     private val byId = teams.associateBy { it.id }
     private val sectionOfGroup = IntArray(groups.size).also { a -> for ((s, sec) in sections.withIndex()) for (g in sec.groups) a[g] = s }
@@ -165,9 +165,25 @@ class NationCup private constructor(
         stage.next(p, busy) { m -> fixture(m.id, m.a, m.b, stage.matchLabel(m)) }?.let { return it }
         for ((s, k) in brackets.withIndex()) {
             k ?: continue
-            k.next(p, busy) { t -> fixture(t.id, t.a!!.key, t.b!!.key, (if (world) "" else sections[s].title + " ") + k.label(t)) }?.let { return it }
+            k.next(p, busy) { t -> fixture(s, k, t) }?.let { return it }
         }
         return null
+    }
+
+    /** Knockout tie [t] of tournament [s]'s bracket [k] as a fixture. */
+    private fun fixture(s: Int, k: Knockout, t: KnockoutTie): Fixture = fixture(t.id, t.a!!.key, t.b!!.key, (if (world) "" else sections[s].title + " ") + k.label(t))
+
+    override fun seasonMatches(): List<SeasonMatch> =
+        stage.matches.map { m -> matchOf(season, fixture(m.id, m.a, m.b, stage.matchLabel(m)), m.result) } +
+            brackets.withIndex().flatMap { (s, k) -> k?.matches?.map { t -> matchOf(season, fixture(s, k, t), t.result) }.orEmpty() }
+
+    override fun seasonMatch(id: Int): SeasonMatch? {
+        stage.match(id)?.let { m -> return matchOf(season, fixture(m.id, m.a, m.b, stage.matchLabel(m)), m.result) }
+        if (id < KO_BASE) return null
+        val s = (id - KO_BASE) / KO_STEP
+        val k = brackets.getOrNull(s) ?: return null
+        val t = k.matches.firstOrNull { it.id == id } ?: return null
+        return matchOf(season, fixture(s, k, t), t.result)
     }
 
     override fun release(f: Fixture) {
@@ -230,7 +246,7 @@ class NationCup private constructor(
             val m = stage.record(id, a, b, s) ?: return emptyList()
             boards?.let { count(it, format) }
             val sec = sectionOfGroup[m.group]
-            matchNews(a, b, s, stage.matchLabel(m), sec, out)
+            matchNews(a, b, s, stage.matchLabel(m), sec, out, MatchRef(season, comp, id))
             if (brackets[sec] == null && stage.matches.all { sectionOfGroup[it.group] != sec || it.result != null }) out += drawKnockout(sec)
             return out
         }
@@ -240,27 +256,29 @@ class NationCup private constructor(
         boards?.let { count(it, format) }
         val w = t.winner!!.key
         val l = t.loser!!.key
+        val ref = MatchRef(season, comp, t.id)
         if (k.isFinal(t)) {
-            out += LeagueEvent("final", season, listOf(w, l), listOf(t.result!!.text()) + cupTag(sec), comp)
+            out += LeagueEvent("final", season, listOf(w, l), listOf(t.result!!.text()) + cupTag(sec), comp).about(ref)
             val title = sections[sec].title
-            out += LeagueEvent("title", season, listOf(w), listOfNotNull(title, if (w !in winnersBefore) "first" else null), comp)
+            out += LeagueEvent("title", season, listOf(w), listOfNotNull(title, if (w !in winnersBefore) "first" else null), comp).about(ref)
+            // The cup's awards are about the whole cup, not its final.
             if (world) awardsNews()?.let { out += it }
         } else {
-            out += LeagueEvent("cup_round", season, listOf(w, l), listOf(k.label(t), t.result!!.text()) + cupTag(sec), comp)
+            out += LeagueEvent("cup_round", season, listOf(w, l), listOf(k.label(t), t.result!!.text()) + cupTag(sec), comp).about(ref)
         }
-        KnockoutNews.upset(season, comp, t.winner!!, t.loser!!)?.let { out += it.copy(args = it.args + cupTag(sec)) }
-        Nations.rivalry(w, l)?.let { out += LeagueEvent("rivalry", season, listOf(w, l), listOf(it, t.result!!.text(), k.label(t)) + cupTag(sec), comp) }
+        KnockoutNews.upset(season, comp, t.winner!!, t.loser!!)?.let { out += it.copy(args = it.args + cupTag(sec)).about(ref) }
+        Nations.rivalry(w, l)?.let { out += LeagueEvent("rivalry", season, listOf(w, l), listOf(it, t.result!!.text(), k.label(t)) + cupTag(sec), comp).about(ref) }
         return out
     }
 
     /** News of a group match: an upset by 100 or more, a rivalry won. */
-    private fun matchNews(a: String, b: String, s: TieScore, label: String, sec: Int, out: MutableList<LeagueEvent>) {
+    private fun matchNews(a: String, b: String, s: TieScore, label: String, sec: Int, out: MutableList<LeagueEvent>, ref: MatchRef) {
         if (s.winner == 0) return
         val (w, l) = if (s.winner > 0) a to b else b to a
         val x = stage.entry(w)
         val y = stage.entry(l)
-        if (x != null && y != null) KnockoutNews.upset(season, comp, x, y)?.let { out += it.copy(args = it.args + cupTag(sec)) }
-        Nations.rivalry(w, l)?.let { out += LeagueEvent("rivalry", season, listOf(w, l), listOf(it, s.text(), label) + cupTag(sec), comp) }
+        if (x != null && y != null) KnockoutNews.upset(season, comp, x, y)?.let { out += it.copy(args = it.args + cupTag(sec)).about(ref) }
+        Nations.rivalry(w, l)?.let { out += LeagueEvent("rivalry", season, listOf(w, l), listOf(it, s.text(), label) + cupTag(sec), comp).about(ref) }
     }
 
     /** Tournament [s]'s bracket from its group tables; returns the news. */

@@ -19,16 +19,22 @@ class AllStar private constructor(
     val challenger: List<String>,
     topRating: Double,
     challengerRating: Double,
-) : ViewableCompetition {
+) : ViewableCompetition, MatchSource {
     override val comp: Comp get() = Comp.ALL_STAR
 
     private val sides = DrawEntry(TOP, 1, topRating) to DrawEntry(CHALLENGER, 2, challengerRating)
     private val bracket = Knockout(listOf(sides), { 1 }, { Comp.ALL_STAR.label }, { OPENS })
 
-    override fun next(p: Double, busy: Set<String>): Fixture? = bracket.next(p, busy) { t ->
+    override fun next(p: Double, busy: Set<String>): Fixture? = bracket.next(p, busy, ::fixture)
+
+    private fun fixture(t: KnockoutTie): Fixture {
         val n = minOf(top.size, challenger.size)
-        Fixture(comp, t.id, TOP, CHALLENGER, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TEAM, lineupA = top.take(n), lineupB = challenger.take(n), rated = false, label = comp.label)
+        return Fixture(comp, t.id, TOP, CHALLENGER, Knockout.fixtureSeed(seed, comp, t.id), JobKind.TEAM, lineupA = top.take(n), lineupB = challenger.take(n), rated = false, label = comp.label)
     }
+
+    override fun seasonMatches(): List<SeasonMatch> = bracket.matches.map { matchOf(season, fixture(it), it.result) }
+
+    override fun seasonMatch(id: Int): SeasonMatch? = bracket.matches.firstOrNull { it.id == id }?.let { matchOf(season, fixture(it), it.result) }
 
     override fun release(f: Fixture) = bracket.release(f.id)
 
@@ -44,7 +50,8 @@ class AllStar private constructor(
     override fun record(r: JobResult): List<LeagueEvent> {
         if (!Knockout.current(seed, comp, r)) return emptyList()
         val t = bracket.record(r.fixture.id, r.fixture.a, r.fixture.b, TieScore.of(r)) ?: return emptyList()
-        return KnockoutNews.final(season, comp, t, null)
+        val ref = MatchRef(season, comp, t.id)
+        return KnockoutNews.final(season, comp, t, null).map { it.about(ref) }
     }
 
     override val finished: Boolean get() = bracket.finished
@@ -149,7 +156,7 @@ open class TeamCup protected constructor(
     /** The knockout is double elimination (패자부활); saved. */
     private val double: Boolean,
     private val kinds: Kinds,
-) : ViewableCompetition {
+) : ViewableCompetition, MatchSource {
     /**
      * A cup's save header and honour kinds: [winner] and [runnerUp] (null: none) keyed by team id,
      * [squad] keyed by each squad member of every team, or of the winning team only ([winnersOnly]).
@@ -182,6 +189,17 @@ open class TeamCup protected constructor(
         stage.next(p, busy) { m -> fixture(m.id, m.a, m.b, stage.matchLabel(m)) }
             ?: bracket?.let { k -> k.next(p, busy) { t -> fixture(t.id, t.a!!.key, t.b!!.key, k.label(t)) } }
 
+    override fun seasonMatches(): List<SeasonMatch> =
+        stage.matches.map { m -> matchOf(season, fixture(m.id, m.a, m.b, stage.matchLabel(m)), m.result) } +
+            bracket?.let { k -> k.matches.map { t -> matchOf(season, fixture(t.id, t.a!!.key, t.b!!.key, k.label(t)), t.result) } }.orEmpty()
+
+    override fun seasonMatch(id: Int): SeasonMatch? {
+        stage.match(id)?.let { m -> return matchOf(season, fixture(m.id, m.a, m.b, stage.matchLabel(m)), m.result) }
+        val k = bracket ?: return null
+        val t = k.matches.firstOrNull { it.id == id } ?: return null
+        return matchOf(season, fixture(t.id, t.a!!.key, t.b!!.key, k.label(t)), t.result)
+    }
+
     override fun release(f: Fixture) {
         if (f.id in stage) stage.release(f.id) else bracket?.release(f.id)
     }
@@ -213,7 +231,8 @@ open class TeamCup protected constructor(
         }
         val k = bracket ?: return emptyList()
         val t = k.record(id, a, b, s) ?: return emptyList()
-        return if (k.isFinal(t)) KnockoutNews.final(season, comp, t, comp.label) else listOf(KnockoutNews.round(season, comp, t, k.label(t)))
+        val ref = MatchRef(season, comp, t.id)
+        return (if (k.isFinal(t)) KnockoutNews.final(season, comp, t, comp.label) else listOf(KnockoutNews.round(season, comp, t, k.label(t)))).map { it.about(ref) }
     }
 
     /** Puts saved results back, earliest first. */

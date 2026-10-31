@@ -37,23 +37,25 @@ object LeagueMatch {
         cancelled: () -> Boolean = { false },
         /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
         scout: (String) -> OppModel? = NO_SCOUT,
+        /** Takes every decision of the games, for the match logs (play is the same without it). */
+        log: LogSink? = null,
     ): BoardResult {
         val games = ArrayList<GameScore>()
         val facts = ArrayList<GameFacts>()
         val first = DiceStream(DiceStream.mix(seed, 0))
         val second = DiceStream(DiceStream.mix(seed, 1))
         fun rng(game: Int, seat: Int) = Random(DiceStream.mix(seed, 7, game.toLong(), seat.toLong()))
-        val g1 = game(rules, a.player(rng(0, 0), scout(b.key)), b.player(rng(0, 1), scout(a.key)), first, second, estimate, cancelled)
+        val g1 = game(rules, a.player(rng(0, 0), scout(b.key)), b.player(rng(0, 1), scout(a.key)), first, second, estimate, cancelled, log = log)
         games += score(g1.first, g1.second)
         g1.facts?.let { facts += it }
         if (format != MatchFormat.SINGLE) {
-            val g2 = game(rules, b.player(rng(1, 0), scout(a.key)), a.player(rng(1, 1), scout(b.key)), first, second, estimate, cancelled)
+            val g2 = game(rules, b.player(rng(1, 0), scout(a.key)), a.player(rng(1, 1), scout(b.key)), first, second, estimate, cancelled, log = log)
             games += score(g2.second, g2.first)
             g2.facts?.let { facts += it }
         }
         var deciders = 0
         if (format == MatchFormat.BEST_OF_3 && games.sumOf { if (it.a > it.b) 1.0 else if (it.a == it.b) 0.5 else 0.0 } == 1.0) {
-            decider(rules, a, b, seed, 0, estimate, cancelled, games, facts, scout)
+            decider(rules, a, b, seed, 0, estimate, cancelled, games, facts, scout, log)
             deciders = 1
         }
         return BoardResult(a.key, b.key, games, facts, deciders)
@@ -82,6 +84,8 @@ object LeagueMatch {
          * won (a drawn game half each) and more than the other; at most [legs] pairs.
          */
         firstTo: Int = 0,
+        /** Takes every decision of the games, for the match logs (play is the same without it). */
+        log: LogSink? = null,
     ): BoardResult {
         val games = ArrayList<GameScore>()
         val facts = ArrayList<GameFacts>()
@@ -102,23 +106,23 @@ object LeagueMatch {
                 val first = DiceStream(DiceStream.mix(s, 0))
                 val second = DiceStream(DiceStream.mix(s, 1))
                 fun rng(game: Int, seat: Int) = Random(DiceStream.mix(s, 7, game.toLong(), seat.toLong()))
-                val g1 = game(rules, a.player(rng(0, 0), scout(b.key)), b.player(rng(0, 1), scout(a.key)), first, second, estimate, cancelled)
+                val g1 = game(rules, a.player(rng(0, 0), scout(b.key)), b.player(rng(0, 1), scout(a.key)), first, second, estimate, cancelled, log = log)
                 count(score(g1.first, g1.second))
                 g1.facts?.let { facts += it }
                 if (over()) break@series
-                val g2 = game(rules, b.player(rng(1, 0), scout(a.key)), a.player(rng(1, 1), scout(b.key)), first, second, estimate, cancelled)
+                val g2 = game(rules, b.player(rng(1, 0), scout(a.key)), a.player(rng(1, 1), scout(b.key)), first, second, estimate, cancelled, log = log)
                 count(score(g2.second, g2.first))
                 g2.facts?.let { facts += it }
                 if (over()) break@series
             }
         } else for (leg in 0 until legs) {
-            val m = playMatch(rules, a, b, DiceStream.mix(seed, 100L + leg), if (format == MatchFormat.BEST_OF_3) MatchFormat.MIRRORED else format, estimate, cancelled, scout)
+            val m = playMatch(rules, a, b, DiceStream.mix(seed, 100L + leg), if (format == MatchFormat.BEST_OF_3) MatchFormat.MIRRORED else format, estimate, cancelled, scout, log)
             games += m.games
             facts += m.facts
         }
         var deciders = 0
         while (deciders < maxDeciders && TieRule.match(games) == 0) {
-            decider(rules, a, b, seed, deciders, estimate, cancelled, games, facts, scout)
+            decider(rules, a, b, seed, deciders, estimate, cancelled, games, facts, scout, log)
             deciders++
         }
         return BoardResult(a.key, b.key, games, facts, deciders)
@@ -135,11 +139,17 @@ object LeagueMatch {
         cancelled: () -> Boolean = { false },
         /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
         scout: (String) -> OppModel? = NO_SCOUT,
+        /** Takes every decision of the games, board by board, for the match logs. */
+        log: LogSink? = null,
     ): List<BoardResult> = lineupA.zip(lineupB).mapIndexed { i, (x, y) ->
-        playMatch(rules, x, y, DiceStream.mix(seed, 200L + i), format, estimate, cancelled, scout)
+        log?.board(i)
+        playMatch(rules, x, y, DiceStream.mix(seed, 200L + i), format, estimate, cancelled, scout, log)
     }
 
-    /** Plays a whole job; [ai] finds each AI (null: the job cannot be played). */
+    /**
+     * Plays a whole job; [ai] finds each AI (null: the job cannot be played). With [log], every
+     * decision of every game goes to it too ([LogSink]: one sink per job; play is the same).
+     */
     fun playJob(
         rules: RuleSet,
         job: Fixture,
@@ -149,6 +159,7 @@ object LeagueMatch {
         cancelled: () -> Boolean = { false },
         /** The opponent model of each AI by its record ([OppModel], for the 상대 맞춤 AIs). */
         scout: (String) -> OppModel? = NO_SCOUT,
+        log: LogSink? = null,
     ): JobResult? {
         val t0 = System.nanoTime()
         val boards: List<BoardResult>
@@ -157,14 +168,16 @@ object LeagueMatch {
             JobKind.MATCH -> {
                 val x = ai(job.a) ?: return null
                 val y = ai(job.b) ?: return null
-                val r = playMatch(rules, x, y, job.seed, format, estimate, cancelled, scout)
+                log?.board(0)
+                val r = playMatch(rules, x, y, job.seed, format, estimate, cancelled, scout, log)
                 boards = listOf(r)
                 winner = TieRule.match(r.games, format)
             }
             JobKind.TIE -> {
                 val x = ai(job.a) ?: return null
                 val y = ai(job.b) ?: return null
-                val r = playTie(rules, x, y, job.seed, job.legs, format, estimate, cancelled = cancelled, scout = scout, firstTo = job.firstTo)
+                log?.board(0)
+                val r = playTie(rules, x, y, job.seed, job.legs, format, estimate, cancelled = cancelled, scout = scout, firstTo = job.firstTo, log = log)
                 boards = listOf(r)
                 // Level after every decider: side A (the higher seed by convention) goes through.
                 winner = TieRule.match(r.games).let { if (it == 0) 1 else it }
@@ -172,7 +185,7 @@ object LeagueMatch {
             JobKind.TEAM -> {
                 val xs = job.lineupA.map { ai(it) ?: return null }
                 val ys = job.lineupB.map { ai(it) ?: return null }
-                boards = playTeam(rules, xs, ys, job.seed, format, estimate, cancelled, scout)
+                boards = playTeam(rules, xs, ys, job.seed, format, estimate, cancelled, scout, log)
                 winner = TieRule.team(boards, format)
             }
         }
@@ -238,16 +251,17 @@ object LeagueMatch {
         games: MutableList<GameScore>,
         facts: MutableList<GameFacts>,
         scout: (String) -> OppModel?,
+        log: LogSink?,
     ) {
         val s0 = DiceStream(DiceStream.mix(seed, 300L + k, 0))
         val s1 = DiceStream(DiceStream.mix(seed, 300L + k, 1))
         fun rng(seat: Int) = Random(DiceStream.mix(seed, 301L + k, seat.toLong()))
         if (k % 2 == 0) {
-            val g = game(rules, a.player(rng(0), scout(b.key)), b.player(rng(1), scout(a.key)), s0, s1, estimate, cancelled)
+            val g = game(rules, a.player(rng(0), scout(b.key)), b.player(rng(1), scout(a.key)), s0, s1, estimate, cancelled, log = log)
             games += score(g.first, g.second)
             g.facts?.let { facts += it }
         } else {
-            val g = game(rules, b.player(rng(0), scout(a.key)), a.player(rng(1), scout(b.key)), s0, s1, estimate, cancelled)
+            val g = game(rules, b.player(rng(0), scout(a.key)), a.player(rng(1), scout(b.key)), s0, s1, estimate, cancelled, log = log)
             games += score(g.second, g.first)
             g.facts?.let { facts += it }
         }
@@ -269,18 +283,20 @@ object LeagueMatch {
         estimate: WinEstimate?,
         cancelled: () -> Boolean,
         watch: MutableList<WatchTurn>? = null,
+        log: LogSink? = null,
     ): Played {
         var x = Board(rules)
         var y = Board(rules)
         val trace = if (estimate != null) ArrayList<Pair<Board, Board>>(2 * Category.COUNT) else null
+        log?.newGame()
         for (turn in 0 until Category.COUNT) {
             if (cancelled()) throw CancellationException("league stopped")
             val l0 = watch?.let { TurnLog() }
-            x = turn(rules, first, x, y, s0, turn, l0)
+            x = turn(rules, first, x, y, s0, turn, l0, log)
             trace?.add(x to y)
             l0?.let { watch!! += WatchTurn(0, it.throws, it.held, it.category, it.points, x, y) }
             val l1 = watch?.let { TurnLog() }
-            y = turn(rules, second, y, x, s1, turn, l1)
+            y = turn(rules, second, y, x, s1, turn, l1, log)
             trace?.add(x to y)
             l1?.let { watch!! += WatchTurn(1, it.throws, it.held, it.category, it.points, x, y) }
         }
@@ -295,18 +311,20 @@ object LeagueMatch {
         var points = 0
     }
 
-    private fun turn(rules: RuleSet, p: Player, me: Board, opp: Board, stream: DiceStream, turn: Int, log: TurnLog? = null): Board {
+    private fun turn(rules: RuleSet, p: Player, me: Board, opp: Board, stream: DiceStream, turn: Int, log: TurnLog? = null, sink: LogSink? = null): Board {
         p.startTurn(me, opp)
         var r = stream.throwDice(Dice.EMPTY_KEEP, turn, 0)
         log?.throws?.add(Dice.rollFaces(r))
         for (rollsDone in 1..2) {
             val keep = p.chooseKeep(rollsDone, r)
+            sink?.keep(r, keep)
             if (keep == Dice.rollAsKeep[r]) break
             log?.held?.add(Dice.keepFaces(keep))
             r = stream.throwDice(keep, turn, rollsDone)
             log?.throws?.add(Dice.rollFaces(r))
         }
         val c = p.chooseCategory(r)
+        sink?.box(c)
         val points = rules.score(Dice.rollCounts[r], c)
         log?.let {
             it.category = c

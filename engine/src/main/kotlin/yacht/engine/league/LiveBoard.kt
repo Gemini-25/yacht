@@ -74,6 +74,8 @@ class GameCurve(
     /** The fixture it came from (see [LiveFixture.seq]). */
     val fixtureSeq: Long,
     private val curve: ByteArray,
+    /** The season it was played in (0 when not told: [LiveBoard.add]). */
+    val season: Int = 0,
 ) {
     /** A's P(win) after every half-turn, in percent. */
     fun curveA(): IntArray = IntArray(curve.size) { if (aFirst) curve[it].toInt() else 100 - curve[it] }
@@ -142,10 +144,11 @@ class LiveBoard {
     val curves: List<GameCurve> get() = feed.toList()
 
     /**
-     * Keeps a finished job (any competition, friendlies too when the feed shows them) at the
-     * app's time [nowMs]; boards without facts are left out, and a job with none is ignored.
+     * Keeps a finished job (any competition, friendlies too when the feed shows them) of [season]
+     * (0: not told) at the app's time [nowMs]; boards without facts are left out, and a job with
+     * none is ignored.
      */
-    fun add(r: JobResult, nowMs: Long) {
+    fun add(r: JobResult, nowMs: Long, season: Int = 0) {
         val f = r.fixture
         val n = seq
         val boards = ArrayList<LiveBoardGames>(r.boards.size)
@@ -156,7 +159,7 @@ class LiveBoard {
             val list = bd.facts.mapIndexed { gi, facts ->
                 val aFirst = LeagueMatch.deal(f, bi, gi, per).aFirst
                 val g = bd.games[gi]
-                games += GameCurve(f.comp, f.id, f.label, bd.a, bd.b, bi, gi, aFirst, g.a, g.b, n, facts.curve)
+                games += GameCurve(f.comp, f.id, f.label, bd.a, bd.b, bi, gi, aFirst, g.a, g.b, n, facts.curve, season)
                 LiveGame(aFirst, g.a, g.b, facts.totals, facts.curve)
             }
             boards += LiveBoardGames(bd.a, bd.b, list)
@@ -173,6 +176,18 @@ class LiveBoard {
     fun curves(a: String, b: String): List<GameCurve> {
         val last = feed.firstOrNull { (it.a == a && it.b == b) || (it.a == b && it.b == a) } ?: return emptyList()
         return feed.filter { it.fixtureSeq == last.fixtureSeq && it.board == last.board }.sortedBy { it.game }
+    }
+
+    /**
+     * The curves of [ref]'s board (board -1: the first) in game order, from the newest time it was
+     * played (a fixture played again after a kill); empty when none is kept. A curve kept without
+     * its season (0) matches any season.
+     */
+    fun curveOf(ref: MatchRef): List<GameCurve> {
+        val board = maxOf(0, ref.board)
+        fun mine(c: GameCurve) = c.comp == ref.comp && c.fixtureId == ref.id && c.board == board && (c.season == 0 || c.season == ref.season)
+        val last = feed.firstOrNull(::mine) ?: return emptyList()
+        return feed.filter { it.fixtureSeq == last.fixtureSeq && mine(it) }.sortedBy { it.game }
     }
 
     /**

@@ -70,6 +70,8 @@ data class TieView(
      * elimination) an empty losers' tie both of whose feeders were byes, with no side at all.
      */
     val bye: Boolean = false,
+    /** The tie's fixture id (its [MatchRef.id]) once both sides are known; -1 for a bye and before. */
+    val id: Int = -1,
 )
 
 /** A group table, best first. */
