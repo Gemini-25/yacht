@@ -1390,8 +1390,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         return false
     }
 
-    /** "이번 주 중계가 끝났어요. 다음 주 빅매치는 3경기예요." */
-    private fun channelEnd(): String = "이번 주 중계가 끝났어요. 다음 주 빅매치는 ${broadcast?.coming?.size ?: 0}경기예요."
+    /** "이번 주 중계가 끝났어요. 다음 주 빅매치는 3경기예요." (next week's count once some are picked). */
+    private fun channelEnd(): String {
+        val coming = broadcast?.coming?.size ?: 0
+        return "이번 주 중계가 끝났어요." + if (coming > 0) " 다음 주 빅매치는 ${coming}경기예요." else ""
+    }
 
     /** The 4-second card before the channel's next pick ("지금 보기 ⏭⏭" skips it, "멈추기" holds it). */
     private fun countdown(s: Session, ch: Channel) {

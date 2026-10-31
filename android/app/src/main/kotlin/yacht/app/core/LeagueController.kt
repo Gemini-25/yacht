@@ -1093,8 +1093,9 @@ class LeagueController(
                         lastDelta[m.a] = m.deltaA
                         lastDelta[m.b] = m.deltaB
                     }
-                    // Its refs for the feed (until the ladder keeps them), and its logs when it is worth keeping.
-                    if (played != null) refsOf(result, rec.matches)
+                    // Its refs for the feed (until the ladder keeps them), and its logs when it is worth keeping:
+                    // extras of a match already recorded (a failure here must not give it back to the season).
+                    if (played != null) runCatching { refsOf(result, rec.matches) }
                     if (played != null) runCatching { center.offer(result, sink) }.onFailure { e -> scope.launch { onError(e) } }
                     recorded = true
                     lastRecord = System.currentTimeMillis()

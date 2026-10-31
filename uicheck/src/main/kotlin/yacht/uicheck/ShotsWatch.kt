@@ -4,6 +4,7 @@ import yacht.app.core.AppController
 import yacht.app.core.BoardReport
 import yacht.app.core.BroadcastQueue
 import yacht.app.core.LeagueTab
+import yacht.app.core.MatchCenter
 import yacht.app.core.MatchesView
 import yacht.app.core.Page
 import yacht.app.core.ReportState
@@ -23,7 +24,8 @@ import java.util.Random
 /**
  * Watching (lg13, lg60-lg67): the broadcast channel's list, match reports (played, in play, a cup
  * series, a team match, a match to come), the watch screen replaying a real match (and its end),
- * the channel playing its picks (a countdown and a team match drawn from it), and a friendly.
+ * the channel playing its picks (a countdown, a team match and a pick still to be played drawn
+ * from it), and a friendly.
  * The league is stopped while shooting (a report in play is shot first, while it runs).
  */
 internal object ShotsWatch : LeagueShots {
@@ -153,7 +155,10 @@ internal object ShotsWatch : LeagueShots {
 
         // The channel: its first played pick, then a countdown and a team match drawn from it.
         center.startBroadcast()
-        waitFor("broadcast", 180_000) { lg.watch?.let { w -> w.shown >= 8 || w.atEnd || w.message != null || w.waiting != null && w.steps.isEmpty() && w.queue != null } == true }
+        // Played, ended, refused, or a pick still to be played (not the card of a pick being worked out).
+        waitFor("broadcast", 180_000) {
+            lg.watch?.let { w -> w.shown >= 8 || w.atEnd || w.message != null || w.waiting != null && w.waiting != MatchCenter.COMPUTING && w.steps.isEmpty() && w.queue != null } == true
+        }
         center.pause()
         shot(c, out, "lg66_broadcast", heightDp = 1300)
         lg.watch?.takeIf { it.message == null && it.steps.isNotEmpty() }?.let { w ->
@@ -168,6 +173,13 @@ internal object ShotsWatch : LeagueShots {
                         boardLines = List(5) { i -> "${i + 1}번 보드 ${names.getOrElse(2 * i) { "A" }} ${if (i < 2) "2:0" else "0:0"} ${names.getOrElse(2 * i + 1) { "B" }}" },
                         queue = BroadcastQueue(2, 6, null, null),
                     ),
+                    rules, WatchActions(),
+                )
+            }
+            // A pick still to be played with the league stopped: ▶ 이번 주 진행.
+            shotOf(out, "lg66d_waiting", heightDp = 900) {
+                WatchBody(
+                    w.copy(steps = emptyList(), shown = 0, complete = false, playing = false, waiting = MatchCenter.UNPLAYED_PICK, queue = BroadcastQueue(3, 6, null, null)),
                     rules, WatchActions(),
                 )
             }
