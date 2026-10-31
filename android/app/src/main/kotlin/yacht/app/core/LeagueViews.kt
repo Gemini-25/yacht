@@ -249,7 +249,7 @@ data class SeasonView(
     val rules: LeagueConfig? = null,
     /** The season's leagues for the selector (one entry, id "", in a legacy season), in league order. */
     val leagues: List<LeagueInfo> = emptyList(),
-    /** The league shown ("" in a legacy season): the one picked, else the default (see `LeagueSelector.defaultLeague`). */
+    /** The league shown ("" in a legacy season): the one picked while this season has it, else the default (`LeagueSelector.Built.default`). */
     val league: String = "",
     /** National leagues this season, and in the next (its rules as they are now). */
     val national: Boolean = false,

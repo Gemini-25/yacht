@@ -233,7 +233,8 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
                         style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false),
                     )
                     if (r.playing) Text(" ⚔️", fontSize = 11.sp)
-                    r.divisionLabel?.let { Text(" $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
+                    // "아시아 연합 2부" stays on one line (the name gives way).
+                    r.divisionLabel?.let { Text(" $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1) }
                 }
                 Text(
                     "${r.wins}승 ${if (r.ties > 0) "${r.ties}무 " else ""}${r.losses}패 · ${"%.1f".format(100 * r.winRate)}% · ${"%.0f".format(r.avgScore)}점",
@@ -336,7 +337,11 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                 )
                 if (national) LeagueHeader(lg, season)
                 else if (season.nextNational) {
-                    Text("리그 · 이번 시즌은 지역 피라미드로 치러요. 다음 시즌부터 국가 리그로 나뉘어요.", style = MaterialTheme.typography.labelSmall, color = cs.secondary)
+                    // A small league is one ladder, not a regional pyramid.
+                    Text(
+                        "리그 · 이번 시즌은 ${if (tiers.linear) "한 리그로" else "지역 피라미드로"} 치러요. 다음 시즌부터 국가 리그로 나뉘어요.",
+                        style = MaterialTheme.typography.labelSmall, color = cs.secondary,
+                    )
                 }
             }
         }

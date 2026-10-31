@@ -980,7 +980,8 @@ class LeagueController(
     private fun followedDivision(w: LeagueWorld, favs: Set<String>): Pair<Int, Int>? {
         val p = w.plan ?: return null
         val s = p.league
-        val lg = shownOf(p)?.let { s.leagues.byId(it) } ?: return null
+        // The default league of these favourites (after a restore, the backup's, not the ones still in memory).
+        val lg = shownOf(p, selector(p, favs))?.let { s.leagues.byId(it) } ?: return null
         if (lg.size == 0) return null
         val d = lg.divisions.firstOrNull { i -> s.divisions[i].any { it in favs } } ?: lg.first
         return lg.tiers.tier(d - lg.first) to lg.tiers.group(d - lg.first)
@@ -1290,10 +1291,30 @@ class LeagueController(
     @Volatile
     private var oddsNow: Map<String, OddsTable> = emptyMap()
 
-    /** [oddsNow] is replaced under this (the upkeep and a league picked may both refresh). */
+    /** [oddsNow] is replaced under this (a refresh's tables come in one by one). */
     private val oddsLock = Any()
 
-    private fun refreshOdds(force: Boolean = false) {
+    /** A refresh of [oddsNow] is running, and another was asked for meanwhile ([refreshOdds]). */
+    private val oddsRunning = AtomicBoolean(false)
+    private val oddsAgain = AtomicBoolean(false)
+
+    /**
+     * Brings [oddsNow] up to date, one refresh at a time: the upkeep and every league picked ask
+     * for one, and a request while one runs makes it go round once more (for the leagues wanted
+     * then) instead of running the same leagues' odds side by side.
+     */
+    private fun refreshOdds() {
+        oddsAgain.set(true)
+        while (oddsAgain.get() && oddsRunning.compareAndSet(false, true)) {
+            try {
+                while (oddsAgain.getAndSet(false)) refreshOddsOnce()
+            } finally {
+                oddsRunning.set(false)
+            }
+        }
+    }
+
+    private fun refreshOddsOnce() {
         var from: LeagueWorld? = null
         var wanted: List<String> = emptyList()
         val jobs = synchronized(lock) {
@@ -1304,14 +1325,13 @@ class LeagueController(
             val now = oddsNow
             wanted.mapNotNull { id ->
                 val o = now[id]
-                if (!force && o != null && !o.stale(p.league)) return@mapNotNull null
+                if (o != null && !o.stale(p.league)) return@mapNotNull null
                 // From the season's seed and progress (and the league): the same league gives the same odds.
                 val seed = p.seed xor p.league.fixturesPlayed.toLong() xor (if (id.isEmpty()) 0L else LeagueIds.code(id).toLong() shl 48)
                 val input = if (p.league.leagues.national) Odds.input(p, { k -> w.rating(k) }, id) else Odds.input(p, { k -> w.rating(k) })
                 Triple(id, seed, input)
             }
         }
-        var changed = false
         for ((id, seed, input) in jobs) {
             val table = runCatching { Odds.run(input, Odds.runsFor(Odds.left(input)), seed) }.getOrNull() ?: continue
             synchronized(oddsLock) {
@@ -1319,9 +1339,9 @@ class LeagueController(
                 if (world !== from) return
                 oddsNow = oddsNow.filterKeys { it in wanted } + (id to table)
             }
-            changed = true
+            // The shown league's first: it need not wait for the followed ones.
+            publish()
         }
-        if (changed) publish()
     }
 
     /**
@@ -2054,11 +2074,11 @@ class LeagueController(
     private var selectorFor: Triple<Season, LeagueRanking, Set<String>>? = null
 
     /**
-     * [p]'s league selector (under the lock): its leagues, each nation's league and the default,
-     * built again only when the season, its ranking or the favourites change (a few dozen rows).
+     * [p]'s league selector (under the lock) for favourites [favs]: its leagues, each nation's league
+     * and the default, built again only when the season, its ranking or the favourites change (a few
+     * dozen rows).
      */
-    private fun selector(p: SeasonPlan): LeagueSelector.Built {
-        val favs = favourites
+    private fun selector(p: SeasonPlan, favs: Set<String> = favourites): LeagueSelector.Built {
         val was = selectorFor
         selectorBuilt?.let { b -> if (was != null && was.first === p.league && was.second === p.ranking && was.third == favs) return b }
         val w = world
@@ -2520,8 +2540,9 @@ class LeagueController(
 
     /**
      * Loads [matchday] of [division] (the season's index) into [calendar] (null: the current
-     * matchday). A division of a national season that plays fewer rounds than the season has
-     * matchdays shows its own round on [matchday] or the next one after it (the last when none).
+     * matchday). A division of a national season shows its own round on [matchday] or the next one
+     * after it (the last when none; a division with fewer rounds than the season has matchdays plays
+     * them spread over the weeks), and its own round in play (null: that one).
      */
     fun loadCalendar(division: Int, matchday: Int? = null) {
         // Only the newest request is shown (an older one can finish later).
@@ -2536,7 +2557,8 @@ class LeagueController(
                     val games = s.result(f.id)
                     CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), games, !s.isPlayed(f.id) && live.containsKey(f.a to f.b), games?.let { TieRule.match(it, s.format) })
                 }
-                if (!s.leagues.national || n == s.matchdays || n == 0) {
+                // A national division (even one of the most rounds) by its own rounds, the round in play its own.
+                if (!s.leagues.national || n == 0) {
                     val md = (matchday ?: s.currentMatchday).coerceIn(0, maxOf(0, s.matchdays - 1))
                     CalendarView(d, md, s.matchdays, s.currentMatchday, items(md), s.number)
                 } else {
@@ -2748,7 +2770,8 @@ internal object LeagueSelector {
 
     /**
      * [season]'s selector. [ranking] is the one the season is played under (EMPTY, or without a
-     * row for a league: by strength, as the first national season's draws rank them); [nation] a
+     * row for a league: by strength, as the first national season's draws rank them); [config] the
+     * season's rules (no 대륙 챔피언스 or 챔피언스 리그 places when it does not play them); [nation] a
      * player's nation code (null: none, so Korea's); [clubNation] a club's nation.
      */
     fun build(
@@ -2798,8 +2821,9 @@ internal object LeagueSelector {
                 (0 until lg.size).map { lg.tiers.label(it) }, lg.divisions.map { season.divisions[it].size }, keys[lg.id].orEmpty().size,
                 ranked.indexOf(lg.id).takeIf { it >= 0 }?.plus(1),
                 row?.coefficient,
-                row?.cclSlots ?: guess?.cclSlots ?: 0,
-                row?.clDirect ?: guess?.clDirect ?: false,
+                // Places only in what the season's rules play (as the odds count them, `Odds.input`).
+                if (config.continentalCl) row?.cclSlots ?: guess?.cclSlots ?: 0 else 0,
+                config.champions && (row?.clDirect ?: guess?.clDirect ?: false),
                 lg.id in followed,
                 nationsIn[lg.id] ?: 0,
             )

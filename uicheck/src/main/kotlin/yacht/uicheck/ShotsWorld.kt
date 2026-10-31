@@ -26,14 +26,14 @@ internal object ShotsWorld : LeagueShots {
         if (c.league.view?.season?.national == true) selectorShot(c, out)
     }
 
-    /** lg03_selector: 리그 고르기 over 순위 › 리그. */
-    fun selectorShot(c: AppController, out: File) {
+    /** lg03_selector ([name]): 리그 고르기 over 순위 › 리그. */
+    fun selectorShot(c: AppController, out: File, name: String = "lg03_selector") {
         val nav = c.league.nav
         nav.go(LeagueTab.TABLES)
         nav.tables = TablesView.LEAGUE
         nav.tableMode = TableMode.TABLE
         nav.sheet = Sheet.LEAGUES
-        shot(c, out, "lg03_selector", heightDp = 1300)
+        shot(c, out, name, heightDp = 1300)
         nav.go(LeagueTab.HOME)
     }
 
@@ -45,7 +45,7 @@ internal object ShotsWorld : LeagueShots {
     fun nationalShots(c: AppController, out: File, prefix: String) {
         val lg = c.league
         val nav = lg.nav
-        selectorShot(c, out)
+        selectorShot(c, out, "${prefix}_lg03_selector")
         nav.go(LeagueTab.TABLES)
         nav.tables = TablesView.LEAGUE
         nav.tableMode = TableMode.TABLE
@@ -83,10 +83,11 @@ internal object ShotsWorld : LeagueShots {
     /**
      * Every league's 순위 › 리그 (RunCheck `national`): each league at every tier in the table
      * view and its 1부 in each other view, its data loaded first and checked against the
-     * selector's row, each drawn as "<prefix>_<league>_<tier>_<view>"; fails on the first view
-     * that is wrong or cannot be drawn. With [out] null only the snapshot of each league is
-     * checked (nothing loaded or drawn: the league may play on meanwhile). Returns the views drawn.
-     * Ends on 홈 with the default league.
+     * selector's row, each drawn as "<prefix>_<league>_<tier>_<view>"; the lower tiers' rounds and
+     * form are loaded and checked too (not drawn: a shorter tier spreads its rounds over the
+     * weeks). Fails on the first view that is wrong or cannot be drawn. With [out] null only the
+     * snapshot of each league is checked (nothing loaded or drawn: the league may play on
+     * meanwhile). Returns the views drawn. Ends on 홈 with the default league.
      */
     fun everyLeague(c: AppController, out: File?, prefix: String): Int {
         val lg = c.league
@@ -103,6 +104,7 @@ internal object ShotsWorld : LeagueShots {
                 val season = lg.view!!.season!!
                 checkLeague(lg, season, season.leagues.first { it.id == info.id })
                 if (out == null) continue
+                if (tier > 0) for (mode in listOf(TableMode.ROUND, TableMode.FORM)) load(lg, season, tier, mode)
                 for (mode in if (tier == 0) TableMode.entries else listOf(TableMode.TABLE)) {
                     nav.tableMode = mode
                     load(lg, season, tier, mode)
@@ -151,7 +153,10 @@ internal object ShotsWorld : LeagueShots {
                 waitFor("round of $gd") { lg.calendar?.let { it.division == gd && it.season == season.number } == true }
                 val cal = lg.calendar!!
                 check(cal.rounds == season.roundsOf(tier)) { "round of $gd: ${cal.rounds} rounds, the table says ${season.roundsOf(tier)}" }
-                check(cal.items.all { it.a in keys && it.b in keys }) { "round of $gd: a fixture of another division" }
+                check(cal.round in 0 until cal.rounds && cal.currentRound in 0..cal.rounds) { "round of $gd: round ${cal.round}, in play ${cal.currentRound} of ${cal.rounds}" }
+                check(cal.items.isNotEmpty() && cal.items.all { it.a in keys && it.b in keys }) { "round of $gd: no fixture, or one of another division" }
+                // Its rounds before and after are its own: each step lands on a round of this division.
+                check((cal.prev == null) == (cal.round == 0) && (cal.next == null) == (cal.round == cal.rounds - 1)) { "round of $gd: ◀ ${cal.prev} ▶ ${cal.next} at ${cal.round}" }
             }
             TableMode.H2H -> {
                 val title = LeagueIds.division(season.league, tier)
