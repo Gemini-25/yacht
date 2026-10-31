@@ -150,16 +150,20 @@ private fun Articles(c: AppController, v: LeagueView, all: List<Article>, lead: 
             if (n == 1) base else "$base-$n"
         }
     }
-    // Weeks of another season with playoff news are its post-season (that season's length is not kept).
-    val playoffWeeks = remember(news) {
-        news.filter { it.comp == Comp.TITLE_PLAYOFF || it.comp == Comp.PROMOTION_PLAYOFF }.map { it.season to it.week }.toSet()
+    // Another season's post-season starts at its first week with playoff news (that season's
+    // length is not kept): its weeks from there are named as the season named them.
+    val firstPost = remember(news) {
+        news.filter { (it.comp == Comp.TITLE_PLAYOFF || it.comp == Comp.PROMOTION_PLAYOFF) && it.week > 0 && it.week < SeasonCalendar.CLOSING }
+            .groupBy { it.season }.mapValues { (_, l) -> l.minOf { it.week } }
     }
+    val headings = remember(news, clock) { news.map { headingText(it, clock, firstPost[it.season]) } }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (lead != null) item(key = "lead") { ArticleCard(c, v, lead, replayable = lead.ref in replay, lead = true) }
         itemsIndexed(news, key = { i, _ -> keys[i] }) { i, a ->
+            // A heading where the season or its text changes (weeks that read the same share one).
             val prev = news.getOrNull(i - 1)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (prev == null || prev.season != a.season || prev.week != a.week) WeekHeading(a, clock, (a.season to a.week) in playoffWeeks)
+                if (prev == null || prev.season != a.season || headings[i - 1] != headings[i]) WeekHeading(a, headings[i])
                 ArticleCard(c, v, a, replayable = a.ref in replay)
             }
         }
@@ -169,18 +173,26 @@ private fun Articles(c: AppController, v: LeagueView, all: List<Article>, lead: 
 /** Week order inside a season: the close last, news without a week first. */
 private fun weekOrder(w: Int): Int = if (w == SeasonCalendar.NONE) -1 else w
 
-@Composable
-private fun WeekHeading(a: Article, clock: ClockView?, playoffs: Boolean) {
-    val cs = MaterialTheme.colorScheme
+/**
+ * The heading of [a]'s week: this season's by the clock ("포스트시즌 2주차"), another season's
+ * from [firstPost], its first week with playoff news, on as "포스트시즌 N주차".
+ */
+internal fun headingText(a: Article, clock: ClockView?, firstPost: Int?): String {
     val current = clock != null && a.season == clock.season
-    val week = weekLabel(a.week, a.season, clock, if (playoffs) Comp.TITLE_PLAYOFF else null)
-    val text = when {
+    val post = !current && firstPost != null && a.week >= firstPost && a.week < SeasonCalendar.CLOSING
+    val week = if (post) "포스트시즌 ${a.week - firstPost!! + 1}주차" else weekLabel(a.week, a.season, clock)
+    return when {
         a.week == SeasonCalendar.NONE -> "시즌 ${a.season} · 주차 기록 없음"
         current && a.week == clock!!.week && !clock.over -> "$week · 이번 주"
         current -> week
         a.week >= SeasonCalendar.CLOSING -> "시즌 ${a.season} 마감"
         else -> "시즌 ${a.season} · $week"
     }
+}
+
+@Composable
+private fun WeekHeading(a: Article, text: String) {
+    val cs = MaterialTheme.colorScheme
     Column(Modifier.padding(top = 4.dp)) {
         Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = cs.secondary)
         if (a.week == SeasonCalendar.NONE) Text("업데이트 전에 나온 소식이라 몇 주차인지 몰라요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)

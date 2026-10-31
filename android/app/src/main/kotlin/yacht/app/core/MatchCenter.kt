@@ -111,7 +111,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         forget()
         if (w == null || p == null) return
         ensure(w, p)
-        if (book.picks.firstOrNull()?.first == p.week) pickedAt = p.number to p.week
+        if (book.picks.any { it.first == p.week }) pickedAt = p.number to p.week
     }
 
     /** A book file is there for this league (read, or written since): an emptied book is written over it. */
@@ -956,7 +956,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         loading = host.scope.launch(Dispatchers.Default) {
             val v = synchronized(host.lock) { runCatching { broadcastView() }.getOrNull() }
             host.scope.launch { broadcast = v }
-            val picks = v?.picks.orEmpty()
+            // This week's, or last week's while none of this week's is played (1주씩 stopped on the week to come).
+            val picks = v?.onAir.orEmpty()
             if (picks.isEmpty()) {
                 synchronized(watchLock) { if (onScreen?.kind == WatchKind.BROADCAST && session == null) fail("이번 주 중계할 경기가 아직 없어요.") }
                 return@launch
@@ -1002,6 +1003,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         var i = first
         while (true) {
             while (true) {
+                // Hidden: no polling (and no pick started) until the app is shown again.
+                if (hidden) {
+                    delay(1_000)
+                    continue
+                }
                 val (played, other) = synchronized(host.lock) {
                     val p = host.world()?.plan
                     val now = playedNow(p, ch.queue[i])
@@ -1024,7 +1030,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
                 if (me?.isActive == false || onScreen?.kind != WatchKind.BROADCAST || channel !== ch) return
                 ch.done += i
                 val match = m.first ?: return@synchronized false
-                watched += ch.queue[i]
+                // Hidden meanwhile: it opens paused, watched once ▶ 재생 plays it ([resume]).
+                if (!hidden) watched += ch.queue[i]
                 begin(Session(match, 0, 0, ch, i), 0)
                 true
             }
@@ -1139,12 +1146,15 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         onScreen = onScreen?.copy(message = note, playing = false, complete = true, waiting = null)
     }
 
-    /** Starts [s] at its board's game of index [game] (its first when not stored) (under [watchLock]). */
+    /**
+     * Starts [s] at its board's game of index [game] (its first when not stored) (under [watchLock]):
+     * paused at its start when the app was hidden while it was worked out (▶ 재생 plays it).
+     */
     private fun begin(s: Session, game: Int) {
         session = s
         val games = s.match.boards[s.board].games
-        show(s, s.board, games.indexOfFirst { it.index == game }.takeIf { it >= 0 } ?: 0, playing = true)
-        startLoop()
+        show(s, s.board, games.indexOfFirst { it.index == game }.takeIf { it >= 0 } ?: 0, playing = !hidden)
+        if (!hidden) startLoop()
     }
 
     /** Shows game [game] of board [board] from its start (under [watchLock]); its steps (and the next game's) are worked out meanwhile. */
@@ -1169,6 +1179,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             board = board, boards = m.boards.size,
             boardLines = if (m.boards.size > 1) m.boards.map { b -> "${b.board + 1}번 보드 ${host.name(b.a)} ${boardScore(b)} ${host.name(b.b)}" } else emptyList(),
             matchScore = matchScore(m, board, game),
+            matchScoreAfter = when {
+                m.team -> if (game == bd.games.lastIndex) matchScore(m, board + 1, 0) else matchScore(m, board, game)
+                bd.games.size > 1 -> matchScore(m, board, game + 1)
+                else -> null
+            },
             intro = (if (board == 0 && game == 0) m.intro else emptyList()) + gameIntro(m, bd, g),
             outro = outro(m, board, game),
             summary = short, queue = s.channel?.let { ch -> BroadcastQueue(s.at, ch.queue.size, null, null) }, pace = host.watchPace(),
@@ -1200,7 +1215,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     /**
      * The match before game [game] of board [board], with the sides: "김민준 1 : 0 이서연", "시리즈 김민준 2 : 1
-     * 이서연", "보드 대한민국 2 : 1 일본"; null before anything is decided.
+     * 이서연", "보드 대한민국 2 : 1 일본"; null before anything is decided. [board] and [game] may be one
+     * past the last (the match after it): only the boards and games before them are read.
      */
     private fun matchScore(m: WMatch, board: Int, game: Int): String? {
         if (m.team) {
@@ -1427,9 +1443,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         return false
     }
 
-    /** "이번 주 중계가 끝났어요. 다음 주 빅매치는 3경기예요." (next week's count once some are picked). */
+    /** "이번 주 중계가 끝났어요. 다음 주 빅매치는 3경기예요." (the next week's count once some are picked; "지난 주" for last week's). */
     private fun channelEnd(): String {
-        val coming = broadcast?.coming?.size ?: 0
+        val b = broadcast
+        if (b?.showsLast == true) return "지난 주 중계가 끝났어요." + if (b.picks.isNotEmpty()) " 이번 주 빅매치는 ${b.picks.size}경기예요." else ""
+        val coming = b?.coming?.size ?: 0
         return "이번 주 중계가 끝났어요." + if (coming > 0) " 다음 주 빅매치는 ${coming}경기예요." else ""
     }
 
@@ -1465,6 +1483,24 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         return "${titleOf(p, f, ref.season)}, ${side(f.a)} 대 ${Ko.ieyo(side(f.b))}"
     }
 
+    /**
+     * The app is hidden (or shown again): unlike ⏸ ([pause]) it holds what is still being worked
+     * out too. A replay or pick that finishes loading meanwhile opens paused, and the channel
+     * neither waits for its next pick nor marks one watched until the app is shown.
+     */
+    @Volatile
+    private var hidden = false
+
+    fun onBackground() {
+        hidden = true
+        pause()
+    }
+
+    /** The app is shown again: nothing plays on by itself (▶ 재생), a channel waiting for a pick waits on. */
+    fun onForeground() {
+        hidden = false
+    }
+
     /** Pauses the game (the steps go on being worked out). */
     fun pause() {
         synchronized(watchLock) {
@@ -1478,9 +1514,13 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     fun resume() {
         synchronized(watchLock) {
             val w = onScreen ?: return
-            if (w.playing || w.ended || session == null) return
+            val s = session
+            if (w.playing || w.ended || s == null) return
+            // A pick that opened while the app was hidden is watched now.
+            val marked = s.channel?.let { ch -> watched.add(ch.queue[s.at]) } == true
             onScreen = w.copy(playing = true)
             startLoop()
+            if (marked) refreshPicks()
         }
     }
 
@@ -1602,7 +1642,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     /**
      * The picks of the week in play and the next (under the lock; UX 3.7): made once each time the
      * week moves, from the season's matches of those weeks and the ratings then; a week's picks
-     * only grow, so next week's picks made now are that week's first.
+     * only grow, so next week's picks made now are that week's first. Last week's are kept a week.
      */
     private fun ensurePicks(w: LeagueWorld, p: SeasonPlan) {
         val at = p.number to p.week
@@ -1614,6 +1654,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         }
         val saved = book.picks.toMap()
         val out = ArrayList<Pair<Int, List<MatchRef>>>()
+        // Last week's stay a week: 1주씩 stops with the clock on the week to come (nothing of it played yet).
+        saved[p.week - 1]?.let { out += p.week - 1 to it }
         for (week in listOf(p.week, p.week + 1)) {
             val cands = runCatching { candidatesOf(w, p, week) }.getOrDefault(emptyList())
             candidates[week] = cands
@@ -1710,8 +1752,10 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             candidates.clear()
             candidatesSeason = p.number
         }
-        for (week in listOf(p.week, p.week + 1)) if (week !in candidates) candidates[week] = runCatching { candidatesOf(w, p, week) }.getOrDefault(emptyList())
         val picks = book.picks.toMap()
+        for (week in listOf(p.week - 1, p.week, p.week + 1)) {
+            if (week !in candidates && (week >= p.week || week in picks)) candidates[week] = runCatching { candidatesOf(w, p, week) }.getOrDefault(emptyList())
+        }
         fun pick(week: Int, ref: MatchRef): BroadcastPick? {
             val m = SeasonMatches.of(p, ref) ?: return null
             val f = m.fixture
@@ -1731,7 +1775,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         val next = picks[p.week + 1].orEmpty().mapNotNull { pick(p.week + 1, it) }
         val chosen = picks[p.week].orEmpty().toSet()
         val more = candidates[p.week].orEmpty().count { it.star && it.ref !in chosen }
-        return BroadcastView(p.number, p.week, now, more, next)
+        val last = picks[p.week - 1].orEmpty().mapNotNull { pick(p.week - 1, it) }
+        return BroadcastView(p.number, p.week, now, more, next, last)
     }
 
     // ---- shared ---------------------------------------------------------------------------------------
@@ -1988,17 +2033,20 @@ internal object BroadcastPicks {
         c.race -> "우승 경쟁"
         c.base >= 60 -> "토너먼트 빅매치"
         c.base >= 35 -> "걸린 게 큰 경기"
-        c.mates -> "같은 클럽 맞대결"
+        c.mates -> MATES_REASON
         c.close -> "팽팽한 맞대결"
         c.percentile <= 0.1 -> "상위권 맞대결"
         else -> "이번 주 볼 만한 경기"
     }
 
+    private const val MATES_REASON = "같은 클럽 맞대결"
+
     /** Short tags on the pick's row. */
     fun tags(c: Candidate): List<String> = buildList {
         if (c.star) add("★")
         if (c.race) add("우승 경쟁")
-        if (c.mates) add("🤝 같은 클럽 맞대결")
+        // Not when it is the reason already (the row shows the reason first).
+        if (c.mates && reason(c) != MATES_REASON) add("🤝 $MATES_REASON")
         if (c.close) add("접전 예상")
     }
 }

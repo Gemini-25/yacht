@@ -94,15 +94,31 @@ internal fun LeadersHub(lg: LeagueController, v: LeagueView) {
             return@LazyColumn
         }
         val boards = view.boards.toMap()
-        items(LeagueAnalytics.HUB.chunked(2), key = { "hub-${it.first()}" }) { row -> CardRow(row, boards, view, onBoard = { nav.open(Page.Leaderboard(it)) }) }
-        item(key = "others") {
-            var open by remember { mutableStateOf(false) }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (open) "다른 부문 접기 ▴" else "다른 부문 ${LeagueAnalytics.OTHERS.size}개 ▾", style = MaterialTheme.typography.labelLarge,
-                    color = cs.primary, modifier = Modifier.clickable { open = !open }.padding(vertical = 4.dp),
-                )
-                if (open) for (row in LeagueAnalytics.OTHERS.chunked(2)) CardRow(row, boards, view, onBoard = { nav.open(Page.Leaderboard(it)) })
+        // 최근 10경기: every board the league results can count, in the hub's place (none left to fold);
+        // the ones they cannot (평점, 승리 확률, 경기 전 레이팅 are not kept per match) are named once.
+        val recent = view.filter.recent
+        val hub = if (recent) (LeagueAnalytics.HUB + LeagueAnalytics.OTHERS).filter { it in LeagueAnalytics.RECENT_BOARDS } else LeagueAnalytics.HUB
+        items(hub.chunked(2), key = { "hub-${it.first()}" }) { row -> CardRow(row, boards, view, onBoard = { nav.open(Page.Leaderboard(it)) }) }
+        if (recent) {
+            val left = (LeagueAnalytics.HUB + LeagueAnalytics.OTHERS).filter { it !in LeagueAnalytics.RECENT_BOARDS }
+            if (left.isNotEmpty()) {
+                item(key = "recent-missing") {
+                    Text(
+                        yacht.engine.explain.Ko.eun(left.joinToString("·") { LeagueAnalytics.title(it) }) + " 경기마다 남는 기록이 없어 최근 ${LeaderFilter.RECENT}경기로는 셀 수 없어요. 이번 시즌이나 통산으로 봐요.",
+                        style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            item(key = "others") {
+                var open by remember { mutableStateOf(false) }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (open) "다른 부문 접기 ▴" else "다른 부문 ${LeagueAnalytics.OTHERS.size}개 ▾", style = MaterialTheme.typography.labelLarge,
+                        color = cs.primary, modifier = Modifier.clickable { open = !open }.padding(vertical = 4.dp),
+                    )
+                    if (open) for (row in LeagueAnalytics.OTHERS.chunked(2)) CardRow(row, boards, view, onBoard = { nav.open(Page.Leaderboard(it)) })
+                }
             }
         }
         item(key = "links") {

@@ -348,7 +348,7 @@ class MatchLogBook {
     /** Records of no saved class (followed players' and friendlies), least recently used first. */
     private val memory = LinkedHashMap<MatchRef, MatchLog>(16, 0.75f, true)
 
-    /** The broadcast picks of weeks w and w+1: (week, refs), saved in the file's trailer. */
+    /** The broadcast picks of weeks w-1 (kept a week), w and w+1: (week, refs), saved in the file's trailer. */
     var picks: List<Pair<Int, List<MatchRef>>> = emptyList()
 
     /** The budget the current block keeps to (records are evicted by class, see [put]); none until set. */

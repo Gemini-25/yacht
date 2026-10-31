@@ -570,6 +570,8 @@ data class WatchView(
     val boardLines: List<String> = emptyList(),
     /** The match so far: "1 : 0" (series "시리즈 2 : 1", team "보드 2 : 1"); null for a single game. */
     val matchScore: String? = null,
+    /** The match once this game is over (a team match's: once this board is), shown at its end ([atEnd]). */
+    val matchScoreAfter: String? = null,
     /** Broadcaster lines before the first throw of this game, and after its last step. */
     val intro: List<String> = emptyList(),
     val outro: List<String> = emptyList(),
@@ -701,7 +703,22 @@ data class BroadcastPick(
  * '📺 이번 주 중계': the picks of [week] (pick order), followed players' other matches this week
  * ([followedMore]), and next week's picks so far ([coming]).
  */
-data class BroadcastView(val season: Int, val week: Int, val picks: List<BroadcastPick>, val followedMore: Int, val coming: List<BroadcastPick> = emptyList())
+data class BroadcastView(
+    val season: Int,
+    val week: Int,
+    val picks: List<BroadcastPick>,
+    val followedMore: Int,
+    val coming: List<BroadcastPick> = emptyList(),
+    /** Last week's picks: 1주씩 stops with the clock on the week to come, whose picks are all still to be played. */
+    val last: List<BroadcastPick> = emptyList(),
+) {
+    /** Last week's picks stand in for this week's: none of this week's is played yet, some of last week's are. */
+    val showsLast: Boolean get() = picks.none { it.played } && last.any { it.played }
+
+    /** The picks the channel plays and the screens lead with, and their week. */
+    val onAir: List<BroadcastPick> get() = if (showsLast) last else picks
+    val onAirWeek: Int get() = if (showsLast) week - 1 else week
+}
 
 /** Where a replay comes from: a saved decision log, a re-simulation, a highlight's genes, or none. */
 enum class ReplaySource { LOG, RESIM, SNAPSHOT, NONE }

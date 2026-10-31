@@ -58,12 +58,12 @@ class MatchCenterTest {
     ).mapIndexed { i, make -> LeagueAi("p$i", "선수 $i", Family.EV, "", make = make) }.associateBy { it.key }
     private val keys = ais.keys.toList()
 
-    private inner class Host(@Volatile var w: LeagueWorld?, private val favs: Set<String> = emptySet()) : LeagueHost {
+    private inner class Host(@Volatile var w: LeagueWorld?, private val favs: Set<String> = emptySet(), private val t: Tables? = null) : LeagueHost {
         override val scope: CoroutineScope get() = this@MatchCenterTest.scope
         override val lock = Any()
         override val folder = File(".")
         override fun world(): LeagueWorld? = w
-        override fun tables(): Tables? = null
+        override fun tables(): Tables? = t
         override fun extra(): LeagueTables? = null
         override fun estimate(): WinEstimate? = null
         override fun ai(key: String): LeagueAi? = ais[key]
@@ -102,6 +102,30 @@ class MatchCenterTest {
             c.offer(r, sink)
         }
         return MatchRef(p.number, Comp.LEAGUE, id)
+    }
+
+    /** [lf] taken as the league hands it out (so it counts as played once recorded), played with its log and offered to [c]. */
+    private fun playTaken(c: MatchCenter, h: Host, lf: yacht.engine.league.LeagueFixture): MatchRef {
+        val w = h.w!!
+        val p = w.plan!!
+        val sink = LogSink()
+        val r = assertNotNull(LeagueMatch.playJob(rules, p.league.job(lf), { ais[it] }, p.config.matchFormat, log = sink))
+        synchronized(h.lock) {
+            w.recordJob(r)
+            c.offer(r, sink)
+        }
+        assertTrue(p.league.isPlayed(lf.id))
+        return MatchRef(p.number, Comp.LEAGUE, lf.id)
+    }
+
+    /** The precomputed tables when they are there (`../tables`, as the harness reads them); null in a checkout without them. */
+    private val tables: Tables? by lazy {
+        val dir = File("../tables")
+        if (!File(dir, "ev.bin").exists() || !File(dir, "dist.bin").exists()) return@lazy null
+        fun map(name: String) = java.io.RandomAccessFile(File(dir, name), "r").use { it.channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, 0, it.length()) }
+        val r = RuleSet.NINTENDO
+        val bonus = File(dir, "bonus.bin").takeIf { it.exists() }?.let { yacht.engine.TableIO.readBonus(map(it.name), r) }
+        Tables(r, yacht.engine.TableIO.readEv(map("ev.bin"), r), yacht.engine.TableIO.readDist(map("dist.bin"), r), bonus = bonus)
     }
 
     /** The league fixtures of [w]'s first matchday, by sides. */
@@ -255,6 +279,92 @@ class MatchCenterTest {
         // Logged (an adaptive side is always kept): ▶.
         val ref = play(c, h, adaptive.id)
         synchronized(h.lock) { assertTrue(c.canReplay(ref, adaptive.a, adaptive.b)) }
+    }
+
+    /** Polls [ok] for up to [ms]. */
+    private fun waitFor(ms: Long = 60_000, ok: () -> Boolean): Boolean {
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) {
+            if (ok()) return true
+            Thread.sleep(20)
+        }
+        return ok()
+    }
+
+    @Test
+    fun aReplayThatLoadsWhileTheAppIsHiddenOpensPausedAndTheEndCountsTheLastGame() {
+        // A replay works its steps out with the tables (not in a checkout without them).
+        val t = tables ?: return
+        val h = Host(world(), t = t)
+        val c = MatchCenter(h)
+        val f = fixtures(h.w!!).first { "p0" in listOf(it.a, it.b) }
+        assertEquals(f.id, h.w!!.plan!!.league.next(keys.toSet() - setOf(f.a, f.b))?.id)
+        val ref = playTaken(c, h, f)
+        // Hidden while the replay is worked out: it opens at its start, paused, and stays so.
+        c.onBackground()
+        c.watch(ref.encode())
+        assertTrue(waitFor { c.watch?.let { it.message != null || (it.waiting == null && it.steps.isNotEmpty()) } == true }, "${c.watch}")
+        val w = assertNotNull(c.watch)
+        assertNull(w.message)
+        assertTrue(!w.playing && w.shown == 0, "playing ${w.playing}, shown ${w.shown}")
+        Thread.sleep(600)
+        assertEquals(0, c.watch?.shown)
+        // Shown again: nothing plays by itself; ▶ 재생 plays it.
+        c.onForeground()
+        Thread.sleep(300)
+        assertEquals(0, c.watch?.shown)
+        c.resume()
+        assertTrue(waitFor { (c.watch?.shown ?: 0) > 0 })
+        // The match's last game: the score card reads the match before it while it plays, and the
+        // whole match at its end (as the end lines do).
+        c.stop()
+        c.watch(ref.encode(), game = 1)
+        assertTrue(waitFor { c.watch?.let { it.message != null || it.matchScoreAfter != null } == true }, "${c.watch}")
+        val last = assertNotNull(c.watch)
+        assertEquals(2, last.games.size)
+        fun won(i: Int) = last.games[i].let { if (it.scoreA!! > it.scoreB!!) 1.0 else if (it.scoreA == it.scoreB) 0.5 else 0.0 }
+        fun num(x: Double) = if (x == Math.floor(x)) x.toInt().toString() else "%.1f".format(java.util.Locale.ROOT, x)
+        assertEquals("${f.a} ${num(won(0))} : ${num(1 - won(0))} ${f.b}", last.matchScore)
+        assertEquals("${f.a} ${num(won(0) + won(1))} : ${num(2 - won(0) - won(1))} ${f.b}", last.matchScoreAfter)
+        c.stop()
+    }
+
+    @Test
+    fun lastWeeksPicksStayOnAirUntilThisWeeksArePlayed() {
+        val h = Host(world())
+        val c = MatchCenter(h)
+        val p = h.w!!.plan!!
+        // The first week's picks, made before any of it is played.
+        val first = assertNotNull(c.broadcastNow())
+        assertEquals(1, first.week)
+        val weekOne = first.picks.map { it.ref }
+        assertTrue(weekOne.isNotEmpty())
+        assertTrue(!first.showsLast && first.onAir == first.picks)
+        // The whole first week played: 1주씩 stops with the clock on week 2, none of whose matches is played.
+        repeat(p.league.matchday(0).size) { playTaken(c, h, assertNotNull(p.league.next(emptySet(), lastMatchday = 0))) }
+        val v = assertNotNull(c.broadcastNow())
+        assertEquals(2, v.week)
+        assertTrue(v.picks.isNotEmpty() && v.picks.none { it.played })
+        // Last week's picks stay on air (the channel plays them), this week's wait under them.
+        assertEquals(weekOne, v.last.map { it.ref })
+        assertTrue(v.last.all { it.played })
+        assertTrue(v.showsLast)
+        assertEquals(1, v.onAirWeek)
+        assertEquals(v.last, v.onAir)
+        // Saved and read back in week 2: the same, and the book keeps the picks of weeks 1 to 3.
+        val bytes = synchronized(h.lock) { c.files().getValue(MatchCenter.LOGS) }
+        val again = MatchCenter(h)
+        synchronized(h.lock) { again.load(bytes) }
+        assertEquals(listOf(1, 2, 3), again.picks().map { it.first })
+        val read = assertNotNull(again.broadcastNow())
+        assertEquals(v.last.map { it.ref }, read.last.map { it.ref })
+        assertEquals(v.picks.map { it.ref }, read.picks.map { it.ref })
+        // One of this week's played: this week's are on air again.
+        val pick = p.league.fixture(MatchRef.decode(v.picks.first().ref)!!.id)
+        assertEquals(pick.id, p.league.next(keys.toSet() - setOf(pick.a, pick.b))?.id)
+        playTaken(c, h, pick)
+        val now = assertNotNull(c.broadcastNow())
+        assertTrue(!now.showsLast && now.onAir == now.picks && now.onAirWeek == 2)
     }
 
     @Test

@@ -183,8 +183,15 @@ private fun Side(name: String, rating: Int?, place: String?, delta: Int?, won: B
     val cs = MaterialTheme.colorScheme
     Column(modifier, horizontalAlignment = if (align == TextAlign.End) Alignment.End else Alignment.Start) {
         Text(name, fontWeight = if (won) FontWeight.ExtraBold else FontWeight.SemiBold, color = if (won) cs.primary else cs.onSurface, maxLines = 2, textAlign = align)
-        val sub = listOfNotNull(rating?.let { "레이팅 $it" }, place).joinToString(" · ")
-        if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = align)
+        // Its parts wrap whole: Korean text breaks between a digit and a syllable ("일본 1부 18" / "위").
+        val parts = listOfNotNull(rating?.let { "레이팅 $it" }, place)
+        if (parts.isNotEmpty()) {
+            FlowRow(horizontalArrangement = if (align == TextAlign.End) Arrangement.End else Arrangement.Start) {
+                for ((i, p) in parts.withIndex()) {
+                    Text(if (i < parts.lastIndex) "$p · " else p, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, softWrap = false)
+                }
+            }
+        }
         if (delta != null && delta != 0) Text("%+d".format(delta), style = MaterialTheme.typography.labelSmall, color = if (delta > 0) gameColors.good else cs.error)
     }
 }

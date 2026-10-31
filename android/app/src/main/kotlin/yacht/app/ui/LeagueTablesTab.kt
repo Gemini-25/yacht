@@ -6,6 +6,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,10 +27,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -205,6 +212,7 @@ internal fun LadderFilterSheet(lg: LeagueController, v: LeagueView) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LadderItem(r: LadderRow, favourite: Boolean, badge: yacht.app.core.ClubBadge?, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -225,17 +233,25 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, badge: yacht.app.core.C
             }
             TierBadge(r.tier, r.games, Modifier.width(78.dp), if (r.isMe) Ladder.ME_PLACEMENT else Ladder.PLACEMENT)
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (favourite) Text("★ ", color = cs.secondary, fontSize = 13.sp)
-                    ClubMark(badge, 14.dp)
-                    Text(
-                        if (r.isMe) "🙋 나 (랭크전)" else r.shown,
-                        fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (r.playing) Text(" ⚔️", fontSize = 11.sp)
-                    // "아시아 연합 2부" stays on one line (the name gives way).
-                    r.divisionLabel?.let { Text(" $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1) }
+                // The division label ("아시아 연합 2부") goes whole to the next line when it does not fit
+                // after the name: the name is cut only when it alone is wider than the row.
+                FlowRow(verticalArrangement = Arrangement.Center) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (favourite) Text("★ ", color = cs.secondary, fontSize = 13.sp)
+                        ClubMark(badge, 14.dp)
+                        Text(
+                            if (r.isMe) "🙋 나 (랭크전)" else r.shown,
+                            fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (r.playing) Text(" ⚔️", fontSize = 11.sp)
+                    }
+                    r.divisionLabel?.let {
+                        Text(
+                            " $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, softWrap = false,
+                            modifier = Modifier.align(Alignment.CenterVertically),
+                        )
+                    }
                 }
                 Text(
                     "${r.wins}승 ${if (r.ties > 0) "${r.ties}무 " else ""}${r.losses}패 · ${"%.1f".format(100 * r.winRate)}% · ${"%.0f".format(r.avgScore)}점",
@@ -293,6 +309,7 @@ internal fun LeagueHeader(lg: LeagueController, season: SeasonView) {
  * chips, the division in the view picked, the zone legend with "ⓘ 규칙", and next season's
  * newcomers under the last tier.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -327,22 +344,39 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
     val title = info?.takeIf { national }?.let { yacht.engine.league.LeagueIds.division(it.id, tiers.tier(d)) } ?: label
     // 최근 폼: read again as results come in (the played count moves on).
     if (mode == TableMode.FORM) androidx.compose.runtime.LaunchedEffect(gd, season.number, season.played) { lg.loadForm(gd) }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // Below about 380 dp the table drops its 득실 column when it shows 완승 (the names keep their room).
+    val density = LocalDensity.current
+    var narrow by remember { mutableStateOf(false) }
+    LazyColumn(
+        Modifier.onSizeChanged { narrow = with(density) { it.width.toDp() } < NARROW_TABLE },
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 // A national division plays its own rounds over the season's weeks (a lower tier can play fewer).
                 val rounds = season.roundsOf(d)
-                val now = if (national) minOf((season.positions.getOrNull(d)?.size ?: 0) + 1, rounds) else minOf(season.currentMatchday + 1, rounds)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("리그 순위표", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                val done = season.positions.getOrNull(d)?.size ?: 0
+                val now = if (national) minOf(done + 1, rounds) else minOf(season.currentMatchday + 1, rounds)
+                // The counts go whole under the title when both do not fit on one line (360 dp).
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.Center) {
+                    Text("리그 순위표", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, softWrap = false, modifier = Modifier.align(Alignment.CenterVertically).padding(end = 8.dp))
+                    // A national season's match count is the whole world's (every league): said so.
                     Text(
                         "시즌 ${season.number}" + (if (rounds > 0) " · $now/${rounds}라운드" else "") +
-                            " · ${season.played}/${season.total}경기",
-                        style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
+                            if (national) " · 전체 ${"%,d".format(season.played)}/${"%,d".format(season.total)}경기" else " · ${season.played}/${season.total}경기",
+                        style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, softWrap = false,
+                        modifier = Modifier.align(Alignment.CenterVertically),
                     )
                 }
                 LinearProgressIndicator(
-                    progress = { if (season.total == 0) 0f else season.played.toFloat() / season.total },
+                    // A national division's bar is its own rounds; a legacy season's, its matches.
+                    progress = {
+                        when {
+                            national -> if (rounds <= 0) 0f else minOf(done, rounds).toFloat() / rounds
+                            season.total == 0 -> 0f
+                            else -> season.played.toFloat() / season.total
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().height(3.dp),
                 )
                 if (national) LeagueHeader(lg, season)
@@ -436,7 +470,7 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                         Text("선수", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                         Text("경기", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("승-무-패", Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                        Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        if (!(narrow && season.bonus)) Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         if (season.bonus) Text("완승", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                     }
@@ -452,7 +486,7 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                         Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                         Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
-                        Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        if (!(narrow && season.bonus)) Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         if (season.bonus) Text("${r.sweeps}", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
                     }
@@ -481,8 +515,10 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                 val top = tiers.tier(d) == 0
                 Text(
                     "🌍 나라마다 자기 리그에서 뛰고, 선수가 적은 나라는 연합 리그에 모여요. 리그마다 따로 승강해요." +
-                        (if (top && info.cclSlots > 0) " 1부에는 다음 시즌 대륙 챔피언스 출전권 ${info.cclSlots}장이 걸려 있어요." else "") +
-                        if (top && info.clDirect) " 우승하면 챔피언스 리그에 바로 나가요." else "",
+                        // This season's places (the ranking it was drawn with): next season's come from the ranking at its close.
+                        (if (top && info.cclSlots > 0) " 지금 리그 랭킹이면 1부에 다음 시즌 대륙 챔피언스 출전권 ${info.cclSlots}장이 걸려요." else "") +
+                        (if (top && info.clDirect) " 랭킹이 그대로면 우승자는 챔피언스 리그에 바로 나가요." else "") +
+                        if (top && (info.cclSlots > 0 || info.clDirect)) " 출전권은 시즌이 끝날 때 새로 매기는 랭킹으로 정해져요." else "",
                     style = MaterialTheme.typography.labelSmall,
                     color = cs.secondary,
                 )
@@ -755,3 +791,6 @@ private fun RankChartCard(lg: LeagueController, season: SeasonView, division: In
 
 /** How often an open 상대 전적 matrix reads the numbers again while the league runs. */
 private const val H2H_REFRESH_MS = 10_000L
+
+/** Below this width the division table drops its 득실 column when it shows 완승. */
+private val NARROW_TABLE = 380.dp

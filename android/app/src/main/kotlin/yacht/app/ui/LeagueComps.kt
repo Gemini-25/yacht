@@ -172,7 +172,12 @@ internal fun CompetitionScreen(lg: LeagueController, v: LeagueView, page: Page.C
     val groupMatches: (Int, String, String) -> Unit = remember(lg, page.comp) {
         { part, title, group -> lg.nav.open(Page.Matches(MatchQuery.Group(page.comp, part, group), "$title $group 경기")) }
     }
-    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format, badge = badge, onGroupMatches = groupMatches) { lg.nav.sheet = Sheet.STAGE }
+    // A knockout tie's report (🔮 before it is played); the season shown is the clock's.
+    val season = v.clock?.season
+    val tie: (Int) -> Unit = remember(lg, page.comp, season) {
+        { id -> season?.let { s -> matchKey(s, page.comp, id) }?.let { lg.nav.open(Page.Match(it)) } }
+    }
+    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format, badge = badge, onGroupMatches = groupMatches, onTie = tie) { lg.nav.sheet = Sheet.STAGE }
 }
 
 /**
@@ -192,6 +197,8 @@ internal fun CompetitionBody(
     badge: (String) -> ClubBadge? = { null },
     /** A group's matches (part, its title, the group's label); null: the cards have no link. */
     onGroupMatches: ((Int, String, String) -> Unit)? = null,
+    /** A knockout tie by its fixture id (its report); null: the ties have no link. */
+    onTie: ((Int) -> Unit)? = null,
     onStage: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -223,14 +230,14 @@ internal fun CompetitionBody(
                     GroupCard(t, label, onOpen, badge, onGroupMatches?.let { f -> { f(index, g.title, t.label) } })
                 }
                 if (g.groups.isEmpty() && k != null) {
-                    item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), podium = podium, format = format, badge = badge, titled = titled) }
+                    item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), podium = podium, format = format, badge = badge, titled = titled, onTie = onTie) }
                 }
             } else {
-                item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), round, podium, format, badge, titled) }
+                item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), round, podium, format, badge, titled, onTie) }
             }
         }
         when (view) {
-            is CompetitionView.Bracket -> item { BracketCard(view, label, onOpen, roundWeeks(page.comp, mine, view.rounds, leagueWeeks), st?.round, podium, format, badge) }
+            is CompetitionView.Bracket -> item { BracketCard(view, label, onOpen, roundWeeks(page.comp, mine, view.rounds, leagueWeeks), st?.round, podium, format, badge, onTie = onTie) }
             is CompetitionView.Groups -> part(view)
             is CompetitionView.Sections -> view.parts.getOrNull(st?.part ?: 0)?.let { p ->
                 item { Text(sectionIcon(p.title) + " " + p.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall) }
@@ -460,6 +467,8 @@ internal fun BracketCard(
     badge: (String) -> ClubBadge? = { null },
     /** Its title on top (off under a heading that already says it). */
     titled: Boolean = true,
+    /** A tie's score taps through to its match by fixture id ([TieView.id]); null: no link. */
+    onTie: ((Int) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val rounds = b.rounds
@@ -476,7 +485,7 @@ internal fun BracketCard(
                     Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 }
                 if (double) Text("↓ 승자조에서 지면 패자조로 내려가요 · 패자조에서 지면 탈락", style = MaterialTheme.typography.labelSmall, color = cs.tertiary)
-                RoundTies(rounds[r], double, label, onOpen, badge)
+                RoundTies(rounds[r], double, label, onOpen, badge, onTie)
                 if (podium) Podium(rounds, double, label)
             }
         }
@@ -524,7 +533,7 @@ private fun Podium(rounds: List<BracketRound>, double: Boolean, label: (String) 
 }
 
 @Composable
-private fun RoundTies(round: BracketRound, double: Boolean, label: (String) -> String, onOpen: (String) -> Unit, badge: (String) -> ClubBadge?) {
+private fun RoundTies(round: BracketRound, double: Boolean, label: (String) -> String, onOpen: (String) -> Unit, badge: (String) -> ClubBadge?, onTie: ((Int) -> Unit)?) {
     val cs = MaterialTheme.colorScheme
     // Byes go on without a match; an empty losers' tie (both feeders byes) has no one to show.
     val byes = round.ties.count { it.bye && it.winner != null }
@@ -536,7 +545,7 @@ private fun RoundTies(round: BracketRound, double: Boolean, label: (String) -> S
         if (byes > 0) Text("부전승 ${byes}팀", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         for (t in round.ties) {
             if (t.bye) continue
-            TieLine(t.a, t.b, t.scoreA, t.scoreB, t.winner, t.played, t.legs, t.firstTo, round.side, double, t.fromWinners, label, onOpen, badge)
+            TieLine(t.a, t.b, t.scoreA, t.scoreB, t.winner, t.played, t.legs, t.firstTo, round.side, double, t.fromWinners, label, onOpen, badge, t.id, onTie)
         }
     }
 }
@@ -562,6 +571,9 @@ private fun TieLine(
     label: (String) -> String,
     onOpen: (String) -> Unit,
     badge: (String) -> ClubBadge?,
+    /** The tie's fixture id (-1: none yet) and what a tap on its score opens (its report). */
+    id: Int = -1,
+    onTie: ((Int) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val decided = played && winner != null
@@ -581,7 +593,12 @@ private fun TieLine(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Side(a, winner, mark(a), label, onOpen, Modifier.weight(1f), TextAlign.Start, badge)
-        Column(Modifier.padding(horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        // The score opens the tie's report (a preview before it is played); the names open the players.
+        val link = onTie != null && id >= 0
+        Column(
+            Modifier.clip(RoundedCornerShape(6.dp)).clickable(enabled = link) { onTie?.invoke(id) }.padding(horizontal = 6.dp, vertical = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(
                 when {
                     played && firstTo > 0 -> "${halfText(scoreA)}-${halfText(scoreB)}"
@@ -596,6 +613,7 @@ private fun TieLine(
                 color = if (played) cs.onSurface else cs.onSurfaceVariant,
             )
             if (played && firstTo > 0) Text("${firstTo}선승", fontSize = 9.sp, color = cs.onSurfaceVariant)
+            if (link) Text(if (played) "리포트 ›" else "🔮", fontSize = 9.sp, color = cs.primary)
         }
         Side(b, winner, mark(b), label, onOpen, Modifier.weight(1f), TextAlign.End, badge)
     }

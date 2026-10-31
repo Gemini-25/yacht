@@ -1236,8 +1236,14 @@ class LeagueController(
                 }
             }
             weekGoal = null
-            if (p.number != season) "시즌 $season 일정을 다 마쳤어요. ▶를 누르면 시즌 ${p.number} 1주차를 해요."
-            else "${week}주차를 다 치렀어요. ▶를 누르면 ${p.week}주차를 해요."
+            // A post-season week by its own name, as the control bar and the schedule say it.
+            val lw = runCatching { p.calendar.leagueWeeks }.getOrDefault(Int.MAX_VALUE)
+            fun wk(x: Int) = if (x > lw) "포스트시즌 ${x - lw}주차" else "${x}주차"
+            when {
+                p.number != season -> "시즌 $season 일정을 다 마쳤어요. ▶를 누르면 시즌 ${p.number} 1주차를 해요."
+                p.week >= yacht.engine.league.SeasonCalendar.CLOSING -> "${wk(week)}를 다 치렀어요. ▶를 누르면 시즌을 마감해요."
+                else -> "${wk(week)}를 다 치렀어요. ▶를 누르면 ${wk(p.week)}를 해요."
+            }
         }
         if (flag.getAndSet(true)) return true
         endedWeek = note
@@ -1492,7 +1498,8 @@ class LeagueController(
             if (running) resumeOnForeground = true
             stop(keepResume = true)
         }
-        pauseWatch()
+        // Holds a replay or pick still being worked out too (⏸ alone would let it start playing).
+        center.onBackground()
         if (liveJob?.isActive == true) {
             liveJob?.cancel()
             liveOnForeground = true
@@ -1502,6 +1509,7 @@ class LeagueController(
     /** App shown again: the league goes on if it was running when the app was hidden. */
     fun onForeground() {
         visible = true
+        center.onForeground()
         if (liveOnForeground) {
             liveOnForeground = false
             watchLive(true)

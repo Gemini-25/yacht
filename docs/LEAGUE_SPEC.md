@@ -494,7 +494,8 @@ fifth vs the rest, with the change from the previous season (메타 리포트).
 **Records** (`rec` lines, updated in O(1) per game; `RecordKind(label, group, lowerIsBetter,
 running, retired)`, `RecordKind.withUnit` gives "245점", "87점 차", "17연승", "레이팅 차 514",
 "평점 7.85"): 레이팅 — best rating ever (once a player has 60 games), biggest rating gain in a
-season, biggest upset (rating gap a winner overcame); 한 판·한 경기 — best game, biggest margin,
+season, biggest upset (`UPSET2`: rating gap a winner overcame, both players past 60 games, as
+are the review's biggest upset and its upsets count); 한 판·한 경기 — best game, biggest margin,
 **biggest comeback in points** (`COMEBACK_POINTS`: the winner's largest deficit after a full turn),
 lowest winning score, best two-player total; 한 시즌 — most points, **best points per match**
 (`SEASON_PPM`, 60% of one's own fixtures), **most sweeps** (`SEASON_SWEEPS`, with the bonus),
@@ -503,7 +504,8 @@ longest winning streak, **games in a row with a Yacht** (`YACHT_RUN`, running; t
 the career `c` line's third field), most games, wins, yachts and 300-point games; 우승·수상 — most
 titles, MVPs, 이 주의 선수, youngest and oldest 1부 champion of any league. **Retired** kinds are
 decoded and kept, shown as 예전 기록, never broken: `COMEBACK` (a P(win) percentage, saturated at
-0), `YACHTS_MATCH` (2 of 2), `SEASON_RATING` (the old scale, "구 평점"). A record breaks only by a
+0), `YACHTS_MATCH` (2 of 2), `SEASON_RATING` (the old scale, "구 평점"), `UPSET` (any ratings: a
+new player's unsettled one set gaps never seen again, "옛 기준"). A record breaks only by a
 strictly better value (higher, or lower for `lowerIsBetter`). **History**: the 3 holders before
 (`Records.history`, `hist` lines); a count its own holder raises stays one entry. A `running`
 record makes the news once a season; a record new to an older league settles over its first season
@@ -789,7 +791,9 @@ At most 1,600 dp at 392 dp wide (the harness fails above), top to bottom:
   rules next (where the followed players will play).
 - **★ 응원**: followed players, clubs, nations and leagues (two lines each: last and next match, form,
   place; "응원 전체 ›" opens `Page.Follows`, each card's ▶/📋/🔮, a club card's "선수단 경기 ›").
-- **📺 이번 주 빅매치**: the broadcast picks of the week as cards (▶ played, 🔮 to come), "📺 연속 재생 ›".
+- **📺 이번 주 빅매치**: the broadcast picks of the week as cards (▶ played, 🔮 to come), "📺 연속 재생 ›";
+  while none of the week's is played (1주씩 stops with the clock on the week to come) **📺 지난 주 빅매치**,
+  last week's picks (the book keeps them a week).
 - **⚡ 최근 결과**, **📋 내 리그** (the shown league's 1부 top rows, "순위표 전체 ›"), **🌍 국제 무대**
   (CCL and CL where they stand, the ranking's top), a 🏛 line while proposals wait for a vote,
   **🏃 기록 추격** (the nearest record chases), **📰 주요 뉴스**, **🗓 다음 주**, and a footer (counts,
@@ -799,7 +803,8 @@ At most 1,600 dp at 392 dp wide (the harness fails above), top to bottom:
 Chips: **이번 주** (the week's stages with played/total, live matches, late stages, the week's top
 news, next week; rows open their competition), **결과** (the feed newest first, "필터 ▾": 전체 /
 ★ 응원 / 리그 / 대회 / 친선; a card opens its report, ▶ replays it), **중계** ('📺 이번 주 중계': the
-week's picks, "★ 내 선수 경기 n", "다음 주 빅매치", then the live scoreboard replaying finished
+week's picks, or last week's under '📺 지난 주 중계' with this week's below them while none of this
+week's is played, "★ 내 선수 경기 n", "다음 주 빅매치", then the live scoreboard replaying finished
 matches turn by turn, six at a time), **하이라이트** (이번 시즌 / 역대, by drama; ▶ plays the game).
 A match row's ▶ shows only where the match can be played again (UX 3.3: its log is kept, or it is
 this season's official match and neither side adapts).
@@ -809,7 +814,8 @@ Chips: **리그** (the league header and its tiers; "보기 ▾" `Sheet.TABLE_MO
 라운드, 순위 변동, 상대 전적, 확률; the "완승" column under 완승 보너스; promotion, playoff and relegation
 marks per league; a row opens the player), **대회** (a card per competition: where it stands, its
 stages with weeks; a card opens `Page.Competition`: "단계: … ▾" `Sheet.STAGE`, the week strip, the
-groups (each "이 조 경기 ›") or one bracket round, the national cups' notes and squads), **클럽** (the
+groups (each "이 조 경기 ›") or one bracket round (a tie's score opens its report, 🔮 before it is
+played; a name its player), the national cups' notes and squads), **클럽** (the
 league's F1-style club table with this week's W-D-L, every club of its nations by titles,
 "이적·드래프트 ›" `Page.Market`; a legacy season shows its club league), **랭킹** (the league
 ranking: coefficients of five seasons, the change, continental places; "대륙 ▾" `Sheet.CONFED`;
@@ -844,7 +850,12 @@ followed players), then leaders, numbers, the 요트협회's decisions, transfer
   broadcaster's lines (match, game, between games, the end), both score cards, the P(win) bar,
   pause/next turn/next game, a board and game picker for team matches and series, 요약 중계
   (the last turns only), pace 느리게 / 보통 / 빠르게 (saved); the channel plays the week's picks one
-  after another with a countdown, waiting "곧 시작해요" for a pick still to be played.
+  after another with a countdown, waiting "곧 시작해요" for a pick still to be played. At a game's end
+  the score card counts it (the match after it, as the end lines say). The app hidden
+  (`MatchCenter.onBackground`) holds what is still being worked out too: a replay or pick that
+  finishes loading opens paused, the channel neither polls nor marks a pick watched until it is
+  shown, and nothing plays by itself when it is (▶ 재생). 📋 리포트 opens the report over the pages
+  the watch screen came from.
 - **Club** (`Page.Club`): badge, league and place in its club table, budget, titles, this week, the
   squad (✈️ playing abroad), recent results, "선수단 경기 전체 ›" (`Page.Matches`), club records and
   moves. **League** (`Page.League`): its tiers and champions, ranking line, statistics per tier with
@@ -953,6 +964,9 @@ Conventions for modules:
   league's climb counts from the ranking its season was played under. The next season's own
   ranking (`SeasonPlan.ranking`) is computed again over its own leagues and seeds; leagues level on
   coefficients can then sit in another order near ranks 8-14 right after the first national season.
+  A league formed in that season (no line for the closed season while others have one) is ranked
+  after every league with a line, by strength, as the draws order it, so the 대륙 챔피언스 places
+  and 챔스 직행 flags the ranking page shows are the ones the season's draws used.
 - Storage in `federation.txt`: `coef <season> <league> <points> <entries>` (newest 10 seasons) and a
   `top <season> <ids>` line for every national season (its 8 best-ranked leagues: the major titles).
   The raw sums are kept, so the formula can change.
@@ -992,23 +1006,38 @@ Raw counts, kept as the `fs` line: the elevator (members promoted into a 1부 la
 played it, and of those the relegated now; none after a legacy season), `champPpm` (2부
 champions' points per match minus their 1부's median, averaged over leagues), title playoffs whose
 regular-season leader did not win (`REG` vs `L0`), runaway leaders (≥ 8 points clear), decided
-league matches and their 2-0 sweeps (two-game formats only), the rounds R, the fixtures at
-divisionSize + 2 against the old pyramid's, 요트컵 ties from the winners' 8강 on and those won by
-the side rated ≥ 100 lower at the draw, and the 챔피언스 리그 points per match of the entrants
-who came as league champions against those from the 대륙 챔피언스 (`clEdge`), plus the six lever
-values the season was played with (`lv`). One pass, 15-55 ms at 3000 players.
+league matches and their 2-0 sweeps (two-game formats only), **the 2-0 bonus's effect on the final
+tables** (`bonusMoved`: the members of divisions of 4 or more whose place differs between the table
+with the bonus and the one without it, whatever the season gave; `bonusShare` = moved / ranked),
+**the divisions' spread** (`spread`: over the national divisions of 6 or more, the first's points
+per match minus the last's, 3 a win and 1 a draw without the bonus, averaged), the rounds R, the
+fixtures at divisionSize + 2 against the old pyramid's, 요트컵 ties from the winners' 8강 on and
+those won by the side rated ≥ 100 lower at the draw, and the 챔피언스 리그 points per match of the
+entrants who came as league champions against those from the 대륙 챔피언스 (`clEdge`), plus the
+six lever values the season was played with (`lv`). A file from before `bonusMoved` and `spread`
+reads them as 0/0 and none. One pass, 15-55 ms at 3000 players.
 
 ### 11.4 Generators and their calibration
 Each kind has a guard (the rules can take the change, a sample: ≥ 10 promoted, ≥ 8 playoff leagues,
-≥ 8 leagues, ≥ 10 cup ties, ≥ 12 CL matches a side, ≥ 30 decided matches; a world of the four 연합
-리그 alone, below about 1000 players, never reads its title playoffs on 4 leagues), a statistic x, a floor f
-and a threshold t. Past its floor it is a candidate with `pressure = min(3, 0.3 + 0.7 (x − f) /
-(t − f))`: 0.3 at the floor, 1.0 at the threshold (t < f for "lower is worse"). An assembly:
+≥ 8 leagues, ≥ 10 cup ties, ≥ 12 CL matches a side, ≥ 100 ranked members for the bonus, a spread
+for the division size; a world of the four 연합 리그 alone, below about 1000 players, never reads its
+title playoffs on 4 leagues), a statistic x, a floor f and a threshold t. Past its floor it is a
+candidate with `pressure = min(3, 0.3 + 0.7 (x − f) / (t − f))`: 0.3 at the floor, 1.0 at the
+threshold (t < f for "lower is worse"). SWEEP_OFF/ON read `bonusShare` (the bonus off when it moved
+few places, on when it would have moved many), SIZE_DOWN/UP `spread` (smaller divisions when they
+are wide, bigger when they are close and cost no more fixtures than the old pyramid). An assembly:
 candidates → drop a lever with a pending proposal, or **whose value differs among the season to
 come, the season played and the one before** (changed in either direction in the last 2 seasons,
 by the federation or by hand), or whose change the rules cannot take → one per lever (the higher
-pressure) → by pressure, then kind order → the first **2**, and a third at pressure ≥ 0.6. None:
-"이번 총회는 규칙을 그대로 두기로 했어요". The evidence always carries the real numbers.
+pressure) → by pressure, then kind order → the first **2**, and a third at pressure ≥ 0.6. Fewer
+than 2: **검토 안건** fill up to 2, the kinds short of their floors whose pressure is still above 0
+(`Federation.candidates(…, floorFree = true)`, the same lever rules, on levers not tabled yet, by
+pressure); their pressure stays below 0.3 (`Proposal.review`), so a seat votes yes at less than
+0.355 and the committee seldom passes one, and their evidence starts "급한 안건은 아니지만 한번
+검토해 보자고 올렸어요." with plain wording ("…이었어요", not "…뿐이었어요"). None at all (no lever
+open or leaning): "요트협회 총회, 새 안건 없음 | 이번 요트협회 총회에는 새로 올린 안건이 없어요"
+(the assembly only tables: rules adopted at the same close still apply). The evidence always
+carries the real numbers.
 
 **Calibration** (S20, `FederationCalibration`, opt-in: `FEDERATION_CALIBRATION=1`; the CSVs are in
 the S20 hand-off): real games through `LeagueWorld`, DEFAULT at 1000 generated players, about 40 s
@@ -1022,8 +1051,10 @@ and its committee change the rules for 10 each (seeds 7 and 13). Per season:
 | champPpm | +0.8 to +1.0 | +0.8 to +0.9 | a 2부 champion plays weaker opposition: the SWAP_UP guard always holds |
 | leader lost the playoff | 50-86% of 28, mean 70% | | a 4-player playoff barely favours its top seed |
 | runaway leader | 14-46%, mean 29% | 18-39% | the same with or without a playoff |
-| 2-0 among decided | 95.8-96.8% | the same | a decided match that is no 2-0 needs a drawn game |
-| rounds R | 42 | 42 | |
+| 2-0 among decided | 95.8-96.8% | the same | a decided match that is no 2-0 needs a drawn game: no longer a lever's statistic |
+| rounds R | 42 | 42 | no longer a lever's statistic |
+| bonusShare (places the 2-0 bonus moves) | 27.5-34.5% of 1000, median 30% (A, final run) | 28-35% with the bonus off (E) | the hypothetical table reads the same with the bonus on or off |
+| spread (1위 − 꼴찌, points per match) | 1.075-1.184, median 1.13 at D = 20 | 1.02-1.13 at D = 18 (E) | narrower divisions, narrower spread |
 | 요트컵 upsets from the 8강 | 0-6 of 22, none in 13 of 30 | 0-1 of 22 with short series after the first season (C: 6, 1, 0, 0, 0, 1) | rating gaps of 100 are rare among the last 8 |
 | clEdge | −0.54 to +0.38 | −0.51 to +0.65 | about 50-60 CL matches a side: SD about 0.3 |
 
@@ -1036,14 +1067,20 @@ third of the seasons under the rules it argues against, and its threshold only i
 | SWAP_UP | 20% → 12% | 4 of 9 (A), 1 of 9 (D) |
 | TITLE_PO_OFF | 78% → 90% (22 of 28 leagues) | 2 of 10 (A), 2 of 6 (B), 0 of 10 (D) |
 | TITLE_PO_ON | 33% → 50% (10 of 28) | the statistic 3 of 10 (A) and 3 of 10 (D) with a playoff; 0 of 4 (B) and 1 of 6 (C) without |
-| SWEEP_OFF / SWEEP_ON | 99% → 100% / 52% → 45% | never: out of reach under 판 승점제 |
-| SIZE_DOWN / SIZE_UP | 46 → 48 / 36 → 34 weeks | never at D = 20 (the dead band 37-45 by design) |
+| SWEEP_OFF / SWEEP_ON | bonusShare 29% → 26% / 33% → 36% | 3 of 10 (A) / 1 of 1 with the bonus off (E) |
+| SIZE_DOWN / SIZE_UP | spread 1.15 → 1.20 / 1.10 → 1.06 | 2 of 10 / 3 of 10 at D = 20 (A); SIZE_UP 3 of 6 at D = 18 (E) |
 | LONG_KO_ON | 9% → 25% (2 of 22) | rare with short series |
 | LONG_KO_OFF | no upset at all, pressure 0.3 (the threshold lies below zero) | 13 of 30: a standing argument, never adopted in B and D |
 | CL_DIRECT_UP / DOWN | +0.30 → +0.65 / −0.30 → −0.65 | 2 of 32 / 8 of 32 |
 
-On run A's ten seasons the assemblies table 0, 2, 0, 0, 2, 1, 2, 1, 1, 1 proposals at pressures
-0.30-0.74 (FederationTest pins the floors and these seasons). With the federation deciding (run B,
+On run A's ten seasons (the bonus and spread from the same seasons played again) the assemblies
+table 2, 2, 1, 1, 2, 2, 2, 2, 2, 2 proposals, two of them 검토 안건 (seasons 4 and 10), at
+pressures up to 0.78 (FederationTest pins the floors and these seasons); seasons 3 and 4 have no
+other lever leaning its way. Run E (the final statistics, floors and 검토 안건, the federation
+deciding, seed 5): 2, 2, 1, 2, 2, 2, 2, 1, 2, 2 tabled (3 검토 안건), 3 of 16 adopted (divisionSize
+20 → 18 after season 1, the bonus off after season 2, divisionSize back to 20 after season 7 as the
+smaller divisions narrowed the spread), no lever past its floor in more than half the seasons.
+Before the bonus and spread statistics and the 검토 안건 (S20): With the federation deciding (run B,
 before TITLE_PO_OFF's floor moved from 72% to 78%): 2, 1, 2, 1, 2, 2, 0, 1, 0, 1 tabled, 3 of 11
 adopted (autoSwap 2 → 3, the title playoff off, clDirect 7 → 6), no kind tabled every season and no
 lever in more than half. Run D (the final floors): 1, 0, 0, 1, 2, 1, 0, 2, 0, 2 tabled (LONG_KO_OFF 4
@@ -1052,13 +1089,13 @@ typical assembly tables one or two proposals and a quiet season none (at least o
 assemblies of 10, two or more in 3-4); the committee passes a proposal at 0.3 about 1 time in 5.5
 and one at 1.0 about 3 times in 4, so with the typical pressures of 0.3-0.8 a rule changes every
 few seasons (3 of the 18 proposals decided in B and D).
-ENG 6.4's target of two proposals in 80% of the assemblies is not met on purpose: with four
-statistics that tell seasons apart and none past its floor in more than half the seasons, two or
-more come in about 30-40%; more would need floors inside the typical range of each statistic, so the
-same kinds would fire every season (as a migrated save showed before the calibration: every
-proposal at 1.6-2.8 and a rule changed every season). The sweep share and the 8강 upsets hardly
-tell one season from another; a statistic that does (the 2-0 share of all league matches, upsets
-from the 32강 on, a smaller rating gap) would make those two levers live.
+With only four statistics telling seasons apart, two or more came in about 30-40% of the
+assemblies; lower floors would have put the same kinds past them every season (as a migrated save
+showed before the calibration: every proposal at 1.6-2.8 and a rule changed every season). The
+bonus and spread statistics make the sweep and size levers live, and the 검토 안건 meet ENG 6.4's
+two proposals in 80% of the assemblies (FederationCalibration checks it) without lowering a floor:
+a 검토 안건 presses below 0.3, so the committee passes one in ten or fewer. The 8강 upsets still
+hardly tell one season from another (upsets from the 32강 on, or a smaller rating gap, would).
 
 ### 11.5 Committee vote, application, hard rule
 - **선수 위원회** (`Federation.committee`): the best-rated member of each of the 9 best-ranked

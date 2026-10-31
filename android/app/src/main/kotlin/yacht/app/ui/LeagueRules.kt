@@ -220,7 +220,7 @@ private fun CupsPart(lg: LeagueController, cfg: LeagueConfig, cups: Modifier, cl
     Text("대회", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = cups)
     Text(
         if (cfg.national) {
-            "시즌은 주 단위로 흘러가요. 리그 한 라운드가 한 주예요. 요트컵, 대륙 챔피언스, 챔피언스 리그는 시즌이 시작될 때 정해진 주에 열리고, " +
+            "시즌은 주 단위로 흘러가요. 리그는 주마다 라운드를 치르는데, 선수가 적은 리그는 중간중간 쉬는 주가 있어요. 요트컵, 대륙 챔피언스, 챔피언스 리그는 시즌이 시작될 때 정해진 주에 열리고, " +
                 "리그가 끝나면 포스트시즌에 플레이오프를 치르고 시즌을 마감해요. 일정은 경기 › 이번 주에서 볼 수 있어요."
         } else {
             "시즌은 주 단위로 흘러가요. 리그 한 라운드가 한 주예요. 요트컵과 챔피언스 리그는 시즌이 시작될 때 정해진 주에 하나씩 열리고, " +

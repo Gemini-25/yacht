@@ -340,7 +340,12 @@ internal fun LiveBoardView(c: AppController) {
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item { BroadcastHeader(c, b) }
         if (b != null) {
-            items(b.picks, key = { "pick-${it.ref}" }) { p -> PickRow(p) { startBroadcast(c, p.ref) } }
+            // Last week's picks lead while none of this week's is played (1주씩 stops on the week to come).
+            items(b.onAir, key = { "pick-${it.ref}" }) { p -> PickRow(p) { startBroadcast(c, p.ref) } }
+            if (b.showsLast && b.picks.isNotEmpty()) {
+                item { Text("이번 주 빅매치 · ${weekLabel(b.week, b.season, lg.view?.clock)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp)) }
+                items(b.picks, key = { "now-${it.ref}" }) { p -> PickRow(p) { lg.nav.open(Page.Match(p.ref)) } }
+            }
             if (b.followedMore > 0) {
                 item {
                     LinkLine("★ 내 선수 경기 ${b.followedMore}", "응원하는 선수의 이번 주 다른 경기를 결과에서 봐요.") {
@@ -435,19 +440,24 @@ internal fun startBroadcast(c: AppController, from: String? = null) {
     c.screen = Screen.WATCH
 }
 
-/** '📺 이번 주 중계' with ▶ 연속 재생 (or why nothing is on yet). */
+/** '📺 이번 주 중계' (or last week's, while none of this week's is played) with ▶ 연속 재생, or why nothing is on yet. */
 @Composable
 private fun BroadcastHeader(c: AppController, b: BroadcastView?) {
     val cs = MaterialTheme.colorScheme
+    val clock = c.league.view?.clock
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("📺 이번 주 중계" + (b?.let { " · ${it.week}주차" } ?: ""), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            if (b != null && b.picks.any { it.played }) Button(onClick = { startBroadcast(c) }) { Text("▶ 연속 재생") }
+            Text(
+                (if (b?.showsLast == true) "📺 지난 주 중계" else "📺 이번 주 중계") + (b?.let { " · " + weekLabel(it.onAirWeek, it.season, clock) } ?: ""),
+                fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f),
+            )
+            if (b != null && b.onAir.any { it.played }) Button(onClick = { startBroadcast(c) }) { Text("▶ 연속 재생") }
         }
         Text(
             when {
                 b == null -> "이번 주 빅매치를 고르는 중이에요…"
-                b.picks.isEmpty() -> "이번 주에는 중계할 경기가 없어요."
+                b.onAir.isEmpty() -> "이번 주에는 중계할 경기가 없어요."
+                b.showsLast -> "이번 주 경기는 아직 시작 전이에요. 지난 주 빅매치를 요약으로 이어서 보여 줘요. 경기를 누르면 거기서부터 봐요."
                 else -> "결승, 우승 경쟁, 응원하는 선수의 경기를 골라 요약으로 이어서 보여 줘요. 경기를 누르면 거기서부터 봐요."
             },
             style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
@@ -480,7 +490,8 @@ private fun PickRow(p: BroadcastPick, onClick: () -> Unit) {
             if (p.reason.isNotEmpty() || p.tags.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (p.reason.isNotEmpty()) Text(p.reason, style = MaterialTheme.typography.labelSmall, color = cs.secondary, fontWeight = FontWeight.Bold)
-                    for (t in p.tags.filter { it != p.reason }.take(3)) {
+                    // A tag that says the reason again ("🤝 같은 클럽 맞대결" by "같은 클럽 맞대결") is left out.
+                    for (t in p.tags.filter { it != p.reason && it.substringAfter(' ') != p.reason }.take(3)) {
                         Text(
                             t, style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer,
                             modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.secondaryContainer).padding(horizontal = 6.dp, vertical = 1.dp),

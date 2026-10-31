@@ -8,6 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -112,7 +114,7 @@ private fun LeagueSelectorSheet(lg: yacht.app.core.LeagueController, v: LeagueVi
         for ((title, infos) in sections) {
             SheetHeading(title)
             for (info in infos) {
-                SheetChoice(selectorTitle(info), selectorLine(info), info.id == season.league) {
+                SheetChoice(selectorTitle(info), null, info.id == season.league, parts = selectorParts(info)) {
                     val favs = lg.favourites
                     val tier = v.rows.filter { it.key in favs && it.league == info.id }.mapNotNull { r -> r.division?.minus(info.first) }.minOrNull()
                     nav.selectLeague(info.id, tier ?: 0)
@@ -134,14 +136,14 @@ private fun selectorTitle(info: yacht.app.core.LeagueInfo): String =
     if (info.union) "${info.icon} ${info.label}" else (info.rank?.let { "${it}위 " } ?: "") + "${info.icon} ${info.label}"
 
 /** A league's line in the selector: its 국제 성적 점수 (once it has one), players, tiers and next season's places. */
-private fun selectorLine(info: yacht.app.core.LeagueInfo): String = listOfNotNull(
+private fun selectorParts(info: yacht.app.core.LeagueInfo): List<String> = listOfNotNull(
     info.coefficient?.takeIf { !info.union }?.let { "국제 성적 점수 ${String.format(java.util.Locale.ROOT, "%.3f", it)}" },
     "${info.nations}개국".takeIf { info.union },
     "선수 ${"%,d".format(info.members)}명",
     "${info.tiers}개 부",
     "대륙 챔피언스 ${info.cclSlots}장".takeIf { info.cclSlots > 0 },
     "챔스 직행".takeIf { info.clDirect },
-).joinToString(" · ")
+)
 
 /**
  * A bottom sheet drawn inside the league screen (so a screenshot renders it and back closes it
@@ -178,7 +180,8 @@ internal fun LeagueSheet(title: String, onDismiss: () -> Unit, scroll: ScrollSta
 
 /** One choice of a sheet's list: its name, a line on it, and a check when it is the one chosen. */
 @Composable
-internal fun SheetChoice(label: String, sub: String?, selected: Boolean, onClick: () -> Unit) {
+@OptIn(ExperimentalLayoutApi::class)
+internal fun SheetChoice(label: String, sub: String?, selected: Boolean, parts: List<String>? = null, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
@@ -189,6 +192,14 @@ internal fun SheetChoice(label: String, sub: String?, selected: Boolean, onClick
         Column(Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
             sub?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
+            // Parts wrap whole ("대륙 챔피언스 2장" never splits as "2" / "장": Korean breaks between any two syllables).
+            if (parts != null) {
+                FlowRow {
+                    for ((i, p) in parts.withIndex()) {
+                        Text(if (i < parts.lastIndex) "$p · " else p, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, softWrap = false)
+                    }
+                }
+            }
         }
         if (selected) Text("✓", color = cs.primary, fontWeight = FontWeight.Bold)
     }

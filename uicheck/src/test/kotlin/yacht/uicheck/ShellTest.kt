@@ -40,6 +40,25 @@ import kotlin.test.assertTrue
 
 /** The league shell's logic that needs no screen: competition stages and pages, match keys, the results filter, the bar's lines. */
 class ShellTest {
+    @Test
+    fun aPastSeasonsPostSeasonNewsIsHeadedAsThatSeasonNamedIt() {
+        // Season 2 had 38 league weeks; its playoffs' news starts in week 39. The clock is in season 3.
+        val clock = ClockView(3, 5, 40, 43, false, emptyList())
+        fun a(week: Int, comp: Comp? = null) = yacht.engine.league.Article(2, "x", "h", "b", emptyList(), comp, 2, week)
+        val first = 39
+        assertEquals("시즌 2 · 38주차", yacht.app.ui.headingText(a(38), clock, first))
+        assertEquals("시즌 2 · 포스트시즌 1주차", yacht.app.ui.headingText(a(39, Comp.TITLE_PLAYOFF), clock, first))
+        // A post-season week without playoff news is no league week "41주차".
+        assertEquals("시즌 2 · 포스트시즌 3주차", yacht.app.ui.headingText(a(41), clock, first))
+        assertEquals("시즌 2 · 포스트시즌 2주차", yacht.app.ui.headingText(a(40, Comp.PROMOTION_PLAYOFF), clock, first))
+        assertEquals("시즌 2 마감", yacht.app.ui.headingText(a(yacht.engine.league.SeasonCalendar.CLOSING), clock, first))
+        // No playoff news that season: its weeks by number.
+        assertEquals("시즌 2 · 41주차", yacht.app.ui.headingText(a(41), clock, null))
+        // This season's weeks by the clock.
+        val now = yacht.engine.league.Article(3, "x", "h", "b", emptyList(), null, 2, 42)
+        assertEquals("포스트시즌 2주차", yacht.app.ui.headingText(now, clock, 41))
+    }
+
     /** A one-match tie; a played one won 2-0 by [winner]. */
     private fun tie(a: String?, b: String?, played: Boolean = false, winner: String? = null) =
         TieView(a, b, if (played && winner == a) 2.0 else 0.0, if (played && winner == b) 2.0 else 0.0, winner, played, 1)

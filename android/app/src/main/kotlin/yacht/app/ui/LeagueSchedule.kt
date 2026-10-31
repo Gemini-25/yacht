@@ -186,8 +186,15 @@ fun WeekTab(lg: LeagueController, v: LeagueView, onLeague: (WeekStage) -> Unit, 
         if (w == c.week && !c.over) c.row(w + 1)?.let { next -> item { NextWeek(c, next) } }
         item { BigGames(c) }
         item {
+            // National seasons have no club league, and a smaller league rests some weeks (its rounds spread over the season).
             Text(
-                "리그 한 라운드가 한 주예요. 요트컵·챔피언스 리그 같은 대회는 시즌이 시작될 때 정해진 주에 하나씩 열리고, 클럽 리그는 몇 주마다 한 라운드씩 치러요. " +
+                (
+                    if (v.season?.national == true) {
+                        "리그는 주마다 라운드를 치르는데, 선수가 적은 리그는 중간중간 쉬는 주가 있어요. 요트컵·대륙 챔피언스·챔피언스 리그 같은 대회는 시즌이 시작될 때 정해진 주에 열려요. "
+                    } else {
+                        "리그 한 라운드가 한 주예요. 요트컵·챔피언스 리그 같은 대회는 시즌이 시작될 때 정해진 주에 하나씩 열리고, 클럽 리그는 몇 주마다 한 라운드씩 치러요. "
+                    }
+                    ) +
                     "생각이 오래 걸리는 AI가 있으면 경기가 다음 주로 조금 밀리기도 해요. 리그가 끝나면 포스트시즌에 플레이오프를 치르고 시즌을 마감해요.",
                 style = MaterialTheme.typography.labelSmall,
                 color = cs.onSurfaceVariant,

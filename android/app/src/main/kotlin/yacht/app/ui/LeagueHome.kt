@@ -401,10 +401,15 @@ private fun BigMatches(c: AppController, v: LeagueView) {
     val season = clock.season
     val b = lg.center.broadcast
     LaunchedEffect(season, clock.week, b == null) { if (b == null) lg.center.refreshPicks() }
-    val picks = b?.takeIf { it.season == season }?.picks.orEmpty()
-    if (picks.isEmpty()) return
+    // Last week's picks while none of this week's is played (1주씩 stops on the week to come).
+    val shown = b?.takeIf { it.season == season }
+    val picks = shown?.onAir.orEmpty()
+    if (shown == null || picks.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SectionTitle("📺 이번 주 빅매치 · ${b!!.week}주차", if (picks.any { it.played }) "📺 연속 재생 ›" else "중계 ›") {
+        SectionTitle(
+            (if (shown.showsLast) "📺 지난 주 빅매치 · " else "📺 이번 주 빅매치 · ") + weekName(shown.onAirWeek, clock.leagueWeeks),
+            if (picks.any { it.played }) "📺 연속 재생 ›" else "중계 ›",
+        ) {
             if (picks.any { it.played }) startBroadcast(c) else {
                 lg.nav.go(LeagueTab.MATCHES)
                 lg.nav.matches = MatchesView.BROADCAST

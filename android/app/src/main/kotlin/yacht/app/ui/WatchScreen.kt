@@ -40,7 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
-import yacht.app.core.LeagueTab
+import yacht.app.core.Sheet
 import yacht.app.core.MatchCenter
 import yacht.app.core.Page
 import yacht.app.core.Screen
@@ -112,8 +112,11 @@ fun WatchScreen(c: AppController) {
                         val ref = w.ref
                         center.stop()
                         if (ref != null) {
-                            lg.nav.go(LeagueTab.MATCHES)
-                            lg.nav.open(Page.Match(ref, w.board, w.game))
+                            // Over the pages the watch screen was opened from (← from the report goes back there).
+                            lg.nav.sheet = Sheet.NONE
+                            val page = Page.Match(ref, w.board, w.game)
+                            val top = lg.nav.page
+                            if (top is Page.Match && top.key == ref) lg.nav.replaceTop(page) else lg.nav.open(page)
                         }
                         c.screen = Screen.LEAGUE
                     },
@@ -240,7 +243,8 @@ private fun ScoreCard(w: WatchView, first: Board, second: Board, actions: WatchA
                 WinBar(win)
                 Text("${w.firstName} 승률 ${pct(win)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             }
-            w.matchScore?.let { Text(it, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+            // At the game's end the score counts it too (the outro below says the same result).
+            (if (w.atEnd) w.matchScoreAfter else w.matchScore)?.let { Text(it, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
             if (w.games.size > 1) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (g in w.games) {
