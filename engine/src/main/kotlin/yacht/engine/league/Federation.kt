@@ -782,7 +782,7 @@ class Federation : CoefficientStore {
                             f.resolved = p[2].toInt()
                         }
                         "coef" -> coefs.getOrPut(p[1].toInt()) { LinkedHashMap() }[p[2]] = intArrayOf(p[3].toInt(), p[4].toInt())
-                        "top" -> f.tops[p[1].toInt()] = if (p[2] == "-") emptyList() else p[2].split(',')
+                        "top" -> f.tops[p[1].toInt()] = if (p[2] == "-") emptyList() else p[2].split(',').take(TOP)
                         "up" -> {
                             f.upSeason = p[1].toInt()
                             f.upKeys = if (p[2] == "-") emptyList() else p[2].split(',')

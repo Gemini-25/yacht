@@ -478,6 +478,8 @@ class FederationTest {
         assertEquals(0.123, back.stats(6)!!.champPpm)
         assertEquals(f.stats(5)!!.encode(), back.stats(5)!!.encode())
         assertEquals(8, back.top(6)!!.size)
+        // A longer top line (a hand-edited file) reads as the best 8, as putTop keeps them.
+        assertEquals((1..8).map { "L$it" }, Federation.decode("federation 1\ntop 9 " + (1..12).joinToString(",") { "L$it" }).top(9))
         // Escaped evidence, an unknown kind, a broken line, a line of a later version: read or skipped.
         val extra = "prop 7 1 SWAP_DOWN autoSwap 2 1 0.40 - - - 0 0 a%20b|c%7Cd\nprop 7 2 NO_SUCH_KIND autoSwap 2 1 0.40 - - - 0 0 -\n" +
             "prop 7 3 SWAP_UP clDirect 2 3 0.40 - - - 0 0 -\nprop 7 4 SWAP_UP autoSwap 2 3 0.40 - X - 0 0 -\nprop 7\ncoef x KR 1 1\nfuture 1 2 3\n"
