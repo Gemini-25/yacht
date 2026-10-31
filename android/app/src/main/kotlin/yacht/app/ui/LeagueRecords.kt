@@ -2,7 +2,6 @@ package yacht.app.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,232 +29,44 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import yacht.app.core.ChronicleView
+import yacht.app.core.HallSeason
+import yacht.app.core.HallView
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
 import yacht.app.core.Page
-import yacht.app.core.ProfileView
 import yacht.app.core.RecordsView
-import yacht.app.core.SeasonHistoryItem
+import yacht.app.core.ReviewList
+import yacht.app.core.RoomRecord
+import yacht.app.core.RoomView
 import yacht.engine.league.Family
 import yacht.engine.league.LeagueRecord
-import yacht.engine.league.Origin
 import yacht.engine.league.RecordGroup
 import yacht.engine.game.label
 
 /**
- * The profile part of an AI's page: origin, family tree and honours (loaded on open); [onOpen]
- * opens another player's page by key.
- */
-@Composable
-fun ProfileSection(lg: LeagueController, key: String, onOpen: (String) -> Unit) {
-    LaunchedEffect(key) { lg.loadProfile(key) }
-    val p = lg.profile?.takeIf { it.key == key } ?: return
-    val cs = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            listOfNotNull(
-                p.origin.label,
-                p.hometown.takeIf { it.isNotEmpty() }?.let { "$it 출신" },
-                p.born?.let { "시즌 $it 데뷔" },
-                p.retired?.let { "시즌 $it 은퇴" },
-                if (p.legend) "🏛 레전드" else null,
-            ).joinToString(" · "),
-            style = MaterialTheme.typography.labelMedium,
-            color = cs.secondary,
-        )
-        p.identity?.let { IdentityPart(it, alive = p.retired == null, onOpen = onOpen) }
-        p.genes?.takeIf { p.identity?.style == null && (p.origin == Origin.GENERATED || p.origin == Origin.EVOLVED || p.origin == Origin.CREATED) }?.let {
-            Text("스타일: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-        }
-        Honours(p)
-        StatsPart(p)
-        Growth(p)
-        Genealogy(p)
-    }
-}
-
-/** This season's and career numbers beyond the ladder's, and the boxes it is best and worst at. */
-@Composable
-private fun StatsPart(p: ProfileView) {
-    val st = p.career ?: return
-    if (st.games == 0) return
-    val cs = MaterialTheme.colorScheme
-    val season = p.season?.takeIf { it.games > 0 }
-    Text("📈 기록 (통산${if (season != null) " · 이번 시즌" else ""})", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    @Composable
-    fun line(label: String, career: String, now: String?) =
-        Text("$label  $career" + (now?.let { "  ·  $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-    fun rating(a: yacht.engine.league.AiStats) = if (a.avgRating.isNaN()) "–" else "%.2f".format(a.avgRating)
-    line("평균 평점", rating(st), season?.let { rating(it) })
-    line("경기(매치) 승-무-패", "${st.matchWins}-${st.matchDraws}-${st.matchLosses}", season?.let { "${it.matchWins}-${it.matchDraws}-${it.matchLosses}" })
-    line("역전승 / 역전패", "${st.comebacks} / ${st.blownLeads}", season?.let { "${it.comebacks} / ${it.blownLeads}" })
-    line("5점 차 이내 승 / 패", "${st.closeWins} / ${st.closeLosses}", season?.let { "${it.closeWins} / ${it.closeLosses}" })
-    line("대어 사냥 (100점 이상 위)", "${st.giantKills}", season?.let { "${it.giantKills}" })
-    line("300점 이상", "${st.over300}", season?.let { "${it.over300}" })
-    if (st.derbyWins + st.derbyLosses > 0) line("더비 (같은 고향) 승/패", "${st.derbyWins} / ${st.derbyLosses}", null)
-    // 주무기 / 약점: its box averages against the league's.
-    val league = p.league
-    if (league != null && st.carded >= 20) {
-        val diffs = yacht.engine.Category.ALL.mapNotNull { c ->
-            val mine = st.boxAverage(c)
-            val avg = league.boxAverage(c)
-            if (mine.isNaN() || avg.isNaN()) null else c to mine - avg
-        }
-        val strong = diffs.sortedByDescending { it.second }.take(2).filter { it.second > 0.3 }
-        val weak = diffs.sortedBy { it.second }.take(2).filter { it.second < -0.3 }
-        if (strong.isNotEmpty()) Text("💪 주무기: " + strong.joinToString(", ") { (c, d) -> "${c.label} %+.1f".format(d) }, style = MaterialTheme.typography.labelSmall, color = gameColors.good)
-        if (weak.isNotEmpty()) Text("🩹 약점: " + weak.joinToString(", ") { (c, d) -> "${c.label} %+.1f".format(d) }, style = MaterialTheme.typography.labelSmall, color = cs.error)
-    }
-}
-
-/** 성장 곡선: its rating at the end of each season, title seasons ringed, and the season lines. */
-@Composable
-private fun Growth(p: ProfileView) {
-    val lines = p.lines
-    if (lines.isEmpty()) return
-    val cs = MaterialTheme.colorScheme
-    Text("🌱 성장 곡선", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    // Seasons without a rating (the AI had none at the end) are left out of the curve.
-    val rated = lines.filter { !it.rating.isNaN() }
-    if (rated.size >= 2) {
-        val titled = p.honours.filter { trophy(it.kind) == "👑" || trophy(it.kind) == "🥇" || trophy(it.kind) == "🏆" }.map { it.season }.toSet()
-        LineChart(
-            rated.map { it.rating }, labels = "시즌 ${rated.first().season}" to "시즌 ${rated.last().season}",
-            mark = rated.withIndex().filter { it.value.season in titled }.map { it.index }.toSet(),
-        )
-    }
-    for (l in lines.takeLast(8).reversed()) {
-        Text(
-            "시즌 ${l.season} · ${l.division + 1}부 ${l.position}위 · ${l.wins}승 ${l.draws}무 ${l.losses}패 · 레이팅 ${if (l.rating.isNaN()) "–" else "%.0f".format(l.rating)}" +
-                if (l.avgRating.isNaN()) "" else " · 평점 ${"%.2f".format(l.avgRating)}",
-            style = MaterialTheme.typography.labelSmall,
-            color = cs.onSurfaceVariant,
-        )
-    }
-}
-
-/** 시즌 결산: shown once when a season ends. */
-@Composable
-fun SeasonReviewDialog(lg: LeagueController, r: yacht.engine.league.SeasonReview) {
-    val cs = MaterialTheme.colorScheme
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = { lg.dismissReview() },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = { lg.dismissReview() }) { Text("확인") } },
-        title = { Text("📰 시즌 ${r.season} 결산", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (line in r.sentences) Text(line, style = MaterialTheme.typography.bodyMedium)
-                if (r.champions.isNotEmpty()) {
-                    Text("🏆 우승", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    // A pyramid's group titles below 3부 in one line.
-                    val shown = r.champions.filter { trophy(it.kind) != null }
-                    val lower = shown.filter { h -> division(h.kind, "L")?.let { it > 2 } == true }
-                    for (h in shown - lower.toSet()) Text("${trophy(h.kind)} ${honourLabel(h.kind)} ${honourWinner(lg, h.kind, h.key)}", style = MaterialTheme.typography.bodySmall)
-                    if (lower.isNotEmpty()) Text("🥇 4부 이하 지역 리그 조 우승 ${lower.size}명", style = MaterialTheme.typography.bodySmall)
-                }
-                if (r.awards.isNotEmpty()) {
-                    Text("🏅 시상식", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (h in r.awards) Text("${honourLabel(h.kind)} ${lg.name(h.key)}", style = MaterialTheme.typography.bodySmall)
-                }
-                if (r.risers.isNotEmpty()) {
-                    Text("📈 가장 많이 오른 AI", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (m in r.risers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (${"%+.0f".format(m.delta)})", style = MaterialTheme.typography.bodySmall, color = gameColors.good)
-                }
-                if (r.fallers.isNotEmpty()) {
-                    Text("📉 가장 많이 내린 AI", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (m in r.fallers) Text("${lg.name(m.key)} ${"%.0f".format(m.from)} → ${"%.0f".format(m.to)} (${"%+.0f".format(m.delta)})", style = MaterialTheme.typography.bodySmall, color = cs.error)
-                }
-                if (r.records.isNotEmpty()) {
-                    Text("📜 새 기록", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (b in r.records) Text("${b.record.kind.label}: ${b.record.kind.text(b.record.value)} ${lg.name(b.record.holder)}", style = MaterialTheme.typography.bodySmall)
-                }
-                if (r.meta.isNotEmpty()) {
-                    Text("📊 메타 변화", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-                    for (m in r.meta) {
-                        Text(
-                            m.label + ": " + if (m.percent) "%.0f%% → %.0f%%".format(100 * m.before, 100 * m.after) else "%.1f → %.1f".format(m.before, m.after),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            }
-        },
-    )
-}
-
-@Composable
-private fun Honours(p: ProfileView) {
-    val cs = MaterialTheme.colorScheme
-    val shown = p.honours.filter { trophy(it.kind) != null }
-    if (shown.isEmpty()) return
-    Text(if (p.titles > 0) "🏆 수상 · 우승 ${p.titles}회" else "🏆 수상", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    // Counts first ("요트컵 우승 ×3"), then the seasons.
-    val byKind = shown.groupBy { it.kind }.entries.sortedByDescending { it.value.size }
-    for ((kind, hs) in byKind.take(8)) {
-        Text(
-            "${trophy(kind)} ${honourLabel(kind)}" + (if (hs.size > 1) " ×${hs.size}" else "") + " · 시즌 " + hs.map { it.season }.sorted().joinToString(", "),
-            style = MaterialTheme.typography.labelSmall,
-            color = cs.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun Genealogy(p: ProfileView) {
-    if (p.ancestors.isEmpty() && p.descendants.isEmpty()) return
-    val cs = MaterialTheme.colorScheme
-    Text("🌳 사제 계보", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-    val up = listOf("스승", "스승의 스승", "3대 위 스승", "4대 위 스승")
-    for ((g, row) in p.ancestors.withIndex()) {
-        val names = row.filterNotNull().distinct()
-        if (names.isEmpty()) continue
-        Text("${up.getOrElse(g) { "${g + 1}대 위" }}: ${names.joinToString(", ")}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-    }
-    val down = listOf("제자", "제자의 제자", "3대 아래 제자", "4대 아래 제자")
-    for ((g, row) in p.descendants.withIndex()) {
-        Text("${down.getOrElse(g) { "${g + 1}대 아래" }} ${row.size}: ${row.take(8).joinToString(", ")}${if (row.size > 8) " 외" else ""}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-    }
-}
-
-/**
- * 기록 (its chip row is the shell's): 리더 (for now this season's MVP race), 기록실 (the league's
- * records and milestones), 전당 (champions, the hall of fame, dynasties), 결산 (the seasons) and
- * 더 보기 (the pages of the rest).
+ * 기록 (its chip row is the shell's): 리더 (the leaderboard hub), 기록실 (the records, compact, with
+ * this season's new ones, the chases and record news), 전당 (champions by season, the hall of fame,
+ * dynasties, the chronicle), 결산 (every season, a tap: its review) and 더 보기 (the other pages).
  */
 @Composable
 fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     val view = lg.nav.records
-    LaunchedEffect(view, v.season?.number) { if (view != RecordsView.MORE) lg.loadRecords() }
-    val r = lg.records
-    when (view) {
-        RecordsView.LEADERS -> MvpRace(lg, r, onOpen)
-        RecordsView.ROOM -> RecordsRoom(lg, r, onOpen)
-        RecordsView.HALL -> HallOfFame(lg, v.season?.history.orEmpty(), r, onOpen)
-        RecordsView.SEASONS -> SeasonArchive(lg, r)
-        RecordsView.MORE -> MoreList(lg, v)
-    }
-}
-
-/** 기록 › 리더: this season's best average match rating (the MVP race). */
-@Composable
-private fun MvpRace(lg: LeagueController, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
-    if (r == null) {
-        CenterText("기록을 불러오는 중…")
-        return
-    }
-    if (r.mvpRace.isEmpty()) {
-        CenterText("이번 시즌 경기가 쌓이면 평점이 높은 선수부터 MVP 레이스가 보여요.")
-        return
-    }
-    // Bars from a little under the lowest shown, so small gaps are visible.
-    val lo = r.mvpRace.minOf { it.second.avgRating } - 0.1
-    val hi = r.mvpRace.maxOf { it.second.avgRating }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item { Text("⭐ MVP 레이스 · 이번 시즌 평균 평점", fontWeight = FontWeight.Bold) }
-        item { Text("경기마다 매긴 평점의 평균이에요. 시즌이 끝나면 1위가 MVP를 받아요.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        items(r.mvpRace, key = { "mvp-${it.first}" }) { (k, st) ->
-            Box(Modifier.clickable { onOpen(k) }) { BarRow(lg.name(k), st.avgRating - lo, hi - lo, "%.2f".format(st.avgRating)) }
+    val season = v.season?.number
+    LaunchedEffect(view, season, v.clock?.week) {
+        when (view) {
+            RecordsView.ROOM -> lg.analytics.loadRoom()
+            RecordsView.HALL -> lg.analytics.loadHall()
+            RecordsView.SEASONS -> lg.analytics.loadReviews()
+            else -> {}
         }
+    }
+    when (view) {
+        RecordsView.LEADERS -> LeadersHub(lg, v)
+        RecordsView.ROOM -> RecordsRoom(lg, lg.analytics.room(), onOpen)
+        RecordsView.HALL -> HallOfFame(lg, lg.analytics.hall(), onOpen)
+        RecordsView.SEASONS -> SeasonArchive(lg, lg.analytics.reviewList())
+        RecordsView.MORE -> MoreList(lg, v)
     }
 }
 
@@ -266,27 +77,162 @@ private fun MoreList(lg: LeagueController, v: LeagueView) {
     // 선수 비교 starts from the best-ranked followed player, else the best-ranked one.
     val first = v.rows.filter { it.rank != null && !it.isMe }.sortedBy { it.rank }.let { rows -> rows.firstOrNull { it.key in lg.favourites } ?: rows.firstOrNull() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        LinkLine("🔎 탐구", "가장 낮은 점수로 이긴 판, 천적 관계, 레이팅보다 잘한 선수, 리그 비교") { nav.open(Page.Facts()) }
+        LinkLine("📜 연대기", "시즌마다 우승, MVP, 리그 랭킹 1위, 왕조") { nav.open(Page.Chronicle) }
         LinkLine("🌱 유망주", "22세 이하 선수를 잠재력 순으로") { nav.open(Page.Prospects) }
         LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { nav.open(Page.Legends) }
         LinkLine("🧬 계열별", "AI 계열마다 선수와 계열 대 계열 전적") { nav.open(Page.Families) }
         LinkLine("📊 메타 리포트", "칸마다 리그 평균 점수와 0점 비율, 상위권의 성향") { nav.open(Page.Meta) }
         if (first != null) LinkLine("⚖ 선수 비교", "두 선수의 기록과 능력치를 나란히") { nav.open(Page.Compare(first.key)) }
         LinkLine("⚗ AI 연구소", "두 AI를 수천 번 붙여서 누가 얼마나 강한지 재요") { nav.open(Page.Lab) }
+        if (v.season?.national == true || v.season?.nextNational == true) LinkLine("🏛 요트협회 기록", "안건과 결정, 시상의 역사") { nav.open(Page.Federation) }
     }
 }
 
-/** 기록 › 전당: the hall of fame, dynasties, the champions season by season, and the legends' page. */
+// ---- 기록실 -------------------------------------------------------------------------------------------
+
+/**
+ * 기록 › 기록실: this season's new records on top, then every record as one two-line row ("{label} ·
+ * {value}" / "{holder} · 시즌 {n}"), grouped and foldable, its earlier holders on a tap; who chases
+ * which record; the latest record news; the retired kinds folded (예전 기록).
+ */
 @Composable
-private fun HallOfFame(lg: LeagueController, history: List<SeasonHistoryItem>, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
+private fun RecordsRoom(lg: LeagueController, r: RoomView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val members = r?.hallOfFame.orEmpty()
-    val dynasties = r?.dynasties.orEmpty()
+    if (r == null) {
+        CenterText("기록을 불러오는 중…")
+        return
+    }
+    val folded = remember { mutableStateOf(emptySet<RecordGroup>()) }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (r.fresh.isNotEmpty()) {
+            item(key = "fresh-head") { RoomHeading("🆕 이번 시즌 새 기록") }
+            items(r.fresh, key = { "fresh-${it.record.kind}" }) { b ->
+                Card(Modifier.fillMaxWidth().clickable { onOpen(b.record.holder) }, colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
+                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                        Text("${b.record.kind.label} · ${b.record.kind.withUnit(b.record.value)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        // A count its own holder raised says where it stood; another holder's is the record beaten.
+                        val before = b.previous?.let { p ->
+                            if (p.holder == b.record.holder) " · 시즌 전 ${p.kind.withUnit(p.value)}에서 늘렸어요" else " · 종전 ${p.kind.withUnit(p.value)} (${lg.name(p.holder)})"
+                        } ?: " · 첫 기록"
+                        Text(lg.name(b.record.holder) + before, style = MaterialTheme.typography.labelSmall, color = cs.onTertiaryContainer)
+                    }
+                }
+            }
+        }
+        if (r.groups.isEmpty()) item(key = "none") { Text("공식 경기가 쌓이면 기록이 생겨요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp)) }
+        for ((g, list) in r.groups) {
+            val open = g !in folded.value
+            item(key = "group-${g.name}") {
+                Row(
+                    Modifier.fillMaxWidth().clickable { folded.value = if (open) folded.value + g else folded.value - g }.padding(top = 10.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(g.label, style = MaterialTheme.typography.labelLarge, color = cs.primary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(if (open) "▴" else "${list.size}개 ▾", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                }
+            }
+            if (open) items(list, key = { "rec-${it.record.kind}" }) { rec -> RecordRow(lg, rec, onOpen) }
+        }
+        if (r.chase.isNotEmpty()) {
+            item(key = "chase-head") { RoomHeading("🏃 기록 추격") }
+            items(r.chase, key = { "chase-${it.first}" }) { (kind, lines) ->
+                Column(Modifier.padding(vertical = 3.dp)) {
+                    Text(kind.label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                    for (l in lines) {
+                        Row(Modifier.fillMaxWidth().clickable { onOpen(l.key) }.padding(vertical = 1.dp)) {
+                            Text(lg.name(l.key), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text(l.text(), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = if (yacht.engine.league.RecordChase.near(l)) cs.primary else cs.onSurface)
+                        }
+                    }
+                }
+            }
+        }
+        if (r.news.isNotEmpty()) {
+            item(key = "news-head") { RoomHeading("📰 최근 기록 뉴스") }
+            items(r.news, key = { "news-${it.season}-${it.week}-${it.headline}" }) { a -> ArticleCard(a, lg.view?.clock) { k -> if (lg.isAi(k)) onOpen(k) } }
+        }
+        if (r.retired.isNotEmpty()) {
+            item(key = "retired") {
+                var open by remember { mutableStateOf(false) }
+                Column {
+                    Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(top = 10.dp, bottom = 2.dp)) {
+                        Text("🗄 예전 기록", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text(if (open) "▴" else "${r.retired.size}개 ▾", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                    }
+                    if (open) {
+                        Text("더는 겨루지 않는 기록이에요. 기준이 바뀌었거나 다시 깰 수 없게 된 기록이라 보관만 해요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        for (rec in r.retired) RecordRow(lg, RoomRecord(rec, emptyList(), false), onOpen)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoomHeading(text: String) = Text(text, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+
+/** One record in two lines; a tap shows its earlier holders (이전 기록), the holder's name opens its page. */
+@Composable
+private fun RecordRow(lg: LeagueController, r: RoomRecord, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val rec = r.record
+    var open by remember(rec.kind) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().clickable(enabled = r.history.isNotEmpty()) { open = !open }.padding(vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${rec.kind.label} · ${rec.kind.withUnit(rec.value)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            )
+            if (r.fresh) Text("NEW ", style = MaterialTheme.typography.labelSmall, color = cs.tertiary, fontWeight = FontWeight.Bold)
+            if (r.history.isNotEmpty()) Text(if (open) "▴" else "이전 ${r.history.size} ▾", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
+        Text(
+            recordWho(lg, rec), style = MaterialTheme.typography.labelSmall, color = cs.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clickable { if (lg.isAi(rec.holder)) onOpen(rec.holder) },
+        )
+        if (open) {
+            for (h in r.history) {
+                Text(
+                    "이전 · ${h.kind.withUnit(h.value)} · ${recordWho(lg, h)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp).clickable { if (lg.isAi(h.holder)) onOpen(h.holder) },
+                )
+            }
+        }
+    }
+}
+
+/** "엔리코 갈로 · 시즌 3 · vs 상대 · 요트컵". */
+private fun recordWho(lg: LeagueController, r: LeagueRecord): String =
+    "${lg.name(r.holder)} · 시즌 ${r.season}" + (r.other?.let { " · vs ${lg.name(it)}" } ?: "") + (r.comp?.let { " · ${it.label}" } ?: "")
+
+// ---- 전당 and the chronicle ------------------------------------------------------------------------
+
+/** 기록 › 전당: the chronicle and the legends, the most league titles, the hall of fame, dynasties, then the seasons' champions. */
+@Composable
+private fun HallOfFame(lg: LeagueController, h: HallView?, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item { LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { lg.nav.open(Page.Legends) } }
-        if (history.isEmpty()) item { Text("시즌이 끝나면 우승팀과 수상자가 여기에 쌓여요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp)) }
-        if (members.isNotEmpty()) {
-            item { Text("🏛 헌액 (우승 3회, MVP 2회, 또는 5,000판 승률 55%)", fontWeight = FontWeight.Bold) }
-            items(members.reversed(), key = { "hof-${it.key}" }) { m ->
+        item {
+            Column {
+                LinkLine("📜 연대기", "시즌마다 우승, MVP, 리그 랭킹 1위, 왕조를 한눈에") { lg.nav.open(Page.Chronicle) }
+                LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { lg.nav.open(Page.Legends) }
+            }
+        }
+        if (h == null) {
+            item { Text("전당을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp)) }
+            return@LazyColumn
+        }
+        if (h.seasons.isEmpty()) item { Text("시즌이 끝나면 우승팀과 수상자가 여기에 쌓여요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp)) }
+        // Most league titles, once someone has two.
+        val most = h.most.filter { it.second >= 2 }
+        if (most.isNotEmpty()) {
+            item { Text("👑 리그 최다 우승: " + most.joinToString(" · ") { (k, n) -> "${lg.name(k)} ${n}회" }, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+        }
+        if (h.members.isNotEmpty()) {
+            item { Text("🏛 헌액 (우승 3회, MVP 2회, 또는 5,000판 승률 55%)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
+            items(h.members.reversed(), key = { "hof-${it.key}" }) { m ->
                 Row(Modifier.fillMaxWidth().clickable { onOpen(m.key) }.padding(vertical = 2.dp)) {
                     Text("시즌 ${m.season}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
                     Text(
@@ -300,9 +246,9 @@ private fun HallOfFame(lg: LeagueController, history: List<SeasonHistoryItem>, r
                 }
             }
         }
-        if (dynasties.isNotEmpty()) {
+        if (h.dynasties.isNotEmpty()) {
             item { Text("👑 왕조·트레블", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
-            items(dynasties.reversed().take(30), key = { "dy-${it.key}-${it.kind}-${it.title}-${it.from}" }) { d ->
+            items(h.dynasties.reversed().take(30), key = { "dy-${it.key}-${it.kind}-${it.title}-${it.from}" }) { d ->
                 Text(
                     "${lg.name(d.key)} · " + when (d.kind) {
                         "RUN" -> "${honourLabel(d.title)} ${d.count}연패 (시즌 ${d.from}–${d.to})"
@@ -316,33 +262,131 @@ private fun HallOfFame(lg: LeagueController, history: List<SeasonHistoryItem>, r
                 )
             }
         }
-        if (history.isNotEmpty()) item { Text("시즌별", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
-        item {
-            val titles = history.mapNotNull { it.champions.firstOrNull() }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(5)
-            if (titles.isNotEmpty()) {
-                Text("최다 우승: " + titles.joinToString(" · ") { "${it.key} ${it.value}회" }, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        if (h.seasons.isNotEmpty()) item { Text("시즌별", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
+        items(h.seasons, key = { "hall-${it.season}" }) { s -> HallSeasonCard(lg, s, onOpen) }
+    }
+}
+
+/** A season of the hall: its leagues' champions (the best-ranked first), the world titles, the awards and the moves counted. */
+@Composable
+private fun HallSeasonCard(lg: LeagueController, s: HallSeason, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("시즌 ${s.season}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("결산 ›", style = MaterialTheme.typography.labelMedium, color = cs.primary, modifier = Modifier.clickable { lg.nav.open(Page.Review(s.season)) })
+            }
+            for (ch in s.champions) {
+                Text(
+                    "${if (ch.tier == 0) "👑" else "🥇"} ${ch.label} ${lg.name(ch.key)}", style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable { if (lg.isAi(ch.key)) onOpen(ch.key) },
+                )
+            }
+            if (s.more > 0) Text(if (s.national) "외 ${s.more}개 리그 우승" else "외 ${s.more}개 조 우승", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            for (t in s.titles) {
+                Text(
+                    "${trophy(t.kind) ?: "🏆"} ${honourLabel(t.kind)} ${honourWinner(lg, t.kind, t.key)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                    modifier = Modifier.clickable { if (lg.isAi(t.key)) onOpen(t.key) },
+                )
+            }
+            if (s.awards.isNotEmpty()) {
+                Text(s.awards.joinToString("  ") { "${trophy(it.kind) ?: "🏅"} ${honourLabel(it.kind)} ${lg.name(it.key)}" }, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+            if (s.promoted + s.relegated > 0) {
+                Text("⬆ 승격 ${s.promoted}명 · ⬇ 강등 ${s.relegated}명", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             }
         }
-        items(history, key = { "hall-${it.number}" }) { h ->
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("시즌 ${h.number}", fontWeight = FontWeight.Bold)
-                    // A pyramid's champion per group: 1부 to 3부 by name, the rest counted.
-                    val tierOf = h.championTiers.takeIf { it.size == h.champions.size } ?: h.champions.indices.toList()
-                    val shown = h.champions.indices.filter { tierOf[it] <= 2 || h.champions.size <= 8 }
-                    Text(
-                        shown.joinToString("  ") { i -> "${if (tierOf[i] == 0) "👑" else "🥇"} ${tierOf[i] + 1}부 ${h.champions[i]}" } +
-                            if (shown.size < h.champions.size) "  외 ${h.champions.size - shown.size}개 조" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    for ((kind, who) in h.titles) {
-                        Text("${trophy(kind) ?: "·"} ${honourLabel(kind)} $who", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+    }
+}
+
+/** [Page.Chronicle]: the eras (the longest runs, the most titles, the best rating, the longest reign of a league) and every season's lines. */
+@Composable
+internal fun ChroniclePage(lg: LeagueController, v: LeagueView) {
+    LaunchedEffect(v.season?.number) { lg.analytics.loadChronicle() }
+    val c = lg.analytics.chronicle()
+    if (c == null) {
+        CenterText("연대기를 불러오는 중…")
+        return
+    }
+    ChronicleBody(c) { k -> if (lg.isAi(k)) lg.nav.open(Page.Player(k)) }
+}
+
+/** The chronicle's body (the harness draws it with hand-made seasons too). */
+@Composable
+internal fun ChronicleBody(c: ChronicleView, onPlayer: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (c.seasons.isEmpty()) item { Text("시즌이 끝나면 시즌마다 우승과 MVP, 왕조가 여기에 이어져요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp)) }
+        if (c.eras.isNotEmpty()) {
+            item {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("🏛 시대를 만든 이름들", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer)
+                        for (l in c.eras) ChronicleText(l, cs.onSecondaryContainer, onPlayer)
                     }
-                    val awards = listOfNotNull(h.topScorer?.let { "⚽ 득점왕 $it" }, h.yachtKing?.let { "🎲 최다 요트 $it" })
-                    if (awards.isNotEmpty()) Text(awards.joinToString("  "), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                    fun more(n: Int, shown: Int) = if (n > shown) " 외 ${n - shown}명" else ""
-                    if (h.promoted.isNotEmpty()) Text("⬆ 승격: ${h.promoted.joinToString(", ")}${more(h.promotedCount, h.promoted.size)}", style = MaterialTheme.typography.labelSmall, color = gameColors.good)
-                    if (h.relegated.isNotEmpty()) Text("⬇ 강등: ${h.relegated.joinToString(", ")}${more(h.relegatedCount, h.relegated.size)}", style = MaterialTheme.typography.labelSmall, color = cs.error)
+                }
+            }
+        }
+        items(c.seasons, key = { "chr-${it.season}" }) { s ->
+            Row {
+                Column(Modifier.width(56.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("시즌", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    Text("${s.season}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = cs.primary)
+                }
+                Column(Modifier.weight(1f).padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    for (l in s.lines) ChronicleText(l, cs.onSurface, onPlayer)
+                    HorizontalDivider(Modifier.padding(top = 4.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChronicleText(l: yacht.app.core.ChronicleLine, color: androidx.compose.ui.graphics.Color, onPlayer: (String) -> Unit) {
+    Text(
+        "${l.icon} ${l.text}", style = MaterialTheme.typography.bodySmall, color = color,
+        modifier = Modifier.fillMaxWidth().clickable(enabled = l.key != null) { l.key?.let(onPlayer) },
+    )
+}
+
+// ---- 결산 -------------------------------------------------------------------------------------------
+
+/** 기록 › 결산: the average score season by season, then every season (newest first); a tap opens its review (a summary for one older than the kept reviews). */
+@Composable
+private fun SeasonArchive(lg: LeagueController, r: ReviewList?) {
+    val cs = MaterialTheme.colorScheme
+    if (r == null) {
+        CenterText("결산을 불러오는 중…")
+        return
+    }
+    if (r.items.isEmpty()) {
+        CenterText("시즌이 끝나면 시즌마다 우승팀·수상자·깨진 기록이 여기에 남아요.")
+        return
+    }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // Oldest first on the chart (the list below is newest first).
+        val seasons = r.items.filter { !it.avgScore.isNaN() }.sortedBy { it.season }
+        if (seasons.size >= 2) {
+            item {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("시즌별 평균 점수", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        LineChart(seasons.map { it.avgScore }, labels = "시즌 ${seasons.first().season}" to "시즌 ${seasons.last().season}")
+                    }
+                }
+            }
+        }
+        items(r.items, key = { "sum-${it.season}" }) { s ->
+            Card(Modifier.fillMaxWidth().clickable { lg.nav.open(Page.Review(s.season)) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("시즌 ${s.season}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text(if (s.kept) "📖 결산 ›" else "요약 ›", style = MaterialTheme.typography.labelMedium, color = if (s.kept) cs.primary else cs.onSurfaceVariant)
+                    }
+                    for (line in s.lines) Text(line, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (s.games > 0) Text("${"%,d".format(s.games)}판 · 평균 ${"%.1f".format(s.avgScore)}점", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 }
             }
         }
@@ -375,101 +419,6 @@ internal fun Legends(lg: LeagueController, onOpen: (String) -> Unit) {
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-/** An AI no longer in the league (retired, or a legend): its profile alone. */
-@Composable
-fun PastProfileDialog(lg: LeagueController, key: String, onOpen: (String) -> Unit, onDismiss: () -> Unit) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("닫기") } },
-        title = { Text(lg.name(key), fontWeight = FontWeight.Bold) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) { ProfileSection(lg, key, onOpen) } },
-    )
-}
-
-
-/** 기록 › 기록실: the league's records by section, and the latest milestones. */
-@Composable
-private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    if (r == null) {
-        CenterText("기록을 불러오는 중…")
-        return
-    }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item { Text("📜 리그 기록", fontWeight = FontWeight.Bold) }
-        if (r.records.isEmpty()) item { Text("공식 경기가 쌓이면 기록이 생겨요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
-        // By section (레이팅, 한 판·한 경기, 한 시즌, 통산, 우승·수상), each in its kinds' order.
-        for (g in RecordGroup.entries) {
-            val list = r.records.filter { it.kind.group == g }.sortedBy { it.kind.ordinal }
-            if (list.isEmpty()) continue
-            item(key = "rec-group-${g.name}") {
-                Text(g.label, style = MaterialTheme.typography.labelLarge, color = cs.primary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
-            }
-            items(list, key = { "rec-${it.kind}" }) { rec -> RecordCard(lg, rec, onOpen) }
-        }
-        if (r.milestones.isNotEmpty()) {
-            item { Text("🎯 마일스톤", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
-            items(r.milestones.take(30), key = { "ms-${it.season}-${it.keys}-${it.args}" }) { e ->
-                Text("시즌 ${e.season} · ${lg.name(e.keys.firstOrNull() ?: "")} ${milestoneText(e.args)}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-/** One record: what it is, its value and holder, and when, against whom and where. */
-@Composable
-private fun RecordCard(lg: LeagueController, rec: LeagueRecord, onOpen: (String) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Card(Modifier.fillMaxWidth().clickable { onOpen(rec.holder) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Text(rec.kind.label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-            Text("${rec.kind.text(rec.value)} · ${lg.name(rec.holder)}", fontWeight = FontWeight.Bold)
-            Text(
-                "시즌 ${rec.season}" + (rec.other?.let { " · 상대 ${lg.name(it)}" } ?: "") + (rec.comp?.let { " · ${it.label}" } ?: ""),
-                style = MaterialTheme.typography.labelSmall,
-                color = cs.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** 기록 › 결산: every finished season, newest first, with the average score season by season. */
-@Composable
-private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomView?) {
-    val cs = MaterialTheme.colorScheme
-    if (r == null || r.summaries.isEmpty()) {
-        CenterText("시즌이 끝나면 시즌마다 우승팀·수상자·깨진 기록이 여기에 남아요.")
-        return
-    }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        // Oldest first on the chart (the list below is newest first).
-        val seasons = r.summaries.sortedBy { it.season }
-        if (seasons.size >= 2) {
-            item {
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("시즌별 평균 점수", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                        LineChart(seasons.map { it.avgScore }, labels = "시즌 ${seasons.first().season}" to "시즌 ${seasons.last().season}")
-                    }
-                }
-            }
-        }
-        items(r.summaries, key = { "sum-${it.season}" }) { s ->
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
-                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("시즌 ${s.season}", fontWeight = FontWeight.Bold)
-                    Text("${"%,d".format(s.games)}판 · 평균 ${"%.1f".format(s.avgScore)}점", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                    for (h in s.honours.filter { trophy(it.kind) != null }) {
-                        Text("${trophy(h.kind)} ${honourLabel(h.kind)} ${honourWinner(lg, h.kind, h.key)}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    s.topScorer?.let { Text("⚽ 득점왕 ${lg.name(it)} (평균 ${"%.1f".format(s.topScore)}점)", style = MaterialTheme.typography.bodySmall) }
-                    for (b in s.records) Text("📜 ${b.record.kind.label}: ${b.record.kind.text(b.record.value)} ${lg.name(b.record.holder)}", style = MaterialTheme.typography.labelSmall, color = cs.secondary)
                 }
             }
         }

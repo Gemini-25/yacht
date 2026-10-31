@@ -686,10 +686,13 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             Drama.of(it, ctx).tags
         }.orEmpty()
         val (ra, rb) = facts?.ratings(scale)?.let { (x, y) -> if (deal.aFirst) x to y else y to x } ?: (null to null)
+        // 정확도 against the expected-score best, worked out here on demand (a report's game played back).
+        val (accA, accB) = host.tables()?.let { t -> runCatching { Accuracies.of(t, turns) }.getOrNull() }
+            ?.let { (x, y) -> if (deal.aFirst) x to y else y to x } ?: (null to null)
         return GameReport(
             g.index, gameLabel(f, g.index, log.perMatch, host.name(first)), g.scoreA, g.scoreB, deal.aFirst,
             (ba[Category.YACHT] ?: 0) > 0, (bb[Category.YACHT] ?: 0) > 0, ba.bonus > 0, bb.bonus > 0,
-            facts?.curve, facts?.decisiveHalfTurn, boxes(ba), boxes(bb), ra, rb, tags,
+            facts?.curve, facts?.decisiveHalfTurn, boxes(ba), boxes(bb), ra, rb, tags, accA, accB,
         )
     }
 

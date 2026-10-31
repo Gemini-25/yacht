@@ -63,7 +63,25 @@ enum class Sheet {
 data class LadderFilter(val followed: Boolean = false, val origin: Origin? = null, val nation: String? = null, val family: Family? = null)
 
 /** The leaderboards' scope: this season or careers, one league or all, the first tier only. */
-data class LeaderFilter(val scope: StatScope = StatScope.SEASON, val league: String? = null, val tierOnly: Boolean = false)
+data class LeaderFilter(
+    val scope: StatScope = StatScope.SEASON,
+    val league: String? = null,
+    val tierOnly: Boolean = false,
+    /** Each player's last [LeaderFilter.RECENT] league matches instead of [scope]. */
+    val recent: Boolean = false,
+    /** Whose boards: [league]'s members (null: the shown league), everyone, a nation's players ([nation]) or a club's ([club]); null picks one followed. */
+    val area: LeaderArea = LeaderArea.ALL,
+    val nation: String? = null,
+    val club: String? = null,
+) {
+    companion object {
+        /** League matches the "최근 10경기" boards count. */
+        const val RECENT = 10
+    }
+}
+
+/** Whose leaderboards: my league (the shown one), everyone, a nation's players, a club's members. */
+enum class LeaderArea(val label: String) { LEAGUE("내 리그"), ALL("전체"), NATION("국가"), CLUB("클럽") }
 
 /** 경기 › 하이라이트's filters. */
 data class HighlightFilter(val allTime: Boolean = false, val followed: Boolean = false)
@@ -107,6 +125,12 @@ sealed interface Page {
     data object Legends : Page { override val loadKey get() = "legends" }
     data object Families : Page { override val loadKey get() = "families" }
     data object Meta : Page { override val loadKey get() = "meta" }
+
+    /** 탐구: fun facts of the season and the league comparison ([leagues]: the comparison first). */
+    data class Facts(val leagues: Boolean = false) : Page { override val loadKey get() = "facts" }
+
+    /** 연대기: the seasons as a timeline (champions, dynasties, the era's best, the ranking's no. 1). */
+    data object Chronicle : Page { override val loadKey get() = "chronicle" }
 }
 
 /**

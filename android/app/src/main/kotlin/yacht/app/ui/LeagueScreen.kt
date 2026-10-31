@@ -110,10 +110,18 @@ fun LeagueScreen(c: AppController) {
             resetAsk = true
         }
         WorldSheets(c)
+        RecordsSheets(c)
         PlayerActionsSheet(c)
     }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
-    lg.review?.let { SeasonReviewDialog(lg, it) }
+    // The season just closed opens its review once, as a page, while a tab (no page) is shown.
+    val pending = lg.review
+    androidx.compose.runtime.LaunchedEffect(pending, page == null) {
+        if (pending != null && nav.page == null) {
+            nav.open(Page.Review(pending.season))
+            lg.dismissReview()
+        }
+    }
     if (resetAsk) {
         AlertDialog(
             onDismissRequest = { resetAsk = false },
@@ -277,7 +285,9 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     Page.Meta -> "메타 리포트"
     Page.Follows -> "응원"
     Page.Federation -> "요트협회"
-    is Page.Leaderboard -> page.kind.label
+    is Page.Leaderboard -> yacht.app.core.LeagueAnalytics.title(page.kind)
+    is Page.Facts -> if (page.leagues) "리그 비교" else "탐구"
+    Page.Chronicle -> "연대기"
     is Page.Review -> "시즌 ${page.season} 결산"
     is Page.Matches -> page.title
     is Page.League -> LeagueIds.label(page.id)
@@ -311,7 +321,11 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
             androidx.compose.runtime.LaunchedEffect(v.season?.number) { lg.loadRecords() }
             MetaReportView(lg.records)
         }
-        // The followed players, the leaderboards, the reviews and match lists come later.
+        is Page.Leaderboard -> LeaderBoardPage(lg, v, page)
+        is Page.Review -> ReviewPageBody(c, v, page)
+        is Page.Facts -> FactsPage(lg, v, page)
+        Page.Chronicle -> ChroniclePage(lg, v)
+        // The followed players and match lists come later.
         else -> CenterText("곧 볼 수 있어요.")
     }
 }

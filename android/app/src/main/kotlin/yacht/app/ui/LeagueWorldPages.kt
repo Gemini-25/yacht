@@ -301,6 +301,7 @@ internal fun LeaguePageBody(lg: LeagueController, v: LeagueView, page: Page.Leag
         if (p.tiers.isNotEmpty()) {
             Heading("📈 리그 통계 (이번 시즌)")
             for ((label, a) in p.tiers) Small("$label · ${aggregateLine(a)}")
+            GroupStyleLine(lg, "l:${page.id}")
         }
         Heading("🧩 부 구성")
         Small(info.tierLabels.zip(info.sizes).joinToString(" · ") { (t, n) -> "$t ${n}명" })

@@ -121,3 +121,34 @@ internal fun SweepTag(text: String) {
 
 /** Games won with a drawn game as half: "3", "2.5". */
 internal fun halfText(x: Double): String = if (x == Math.floor(x)) "%.0f".format(x) else "%.1f".format(x)
+
+/** 평점 2.0's grades: 8.0 and above 월드클래스 (blue), 7.0 and above good (green), below 5.0 poor (red). */
+internal enum class RatingGrade(val label: String?) { WORLD_CLASS("월드클래스"), GOOD(null), POOR(null) }
+
+/** [r]'s grade; null for an ordinary 5.0-7.0, or no rating. */
+internal fun ratingGrade(r: Double?): RatingGrade? = when {
+    r == null || r.isNaN() -> null
+    r >= 8.0 -> RatingGrade.WORLD_CLASS
+    r >= 7.0 -> RatingGrade.GOOD
+    r < 5.0 -> RatingGrade.POOR
+    else -> null
+}
+
+/** The colour a 평점 is written in ([ratingGrade]); [Color.Unspecified] for an ordinary one. */
+@Composable
+internal fun ratingColor(r: Double?): Color = when (ratingGrade(r)) {
+    RatingGrade.WORLD_CLASS -> Color(0xFF3D7BF0)
+    RatingGrade.GOOD -> gameColors.good
+    RatingGrade.POOR -> MaterialTheme.colorScheme.error
+    null -> Color.Unspecified
+}
+
+/** A 평점 in its grade's colour with [digits] decimals, and "월드클래스" after it when [tagged]. */
+@Composable
+internal fun RatingText(r: Double, digits: Int = 1, tagged: Boolean = false, style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelMedium, bold: Boolean = true) {
+    val label = ratingGrade(r)?.label
+    Text(
+        "%.${digits}f".format(r) + if (tagged && label != null) " $label" else "",
+        style = style, color = ratingColor(r), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal, maxLines = 1,
+    )
+}
