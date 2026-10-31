@@ -1081,8 +1081,10 @@ while the league plays at FULL; `stress ../tables <minutes> <seed> <players> FUL
   out the cups' results and the `e` lines.
 - No exception in either run. The harness reports state written off the main thread by the match
   centre's step publisher (`MatchCenter.publishSteps`, `show`, `waits` on a background
-  dispatcher: 68 and 130 writes) besides the controllers' constructors, and one action that held
-  the main thread over 100 ms (`changeObjective`, 366 ms).
+  dispatcher: 68 and 130 writes) besides the controllers' constructors, and one main-thread call
+  of 366 ms at 1000 players that the harness then named after the last labelled action (it now
+  names every action; a rerun of the same 15 minutes, seed 1, had no call over 100 ms: 10 seasons,
+  no failure, live heap ≤ 89 MB, rollover 0.42 / 0.68 s, snapshot 9 / 84 ms).
 - The federation through the app (federation on): at 1000 players the ten assemblies tabled 0, 1,
   1, 0, 1, 0, 1, 2, 2, 2 proposals and the committee adopted 2 of 8 (clDirect 7 → 8, the title
   playoff off); at 3000 the season after the league grew from 1000 pressed SWAP_UP at 1.49 (5 of

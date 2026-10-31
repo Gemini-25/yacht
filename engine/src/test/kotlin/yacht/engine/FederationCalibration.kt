@@ -127,7 +127,7 @@ class FederationCalibration {
 
         companion object {
             const val HEADER = "season,levers,promoted,bounced,champPpm,playoffLeagues,leaderLost,leagues,runaway,decided,sweeps,rounds,projected,legacy," +
-                "koTies,koUpsets,champPoints,champMatches,cclPoints,cclMatches,candidates,tabled,decided"
+                "koTies,koUpsets,champPoints,champMatches,cclPoints,cclMatches,candidates,tabled,decisions"
         }
     }
 
