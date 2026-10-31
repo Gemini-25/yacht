@@ -265,6 +265,8 @@ Idempotent per (season, plan seed); every branch reads the closing plan.
 5. Resize per nation: found or dissolve clubs to reach C, only when the new count brings the clubs
    closer to `clubSize` (no founding at 12 members and dissolving at 11 the season after);
    dissolve by fewest titles, lowest place, highest id; a nation with no members loses its clubs.
+   (Nations of 9-13 members, as at 300 players, still found or fold a second club every few
+   seasons as their numbers drift.)
 6. Balance: where the clubless members cannot bring every club to its floor, the biggest clubs
    release their weakest member of their own nation (`R`) one at a time.
 7. Draft per nation: pupils new to the league join their mentor's club (`Y`, 유스 입단), then
@@ -918,40 +920,43 @@ and its committee change the rules for 10 each (seeds 7 and 13). Per season:
 
 | Statistic | Default rules (A, B) | Other rules (B, C) | Notes |
 |---|---|---|---|
-| elevator | 15-30%, median 20% (autoSwap 2) | 28-47%, median 36% (autoSwap 3) | |
+| elevator | 15-40%, median 23% (autoSwap 2) | 28-47%, median 36% (autoSwap 3) | it differs from league to league (A 15-30%, D 17-40%) |
 | champPpm | +0.8 to +1.0 | +0.8 to +0.9 | a 2부 champion plays weaker opposition: the SWAP_UP guard always holds |
-| leader lost the playoff | 61-86% of 28, mean 72% | | a 4-player playoff barely favours its top seed |
+| leader lost the playoff | 50-86% of 28, mean 70% | | a 4-player playoff barely favours its top seed |
 | runaway leader | 14-46%, mean 29% | 18-39% | the same with or without a playoff |
 | 2-0 among decided | 95.8-96.8% | the same | a decided match that is no 2-0 needs a drawn game |
 | rounds R | 42 | 42 | |
-| 요트컵 upsets from the 8강 | 0-5 of 22, none in 9 of 20 | 0-1 of 22 with short series | rating gaps of 100 are rare among the last 8 |
-| clEdge | −0.50 to +0.38 | −0.51 to +0.65 | about 50-60 CL matches a side: SD about 0.3 |
+| 요트컵 upsets from the 8강 | 0-6 of 22, none in 13 of 30 | 0-1 of 22 with short series | rating gaps of 100 are rare among the last 8 |
+| clEdge | −0.54 to +0.38 | −0.51 to +0.65 | about 50-60 CL matches a side: SD about 0.3 |
 
 The floors are set so that each statistic that tells seasons apart passes its floor in about a
 third of the seasons under the rules it argues against, and its threshold only in an unusual one:
 
 | Kind | Floor → threshold | Past the floor |
 |---|---|---|
-| SWAP_DOWN | 38% → 50% | never at autoSwap 2; 2 of 7 (B) and 4 of 5 (C) at autoSwap 3 |
-| SWAP_UP | 20% → 12% | 4 of 9 (A) |
-| TITLE_PO_OFF | 78% → 90% (22 of 28 leagues) | 2 of 10 (A), 2 of 6 (B) |
-| TITLE_PO_ON | 33% → 50% (10 of 28) | 3 of 10 (A), 0 of 4 (B) |
+| SWAP_DOWN | 38% → 50% | 1 of 20 at autoSwap 2 (D); 2 of 7 (B) and 4 of 5 (C) at autoSwap 3 |
+| SWAP_UP | 20% → 12% | 4 of 9 (A), 1 of 9 (D) |
+| TITLE_PO_OFF | 78% → 90% (22 of 28 leagues) | 2 of 10 (A), 2 of 6 (B), 0 of 10 (D) |
+| TITLE_PO_ON | 33% → 50% (10 of 28) | the statistic 3 of 10 (A) and 3 of 10 (D) with a playoff; 0 of 4 without (B) |
 | SWEEP_OFF / SWEEP_ON | 99% → 100% / 52% → 45% | never: out of reach under 판 승점제 |
 | SIZE_DOWN / SIZE_UP | 46 → 48 / 36 → 34 weeks | never at D = 20 (the dead band 37-45 by design) |
 | LONG_KO_ON | 9% → 25% (2 of 22) | rare with short series |
-| LONG_KO_OFF | no upset at all, pressure 0.3 (the threshold lies below zero) | 9 of 20: a standing argument, rarely adopted |
-| CL_DIRECT_UP / DOWN | +0.30 → +0.65 / −0.30 → −0.65 | 3 of 23 / 5 of 23 |
+| LONG_KO_OFF | no upset at all, pressure 0.3 (the threshold lies below zero) | 13 of 30: a standing argument, never adopted in B and D |
+| CL_DIRECT_UP / DOWN | +0.30 → +0.65 / −0.30 → −0.65 | 2 of 32 / 8 of 32 |
 
 On run A's ten seasons the assemblies table 0, 2, 0, 0, 2, 1, 2, 1, 1, 1 proposals at pressures
 0.30-0.74 (FederationTest pins the floors and these seasons). With the federation deciding (run B,
 before TITLE_PO_OFF's floor moved from 72% to 78%): 2, 1, 2, 1, 2, 2, 0, 1, 0, 1 tabled, 3 of 11
 adopted (autoSwap 2 → 3, the title playoff off, clDirect 7 → 6), no kind tabled every season and no
-lever in more than half. Run D (the final floors): see the S20 hand-off. So a typical assembly
-tables one or two proposals and a quiet season none; the committee passes a proposal at 0.3 about
-1 time in 5.5 and one at 1.0 about 3 times in 4, so the rules change every two or three seasons.
+lever in more than half. Run D (the final floors): 1, 0, 0, 1, 2, 1, 0, 2, 0, 2 tabled (LONG_KO_OFF 4
+times, CL_DIRECT_DOWN 3, SWAP_UP and SWAP_DOWN once each) and none of the 7 decided adopted. So a
+typical assembly tables one or two proposals and a quiet season none (at least one in 6-8
+assemblies of 10, two or more in 3-4); the committee passes a proposal at 0.3 about 1 time in 5.5
+and one at 1.0 about 3 times in 4, so with the typical pressures of 0.3-0.8 a rule changes every
+few seasons (3 of the 18 proposals decided in B and D).
 ENG 6.4's target of two proposals in 80% of the assemblies is not met on purpose: with four
 statistics that tell seasons apart and none past its floor in more than half the seasons, two or
-more come in about 40%; more would need floors inside the typical range of each statistic, so the
+more come in about 30-40%; more would need floors inside the typical range of each statistic, so the
 same kinds would fire every season (as a migrated save showed before the calibration: every
 proposal at 1.6-2.8 and a rule changed every season). The sweep share and the 8강 upsets hardly
 tell one season from another; a statistic that does (the 2-0 share of all league matches, upsets
@@ -1007,4 +1012,29 @@ ladder, and starts the season, clubs and federation fresh (it cannot read `seaso
 
 ## 13. CPU and save size (measured)
 
-See section 13 of the S20 hand-off for the full logs. *(Filled in below.)*
+Measured by S20 on the merged tree (S1-S18) through the app's real controller on a 4-core server
+shared with other builds. **RunCheck `size`** plays new leagues of the app's default rules from a
+fixed seed for 3 seasons at FULL speed, stopping after each close, and reads the folder after the
+close's saves; it also times a fixed reference workload, since the shared machine's speed drifts
+(its `ref` was 3.05-3.20 s when the baseline was recorded and 3.3-4.9 s now). The baseline
+(`uicheck/src/main/resources/size_baseline.txt`) was recorded on the 945de5e engine.
+
+| | 200 players: baseline → now | 1000 players: baseline → now |
+|---|---|---|
+| folder after 3 seasons | 478,915 → 407,905 B (−15%) | 2,191,785 → 1,580,207 B (−28%) |
+| 30-season projection | 666,355 → 693,985 B (+4.1%, see below) | 2,770,875 → 2,320,697 B (−16%) |
+| CPU a season (process) | 66.0 → 57.6 s (−13%) | 176.0 → 150.2 s (−15%) |
+| CPU per reference | 20.6 → 13.0 (−37%) | 57.7 → 35.3 (−39%) |
+
+- Where the bytes went at 1000 players: ladder.txt −689 KB (about 20 league opponents twice
+  instead of about 49 once: fewer pairs), clubs.txt +20 KB, archive.txt +25 KB (the `sx` lines and
+  the kept reviews), matchlogs.bin +14 KB, news.txt +9 KB (refs, scope, the desk's lines),
+  federation.txt +2.5 KB, roster +5 KB.
+- **The 200-player projection** (the folder after season 3 plus 30 times season 3's growth of
+  archive.txt, honours.txt and matchlogs.bin) is above the gate's +3% margin. The growth it
+  extrapolates is not a steady one: archive.txt grows 6.5 KB from season 2 to 3 while its kept
+  reviews fill up (3 below 500 members, about 2 KB each), then about 3.3 KB a season like the
+  baseline's 3.2 KB (an 8-season probe with made-up results: +5.0, +4.9, then +3.0-3.7 KB; the
+  part without the reviews +3.1-3.4 KB every season). With the steady growth the projection is
+  about 600 KB (−10%).
+
