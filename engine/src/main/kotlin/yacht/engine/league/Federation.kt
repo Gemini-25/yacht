@@ -655,10 +655,15 @@ class Federation : CoefficientStore {
         const val STATS = 10
         const val PROPOSALS = 30
 
-        /** Samples the guards ask for: promoted players, title-playoff leagues, leagues, cup ties, 챔피언스 리그 matches a side, decided matches. */
+        /**
+         * Samples the guards ask for: promoted players, title-playoff leagues, leagues, cup ties,
+         * 챔피언스 리그 matches a side, decided matches. A world of the four 연합 리그 alone (below
+         * about 1000 players) reads its title playoffs on 4 leagues, where one season's dice decide
+         * the share (4 of 4 leaders lose in about a quarter of the seasons): too few to change a rule.
+         */
         const val MIN_PROMOTED = 10
-        const val MIN_PLAYOFFS = 4
-        const val MIN_LEAGUES = 4
+        const val MIN_PLAYOFFS = 8
+        const val MIN_LEAGUES = 8
         const val MIN_TIES = 10
         const val MIN_CL_MATCHES = 12
         const val MIN_DECIDED = 30

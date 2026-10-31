@@ -22,6 +22,7 @@ import yacht.engine.league.MatchFormat
 import yacht.engine.league.MatchRef
 import yacht.engine.league.News
 import yacht.engine.league.NewsBook
+import yacht.engine.league.RecordKind
 import yacht.engine.league.Season
 import yacht.engine.league.TieRule
 import yacht.engine.league.TitleRaceWatch
@@ -115,16 +116,13 @@ class MediaTest {
         book.offer(job(0, low = 2), season = 1)
         book.offer(job(99, low = 0, comp = Comp.FRIENDLY), season = 1)
         assertEquals(top.map { it.id }, book.thisSeason.map { it.id })
-        val lines = book.archiveLines(1)
-        assertEquals(3, lines.size)
-        assertTrue(lines.all { it.startsWith("hl ") })
-        val back = HighlightBook.decodeArchive(lines + "hl cut 1 2" + "")
-        assertEquals(top.take(3).map { it.id }, back.map { it.id })
-        assertEquals(top[0].curve.toList(), back[0].curve.toList())
+        val best = book.best(1)
+        assertEquals(top.take(HighlightBook.ARCHIVED).map { it.id }, best.map { it.id })
+        assertEquals(top[0].curve.toList(), best[0].curve.toList())
         // A new season: its list starts empty, the old season's best can still be archived.
         book.startSeason(2)
         assertTrue(book.thisSeason.isEmpty())
-        assertEquals(lines, book.archiveLines(1))
+        assertEquals(best.map { it.id }, book.best(1).map { it.id })
         assertEquals(20, book.allTime.size)
         book.offer(job(5, low = 50), season = 2)
         assertEquals(2, book.thisSeason.size)
@@ -615,6 +613,13 @@ class MediaTest {
         val upset = texts("record", listOf("ai1", "ai2"), listOf("UPSET", "1514", "1420"))
         assertTrue(upset.all { "레이팅 차 1,514" in it && "레이팅 차 1,420" in it }, upset.toString())
         assertTrue(texts("record", listOf("ai1"), listOf("best_game", "341", "330")).all { "341" in it })
+        // A count names its noun once: "통산 최다 요트 122개", not "통산 최다 요트 요트 122개".
+        val yachts = texts("record", listOf("ai1"), listOf("CAREER_YACHTS", "122", "121"))
+        assertTrue(yachts.all { "요트 요트" !in it && "122개" in it && "121개" in it }, yachts.toString())
+        assertEquals("레이팅 차 514", News.recordValue(RecordKind.UPSET, 514.0))
+        assertEquals("231.4점", News.recordValue(RecordKind.SEASON_SCORE, 231.4))
+        assertEquals("3회", News.recordValue(RecordKind.POTW, 3.0))
+        assertEquals("17연승", News.recordValue(RecordKind.STREAK, 17.0))
         // League upsets name the division and the score; a legacy league's has no league name.
         val league = texts("league_upset", listOf("ai1", "ai2"), listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE)
         assertTrue(league.any { "한국 1부에서" in it && "2-0으로" in it }, league.toString())

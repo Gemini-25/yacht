@@ -6,6 +6,7 @@ import yacht.app.core.FederationView
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueInfo
 import yacht.app.core.LeagueTab
+import yacht.app.core.MatchQuery
 import yacht.app.core.MatchesView
 import yacht.app.core.Page
 import yacht.app.core.RankRow
@@ -320,6 +321,15 @@ internal object ShotsWorld : LeagueShots {
         check(lg.worldPages.club(club)!!.members.any { it.key == top.key }) { "${club.id}: ${top.key} not among its members" }
         shot(c, out, "lg55_club", heightDp = 1500)
         shot(c, out, "lg55_club_dark", dark = true, heightDp = 1500)
+        // Its squad's matches (the club page's "선수단 경기 전체").
+        val squad = Page.Matches(MatchQuery.OfClub(club.id), "${lg.worldPages.club(club)!!.badge.name} 선수단 경기")
+        nav.open(squad)
+        lg.analytics.loadMatches(squad, lg.center)
+        waitFor("squad matches") { lg.analytics.matches(squad) != null }
+        check(lg.analytics.matches(squad)!!.rows.isNotEmpty()) { "${club.id}: no match of its squad" }
+        shot(c, out, "lg58_matches_club", heightDp = 1300)
+        // A group's matches (a group card's "이 조 경기 ›"), of the first competition with groups.
+        groupMatchesShot(c, out)
         val league = Page.League(top.league)
         nav.open(league)
         lg.worldPages.loadLeague(league.id)
@@ -331,6 +341,28 @@ internal object ShotsWorld : LeagueShots {
         waitFor("market") { lg.worldPages.market != null }
         shot(c, out, "lg74_market", heightDp = 1300)
         nav.go(LeagueTab.HOME)
+    }
+
+    /** lg58b_matches_group: the first group's round-robin matches of the first competition drawn into groups (none yet: no shot). */
+    private fun groupMatchesShot(c: AppController, out: File) {
+        val lg = c.league
+        for ((comp, v) in lg.view?.comps.orEmpty()) {
+            val (part, g) = when (v) {
+                is CompetitionView.Groups -> 0 to v
+                is CompetitionView.Sections -> v.parts.withIndex().firstOrNull { it.value.groups.isNotEmpty() }?.let { it.index to it.value } ?: continue
+                else -> continue
+            }
+            val group = g.groups.firstOrNull() ?: continue
+            val page = Page.Matches(MatchQuery.Group(comp, part, group.label), "${g.title} ${group.label} 경기")
+            lg.nav.open(page)
+            lg.analytics.loadMatches(page, lg.center)
+            waitFor("group matches") { lg.analytics.matches(page) != null }
+            println("$comp ${group.label}: ${lg.analytics.matches(page)!!.total} group matches")
+            shot(c, out, "lg58b_matches_group", heightDp = 1100)
+            lg.nav.close(page)
+            return
+        }
+        println("lg58b_matches_group: no competition in groups yet")
     }
 
     /** lg31_ranking (the season's own, by strength in a first national season), its confederation sheet, lg31b (a filled one, hand-made). */

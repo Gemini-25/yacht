@@ -329,12 +329,5 @@ class PyramidTest {
         val own = Pyramid.crossing(listOf(season.table(3).map { it.key }), listOf(season.table(4).map { it.key }), plan.config.autoSwap, true, worse)
         assertEquals(listOf(own.up, own.down, own.ties), listOf(c.up, c.down, c.ties))
         assertEquals(2, c.swap)
-        // The deprecated overloads see one ladder of all five divisions (as Season.tiers does): safe, not per league.
-        @Suppress("DEPRECATION")
-        val flat = (0 until 4).map { Pyramid.crossing(season, plan.config, it) }
-        assertEquals(c.down, flat[3].down)
-        @Suppress("DEPRECATION")
-        val last = Pyramid.ranking(season, 4)
-        assertEquals(season.table(4).map { it.key }, last)
     }
 }

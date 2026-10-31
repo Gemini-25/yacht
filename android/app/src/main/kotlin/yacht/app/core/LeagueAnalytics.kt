@@ -31,7 +31,9 @@ import yacht.engine.league.RecordChase
 import yacht.engine.league.RecordGroup
 import yacht.engine.league.Season
 import yacht.engine.league.SeasonCalendar
+import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
+import yacht.engine.league.ViewableCompetition
 import yacht.engine.league.TieRule
 import yacht.engine.league.TieView
 import yacht.engine.league.WatchTurn
@@ -82,6 +84,10 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
     var reviews by mutableStateOf<Map<String, ReviewPage>>(emptyMap(), referentialEqualityPolicy())
         private set
 
+    /** [Page.Matches] lists loaded last (at most [WorldPages.KEEP]), by [Page.Matches.loadKey]. */
+    var matchLists by mutableStateOf<Map<String, MatchList>>(emptyMap(), referentialEqualityPolicy())
+        private set
+
     /**
      * Groups' numbers this season and their sentence against everyone's, loaded last, by [groupKey]
      * ("n:KR" a nation's players, "l:KR" a league's members, "c:c07" a club's squad).
@@ -116,6 +122,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
     fun reviewList(): ReviewList? = reviewList?.takeIf { fresh() }
     fun facts(): FactsView? = facts?.takeIf { fresh() }
     fun review(page: Page.Review): ReviewPage? = reviews[page.loadKey]?.takeIf { fresh() }
+    fun matches(page: Page.Matches): MatchList? = matchLists[page.loadKey]?.takeIf { fresh() }
     fun group(key: String): Pair<AggregateStats, String>? = groups[key]?.takeIf { fresh() }
 
     /**
@@ -153,6 +160,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
                     facts = null
                     reviews = emptyMap()
                     groups = emptyMap()
+                    matchLists = emptyMap()
                 }
                 store(v)
             }
@@ -205,6 +213,16 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
     fun loadReview(season: Int, center: MatchCenter? = null) {
         val k = Page.Review(season).loadKey
         load(k, { w, _ -> reviewPageOf(w, season, k, center) }) { reviews = WorldPages.keep(reviews, k, it) }
+    }
+
+    /**
+     * Loads [page]'s matches of this season ([MatchQuery]: a player's, a club's members' and its
+     * 클럽 대항전 ties, a week's, a league round's, a group's), ▶ marked by [center]; O(the
+     * season's matches of the competitions it reads).
+     */
+    fun loadMatches(page: Page.Matches, center: MatchCenter? = null) {
+        val k = page.loadKey
+        load(k, { w, view -> matchListOf(w, view, page.query, center) }) { matchLists = WorldPages.keep(matchLists, k, it) }
     }
 
     /** Loads the fun facts and the league comparison ([Page.Facts]). */
@@ -401,6 +419,78 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         val score = if (first) "${halfText(t.scoreA)}:${halfText(t.scoreB)}" else "${halfText(t.scoreB)}:${halfText(t.scoreA)}"
         return PlayerMatch(null, SeasonCalendar.NONE, where, opp, host.shown(opp), host.badge(opp), result, score, false, comp)
     }
+
+    // ---- match lists ----------------------------------------------------------------------------------
+
+    /** [q]'s matches this season as [MatchList] rows (under the lock); null without a season or what [q] names. */
+    private fun matchListOf(w: LeagueWorld, view: LeagueView?, q: MatchQuery, center: MatchCenter?): MatchList? {
+        val plan = w.plan ?: return null
+        val season = plan.league
+        val found: List<SeasonMatch> = when (q) {
+            is MatchQuery.OfPlayer -> SeasonMatches.ofPlayer(plan, q.key)
+            is MatchQuery.OfClub -> {
+                val book = w.clubs ?: return null
+                val squad = book.members(q.id).toSet()
+                // The squad's league fixtures by one scan of the league, then every competition once: a
+                // match a member plays (a team match once, whole) or the club's own (the 클럽 대항전).
+                val league = SeasonMatches.fixtureIndex(plan, squad).values.flatMap { it.asIterable() }.distinct().sorted()
+                    .mapNotNull { SeasonMatches.of(plan, Comp.LEAGUE, it) }
+                val cups = (plan.comps + plan.post).flatMap { SeasonMatches.ofComp(plan, it.comp) }
+                    .filter { m -> m.fixture.a == q.id || m.fixture.b == q.id || m.fixture.players.any { it in squad } }
+                (league + cups).filter { q.week == null || it.week == q.week }
+            }
+            is MatchQuery.OfWeek -> SeasonMatches.ofWeek(plan, q.week).filter { q.comp == null || it.ref.comp == q.comp }
+            is MatchQuery.Round -> {
+                val lg = season.leagues.byId(q.league) ?: return null
+                val divisions = lg.tiers.groups(q.tier).map { lg.first + it }.toSet()
+                (0 until season.fixturesTotal).map { season.fixture(it) }.filter { it.division in divisions && it.round == q.round }
+                    .mapNotNull { SeasonMatches.of(plan, Comp.LEAGUE, it.id) }
+            }
+            is MatchQuery.Group -> {
+                val g = when (val v = (plan.competition(q.comp) as? ViewableCompetition)?.view()) {
+                    is CompetitionView.Groups -> v
+                    is CompetitionView.Sections -> v.parts.getOrNull(q.part)
+                    else -> null
+                } ?: return null
+                val keys = g.groups.firstOrNull { it.label == q.group }?.rows?.map { it.key }?.toSet() ?: return null
+                // Its round-robin matches ("A조 2차전"), not a knockout tie the two meet in later.
+                SeasonMatches.ofComp(plan, q.comp).filter { it.fixture.a in keys && it.fixture.b in keys && it.fixture.label.endsWith(GROUP_MATCH) }
+            }
+        }
+        fun weekOf(m: SeasonMatch) = if (m.week == SeasonCalendar.NONE) Int.MAX_VALUE else m.week
+        val (played, coming) = found.partition { it.played }
+        val ordered = played.sortedByDescending { weekOf(it) } + coming.sortedBy { weekOf(it) }
+        return MatchList(q, plan.number, ordered.take(MATCH_ROWS).map { lineOf(plan, view, it, center) }, found.size)
+    }
+
+    /** One row of a match list: the whole match (a team match by its teams), its score from side A. */
+    private fun lineOf(plan: yacht.engine.league.SeasonPlan, view: LeagueView?, m: SeasonMatch, center: MatchCenter?): MatchLine {
+        val f = m.fixture
+        val team = f.kind == JobKind.TEAM
+        val where = if (f.comp == Comp.LEAGUE) {
+            plan.league.fixture(m.ref.id).let { lf -> "${plan.league.leagues.label(lf.division)} ${lf.round + 1}라운드" }
+        } else {
+            listOf(f.comp.label, f.label).filter { it.isNotBlank() }.distinct().joinToString(" ")
+        }
+        // The games won (a level game half each); a league match's game scores on a line of their own.
+        val games = m.games?.takeIf { m.played && !team && f.comp == Comp.LEAGUE }
+        val score = when {
+            !m.played -> ""
+            games != null -> "${halfText(games.sumOf { won(it.a, it.b) })}:${halfText(games.sumOf { won(it.b, it.a) })}"
+            else -> m.score?.let { "${halfText(it.scoreA)}:${halfText(it.scoreB)}" }.orEmpty()
+        }
+        fun side(k: String) = if (team) host.name(k) else host.shown(k)
+        fun badge(k: String) = if (team) view?.badges?.get(k) else host.badge(k)
+        val ref = m.ref.whole
+        val replay = m.played && center?.canReplay(ref, f.a, f.b) == true
+        return MatchLine(
+            ref.encode(), m.week, where, f.a, side(f.a), badge(f.a), f.b, side(f.b), badge(f.b), score, m.score?.winner?.coerceIn(-1, 1), replay, f.comp,
+            games?.joinToString(" · ") { "${it.a}:${it.b}" }.orEmpty(),
+        )
+    }
+
+    /** A game won by the side scoring [x] against [y]: 1, a level one 0.5. */
+    private fun won(x: Int, y: Int): Double = if (x > y) 1.0 else if (x == y) 0.5 else 0.0
 
     // ---- leaderboards -------------------------------------------------------------------------------
 
@@ -873,6 +963,12 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
             LeaderKind.SCORER, LeaderKind.YACHTS, LeaderKind.SWEEPS, LeaderKind.BONUS, LeaderKind.CLUTCH,
             LeaderKind.LUCKY, LeaderKind.UNLUCKY, LeaderKind.STEADY, LeaderKind.OVER300,
         )
+
+        /** Rows a [Page.Matches] list shows (a big week has hundreds of matches). */
+        const val MATCH_ROWS = 150
+
+        /** The end of a group's round-robin fixture labels ("A조 2차전"). */
+        private const val GROUP_MATCH = "차전"
 
         /** Lines per hub card, per board page. */
         const val HUB_TOP = 3

@@ -56,7 +56,7 @@ jobs:
 
   screenshots:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -75,8 +75,17 @@ jobs:
           ./gradlew :tools:installDist --console=plain
           tools/build/install/tools/bin/tools gen --out tables
 
+      # The app's core without Android: navigation, back, preferences, the match centre, the home,
+      # the world pages, the analytics, the flip of an old save (only uicheck's own tests: the
+      # engine's ran in the build job).
+      - name: App core tests
+        timeout-minutes: 15
+        run: ./gradlew -p uicheck :test --console=plain
+
+      # Every shot of the run lands in shots/ and the artifact takes them all (the league's lg*
+      # shots take most of the time: a national league is played to its weeks).
       - name: Render UI screenshots
-        timeout-minutes: 12
+        timeout-minutes: 25
         env:
           PRINT_SHOTS: "1"
           JAVA_OPTS: "-Djava.awt.headless=true"
@@ -84,7 +93,10 @@ jobs:
           ./gradlew -p uicheck installDist --console=plain
           uicheck/build/install/uicheck/bin/uicheck tables shots
 
+      # Also after a failed run: the shots taken until then show where it stopped.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ui-screenshots
           path: shots/*.png
+          if-no-files-found: error

@@ -104,17 +104,6 @@ class Archive {
 
     fun inHallOfFame(key: String): Boolean = hof.any { it.key == key }
 
-    /**
-     * Kept for its callers; keeps nothing. A season's best games are named by its review
-     * ([SeasonReview.best]) and kept by the match log archive.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun putHighlights(season: Int, lines: List<String>) {}
-
-    /** Nothing: the archive no longer keeps highlight lines (see [putHighlights]). */
-    @Suppress("UNUSED_PARAMETER")
-    fun highlights(season: Int): List<String> = emptyList()
-
     internal fun putSummary(s: SeasonSummary) {
         summaryMap[s.season] = s
         while (summaryMap.size > MAX_SEASONS) summaryMap.pollFirstEntry()

@@ -101,7 +101,11 @@ internal fun NewsPage(c: AppController, v: LeagueView) {
     val favs = lg.favourites
     val filter = nav.newsFilter
     val onlyFollowed = nav.newsFollowed
-    val shown = remember(all, filter, onlyFollowed, favs) { all.filter { newsShown(it, filter) && (!onlyFollowed || followedNews(it, favs)) } }
+    val shown = remember(all, filter, onlyFollowed, favs) {
+        // The international week's table after every matchday: only the newest of each competition and season.
+        val told = HashSet<Pair<Int, Comp?>>()
+        all.filter { newsShown(it, filter) && (!onlyFollowed || followedNews(it, favs)) && (it.kind != INTL_WEEK || told.add(it.season to it.comp)) }
+    }
     val clock = v.clock
     // The newest importance-5 article of the last two weeks, on top in large.
     val lead = remember(shown, clock) { shown.firstOrNull { a -> a.importance >= 5 && clock != null && a.season == clock.season && a.week >= clock.week - 1 } }
@@ -258,6 +262,9 @@ private fun peopleOf(lg: LeagueController, v: LeagueView, a: Article): List<Pair
 
 /** People shown on a card before "+{n}". */
 private const val PEOPLE = 3
+
+/** The desk's article after a matchday of the 챔피언스 리그 or the 대륙 챔피언스 (the league coefficients it earned). */
+private const val INTL_WEEK = "intl_week"
 
 /** The report of the match [ref] names (at its board and game). */
 private fun openReport(lg: LeagueController, ref: MatchRef) {

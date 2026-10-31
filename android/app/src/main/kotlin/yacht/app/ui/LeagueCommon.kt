@@ -152,3 +152,7 @@ internal fun RatingText(r: Double, digits: Int = 1, tagged: Boolean = false, sty
         style = style, color = ratingColor(r), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal, maxLines = 1,
     )
 }
+
+/** A team's name: a club's (the 클럽 대항전's, the old club league's), else a nation's, a family's or an all-star side's. */
+internal fun teamName(lg: yacht.app.core.LeagueController, key: String): String =
+    lg.clubName(key) ?: yacht.engine.league.Competitions.teamLabel(key)

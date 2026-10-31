@@ -293,7 +293,7 @@ object News {
             // "레이팅 차 514"); older codes are lower case, their values plain numbers.
             val kind = arg(0)?.let { runCatching { RecordKind.valueOf(it) }.getOrNull() }
             arg(0)?.let { v["rec"] = kind?.label ?: RECORD_LABELS[it.lowercase(Locale.ROOT)] ?: it.replace('_', ' ') }
-            fun shown(s: String): String = kind?.let { k -> s.toDoubleOrNull()?.let { k.withUnit(it) } } ?: number(s)
+            fun shown(s: String): String = kind?.let { k -> s.toDoubleOrNull()?.let { recordValue(k, it) } } ?: number(s)
             arg(1)?.let { v["value"] = shown(it) }
             arg(2)?.let { v["prev"] = shown(it) }
             listOf(
@@ -1449,6 +1449,20 @@ object News {
 
     /** Whole numbers with thousands separators, others as they are. */
     private fun number(s: String): String = s.toLongOrNull()?.let { String.format(Locale.ROOT, "%,d", it) } ?: s
+
+    /**
+     * A record's value [v] with its unit ([RecordKind.withUnit]), without the noun its label
+     * already ends on or names: "통산 최다 요트" reads "122개", not "요트 122개", and "한 시즌 최고
+     * 평균 점수" "231.4점"; a unit the label does not name stays ("최대 이변" → "레이팅 차 514").
+     */
+    fun recordValue(kind: RecordKind, v: Double): String {
+        val unit = kind.withUnit(v)
+        val words = unit.split(' ')
+        val at = words.indexOfFirst { w -> w.firstOrNull()?.let { it.isDigit() || it == '+' || it == '-' } == true }
+        if (at <= 0) return unit
+        val label = kind.label.split(' ', '(', ')').filter { it.isNotEmpty() }.toSet()
+        return if (words.take(at).all { it in label }) words.drop(at).joinToString(" ") else unit
+    }
 
     // ---- filling -------------------------------------------------------------------------------
 

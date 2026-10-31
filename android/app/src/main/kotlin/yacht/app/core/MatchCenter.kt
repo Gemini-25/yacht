@@ -289,7 +289,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     private fun closingHighlights(w: LeagueWorld, season: Int): List<Highlight> {
         val now = w.highlights.thisSeason.filter { it.season == season }
         if (now.isNotEmpty()) return now
-        return w.highlights.archiveLines(season).mapNotNull { line -> Highlight.decode(line.substringAfter(' ').split(' ')) }
+        return w.highlights.best(season)
     }
 
     /**
@@ -302,8 +302,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         if (book[ref] != null) return true
         val p = host.world()?.plan ?: return false
         if (ref.season != p.number) return false
-        // A team match is played again whole: a side of any of its boards that adapts or left rules it out.
-        val keys = if (ref.board < 0) listOf(a, b) else lineups.getOrPut(ref.whole) {
+        // A team match is played again whole: a side of any of its boards that adapts or left rules it out
+        // (asked by a board's ref, or by the whole match's with the teams for sides).
+        val keys = if (ref.board < 0 && !ref.comp.byTeams) listOf(a, b) else lineups.getOrPut(ref.whole) {
             SeasonMatches.of(p, ref)?.fixture?.let { f -> if (f.kind == JobKind.TEAM) f.lineupA + f.lineupB else listOf(f.a, f.b) } ?: listOf(a, b)
         }
         return keys.none { host.adaptive(it) } && keys.all { host.ai(it) != null }
@@ -740,9 +741,26 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     // ---- the watch screen -----------------------------------------------------------------------------
 
-    /** The watch screen's game, or null when nothing is watched. */
+    /**
+     * The watch screen's game, or null when nothing is watched: what the screen draws, set on the
+     * main thread only (from [onScreen]).
+     */
     var watch by mutableStateOf<WatchView?>(null)
         private set
+
+    /**
+     * The watch screen's game as the centre's own code reads and changes it (under [watchLock], or
+     * on the main thread): every change is handed to [watch] on the main thread, which takes the
+     * newest when it runs, so the steps worked out off the main thread never write Compose state there.
+     */
+    @Volatile
+    private var onScreen: WatchView? = null
+        set(v) {
+            field = v
+            // Under a lock of its own: on a dispatcher of several threads (the desktop harness) an older hand-over cannot land last.
+            host.scope.launch { synchronized(handOver) { watch = onScreen } }
+        }
+    private val handOver = Any()
 
     /** Matches watched on the channel this season (its picks are marked ✓), by ref text. */
     private val watched: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -845,7 +863,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         loading = host.scope.launch(Dispatchers.Default) {
             val m = matchOf(ref, WatchKind.REPLAY)
             synchronized(watchLock) {
-                if (!isActive || watch?.kind != WatchKind.REPLAY || session != null) return@launch
+                if (!isActive || onScreen?.kind != WatchKind.REPLAY || session != null) return@launch
                 val match = m.first ?: return@launch fail(m.second ?: CHANGED)
                 val i = match.boards.indexOfFirst { it.board == at }.takeIf { it >= 0 } ?: 0
                 begin(Session(match, i, 0, null, 0), game)
@@ -869,7 +887,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val played = r.boards.firstOrNull { maxOf(0, it.log.ref.board) == h.board }
             val i = played?.log?.games?.indexOfFirst { it.index == h.game } ?: -1
             synchronized(watchLock) {
-                if (!isActive || watch?.kind != WatchKind.HIGHLIGHT || session != null) return@launch
+                if (!isActive || onScreen?.kind != WatchKind.HIGHLIGHT || session != null) return@launch
                 if (played == null || i < 0) return@launch fail(r.note ?: CHANGED)
                 val g = wGame(played.log, played.log.games[i], played.turns[i], host.estimate())
                 val m = WMatch(WatchKind.HIGHLIGHT, ref, h.caption, listOf(WBoard(h.board, h.a, h.b, listOf(g))), emptyList(), 0, false, null, null, false, emptyMap(), r.source)
@@ -889,7 +907,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val m = runCatching { friendly(a, b) }.getOrNull()
             synchronized(watchLock) {
                 // Left (or another friendly asked for) meanwhile: this one is on the ladder all the same.
-                if (!isActive || watch?.kind != WatchKind.FRIENDLY || session != null) return@launch
+                if (!isActive || onScreen?.kind != WatchKind.FRIENDLY || session != null) return@launch
                 if (m == null) return@launch fail("친선 경기를 둘 수 없어요. 선수가 리그에 없어요.")
                 begin(Session(m, 0, 0, null, 0), 0)
             }
@@ -940,7 +958,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             host.scope.launch { broadcast = v }
             val picks = v?.picks.orEmpty()
             if (picks.isEmpty()) {
-                synchronized(watchLock) { if (watch?.kind == WatchKind.BROADCAST && session == null) fail("이번 주 중계할 경기가 아직 없어요.") }
+                synchronized(watchLock) { if (onScreen?.kind == WatchKind.BROADCAST && session == null) fail("이번 주 중계할 경기가 아직 없어요.") }
                 return@launch
             }
             val queue = picks.map { it.ref }
@@ -949,7 +967,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val ch = Channel(queue, if (queue.all { it in before }) emptySet() else before)
             val start = from?.let { queue.indexOf(it) }?.takeIf { it >= 0 } ?: synchronized(host.lock) { nextOf(ch, -1) } ?: 0
             synchronized(watchLock) {
-                if (!isActive || watch?.kind != WatchKind.BROADCAST || session != null) return@launch
+                if (!isActive || onScreen?.kind != WatchKind.BROADCAST || session != null) return@launch
                 channel = ch
             }
             playPick(ch, start)
@@ -1003,7 +1021,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             synchronized(watchLock) { if (me?.isActive == false || !waits(ch, i, COMPUTING)) return }
             val m = matchOf(MatchRef.decode(ch.queue[i])?.whole ?: return, WatchKind.BROADCAST)
             val shown = synchronized(watchLock) {
-                if (me?.isActive == false || watch?.kind != WatchKind.BROADCAST || channel !== ch) return
+                if (me?.isActive == false || onScreen?.kind != WatchKind.BROADCAST || channel !== ch) return
                 ch.done += i
                 val match = m.first ?: return@synchronized false
                 watched += ch.queue[i]
@@ -1018,12 +1036,12 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     /** The screen waits for pick [i] of [ch] ([text]: why), no game shown; false when the channel was left (under [watchLock]). */
     private fun waits(ch: Channel, i: Int, text: String): Boolean {
-        val w = watch ?: return false
+        val w = onScreen ?: return false
         if (w.kind != WatchKind.BROADCAST || channel !== ch) return false
         session?.steps?.values?.forEach { it.job?.cancel() }
         session = null
         pending = i
-        watch = w.copy(
+        onScreen = w.copy(
             waiting = text, steps = emptyList(), shown = 0, complete = false, message = null, ended = false,
             queue = BroadcastQueue(i, ch.queue.size, null, null), ref = MatchRef.decode(ch.queue[i])?.whole?.encode(),
         )
@@ -1108,7 +1126,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     /** Opens the watch screen on [kind] while its match is worked out. */
     private fun open(kind: WatchKind, title: String?) {
         stop()
-        watch = WatchView(
+        onScreen = WatchView(
             "", "", "", "", emptyList(), false, 0, true, title, kind = kind,
             pace = host.watchPace(), waiting = if (kind == WatchKind.FRIENDLY) "경기를 준비하는 중…" else COMPUTING,
         )
@@ -1118,7 +1136,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     private fun fail(note: String) {
         session = null
         loop?.cancel()
-        watch = watch?.copy(message = note, playing = false, complete = true, waiting = null)
+        onScreen = onScreen?.copy(message = note, playing = false, complete = true, waiting = null)
     }
 
     /** Starts [s] at its board's game of index [game] (its first when not stored) (under [watchLock]). */
@@ -1144,7 +1162,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         if (game < bd.games.lastIndex) steps(s, board, game + 1, short(s, board, game + 1))
         else if (board < m.boards.lastIndex) steps(s, board + 1, 0, short(s, board + 1, 0))
         val names = host.name(g.first) to host.name(g.second)
-        watch = WatchView(
+        onScreen = WatchView(
             g.first, g.second, names.first, names.second, st.list, st.done, 0, playing,
             title = m.title, kind = m.kind, ref = m.ref?.encode(), game = g.index,
             games = bd.games.map { WatchGameInfo(it.index, it.label, it.first, it.second, it.scoreA, it.scoreB) },
@@ -1299,9 +1317,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             st.list = list
             st.done = done
             if (session !== s || s.board != k.first || s.game != k.second) return
-            val w = watch ?: return
+            val w = onScreen ?: return
             if (w.summary != k.third) return
-            watch = w.copy(steps = list, complete = done)
+            onScreen = w.copy(steps = list, complete = done)
         }
     }
 
@@ -1367,18 +1385,18 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     /** One step of the screen: the next throw, or at a game's end (held for a moment) the next game, board or pick. */
     private fun tick(): Boolean = synchronized(watchLock) {
         val s = session ?: return false
-        val w = watch ?: return false
+        val w = onScreen ?: return false
         if (!w.playing) return false
         val st = s.steps[Triple(s.board, s.game, w.summary)] ?: return true
         val steps = st.list
         when {
             // The lines before the game stay up a step for each.
             w.shown == 0 && s.introHold < w.intro.size -> s.introHold++
-            w.shown < steps.size -> watch = w.copy(steps = steps, complete = st.done, shown = w.shown + 1)
-            !st.done -> watch = w.copy(steps = steps)
+            w.shown < steps.size -> onScreen = w.copy(steps = steps, complete = st.done, shown = w.shown + 1)
+            !st.done -> onScreen = w.copy(steps = steps)
             s.hold < HOLD_TICKS -> {
                 s.hold++
-                watch = w.copy(steps = steps, complete = true)
+                onScreen = w.copy(steps = steps, complete = true)
             }
             else -> return advance(s)
         }
@@ -1404,8 +1422,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             countdown(s, ch)
             return false
         }
-        val w = watch ?: return false
-        watch = w.copy(playing = false, ended = true, outro = w.outro + if (ch != null) listOf(channelEnd()) else emptyList())
+        val w = onScreen ?: return false
+        onScreen = w.copy(playing = false, ended = true, outro = w.outro + if (ch != null) listOf(channelEnd()) else emptyList())
         return false
     }
 
@@ -1423,14 +1441,14 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             for (sec in COUNTDOWN downTo 1) {
                 synchronized(watchLock) {
                     if (session !== s) return@launch
-                    watch = watch?.copy(playing = true, queue = BroadcastQueue(s.at, ch.queue.size, next?.second, sec))
+                    onScreen = onScreen?.copy(playing = true, queue = BroadcastQueue(s.at, ch.queue.size, next?.second, sec))
                 }
                 delay(1_000)
             }
             synchronized(watchLock) {
                 if (session !== s) return@launch
                 val i = next?.first ?: return@launch run {
-                    watch = watch?.let { w -> w.copy(playing = false, ended = true, queue = BroadcastQueue(s.at, ch.queue.size, null, null), outro = w.outro + channelEnd()) }
+                    onScreen = onScreen?.let { w -> w.copy(playing = false, ended = true, queue = BroadcastQueue(s.at, ch.queue.size, null, null), outro = w.outro + channelEnd()) }
                 }
                 loading = host.scope.launch(Dispatchers.Default) { playPick(ch, i) }
             }
@@ -1452,16 +1470,16 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         synchronized(watchLock) {
             loop?.cancel()
             // A countdown to the channel's next pick stops too (▶ 재생 starts it again).
-            watch = watch?.let { w -> w.copy(playing = false, queue = w.queue?.copy(countdown = null)) }
+            onScreen = onScreen?.let { w -> w.copy(playing = false, queue = w.queue?.copy(countdown = null)) }
         }
     }
 
     /** Plays on from the step shown. */
     fun resume() {
         synchronized(watchLock) {
-            val w = watch ?: return
+            val w = onScreen ?: return
             if (w.playing || w.ended || session == null) return
-            watch = w.copy(playing = true)
+            onScreen = w.copy(playing = true)
             startLoop()
         }
     }
@@ -1469,10 +1487,10 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     /** Jumps to the end of the turn shown (or of the next one). */
     fun skipTurn() {
         synchronized(watchLock) {
-            val w = watch ?: return
+            val w = onScreen ?: return
             var i = w.shown
             while (i < w.steps.size && w.steps[i].category == null) i++
-            watch = w.copy(shown = minOf(w.steps.size, i + 1))
+            onScreen = w.copy(shown = minOf(w.steps.size, i + 1))
         }
     }
 
@@ -1482,16 +1500,16 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val s = session ?: return
             val bd = s.match.boards[s.board]
             when {
-                s.game < bd.games.lastIndex -> show(s, s.board, s.game + 1, watch?.playing ?: true)
-                s.match.team && s.board < s.match.boards.lastIndex -> show(s, s.board + 1, 0, watch?.playing ?: true)
+                s.game < bd.games.lastIndex -> show(s, s.board, s.game + 1, onScreen?.playing ?: true)
+                s.match.team && s.board < s.match.boards.lastIndex -> show(s, s.board + 1, 0, onScreen?.playing ?: true)
                 else -> {
-                    val st = s.steps[Triple(s.board, s.game, watch?.summary == true)]
-                    watch = watch?.copy(shown = st?.list?.size ?: 0, complete = st?.done ?: false)
+                    val st = s.steps[Triple(s.board, s.game, onScreen?.summary == true)]
+                    onScreen = onScreen?.copy(shown = st?.list?.size ?: 0, complete = st?.done ?: false)
                     s.hold = HOLD_TICKS
                     return
                 }
             }
-            if (watch?.playing == true) startLoop()
+            if (onScreen?.playing == true) startLoop()
         }
     }
 
@@ -1499,7 +1517,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     fun nextMatch() {
         synchronized(watchLock) {
             val ch = channel ?: return
-            if (watch?.kind != WatchKind.BROADCAST) return
+            if (onScreen?.kind != WatchKind.BROADCAST) return
             val s = session
             val at = s?.at ?: pending
             // The last pick plays on (its end says the channel is over).
@@ -1523,8 +1541,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         synchronized(watchLock) {
             val s = session ?: return
             val i = s.match.boards[s.board].games.indexOfFirst { it.index == index }.takeIf { it >= 0 } ?: return
-            show(s, s.board, i, watch?.playing ?: true)
-            if (watch?.playing == true) startLoop()
+            show(s, s.board, i, onScreen?.playing ?: true)
+            if (onScreen?.playing == true) startLoop()
         }
     }
 
@@ -1533,15 +1551,15 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         synchronized(watchLock) {
             val s = session ?: return
             if (board !in s.match.boards.indices) return
-            show(s, board, 0, watch?.playing ?: true)
-            if (watch?.playing == true) startLoop()
+            show(s, board, 0, onScreen?.playing ?: true)
+            if (onScreen?.playing == true) startLoop()
         }
     }
 
     /** The watch screen's pace (saved in ui.txt). */
     fun setPace(p: WatchPace) {
         host.saveWatchPace(p)
-        synchronized(watchLock) { watch = watch?.copy(pace = p) }
+        synchronized(watchLock) { onScreen = onScreen?.copy(pace = p) }
     }
 
     /** 요약 중계 (true) or every game in full: from the next game on. */
@@ -1563,7 +1581,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             session?.steps?.values?.forEach { it.job?.cancel() }
             session = null
             channel = null
-            watch = null
+            onScreen = null
         }
     }
 

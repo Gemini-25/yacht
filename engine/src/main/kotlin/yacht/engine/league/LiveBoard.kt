@@ -50,6 +50,8 @@ class LiveFixture(
     val boards: List<LiveBoardGames>,
     /** How its boards were decided (as [JobResult.format]). */
     val format: MatchFormat = MatchFormat.MIRRORED,
+    /** The season it was played in (0 when not told: [LiveBoard.add]). */
+    val season: Int = 0,
 ) {
     /** Games of its longest board: they are replayed one after the other, boards side by side. */
     val length: Int get() = boards.maxOf { it.games.size }
@@ -115,6 +117,8 @@ class LiveFrame(
     val winner: Int?,
     /** 0..1, for a progress bar. */
     val progress: Double,
+    /** The season its fixture was played in (0 when not told), so a frame of last season's match names that match. */
+    val season: Int = 0,
 )
 
 /**
@@ -166,7 +170,7 @@ class LiveBoard {
         }
         if (boards.isEmpty()) return
         seq++
-        kept.addFirst(LiveFixture(n, f, nowMs, r.winner, boards, r.format))
+        kept.addFirst(LiveFixture(n, f, nowMs, r.winner, boards, r.format, season))
         while (kept.size > FIXTURES) kept.removeLast()
         for (g in games) feed.addFirst(g)
         while (feed.size > CURVES) feed.removeLast()
@@ -252,7 +256,7 @@ class LiveBoard {
             boards.sumOf { it.wonA } to boards.sumOf { it.wonB }
         }
         val progress = if (fx.steps == 0) 1.0 else t.toDouble() / fx.steps
-        return LiveFrame(slot, fx.fixture, boards, sa, sb, finished, if (finished) fx.winner else null, progress)
+        return LiveFrame(slot, fx.fixture, boards, sa, sb, finished, if (finished) fx.winner else null, progress, fx.season)
     }
 
     private fun won(x: Int, y: Int) = if (x > y) 1.0 else if (x == y) 0.5 else 0.0

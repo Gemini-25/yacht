@@ -62,13 +62,6 @@ class Season private constructor(
         require(leagues.size == divisions.size) { "a league for every division" }
     }
 
-    /**
-     * Which tier each division is in, for code that knows one league only: a legacy season's
-     * tiers; a national season's divisions as one flat ladder (wrong labels, safe indices).
-     */
-    @Deprecated("A national season has several leagues: read leagues (tier, label) instead")
-    val tiers: Tiers = leagues.list.singleOrNull()?.tiers ?: Tiers.linear(divisions.size)
-
     val standings = HashMap<String, Standing>()
 
     /**

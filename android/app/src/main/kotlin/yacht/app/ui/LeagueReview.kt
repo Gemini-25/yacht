@@ -303,7 +303,7 @@ internal fun WrappedCardView(r: ReviewPage, kind: WrappedCard, onPlayer: (String
                 }
                 WrappedCard.RECORDS -> {
                     head("📜", "깨진 기록 ${r.review?.records?.size ?: 0}개")
-                    for (b in r.review?.records.orEmpty().take(4)) item("${b.record.kind.label} ${b.record.kind.withUnit(b.record.value)} · ${name(b.record.holder)}", b.record.holder)
+                    for (b in r.review?.records.orEmpty().take(4)) item("${b.record.kind.label} ${yacht.engine.league.News.recordValue(b.record.kind, b.record.value)} · ${name(b.record.holder)}", b.record.holder)
                 }
                 WrappedCard.RANKING -> {
                     head("🌍", "리그 랭킹이 움직였어요")

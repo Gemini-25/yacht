@@ -6,8 +6,8 @@ says otherwise. The league is in its fifth shape: national leagues, clubs as the
 affiliation, a continental and a world stage, league coefficients and a 요트협회 (federation)
 that proposes rule changes (rules version 3, `LeagueConfig.VERSION`). A season saved under an
 older shape plays to its end as it began (section 7.3); the older shapes are kept where such a
-season needs them and are described where they still apply (2.1.7, 2.2.6). Section 8 still
-describes the screens before the redesign (home and four tabs); the screen docs replace it.
+season needs them and are described where they still apply (2.1.7, 2.2.6). Section 8 describes
+the screens (home and four tabs, pages, the match report and the watch screen).
 
 Ground rules for all code:
 - Engine code (`engine/src/main/kotlin/yacht/engine/league/`) is pure Kotlin: no threads, no
@@ -753,34 +753,129 @@ readable (12).
 
 ## 8. Screens (Korean labels)
 
-LeagueScreen tabs: **순위표** · **일정** · **리그** · **대회** · **클럽** · **소식** · **기록**.
-The control card shows the season clock on every tab: "📅 시즌 3 · 12주차 / 49주", what this week
-holds besides the league ("이번 주: 🏆 요트컵 64강 · 🛡 클럽 4라운드") or what comes next, and a bar
-of the weeks (played, in play, later; dots for finals). A tap opens 일정.
-- 순위표: today's ladder + search (names and nations) + origin and nation chips + 응원 ★.
-- 일정: 이번 주 (any week with ◀ ▶: every stage with played/total, live matches, a tap opens its
-  table or bracket; late stages of earlier weeks; the week's top news; next week; the finals
-  ahead) and 시즌 전체 (a row per week, ✓ played, ● in play, the post-season apart).
-- 리그: tier chips, then group chips in a pyramid (the followed player's group first);
-  division tables (with 운 보정 toggle and odds columns), 일정표 (matchday list with
-  results and upcoming fixtures, 프리뷰 on tap), 순위 변동 그래프, 플레이오프.
-- 대회: 요트컵 bracket, 챔스 groups + bracket, 슈퍼컵, 올스타전, 계열 대항전 (and 대표 명단).
-  Chips say where each stands ("64강", "13주", "끝"); a card lists every stage with its week
-  (✓, ●) and what is on now; bracket round chips carry their week.
-- 클럽: club table, club card (emblem, squad, budget, honours, transfers), 이적·드래프트 소식.
-- 기록: 기록실 (records, dynasties), 국가 랭킹 (by cups, strength or numbers; followed nations;
-  a nation's sheet: school, cups, core squad, most capped, honours by nation, ages, legends),
-  유망주 (22 or younger by potential), 시상식·명예의 전당, 시즌 아카이브, 메타 리포트,
-  칸별 리그 메타, 상대 전적 매트릭스, 계보도, 레전드 보관소, 성장 곡선 (from a profile).
-- 소식: feed (where each match was played: "🏆 요트컵 64강 · 14주차", filters 리그/대회/친선) +
-  하이라이트 + 뉴스 기사 by week under week headings + 마일스톤 + 라이브 스코어보드 (with the
-  week) + 응원 AI filter.
-- Extra entries: AI 연구소 (from the league top bar), 백과사전 (search over AIs, retired,
-  legends, clubs, competitions), 규칙·프리셋 (settings), 시즌 결산 (shown once at rollover),
-  스카우팅 (ranked start dialog), 프로필 (any AI name opens it: flag, nation, gender, age and
-  stage, nickname, ability bars with grades and change, tendency bars, style card, rival,
-  national team, honours, stats, growth curve, 사제 계보, highlights; ⚖ 비교 puts two players
-  side by side).
+The league screen (`ui/LeagueScreen.kt`) is a slim **control bar**, a **bottom bar of four tabs**
+(🏠 홈 · 🎲 경기 · 📊 순위 · 📚 기록), the chip row of the tab shown, and **pages** stacked over
+the tabs (at most 8; `core/LeagueNav.kt`). Every menu is a bottom sheet (`Sheet`). All of it is
+state in `lg.nav` (tab, chips, filters, pages with their own state, the sheet), so the harness can
+set any screen; filters live on across tab switches. Back closes the sheet, then the top page,
+then returns to 순위 from another tab, then leaves the league (`core/BackTarget.kt`). The
+selector's league (`nav.league`) is the one 홈 · 경기 · 순위 show; `ui.txt` keeps dismissed banners
+and the watch pace.
+
+### 8.1 Control bar (`ui/LeagueControlBar.kt`)
+← (leave), the status line, ▶ / ■, ⚙ (settings sheet). The status line says the clock and what
+runs: "시즌 3 · 12주차 / 42주", "🔴 리그 진행 중 · 요트컵 64강 · 챔스 A조 4차전", "🔴 이번 주만
+진행해요 · 120/400경기" (1주씩), "✓ 46주차를 다 치렀어요. ▶를 누르면 47주차를 해요.", "시즌 3
+마무리 중", "⏸ 멈춤 · ▶로 계속 진행해요"; a stop the league made itself shows "⚠ {reason}". A tap
+opens the weeks sheet (`Sheet.WEEKS`: a row per week, ✓ played, ● in play, the post-season apart).
+
+**Settings sheet** (`Sheet.SETTINGS`, "리그 설정"): players and matches; 진행 방식 (1주씩 / 계속);
+속도 (절약 · 보통 · 최대, the pace while running); 앱을 나가면 (멈춤 / 계속, with the notification);
+규칙 ("규칙 설정 ›", and "🏛 요트협회 ›" in a national season or the legacy season before the
+reform); 선수와 AI (선수 만들기, AI 만들기, AI 연구소); 리그 (the shipped seed league while empty,
+리그 초기화).
+
+**League selector** (`Sheet.LEAGUES`, from the header "🇰🇷 한국 리그 ▾" of 홈, 순위 › 리그 and 클럽):
+followed leagues first, then 국가 리그 by ranking and 연합 리그 (XAS, XEU, XAM, XAF, then XWO), each
+with its tiers, members, ranking place and continental places. The default league: the followed
+player's, else a followed club's or nation's, else 한국, else the best-ranked. A legacy season has
+one entry.
+
+### 8.2 홈 (`ui/LeagueHome.kt`, `core/HomeFeed.kt`)
+At most 1,600 dp at 392 dp wide (the harness fails above), top to bottom:
+- **One banner** by priority: 0a an empty league ("▶로 시작해요", the seed league); 0b a season just
+  closed (champions, "📜 결산 보기 ›" opens `Page.Review`, until dismissed or two weeks in); 0c the
+  first national season ("국가 리그가 시작됐어요", until dismissed); 0d a legacy season with national
+  rules next (where the followed players will play).
+- **★ 응원**: followed players, clubs, nations and leagues (two lines each: last and next match, form,
+  place; "응원 전체 ›" opens `Page.Follows`, each card's ▶/📋/🔮, a club card's "선수단 경기 ›").
+- **📺 이번 주 빅매치**: the broadcast picks of the week as cards (▶ played, 🔮 to come), "📺 연속 재생 ›".
+- **⚡ 최근 결과**, **📋 내 리그** (the shown league's 1부 top rows, "순위표 전체 ›"), **🌍 국제 무대**
+  (CCL and CL where they stand, the ranking's top), a 🏛 line while proposals wait for a vote,
+  **🏃 기록 추격** (the nearest record chases), **📰 주요 뉴스**, **🗓 다음 주**, and a footer (counts,
+  the clone and ranked-game invitation).
+
+### 8.3 경기 (`ui/LeagueMatchesTab.kt`)
+Chips: **이번 주** (the week's stages with played/total, live matches, late stages, the week's top
+news, next week; rows open their competition), **결과** (the feed newest first, "필터 ▾": 전체 /
+★ 응원 / 리그 / 대회 / 친선; a card opens its report, ▶ replays it), **중계** ('📺 이번 주 중계': the
+week's picks, "★ 내 선수 경기 n", "다음 주 빅매치", then the live scoreboard replaying finished
+matches turn by turn, six at a time), **하이라이트** (이번 시즌 / 역대, by drama; ▶ plays the game).
+A match row's ▶ shows only where the match can be played again (UX 3.3: its log is kept, or it is
+this season's official match and neither side adapts).
+
+### 8.4 순위 (`ui/LeagueTablesTab.kt`, `ui/LeagueComps.kt`, `ui/LeagueClubs.kt`, `ui/LeagueWorldPages.kt`)
+Chips: **리그** (the league header and its tiers; "보기 ▾" `Sheet.TABLE_MODE`: 순위표, 최근 폼, 운 보정,
+라운드, 순위 변동, 상대 전적, 확률; the "완승" column under 완승 보너스; promotion, playoff and relegation
+marks per league; a row opens the player), **대회** (a card per competition: where it stands, its
+stages with weeks; a card opens `Page.Competition`: "단계: … ▾" `Sheet.STAGE`, the week strip, the
+groups (each "이 조 경기 ›") or one bracket round, the national cups' notes and squads), **클럽** (the
+league's F1-style club table with this week's W-D-L, every club of its nations by titles,
+"이적·드래프트 ›" `Page.Market`; a legacy season shows its club league), **랭킹** (the league
+ranking: coefficients of five seasons, the change, continental places; "대륙 ▾" `Sheet.CONFED`;
+"🏛 요트협회 ›"; "국가대표 랭킹 ›" `Page.Nations`), **레이팅** (the rating ladder, search, "필터 ▾"
+`Sheet.LADDER_FILTER`: 응원, origin, nation, family).
+
+### 8.5 기록 (`ui/LeagueRecords.kt`, `ui/LeagueLeaders.kt`, `ui/LeagueReview.kt`)
+Chips: **리더** (the hub: 득점왕, 요트왕, 평점왕, 완승왕, 보너스왕, 역전의 명수, 클러치, 거인 사냥꾼 with
+their top 3, then 다른 부문; "필터 ▾" `Sheet.LEADER_FILTER`: 이번 시즌 / 통산 / 최근 10경기 and 내 리그 /
+전체 / 국가 / 클럽, 1부만; a card opens `Page.Leaderboard`), **기록실** (this season's new records, every
+record by group with its unit and its earlier holders, 예전 기록 folded, the chases, record news),
+**전당** (seasons by honours per league, the hall of fame, dynasties, most titles, "📜 연대기 ›"),
+**결산** (the kept season reviews; each opens `Page.Review`: Season Wrapped as swipeable cards
+(champions and MVP, the best-rated match with ▶, the biggest upset, records broken, ranking moves,
+followed players), then leaders, numbers, the 요트협회's decisions, transfers), **더 보기** (탐구 `Page.Facts`,
+연대기, 유망주, 레전드 보관소, 계열별, 메타 리포트, 선수 비교, AI 연구소, "🏛 요트협회 기록").
+
+### 8.6 Pages
+- **Player** (`Page.Player`, `ui/LeaguePlayerPage.kt`): header (flag, name, club badge, "{리그}
+  {n}부 {m}위" opening its table, rating and tier, ★ 응원, ⋯ `Sheet.PLAYER_ACTIONS`: 비교, 관전,
+  연구소, 랭크전, 고치기), tabs 개요 (identity, abilities, tendencies, style radar and label, rival,
+  rating trend), 기록 (stat cells with league places, each opening its leaderboard; seats, game 1/2,
+  score histogram; 이번 시즌 / 통산), 경기 (this season's league and competition matches with ▶,
+  last season's kept games), 수상 (titles by major first, awards, places, club honours).
+- **Match report** (`Page.Match`, `ui/LeagueMatchReport.kt`): sides with badges and ratings, the
+  score by game (boards for a team match), 경기 MVP and graded 평점 2.0 (≥ 8.0 월드클래스 blue, ≥ 7.0
+  green, < 5.0 red), the P(win) curve per game, key moments, on demand 정확도 ("정확도 96.2% · 실수
+  2개 (−7.4점)", computed off the main thread from the decision log), the articles about the match;
+  before it is played a preview (expected chances, stakes from the table and odds). The bar's ▶
+  plays it again; the replay source is told (기록 / 다시 계산).
+- **Watch screen** (`ui/WatchScreen.kt`, `Screen.WATCH`): the game throw by throw with the
+  broadcaster's lines (match, game, between games, the end), both score cards, the P(win) bar,
+  pause/next turn/next game, a board and game picker for team matches and series, 요약 중계
+  (the last turns only), pace 느리게 / 보통 / 빠르게 (saved); the channel plays the week's picks one
+  after another with a countdown, waiting "곧 시작해요" for a pick still to be played.
+- **Club** (`Page.Club`): badge, league and place in its club table, budget, titles, this week, the
+  squad (✈️ playing abroad), recent results, "선수단 경기 전체 ›" (`Page.Matches`), club records and
+  moves. **League** (`Page.League`): its tiers and champions, ranking line, statistics per tier with
+  one sentence of style meta, clubs, history. **Nation** (`Page.Nation`): the national team, its
+  league, cups, core squad, most capped, legends, its players' numbers.
+- **Matches** (`Page.Matches`, `MatchQuery`): this season's matches of a club's squad, a group, a
+  week or a league round; played ones newest first, then the ones to come (at most 150 rows);
+  each row: the sides with the games (boards) won, a league match's two game scores under them; it opens its
+  report, ▶ where it can be replayed.
+- **News** (`Page.News`, `ui/LeagueNews.kt`): filters 전체 / 주요 (importance ≥ 4) / 리그 / 국제 /
+  이적·협회, "☆ 전체 / ★ 응원만" in the bar; a lead article on top, then articles by week under week
+  headings; digests (cup rounds, groups, milestones) as one card with "+n명"; an article with a match
+  has "📋 리포트" and ▶; the international week's table only its newest per competition. The league
+  notification's tap opens 홈.
+- **요트협회** (`Page.Federation`): this season's agenda with evidence and 찬성/반대 (a vote applies at
+  the close; without one the 선수 위원회 votes), past decisions, the awards of the last season, a
+  line when the federation is off. Also from 순위 › 랭킹, the settings sheet, the rules page and 기록 ›
+  더 보기.
+- Others: `Page.Follows` (every followed entity), `Page.Leaderboard` (a whole board: the first 50 and
+  followed players further down, its rule line), `Page.Review`, `Page.Facts`, `Page.Chronicle`,
+  `Page.Compare`, `Page.Rules(part)` (the rules editor as a page, 취소/저장; "기본값으로" → DEFAULT;
+  presets), `Page.Lab`, `Page.Market`, `Page.Nations`, `Page.Prospects`, `Page.Legends`,
+  `Page.Families`, `Page.Meta`.
+
+### 8.7 What the screens cost
+The 300 ms snapshot (`LeagueController.publish`) carries only the shown league's tables, 60 news
+articles, the feed and the clock (no club squads; competition views are cached by a result
+counter). Every page loads its data on request off the main thread under the league's lock and
+keeps a few by key (`WorldPages.KEEP`); reports, re-simulations, 정확도, leaderboards and the home
+are never built while nothing asks for them. Compose state is written on the main thread (the
+watch screen's steps too: `MatchCenter.onScreen` hands them over).
 
 ## 9. Framework (implemented) and module boundaries
 
@@ -902,8 +997,9 @@ who came as league champions against those from the 대륙 챔피언스 (`clEdge
 values the season was played with (`lv`). One pass, 15-55 ms at 3000 players.
 
 ### 11.4 Generators and their calibration
-Each kind has a guard (the rules can take the change, a sample: ≥ 10 promoted, ≥ 4 playoff leagues,
-≥ 4 leagues, ≥ 10 cup ties, ≥ 12 CL matches a side, ≥ 30 decided matches), a statistic x, a floor f
+Each kind has a guard (the rules can take the change, a sample: ≥ 10 promoted, ≥ 8 playoff leagues,
+≥ 8 leagues, ≥ 10 cup ties, ≥ 12 CL matches a side, ≥ 30 decided matches; a world of the four 연합
+리그 alone, below about 1000 players, never reads its title playoffs on 4 leagues), a statistic x, a floor f
 and a threshold t. Past its floor it is a candidate with `pressure = min(3, 0.3 + 0.7 (x − f) /
 (t − f))`: 0.3 at the floor, 1.0 at the threshold (t < f for "lower is worse"). An assembly:
 candidates → drop a lever with a pending proposal, or **whose value differs among the season to

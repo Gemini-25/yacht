@@ -16,7 +16,9 @@ import yacht.app.core.LeaderKind
 import yacht.app.core.LeagueAnalytics
 import yacht.app.core.LeagueHost
 import yacht.app.core.LeagueView
+import yacht.app.core.MatchQuery
 import yacht.app.core.MatchReport
+import yacht.app.core.Page
 import yacht.app.core.ReplaySource
 import yacht.app.core.ReportState
 import yacht.app.core.leaderText
@@ -225,6 +227,37 @@ class AnalyticsTest {
         for (k in LeaderKind.entries) assertTrue(LeagueAnalytics.title(k).isNotEmpty() && LeagueAnalytics.ruleOf(k, LeaderFilter()).isNotEmpty())
         assertEquals("불운", LeagueAnalytics.title(LeaderKind.UNLUCKY))
         assertTrue(LeagueAnalytics.ruleOf(LeaderKind.SCORER, LeaderFilter(recent = true)).endsWith("마지막 리그 10경기만 세요."))
+    }
+
+    @Test
+    fun matchListsListAPlayersAndARoundsMatchesPlayedFirst() {
+        val keys = listOf("a", "b", "c", "d", "e", "f")
+        // Half the season played: some of a's matches still to come.
+        val (w, played) = played(keys, upTo = 8) { _, i -> listOf(GameScore(220 + i, 200), GameScore(180, 210)) }
+        val an = LeagueAnalytics(Host(w))
+        val mine = Page.Matches(MatchQuery.OfPlayer("a"), "a의 경기")
+        an.loadMatches(mine)
+        waitFor { an.matches(mine) != null }
+        val list = an.matches(mine)!!
+        val season = w.plan!!.league
+        val all = (0 until season.fixturesTotal).map { season.fixture(it) }.filter { it.a == "a" || it.b == "a" }
+        assertEquals(all.size, list.total)
+        assertEquals(all.map { "1:${yacht.engine.league.Comp.LEAGUE.code}:${it.id}" }.toSet(), list.rows.map { it.ref }.toSet())
+        // Played first, then the ones to come; a played league match shows the games won and each game, from side A.
+        val done = list.rows.takeWhile { it.winner != null }
+        assertEquals(played.count { it.a == "a" || it.b == "a" }, done.size)
+        assertTrue(list.rows.drop(done.size).all { it.winner == null && it.score.isEmpty() })
+        assertTrue(done.all { it.score == "1:1" && it.games.contains(" · ") && it.where.endsWith("라운드") }, done.toString())
+        // A league round of the one tier: every fixture of that round.
+        val round = Page.Matches(MatchQuery.Round(yacht.engine.league.LeagueIds.LEGACY, 0, 0), "1라운드")
+        an.loadMatches(round)
+        waitFor { an.matches(round) != null }
+        assertEquals((0 until season.fixturesTotal).count { season.fixture(it).round == 0 }, an.matches(round)!!.total)
+        // A club list needs clubs: a legacy world without a national book has none to show.
+        val club = Page.Matches(MatchQuery.OfClub("c01"), "클럽")
+        an.loadMatches(club)
+        Thread.sleep(200)
+        assertNull(an.matches(club))
     }
 
     @Test

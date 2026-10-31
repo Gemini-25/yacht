@@ -362,8 +362,7 @@ class HighlightReplay(val highlight: Highlight, val game: SingleGame) {
 
 /**
  * The highlights (docs/LEAGUE_SPEC.md section 4): the [SEASON_TOP] most dramatic games of the
- * current season and the [ALL_TIME] most dramatic ever; [best] (and [archiveLines], the same
- * games as lines) are a season's best [ARCHIVED]: the season review names them
+ * current season and the [ALL_TIME] most dramatic ever; [best] is a season's best [ARCHIVED]: the season review names them
  * ([SeasonReview.best]) and the match log archive keeps their games. Saved as
  * league/highlights.txt. Not thread-safe: callers synchronise.
  *
@@ -466,9 +465,6 @@ class HighlightBook {
         else -> emptyList()
     }
 
-    /** [best] of [season] as lines ("hl ...", [decodeArchive] reads them back). */
-    fun archiveLines(season: Int): List<String> = best(season).map { "$ARCHIVE_TAG ${it.encode()}" }
-
     fun encode(): String = buildString {
         append(HEADER).append('\n')
         append("season ").append(season).append('\n')
@@ -497,9 +493,6 @@ class HighlightBook {
         const val ALL_TIME = 20
         const val ARCHIVED = 3
 
-        /** Tag of the archive lines. */
-        const val ARCHIVE_TAG = "hl"
-
         /** The kept form of an AI version string: 8 hex digits. */
         fun versionHash(version: String): String = "%08x".format(version.hashCode())
 
@@ -523,12 +516,6 @@ class HighlightBook {
             // A cut file may have lost its season line: the kept games tell.
             if (book.season == 0) book.season = book.current.maxOfOrNull { it.season } ?: 0
             return book
-        }
-
-        /** Reads archive lines written by [archiveLines] (with or without their tag); bad lines are skipped. */
-        fun decodeArchive(lines: List<String>): List<Highlight> = lines.mapNotNull { line ->
-            val f = line.trim().split(' ')
-            Highlight.decode(if (f.firstOrNull() == ARCHIVE_TAG) f.drop(1) else f)
         }
     }
 }

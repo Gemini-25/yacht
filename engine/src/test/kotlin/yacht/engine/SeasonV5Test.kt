@@ -191,22 +191,13 @@ class SeasonV5Test {
     }
 
     @Test
-    @Suppress("DEPRECATION")
-    fun theOldTiersNeverThrow() {
-        val s = national()
-        val flat = s.tiers
-        assertEquals(s.divisions.size, flat.size)
-        assertTrue(flat.linear)
-        for (d in s.divisions.indices) {
-            assertEquals(d, flat.tier(d))
-            assertTrue(flat.label(d).isNotEmpty())
-        }
+    fun oneLeagueKeepsItsTiers() {
         // One league alone keeps its own tiers; a legacy season its pyramid.
         val one = Season.start(1, 2L, divisions.take(3), false, Leagues.national(listOf("KR"), listOf(3)))
-        assertEquals(Tiers.linear(3), one.tiers)
+        assertEquals(Tiers.linear(3), one.leagues.list.single().tiers)
         val pyramid = Tiers.of(listOf(1, 2), listOf("", "북", "남"))
         val legacy = Season.start(1, 2L, divisions.take(3), false, pyramid)
-        assertEquals(pyramid, legacy.tiers)
+        assertEquals(pyramid, legacy.leagues.list.single().tiers)
         assertEquals(Leagues.legacy(pyramid), legacy.leagues)
     }
 

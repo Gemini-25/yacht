@@ -40,6 +40,7 @@ import yacht.app.core.CompetitionPage
 import yacht.app.core.CompetitionStage
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
+import yacht.app.core.MatchQuery
 import yacht.app.core.Page
 import yacht.app.core.Sheet
 import yacht.app.core.competitionStages
@@ -53,7 +54,6 @@ import yacht.engine.league.Confed
 import yacht.engine.league.ContinentalChampions
 import yacht.engine.league.LeagueIds
 import yacht.engine.league.Nations
-import yacht.engine.league.Competitions
 import yacht.engine.league.GroupTable
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.TieView
@@ -161,14 +161,18 @@ internal fun CompetitionScreen(lg: LeagueController, v: LeagueView, page: Page.C
     // tie did not change skip recomposing.
     val squads by rememberUpdatedState(loaded.view.squads)
     val openAi by rememberUpdatedState(onOpen)
-    val label: (String) -> String = remember(lg) { { k -> if (squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) } }
+    val label: (String) -> String = remember(lg) { { k -> if (squads.containsKey(k)) teamName(lg, k) else lg.name(k) } }
     // A team (all-star side, family) has no page of its own: its squad is listed below.
     val open: (String) -> Unit = remember { { k -> if (!squads.containsKey(k)) openAi(k) } }
     // A player's club badge, or a club's own (the 클럽 대항전's sides are clubs); none in a legacy season.
     val clubOf = remember(v.rows, v.badges) { v.rows.mapNotNull { r -> r.club?.let { c -> v.badges[c]?.let { r.key to it } } }.toMap() }
     val badges by rememberUpdatedState(v.badges)
     val badge: (String) -> ClubBadge? = remember(clubOf) { { k -> clubOf[k] ?: badges[k] } }
-    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format, badge = badge) { lg.nav.sheet = Sheet.STAGE }
+    // A group's "이 조 경기 ›": its round-robin matches as a list.
+    val groupMatches: (Int, String, String) -> Unit = remember(lg, page.comp) {
+        { part, title, group -> lg.nav.open(Page.Matches(MatchQuery.Group(page.comp, part, group), "$title $group 경기")) }
+    }
+    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format, badge = badge, onGroupMatches = groupMatches) { lg.nav.sheet = Sheet.STAGE }
 }
 
 /**
@@ -186,6 +190,8 @@ internal fun CompetitionBody(
     format: MatchFormat?,
     /** A side's club badge (national seasons). */
     badge: (String) -> ClubBadge? = { null },
+    /** A group's matches (part, its title, the group's label); null: the cards have no link. */
+    onGroupMatches: ((Int, String, String) -> Unit)? = null,
     onStage: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -208,12 +214,14 @@ internal fun CompetitionBody(
         // One part of the competition: its group tables, or one round of its bracket.
         // One part of the competition: its group tables, or one round of its bracket ([heading]: the
         // part's title over it, which its bracket then does not repeat).
-        fun LazyListScope.part(g: CompetitionView.Groups, heading: String? = null) {
+        fun LazyListScope.part(g: CompetitionView.Groups, heading: String? = null, index: Int = 0) {
             val round = st?.round ?: -1
             val k = g.knockout
             val titled = k?.title != heading
             if (round < 0 || k == null) {
-                items(g.groups, key = { "g-${it.label}" }) { t -> GroupCard(t, label, onOpen, badge) }
+                items(g.groups, key = { "g-${it.label}" }) { t ->
+                    GroupCard(t, label, onOpen, badge, onGroupMatches?.let { f -> { f(index, g.title, t.label) } })
+                }
                 if (g.groups.isEmpty() && k != null) {
                     item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), podium = podium, format = format, badge = badge, titled = titled) }
                 }
@@ -226,7 +234,7 @@ internal fun CompetitionBody(
             is CompetitionView.Groups -> part(view)
             is CompetitionView.Sections -> view.parts.getOrNull(st?.part ?: 0)?.let { p ->
                 item { Text(sectionIcon(p.title) + " " + p.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall) }
-                part(p, p.title)
+                part(p, p.title, st?.part ?: 0)
             }
             // A kind of view this screen does not draw yet.
             else -> {}
@@ -241,7 +249,7 @@ internal fun CompetitionBody(
             items(squads.entries.toList(), key = { "s-${it.key}" }) { (team, members) ->
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(Competitions.teamLabel(team), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(label(team), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                         Text(
                             members.mapIndexed { i, k -> "${i + 1}. ${name(k)}" + if (captains[team] == k) " ⓒ" else "" }.joinToString("  "),
                             style = MaterialTheme.typography.labelSmall,
@@ -638,12 +646,17 @@ private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) 
 
 /** A group table; with [GroupTable.bonus] (판 승점제) its 2-0 sweeps, which earned a point each, get a column. */
 @Composable
-internal fun GroupCard(g: GroupTable, label: (String) -> String, onOpen: (String) -> Unit, badge: (String) -> ClubBadge? = { null }) {
+internal fun GroupCard(g: GroupTable, label: (String) -> String, onOpen: (String) -> Unit, badge: (String) -> ClubBadge? = { null }, onMatches: (() -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     val bonus = g.bonus
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(g.label, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(g.label, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                if (onMatches != null) {
+                    Text("이 조 경기 ›", style = MaterialTheme.typography.labelMedium, color = cs.primary, modifier = Modifier.clickable(onClick = onMatches).padding(start = 8.dp))
+                }
+            }
             Row {
                 Text("팀", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 Text("경기", Modifier.width(32.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)

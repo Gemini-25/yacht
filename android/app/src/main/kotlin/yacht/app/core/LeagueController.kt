@@ -218,17 +218,6 @@ class LeagueController(
     @Volatile
     private var shownLeague: String? = null
 
-    /**
-     * The player whose page is on top, for the player dialogs until the pages replace them:
-     * a key opens its page, null closes the top player page.
-     */
-    @Deprecated("A transition to the pages: use nav", ReplaceWith("nav.page"))
-    var detail: String?
-        get() = (nav.page as? Page.Player)?.key
-        set(key) {
-            if (key != null) nav.open(Page.Player(key)) else (nav.page as? Page.Player)?.let { nav.close(it) }
-        }
-
     /** UI preferences saved in league/ui.txt (dismissed banners, the watch pace). */
     var uiPrefs by mutableStateOf(UiPrefs())
         private set
@@ -1871,6 +1860,9 @@ class LeagueController(
         key == Ladder.ME -> "나"
         else -> byKey[key]?.name ?: pastNames[key] ?: clubNames[key] ?: Competitions.teamLabel(key)
     }
+
+    /** A club's name (a national club's, or a club league's), null for another key. */
+    fun clubName(id: String): String? = clubNames[id]
 
     /** Whether [key] is an AI, playing or retired (news and honours also name teams and clubs). */
     fun isAi(key: String): Boolean = key == Ladder.ME || key in byKey || key in pastNames

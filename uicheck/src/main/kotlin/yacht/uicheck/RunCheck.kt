@@ -15,6 +15,7 @@ import yacht.app.core.Screen
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
 import yacht.engine.Tables
+import yacht.engine.league.Archive
 import yacht.engine.league.Comp
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LogClass
@@ -30,9 +31,11 @@ import kotlin.system.exitProcess
  * Runs the app's real league controller (no UI) and says how it goes, to catch a league that
  * stops or stalls by itself.
  *
- * Usage: runcheck <tables dir> <minutes> [ECO|NORMAL|FULL] [seed|new] [make|week|size|national]
+ * Usage: runcheck <tables dir> <minutes> [ECO|NORMAL|FULL] [seed|new|dir=<folder>] [make|week|size|national|replay]
  * - every 5 s: running, matches, season and week, matches in flight, why it stopped;
- * - `seed` starts from the shipped seed league; `make` adds three made players while it runs;
+ * - `seed` starts from the shipped seed league; `dir=<folder>` from a copy of an app folder (the
+ *   one holding `league/`: a saved league, say one from before national leagues, which then
+ *   migrates at its next close); `make` adds three made players while it runs;
  * - `week` presses ▶ in 1주씩 sixty times (each run must stop by itself one week on, with
  *   nothing left over), then plays on in 계속; `week lab` the same with an AI lab experiment
  *   running alongside (its games must not cut a week short).
@@ -77,8 +80,15 @@ private fun run(args: Array<String>) {
     }
     val minutes = args.getOrElse(1) { "5" }.toDouble()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val dir = Files.createTempDirectory("yacht").toFile()
+    // A copy of a saved app folder: the league plays on from it (the folder itself is left as it was).
+    args.getOrElse(3) { "" }.takeIf { it.startsWith(FROM) }?.let { File(it.removePrefix(FROM)) }?.let { from ->
+        check(File(from, "league").isDirectory) { "$from holds no league folder" }
+        from.copyRecursively(dir, overwrite = true)
+        println("runcheck: a copy of $from (${File(dir, "league").list()?.size ?: 0} league files)")
+    }
     val c = AppController(
-        scope, GameStorage(Files.createTempDirectory("yacht").toFile()), loadTables = { load(tablesDir) },
+        scope, GameStorage(dir), loadTables = { load(tablesDir) },
         loadAsset = { name -> File("android/app/src/main/assets", name).takeIf { it.exists() }?.readText() },
     )
     c.start()
@@ -95,6 +105,9 @@ private fun run(args: Array<String>) {
         else -> watch(c, minutes, make = args.getOrElse(4) { "" } == "make")
     }
 }
+
+/** The argument that starts the league from a copy of an app folder. */
+private const val FROM = "dir="
 
 /** 계속: plays [minutes] and fails when the league stops or stalls by itself. */
 private fun watch(c: AppController, minutes: Double, make: Boolean) {
@@ -212,14 +225,40 @@ private const val CPU_MARGIN = 1.05
 
 /**
  * One measured league: [files] its folder after each season (bytes by name), [cpu] the CPU
- * seconds each season took, [ref] the machine's [referenceCpu] then (0: not measured).
+ * seconds each season took, [ref] the machine's [referenceCpu] then (0: not measured), [reviews]
+ * archive.txt's kept season reviews after each season (empty in a baseline from before them).
  */
-private data class SizeRun(val players: Int, val files: List<Map<String, Long>>, val cpu: List<Double>, val ref: Double = 0.0) {
+private data class SizeRun(
+    val players: Int,
+    val files: List<Map<String, Long>>,
+    val cpu: List<Double>,
+    val ref: Double = 0.0,
+    val reviews: List<Reviews> = emptyList(),
+) {
+    /** The season reviews archive.txt keeps: their [bytes] and how many. */
+    data class Reviews(val bytes: Long, val count: Int)
+
     fun total(seasons: Int = files.size): Long = files[seasons - 1].values.sum()
 
-    /** The folder after its seasons plus 30 more seasons of the last one's growth of [GROWING]. */
+    /**
+     * The folder after its seasons plus 30 more seasons of the last one's growth of [GROWING].
+     * The season reviews grow only until their cap ([Archive.REVIEWS], or [Archive.SMALL_REVIEWS]
+     * below [Archive.SMALL_LEAGUE] players) and then turn over: their growth counts once, up to the
+     * cap, not 30 times (a baseline without [reviews] kept one, replaced each season). ladder.txt
+     * is not projected, here as in the baseline (compare its line).
+     */
     val projected: Long
-        get() = total() + 30 * GROWING.sumOf { (files.last()[it] ?: 0L) - (files.getOrNull(files.size - 2)?.get(it) ?: 0L) }
+        get() {
+            var growth = GROWING.sumOf { (files.last()[it] ?: 0L) - (files.getOrNull(files.size - 2)?.get(it) ?: 0L) }
+            var fill = 0L
+            val now = reviews.lastOrNull()
+            if (now != null && reviews.size == files.size && files.size >= 2) {
+                growth -= now.bytes - reviews[reviews.size - 2].bytes
+                val cap = if (players < Archive.SMALL_LEAGUE) Archive.SMALL_REVIEWS else Archive.REVIEWS
+                if (now.count > 0) fill = (cap - now.count).coerceAtLeast(0) * (now.bytes / now.count)
+            }
+            return total() + 30 * growth + fill
+        }
 
     val cpuPerSeason: Double get() = cpu.average()
 
@@ -233,6 +272,7 @@ private data class SizeRun(val players: Int, val files: List<Map<String, Long>>,
         append("projected $projected\n")
         for ((i, x) in cpu.withIndex()) append("cpu ${i + 1} ${"%.2f".format(java.util.Locale.ROOT, x)}\n")
         if (ref > 0) append("ref ${"%.2f".format(java.util.Locale.ROOT, ref)}\n")
+        for ((i, r) in reviews.withIndex()) append("reviews ${i + 1} ${r.bytes} ${r.count}\n")
     }
 
     companion object {
@@ -241,11 +281,13 @@ private data class SizeRun(val players: Int, val files: List<Map<String, Long>>,
             var players = -1
             val files = ArrayList<Map<String, Long>>()
             val cpu = ArrayList<Double>()
+            val reviews = ArrayList<Reviews>()
             var ref = 0.0
             fun flush() {
-                if (players >= 0) runs += SizeRun(players, files.toList(), cpu.toList(), ref)
+                if (players >= 0) runs += SizeRun(players, files.toList(), cpu.toList(), ref, reviews.toList())
                 files.clear()
                 cpu.clear()
+                reviews.clear()
                 ref = 0.0
             }
             for (line in text.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }) {
@@ -258,6 +300,7 @@ private data class SizeRun(val players: Int, val files: List<Map<String, Long>>,
                     "files" -> files += f.drop(2).associate { kv -> kv.substringBefore('=') to kv.substringAfter('=').toLong() }
                     "cpu" -> cpu += f[2].toDouble()
                     "ref" -> ref = f[1].toDouble()
+                    "reviews" -> reviews += Reviews(f[2].toLong(), f[3].toInt())
                 }
             }
             flush()
@@ -286,7 +329,9 @@ private fun sizes(tablesDir: File, speed: LeagueSpeed, args: List<String>) {
             BASELINE_SOURCE.writeText(
                 "# RunCheck size: new leagues under the app's default rules, from the seed $SIZE_SEED, at $speed, $SIZE_SEASONS seasons each.\n" +
                     "# files n: every file of the league folder after season n's close and its saves, in bytes (the hand-made AIs' table caches, *.bin, not counted).\n" +
-                    "# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of ${GROWING.joinToString()}.\n" +
+                    "# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of ${GROWING.joinToString()}\n" +
+                    "# (the season reviews, which stop growing at their cap, to the cap once; ladder.txt is not projected).\n" +
+                    "# reviews n: the bytes and the number of the season reviews archive.txt keeps after season n.\n" +
                     "# cpu n: the CPU seconds of the whole process in season n, from its start to the stop right after its close (the first from its first match on).\n" +
                     "# ref: the CPU seconds of a fixed workload on as many threads (the machine's speed: the median of before, between the seasons and after).\n" +
                     runs.joinToString("") { it.encode() },
@@ -313,6 +358,7 @@ private fun check(runs: List<SizeRun>) {
         }
         println("  %-16s %,10d -> %,10d (%+,d)".format("total", b.total(), r.total(), r.total() - b.total()))
         println("  %-16s %,10d -> %,10d (%+,d)".format("30 seasons", b.projected, r.projected, r.projected - b.projected))
+        println("  (30 seasons: archive.txt, honours.txt and the log book grown 30 times their last season's growth, the season reviews to their cap; ladder.txt not projected)")
         println("  %-16s %10.1f -> %10.1f s".format("CPU a season", b.cpuPerSeason, r.cpuPerSeason))
         val was = b.cpuRelative
         val now = r.cpuRelative
@@ -426,6 +472,7 @@ private fun measure(tablesDir: File, speed: LeagueSpeed, players: Int, cache: Fi
     }
     val files = ArrayList<Map<String, Long>>()
     val cpu = ArrayList<Double>()
+    val reviews = ArrayList<SizeRun.Reviews>()
     // Season by season: the run stops by itself right after the season's close, nothing of the
     // next season played, and the folder is read once that close's saves have landed (read while
     // the league plays on, it could still hold the finished season's save); then the next starts.
@@ -441,6 +488,7 @@ private fun measure(tablesDir: File, speed: LeagueSpeed, players: Int, cache: Fi
         cpu += cpuSeconds() - cpu0
         waitUntil("season $season closed") { (lg.view?.clock?.season ?: 0) > season }
         files += settled(folder)
+        reviews += reviewsOf(File(folder, "archive.txt"))
         refs += referenceCpu(threads)
         println("$players players: season $season in ${(System.currentTimeMillis() - t0) / 1000} s, CPU ${"%.1f".format(cpu.last())} s, folder ${files.last().values.sum()} B")
     }
@@ -449,7 +497,13 @@ private fun measure(tablesDir: File, speed: LeagueSpeed, players: Int, cache: Fi
     refs += referenceCpu(threads)
     val ref = refs.sorted()[refs.size / 2]
     println("$players players: reference ${refs.joinToString(" ") { "%.2f".format(it) }} s")
-    return SizeRun(players, files, cpu, ref) to folder
+    return SizeRun(players, files, cpu, ref, reviews) to folder
+}
+
+/** The season reviews in [archive]: the bytes of their `rv`/`rw` lines and how many there are. */
+private fun reviewsOf(archive: File): SizeRun.Reviews {
+    val lines = archive.takeIf { it.exists() }?.readLines().orEmpty().filter { it.startsWith("rv ") || it.startsWith("rw ") }
+    return SizeRun.Reviews(lines.sumOf { it.toByteArray().size + 1L }, lines.count { it.startsWith("rv head ") || it.startsWith("rw head ") })
 }
 
 // ---- national: a league of national leagues end to end -----------------------------------------

@@ -810,6 +810,37 @@ data class PlayerMatch(
     val comp: Comp? = null,
 )
 
+/**
+ * A row of a [Page.Matches] list: [a] and [b] its sides (players, or the teams of a team match)
+ * with their names and club badges, [where] the competition and stage ("한국 1부 12라운드",
+ * "요트컵 16강"), [score] from side A in games (boards of a team match; "" before it is played),
+ * [games] a league match's game scores ("166:178 · 170:158"), [winner] +1 side A, -1 side B, 0
+ * level, null not played; [replay] the ▶ rule.
+ */
+data class MatchLine(
+    val ref: String,
+    val week: Int,
+    val where: String,
+    val a: String,
+    val aName: String,
+    val aBadge: ClubBadge?,
+    val b: String,
+    val bName: String,
+    val bBadge: ClubBadge?,
+    val score: String,
+    val winner: Int?,
+    val replay: Boolean,
+    val comp: Comp,
+    val games: String = "",
+)
+
+/**
+ * A [Page.Matches] list ([LeagueAnalytics.loadMatches]) of [season]: the played matches newest
+ * week first, then the ones to come by week; [total] the matches found, of which the first
+ * [LeagueAnalytics.MATCH_ROWS] are listed.
+ */
+data class MatchList(val query: MatchQuery, val season: Int, val rows: List<MatchLine>, val total: Int)
+
 /** One line of a leaderboard: [text] the value as shown ("248.3점"), [sub] its sample ("38경기"); [league] the player's league label (national leagues). */
 data class LeaderLine(val key: String, val shown: String, val badge: ClubBadge?, val league: String?, val value: Double, val text: String, val sub: String)
 

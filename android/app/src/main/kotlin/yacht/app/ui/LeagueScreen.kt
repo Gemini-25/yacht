@@ -326,7 +326,6 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Review -> ReviewPageBody(c, v, page)
         is Page.Facts -> FactsPage(lg, v, page)
         Page.Chronicle -> ChroniclePage(lg, v)
-        // The match lists come later.
-        else -> CenterText("곧 볼 수 있어요.")
+        is Page.Matches -> MatchesPage(c, v, page)
     }
 }

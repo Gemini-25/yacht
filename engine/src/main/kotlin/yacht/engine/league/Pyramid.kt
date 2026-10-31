@@ -170,10 +170,6 @@ object Pyramid {
     /** The group tables of tier [t] of league [lg] of [season], best first each. */
     fun tables(season: Season, lg: LeagueDef, t: Int): List<List<String>> = lg.tiers.groups(t).map { d -> season.table(lg.first + d).map { it.key } }
 
-    /** [tables] of a season's single league (a national season: all its divisions as one ladder, as [Season.tiers] has them). */
-    @Deprecated("A national season has several leagues: pass the league's LeagueDef")
-    fun tables(league: Season, t: Int): List<List<String>> = tables(league, flat(league), t)
-
     /** Worse first: fewer points per match, then a lower score difference and score per match, then by key. */
     fun worse(league: Season): Comparator<String> {
         fun s(k: String) = league.standings[k]
@@ -191,19 +187,11 @@ object Pyramid {
     fun crossing(season: Season, config: LeagueConfig, lg: LeagueDef, t: Int): Crossing =
         crossing(tables(season, lg, t), tables(season, lg, t + 1), if (lg.tiers.linear) config.autoSwap else config.groupSwap, config.promotionPlayoff, worse(season))
 
-    /** [crossing] of a season's single league (a national season: all its divisions as one ladder, as [Season.tiers] has them). */
-    @Deprecated("A national season has several leagues: pass the league's LeagueDef")
-    fun crossing(league: Season, config: LeagueConfig, t: Int): Crossing = crossing(league, config, flat(league), t)
-
     /**
      * Tier [t] of league [lg] from best to worst: every group's winner (the better by points per
      * match first), then every runner-up, ... ([interleave]). A linear tier: its table.
      */
     fun ranking(season: Season, lg: LeagueDef, t: Int): List<String> = interleave(tables(season, lg, t), worse(season).reversed())
-
-    /** [ranking] of a season's single league (a national season: all its divisions as one ladder, as [Season.tiers] has them). */
-    @Deprecated("A national season has several leagues: pass the league's LeagueDef")
-    fun ranking(league: Season, t: Int): List<String> = ranking(league, flat(league), t)
 
     /**
      * [lists] position by position: every list's first (the [better] first among them), then
@@ -216,7 +204,7 @@ object Pyramid {
         return out
     }
 
-    /** A season's single league; a national season's divisions as one ladder (the view of [Season.tiers]). */
+    /** A legacy season's one league ([next] builds a legacy season only); a national season's divisions as one ladder. */
     private fun flat(season: Season): LeagueDef =
         season.leagues.list.singleOrNull() ?: LeagueDef(LeagueIds.LEGACY, 0, Tiers.linear(season.divisions.size))
 

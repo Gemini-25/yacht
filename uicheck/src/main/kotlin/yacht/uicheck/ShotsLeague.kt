@@ -1,12 +1,5 @@
 package yacht.uicheck
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import yacht.app.core.AppController
 import yacht.app.core.LeagueTab
 import yacht.app.core.MatchesView
@@ -22,7 +15,6 @@ import yacht.app.ui.BarTone
 import yacht.app.ui.BracketCard
 import yacht.app.ui.ControlBarRow
 import yacht.app.ui.GroupCard
-import yacht.app.ui.HomeBody
 import yacht.engine.league.BracketSide
 import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
@@ -36,13 +28,10 @@ import java.io.File
 
 /**
  * The league screen's own shots (lg00-lg45 that need no new data, and the pages S6 turned the old
- * dialogs into), and the width checks: no tab's chip row may scroll at 392 dp, and the home's
- * content stays within [HOME_MAX_DP].
+ * dialogs into), and the width check: no tab's chip row may scroll at 392 dp (the home's height
+ * budget is ShotsHome's).
  */
 internal object ShotsLeague : LeagueShots {
-    /** The home's height budget at 392 dp (UX 2). */
-    private const val HOME_MAX_DP = 1600f
-
     override fun empty(c: AppController, out: File) {
         shot(c, out, "lg00_empty")
     }
@@ -56,11 +45,10 @@ internal object ShotsLeague : LeagueShots {
         val followedBefore = lg.favourites
         top.firstOrNull()?.key?.let { if (it !in lg.favourites) lg.toggleFavourite(it) }
 
-        // 홈 (v1), its height budget, and the settings sheet.
+        // 홈 (its height budget is ShotsHome's, measured at the screen's width) and the settings sheet.
         shot(c, out, "lg01_home", heightDp = 1600)
         shot(c, out, "lg01_home_dark", dark = true, heightDp = 1600)
         shot(c, out, "lg01_home_360", heightDp = 1600, widthDp = 360)
-        checkHomeHeight(c, out)
         nav.sheet = Sheet.SETTINGS
         shot(c, out, "lg02_settings", heightDp = 1100)
         nav.sheet = Sheet.NONE
@@ -245,18 +233,6 @@ internal object ShotsLeague : LeagueShots {
         check(state.layoutInfo.totalItemsCount > 0) { "the ${t.name} chip row was not drawn" }
         check(!state.canScrollForward && !state.canScrollBackward) { "the ${t.name} chip row scrolls at 392 dp" }
         println("chip row ${t.name}: fits")
-    }
-
-    /** Fails the run when the home's content is taller than [HOME_MAX_DP] at 392 dp (rendered alone, as lg01_home_body). */
-    private fun checkHomeHeight(c: AppController, out: File) {
-        val v = c.league.view ?: return
-        var height by mutableStateOf(0f)
-        shotOf(out, "lg01_home_body", (HOME_MAX_DP + 200).toInt()) {
-            val density = LocalDensity.current
-            Box(Modifier.onSizeChanged { height = with(density) { it.height.toDp().value } }) { HomeBody(c, v) {} }
-        }
-        check(height in 1f..HOME_MAX_DP) { "the home is ${height.toInt()} dp high (at most ${HOME_MAX_DP.toInt()})" }
-        println("home: ${height.toInt()} dp high")
     }
 }
 

@@ -50,6 +50,7 @@ import yacht.app.core.HomeView
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
+import yacht.app.core.MatchQuery
 import yacht.app.core.MatchesView
 import yacht.app.core.Page
 import yacht.app.core.RecordsView
@@ -354,6 +355,12 @@ private fun FollowCardView(c: AppController, v: LeagueView, card: FollowCard) {
             card.last?.let { m -> MatchLine(c, v, "최근", m, card.kind == FollowKind.CLUB) }
             card.next?.let { m -> MatchLine(c, v, "다음", m, false) }
             card.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
+            if (card.kind == FollowKind.CLUB) {
+                Text(
+                    "선수단 경기 ›", style = MaterialTheme.typography.labelMedium, color = cs.primary, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { lg.nav.open(Page.Matches(MatchQuery.OfClub(card.target), "${card.title} 선수단 경기")) }.padding(vertical = 2.dp),
+                )
+            }
         }
     }
 }

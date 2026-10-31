@@ -585,11 +585,7 @@ class StatsTest {
     @Test
     fun theArchiveKeepsNoHighlightLines() {
         // A season's best games are the review's (ids) and the log archive's: "hl" lines go, old ones too.
-        val a = Archive()
-        a.putHighlights(4, listOf("a b c", "d e"))
-        assertTrue(a.highlights(4).isEmpty())
         val old = Archive.decode("archive 1\nhl 4 a b c\nhl 4 d e\n")
-        assertTrue(old.highlights(4).isEmpty())
         assertTrue(old.encode().lines().none { it.startsWith("hl ") })
     }
 

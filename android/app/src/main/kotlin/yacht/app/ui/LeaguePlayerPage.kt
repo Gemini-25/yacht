@@ -191,8 +191,9 @@ internal fun PlayerActionsSheet(c: AppController) {
                 c.screen = Screen.WATCH
             }
         }
-        LinkLine("⚗ 연구소에서 붙이기", "AI 연구소에서 이 선수를 골라 다른 AI와 수백 번 붙여 봐요") {
+        LinkLine("⚗ 연구소에서 붙이기", "AI 연구소에서 이 선수를 다른 AI와 수백 번 붙여 봐요") {
             close()
+            nav.labPick = key
             nav.open(Page.Lab)
         }
         // A league player (generated, evolved or made): remade in 선수 만들기.

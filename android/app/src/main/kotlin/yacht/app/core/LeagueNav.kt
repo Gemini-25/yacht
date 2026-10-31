@@ -46,11 +46,12 @@ enum class LadderSort(val label: String) { RATING("레이팅"), WIN_RATE("승률
 /** 국가대표 랭킹's orders: titles, the top five's strength, players. */
 enum class NationSort(val label: String) { CUPS("대회 성적"), STRENGTH("전력 (상위 5명)"), PLAYERS("선수 수") }
 
-/** The leaderboards, [first] the six shown before "다른 부문 6개 ›". */
-enum class LeaderKind(val label: String, val first: Boolean) {
-    SCORER("득점왕", true), YACHTS("요트왕", true), MVP("MVP 레이스", true),
-    CLUTCH("클러치", true), COMEBACK("역전의 명수", true), LUCKY("행운아", true), BONUS("보너스왕", false), SWEEPS("완승왕", false),
-    UNLUCKY("불운", false), GIANT("거인 사냥꾼", false), STEADY("꾸준함", false), OVER300("300점 클럽", false),
+/**
+ * The leaderboards: the hub's eight first ([LeagueAnalytics.HUB]), each named by
+ * [LeagueAnalytics.title] (the engine's [yacht.engine.league.LeaderStat] labels).
+ */
+enum class LeaderKind {
+    SCORER, YACHTS, MVP, CLUTCH, COMEBACK, LUCKY, BONUS, SWEEPS, UNLUCKY, GIANT, STEADY, OVER300,
 }
 
 /** The part of the rules page a link opens at. */
@@ -176,6 +177,9 @@ class LeagueNav(private val onLeague: () -> Unit = {}) {
 
     /** 국가대표 랭킹's order. */
     var nationSort by mutableStateOf(NationSort.CUPS)
+
+    /** The player the lab opens with as its A (a player page's "⚗ 연구소에서 붙이기"); the lab takes it once. */
+    var labPick by mutableStateOf<String?>(null)
     var sheet by mutableStateOf(Sheet.NONE)
 
     /** The pages over the tabs, the top one last (at most [MAX_PAGES]). */

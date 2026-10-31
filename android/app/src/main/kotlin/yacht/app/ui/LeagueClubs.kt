@@ -51,6 +51,7 @@ import yacht.app.core.ClubsView
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueSelector
 import yacht.app.core.LeagueView
+import yacht.app.core.MatchQuery
 import yacht.app.core.Page
 import yacht.app.core.SeasonView
 import yacht.engine.league.Club
@@ -519,6 +520,10 @@ private fun ClubPageContent(lg: LeagueController, v: LeagueView, p: ClubPage, on
                     Text(m.score, style = MaterialTheme.typography.labelSmall)
                 }
             }
+        }
+        // Every match of the squad this season, cup ties and the 클럽 대항전 included.
+        LinkLine("선수단 경기 전체", "리그와 대회 경기를 한눈에 봐요.") {
+            lg.nav.open(Page.Matches(MatchQuery.OfClub(p.key), "${p.badge.name} 선수단 경기"))
         }
         Heading("📜 클럽 기록")
         Small(

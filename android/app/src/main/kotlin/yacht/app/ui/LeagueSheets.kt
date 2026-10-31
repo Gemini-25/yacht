@@ -264,6 +264,8 @@ private fun ColumnScope.SettingsSheet(c: AppController, v: LeagueView?, onReset:
     )
     SheetHeading("규칙")
     LinkLine("규칙 설정", "바꾼 규칙은 다음 시즌부터 적용돼요.") { page(Page.Rules()) }
+    // The federation sits with national leagues (and the legacy season before the reform).
+    if (v?.season?.national == true || v?.season?.nextNational == true) LinkLine("🏛 요트협회", "총회 안건과 결정 기록을 봐요.") { page(Page.Federation) }
     SheetHeading("선수와 AI")
     LinkLine("🧑 선수 만들기") {
         c.editingPlayer = null

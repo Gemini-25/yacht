@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,7 +51,9 @@ import yacht.engine.league.MatchPreview
 @Composable
 fun LabPage(lg: LeagueController) {
     val cs = MaterialTheme.colorScheme
-    var a by remember { mutableStateOf<String?>(null) }
+    // A player page's pick comes in as A, once.
+    var a by remember { mutableStateOf(lg.nav.labPick) }
+    LaunchedEffect(Unit) { lg.nav.labPick = null }
     var b by remember { mutableStateOf<String?>(null) }
     var target by remember { mutableStateOf(1000) }
     val (current, history) = lg.lab

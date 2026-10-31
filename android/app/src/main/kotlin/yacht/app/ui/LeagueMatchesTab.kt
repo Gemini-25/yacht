@@ -41,13 +41,13 @@ import yacht.app.core.BroadcastView
 import yacht.app.core.FeedItem
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
+import yacht.app.core.MatchLine
 import yacht.app.core.Page
 import yacht.app.core.ResultsFilter
 import yacht.app.core.Screen
 import yacht.app.core.Sheet
 import yacht.engine.explain.Ko
 import yacht.engine.league.Comp
-import yacht.engine.league.Competitions
 import yacht.engine.league.Highlight
 import yacht.engine.league.JobKind
 import yacht.engine.league.LiveBoard
@@ -95,7 +95,7 @@ internal fun FeedList(c: AppController, v: LeagueView) {
                         }
                         if (liveOpen) for (m in live) {
                             val team = m.comp.byTeams
-                            fun side(k: String) = if (team) Competitions.teamLabel(k) else lg.name(k)
+                            fun side(k: String) = if (team) teamName(lg, k) else lg.name(k)
                             val key = v.clock?.let { matchKey(it.season, m.comp, m.id) }
                             Text(
                                 "${stageName(m.comp, m.label, short = true)}  ${side(m.a)}  vs  ${side(m.b)}" + if (m.firstTo > 0) " · ${m.firstTo}선승" else "",
@@ -369,7 +369,8 @@ internal fun LiveBoardView(c: AppController) {
             }
         }
         items(frames, key = { "live-${it.slot}" }) { f ->
-            val key = season?.let { matchKey(it, f.fixture.comp, f.fixture.id) }
+            // The frame's own season (a match of last season just after the rollover), else this one.
+            val key = (f.season.takeIf { it > 0 } ?: season)?.let { matchKey(it, f.fixture.comp, f.fixture.id) }
             LiveCard(c, f, key?.let { k -> { lg.nav.open(Page.Match(k)) } })
         }
     }
@@ -383,7 +384,7 @@ private fun LiveCard(c: AppController, f: LiveFrame, onOpen: (() -> Unit)?) {
     val team = fx.kind == JobKind.TEAM
     // A series (선승제): games won "2-1", and no "/N판" (it would tell how long the finished series ran).
     val series = fx.firstTo > 0
-    fun side(k: String) = if (team && fx.comp.byTeams) Competitions.teamLabel(k) else lg.name(k)
+    fun side(k: String) = if (team && fx.comp.byTeams) teamName(lg, k) else lg.name(k)
     Card(Modifier.fillMaxWidth().clickable(enabled = onOpen != null) { onOpen?.invoke() }, colors = CardDefaults.cardColors(containerColor = if (f.finished) cs.surface else cs.secondaryContainer.copy(alpha = 0.35f))) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -486,6 +487,75 @@ private fun PickRow(p: BroadcastPick, onClick: () -> Unit) {
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * [Page.Matches]: this season's matches of its query (a club's squad, a group, a week, a round),
+ * the played ones newest first, then the ones to come. A row opens its report (🔮 before it is
+ * played); ▶ plays it again where it can be (UX 3.3).
+ */
+@Composable
+internal fun MatchesPage(c: AppController, v: LeagueView, page: Page.Matches) {
+    val lg = c.league
+    val cs = MaterialTheme.colorScheme
+    // Again as the season is played on (every few hundred results, not every snapshot).
+    val played = v.season?.played ?: 0
+    LaunchedEffect(page.loadKey, v.clock?.season, played / MATCHES_REFRESH) { lg.analytics.loadMatches(page, lg.center) }
+    val list = lg.analytics.matches(page)
+    when {
+        list == null -> CenterText("경기를 불러오는 중…")
+        list.rows.isEmpty() -> CenterText("이번 시즌에 해당하는 경기가 아직 없어요.")
+        else -> LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            item(key = "count") {
+                val more = list.total - list.rows.size
+                Text(
+                    "이번 시즌 ${list.total}경기" + if (more > 0) " · 앞의 ${list.rows.size}경기만 보여요" else "",
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+                )
+            }
+            items(list.rows, key = { it.ref }) { m -> MatchListRow(c, v, m, list.season) }
+        }
+    }
+}
+
+/** Results between two refreshes of a [MatchesPage] while the league plays. */
+private const val MATCHES_REFRESH = 200
+
+/** A [MatchesPage] row: when and where, the two sides with the score (the winner in bold), ▶, 📋 or 🔮. */
+@Composable
+private fun MatchListRow(c: AppController, v: LeagueView, m: MatchLine, season: Int) {
+    val lg = c.league
+    val cs = MaterialTheme.colorScheme
+    val done = m.winner != null
+    Card(Modifier.fillMaxWidth().clickable { lg.nav.open(Page.Match(m.ref)) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    listOf(weekLabel(m.week, season, v.clock, m.comp), compIcon(m.comp) + " " + m.where).filter { it.isNotBlank() }.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                )
+                Text(
+                    when {
+                        done && m.replay -> "▶ 다시 보기"
+                        done -> "📋 리포트"
+                        else -> "🔮 프리뷰"
+                    },
+                    style = MaterialTheme.typography.labelMedium, color = cs.primary, fontWeight = FontWeight.Bold,
+                    modifier = (if (done && m.replay) Modifier.clickable { watchMatch(c, m.ref) } else Modifier).padding(start = 8.dp),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ClubMark(m.aBadge, 14.dp)
+                Text(m.aName, Modifier.weight(1f), fontWeight = if (m.winner == 1) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(m.score.ifEmpty { "vs" }, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp))
+                Text(m.bName, Modifier.weight(1f), fontWeight = if (m.winner == -1) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                ClubMark(m.bBadge, 14.dp)
+            }
+            if (m.games.isNotEmpty()) {
+                Text(m.games, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             }
         }
     }
