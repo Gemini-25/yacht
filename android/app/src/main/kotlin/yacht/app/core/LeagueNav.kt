@@ -235,7 +235,7 @@ fun pageOf(link: String, has: (Comp) -> Boolean = { true }): Page? {
     val id = rest?.takeIf { it.isNotEmpty() }
     return when (head) {
         "p" -> id?.let { Page.Player(it) }
-        "c" -> id?.let { if ('@' in it) Page.Encyclopedia(link) else Page.Club(it) }
+        "c" -> id?.let { if ('@' !in it) Page.Club(it) else if (GONE_CLUB.matches(it)) Page.Encyclopedia(link) else null }
         "k" -> id?.let { Page.Coach(it) }
         "l" -> id?.let { Page.League(it) }
         "n" -> id?.let { Page.Nation(it) }
@@ -247,13 +247,19 @@ fun pageOf(link: String, has: (Comp) -> Boolean = { true }): Page? {
         "meta" -> if (rest == null) Page.Meta() else enumOf<MetaTab>(rest)?.let { Page.Meta(it) }
         "cr" -> if (rest == null) Page.ClubRanking() else enumOf<ClubRankKind>(rest)?.let { Page.ClubRanking(it) }
         "m" -> id?.let { Page.Match(it) }
-        "enc" -> id?.let { Page.Encyclopedia(it) }
+        "enc" -> id?.takeIf { ENC_REF.matches(it) }?.let { Page.Encyclopedia(it) }
         else -> null
     }
 }
 
 /** An enum entry by its name, any case; null for another word. */
 private inline fun <reified E : Enum<E>> enumOf(name: String): E? = enumValues<E>().firstOrNull { it.name.equals(name, ignoreCase = true) }
+
+/** A gone or reused club's id with its founding year ("c05@2031"). */
+private val GONE_CLUB = Regex("[^@]+@\\d+")
+
+/** An encyclopedia reference: an entity's prefix, a colon and its id ("p:g001", "c:c05@2031", "x:CCL.ASIA"). */
+private val ENC_REF = Regex("[pcklnx]:.+")
 
 /** The competitions an `x:` link names by an honour's base (HonourKind: "CL" the 챔피언스 리그, "CCL.ASIA" a 대륙 챔피언스). */
 private val HONOUR_COMPS = mapOf("CL" to Comp.CHAMPIONS, "CCL" to Comp.CONT_CHAMPIONS, "CUP" to Comp.CUP, "SUPER" to Comp.SUPER, "WC" to Comp.WORLD_CUP)

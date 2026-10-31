@@ -280,6 +280,25 @@ class NavTest {
     }
 
     @Test
+    fun theBarsBackArrowClosesAPageWithoutATrail() {
+        val nav = LeagueNav()
+        nav.open(Page.Player("a"))
+        nav.open(Page.Club("c05"))
+        // Not an encyclopedia page: ← closes it, as before.
+        nav.leave(nav.page!!)
+        assertEquals(listOf<Page>(Page.Player("a")), nav.pages.toList())
+        // An encyclopedia page read from a link, no trail behind it: ← closes it too.
+        nav.read("p:a")
+        nav.leave(nav.page!!)
+        assertEquals(listOf<Page>(Page.Player("a")), nav.pages.toList())
+        // A page that is no longer on top (a ← drawn before the page changed) closes only itself.
+        nav.read("p:a")
+        nav.read("c:c05")
+        nav.leave(Page.Player("a"))
+        assertEquals(listOf<Page>(Page.Encyclopedia("c:c05", listOf("p:a"))), nav.pages.toList())
+    }
+
+    @Test
     fun theInfoSheetClosesBeforeTheTrail() {
         val nav = LeagueNav()
         nav.read("l:KR")
@@ -337,8 +356,14 @@ class NavTest {
         // A match ref keeps its own colons.
         assertEquals(Page.Match("7:L:120:1"), pageOf("m:7:L:120:1"))
         assertEquals(Page.Encyclopedia("k:k12"), pageOf("enc:k:k12"))
-        // Junk: nothing.
-        for (junk in listOf("", "p", "p:", "zz:1", "ev:x", "wc:", "mk:NOPE", "meta:x", "cr:BEST", "x:", "x:ZZ", "m:", "enc:", "pr:", "hello")) {
+        assertEquals(Page.Encyclopedia("c:c05@2031"), pageOf("enc:c:c05@2031"))
+        assertEquals(Page.Encyclopedia("x:CCL.ASIA"), pageOf("enc:x:CCL.ASIA"))
+        // Junk: nothing (an encyclopedia link names an entity by its prefix; a gone club, its founding year).
+        val junks = listOf(
+            "", "p", "p:", "zz:1", "ev:x", "wc:", "mk:NOPE", "meta:x", "cr:BEST", "x:", "x:ZZ", "x:Z", "m:", "enc:", "pr:", "hello",
+            "enc:g001", "enc:q:1", "enc:p:", "c:c05@", "c:@2031", "c:c05@20x1",
+        )
+        for (junk in junks) {
             assertNull(pageOf(junk), junk)
         }
     }

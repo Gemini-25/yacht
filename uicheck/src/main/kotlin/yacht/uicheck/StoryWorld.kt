@@ -41,7 +41,9 @@ internal object StoryWorld {
 
     /**
      * The world, played [seasons] seasons from [seed] and into the next one up to week [untilWeek]
-     * (null: ⌈0.6 R⌉ + 4), deterministic: the same files every time.
+     * (null: ⌈0.6 R⌉ + 4; a week past the season's last plays it to its end, unclosed),
+     * deterministic: the same files every time but for the wall-clock time the ladder stamps on
+     * each of its recent matches (no screen shows it; StoryWorldTest).
      */
     fun build(players: Int = PLAYERS, seasons: Int = SEASONS, seed: Long = SEED, untilWeek: Int? = null): Built {
         var config = config(players)
@@ -160,7 +162,8 @@ internal object StoryWorld {
     private fun strength(k: String): Int = k.hashCode() and 63
 
     /**
-     * [n] games of [a] against [b]: the stronger side wins more often (from 33% to 67%), the scores
+     * [n] games of [a] against [b]: the stronger side wins more often (an Elo curve on the strengths'
+     * gap over 100: a game's chance from 19% at the widest gap to 81%), the scores
      * spread between 150 and 299, a Yacht or the bonus now and then, all from the fixture's seed.
      */
     private fun games(f: Fixture, a: String, b: String, n: Int, salt: Int): List<GameScore> {

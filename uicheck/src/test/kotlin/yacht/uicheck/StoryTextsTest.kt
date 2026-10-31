@@ -2,6 +2,7 @@ package yacht.uicheck
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import yacht.app.core.ClubBadge
@@ -100,10 +101,10 @@ class StoryTextsTest {
 
         /**
          * The texts: today's SeasonEnd banner first (its title as ui/LeagueHome.kt's SeasonEndBanner
-         * writes it, its two lines as HomeFeed builds them); each app stage appends its own.
+         * writes it, in its bold, its two lines as HomeFeed builds them); each app stage appends its own.
          */
         val CASES: List<Case> = listOf(
-            Case("SeasonEnd title", type.titleSmall, BANNER_DP, 1) { n -> "🏆 ${Ko.i("시즌 ${n.season}")} 끝났어요" },
+            Case("SeasonEnd title", type.titleSmall.copy(fontWeight = FontWeight.Bold), BANNER_DP, 1) { n -> "🏆 ${Ko.i("시즌 ${n.season}")} 끝났어요" },
             Case("SeasonEnd line 1", type.bodySmall, BANNER_DP, 2) { n -> seasonEnd(n).lines[0] },
             Case("SeasonEnd line 2", type.bodySmall, BANNER_DP, 2) { n -> seasonEnd(n).lines.getOrElse(1) { "" } },
         )

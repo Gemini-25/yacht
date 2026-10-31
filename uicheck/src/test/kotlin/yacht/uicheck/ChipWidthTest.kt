@@ -6,6 +6,7 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
 import kotlinx.coroutines.runBlocking
 import yacht.app.core.ClubRankKind
+import yacht.app.core.ClubTab
 import yacht.app.core.MarketTab
 import yacht.app.core.MetaTab
 import yacht.app.ui.ChipRow
@@ -15,7 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The phase's page chip rows (UX 2.1: 이적 센터's tabs, 시대와 메타's, 클럽 랭킹's lists) drawn as the
+ * The phase's page chip rows (UX 2.1: the club page's tabs, 이적 센터's, 시대와 메타's, 클럽 랭킹's lists) drawn as the
  * screens draw them ([ChipRow]) on a 360 dp phone at font scale 1.0 and 1.15: where the last chip
  * ends, and a row wider than the screen scrolls until its last chip shows whole (none is cut off).
  */
@@ -70,6 +71,13 @@ class ChipWidthTest {
     fun theMetaTabsFit() {
         checkRow("MetaTab", MetaTab.entries.map { it.label }, fitsAtOne = true)
         assertTrue(measure(MetaTab.entries.map { it.label }, { it }, 1.15f).fits, "MetaTab at font scale 1.15")
+    }
+
+    /** The club page's four tabs ([yacht.app.core.PageChips.CLUB]): short words, whole on the screen at either font scale. */
+    @Test
+    fun theClubTabsFit() {
+        checkRow("ClubTab", ClubTab.entries.map { it.label }, fitsAtOne = true)
+        assertTrue(measure(ClubTab.entries.map { it.label }, { it }, 1.15f).fits, "ClubTab at font scale 1.15")
     }
 
     @Test
