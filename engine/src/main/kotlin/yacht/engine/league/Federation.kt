@@ -42,8 +42,8 @@ enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Doub
     /** Few go back down and the 2부 champions outscore the 1부's middle: autoSwap + 1. */
     SWAP_UP(Lever.AUTO_SWAP, 0.20, 0.12),
 
-    /** The regular-season leader often loses the title playoff (leaderLost, about 70% of 4-player playoffs): off. */
-    TITLE_PO_OFF(Lever.TITLE_PO, 0.72, 0.86),
+    /** The regular-season leader often loses the title playoff (leaderLost, about 72% of 4-player playoffs): off. */
+    TITLE_PO_OFF(Lever.TITLE_PO, 0.78, 0.90),
 
     /** Without a playoff the leader often runs away with the title (runaway, about 30%): on. */
     TITLE_PO_ON(Lever.TITLE_PO, 0.33, 0.50),

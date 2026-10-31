@@ -85,8 +85,8 @@ class FederationTest {
                 ),
             ),
             Case(
-                ProposalKind.TITLE_PO_OFF, config, "0", { stats(playoffLeagues = 50, leaderLost = it) }, 36, 43, 35,
-                listOf(noPo to stats(playoffLeagues = 50, leaderLost = 43), config to stats(playoffLeagues = 3, leaderLost = 3)),
+                ProposalKind.TITLE_PO_OFF, config, "0", { stats(playoffLeagues = 50, leaderLost = it) }, 39, 45, 38,
+                listOf(noPo to stats(playoffLeagues = 50, leaderLost = 45), config to stats(playoffLeagues = 3, leaderLost = 3)),
             ),
             Case(
                 ProposalKind.TITLE_PO_ON, noPo, "1", { stats(leagues = 100, runaway = it) }, 33, 50, 32,
@@ -189,7 +189,7 @@ class FederationTest {
         // ENG 6.4's table as S20 calibrated it (docs/LEAGUE_SPEC.md 11.4).
         val pinned = mapOf(
             ProposalKind.SWAP_DOWN to (0.38 to 0.50), ProposalKind.SWAP_UP to (0.20 to 0.12),
-            ProposalKind.TITLE_PO_OFF to (0.72 to 0.86), ProposalKind.TITLE_PO_ON to (0.33 to 0.50),
+            ProposalKind.TITLE_PO_OFF to (0.78 to 0.90), ProposalKind.TITLE_PO_ON to (0.33 to 0.50),
             ProposalKind.SWEEP_OFF to (0.99 to 1.00), ProposalKind.SWEEP_ON to (0.52 to 0.45),
             ProposalKind.SIZE_DOWN to (46.0 to 48.0), ProposalKind.SIZE_UP to (36.0 to 34.0),
             ProposalKind.LONG_KO_ON to (0.09 to 0.25), ProposalKind.LONG_KO_OFF to (0.0 to -0.10),
@@ -223,9 +223,9 @@ class FederationTest {
         val f = Federation()
         val tabled = realSeasons.map { s -> f.assemble(s.season, s, config, false).also { f.resolve(s.season + 1, SEED, committee) }.size }
         assertEquals(listOf(0, 2, 0, 0, 2, 1, 2, 1, 1, 1), tabled)
-        // A typical season's proposal presses below 1 (the committee passes few of them); the strongest here, 23 of 28 leaders beaten in the playoffs, 0.81.
+        // A typical season's proposal presses below 1 (the committee passes few of them); the strongest here, 10 of 67 promoted players back down, 0.74.
         val pressures = realSeasons.flatMap { Federation.candidates(it, config) }.map { it.pressure }
-        assertEquals(0.81, pressures.max())
+        assertEquals(0.74, pressures.max())
     }
 
     @Test
