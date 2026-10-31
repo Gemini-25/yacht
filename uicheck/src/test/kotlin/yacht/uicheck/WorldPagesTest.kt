@@ -70,6 +70,11 @@ class WorldPagesTest {
         assertEquals(st.points, shares, 0.05 * (st.counted.size + 1) + 1e-9)
         assertEquals(book.members(top.badge.id).toSet(), page.members.map { it.key }.toSet())
         assertTrue(page.recent.size <= 10 && page.recent.all { it.ref?.startsWith("${p.number}:") == true })
+        // Its 클럽 대항전 titles from the honours (a club's id is the key).
+        assertEquals(0, page.cupTitles)
+        w.honours.add(listOf(yacht.engine.league.Honour(p.number - 1, "CLUBCUP", top.badge.id), yacht.engine.league.Honour(p.number - 1, "CLUBCUP2", top.badge.id)))
+        pages.loadClub(top.badge.id)
+        assertEquals(1, wait { pages.club(Page.Club(top.badge.id))?.takeIf { it.cupTitles > 0 } }.cupTitles)
     }
 
     @Test

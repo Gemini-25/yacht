@@ -920,7 +920,8 @@ data class ClubMember(
  * A national club's page; [key] equals its page's load key. [league] is the league it plays in
  * this season ("" when none), [places] its club-table place per kept season (only when in the top
  * 3, newest first), [moves] the moves in and out (newest first), [recent] its members' last league
- * matches, [gone] the season after which it was dissolved (null while it plays).
+ * matches, [gone] the season after which it was dissolved (null while it plays), [cupTitles] its
+ * 클럽 대항전 titles.
  */
 data class ClubPage(
     val key: String,
@@ -938,6 +939,7 @@ data class ClubPage(
     val recent: List<PlayerMatch>,
     val aggregate: AggregateStats?,
     val gone: Int? = null,
+    val cupTitles: Int = 0,
 )
 
 /**

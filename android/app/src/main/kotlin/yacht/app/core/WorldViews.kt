@@ -239,6 +239,7 @@ class WorldPages internal constructor(private val host: LeagueHost) {
             club?.budget ?: 0, club?.honours ?: gone?.honours ?: 0, club?.founded ?: gone?.founded ?: 0,
             list, p?.let { weekOf(it)(members) }.orEmpty(), places, b.history(id).asReversed().take(CLUB_MOVES),
             p?.let { recentOf(it, members.toSet()) }.orEmpty(), aggregate(w, members), gone?.dissolved,
+            w.honours.all.count { it.kind == "CLUBCUP" && it.key == id },
         )
     }
 

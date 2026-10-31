@@ -524,6 +524,7 @@ private fun ClubPageContent(lg: LeagueController, v: LeagueView, p: ClubPage, on
         Small(
             listOfNotNull(
                 "클럽 순위 우승 ${p.titles}회",
+                p.cupTitles.takeIf { it > 0 }?.let { "${Comp.CLUB_CUP.label} 우승 ${it}회" },
                 "자금 ${p.budget}",
                 p.founded.takeIf { it > 0 }?.let { "시즌 $it 창단" },
             ).joinToString(" · "),
