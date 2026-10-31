@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -146,6 +147,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     private fun forget() {
         resims.clear()
+        lineups.clear()
         logged.clear()
         candidates.clear()
         pickedAt = null
@@ -295,7 +297,17 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         if (ref.comp == Comp.FRIENDLY || ref.comp == Comp.LAB || ref.comp == Comp.LEGEND) return book[ref] != null
         if (book[ref] != null) return true
         val p = host.world()?.plan ?: return false
-        return ref.season == p.number && !host.adaptive(a) && !host.adaptive(b) && host.ai(a) != null && host.ai(b) != null
+        if (ref.season != p.number) return false
+        // A team match is played again whole: a side of any of its boards that adapts or left rules it out.
+        val keys = if (ref.board < 0) listOf(a, b) else lineups.getOrPut(ref.whole) {
+            SeasonMatches.of(p, ref)?.fixture?.let { f -> if (f.kind == JobKind.TEAM) f.lineupA + f.lineupB else listOf(f.a, f.b) } ?: listOf(a, b)
+        }
+        return keys.none { host.adaptive(it) } && keys.all { host.ai(it) != null }
+    }
+
+    /** Every board's sides of the team matches [canReplay] was asked about (this season's), the last [LINEUPS]. */
+    private val lineups = object : LinkedHashMap<MatchRef, List<String>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<MatchRef, List<String>>?): Boolean = size > LINEUPS
     }
 
     /** The current season's boards in the book (under the lock): for the harness. */
@@ -316,6 +328,13 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     /** Runs [block] under the league's lock (the harness reads the book and the season with it). */
     internal fun <T> locked(block: () -> T): T = synchronized(host.lock, block)
+
+    /** The broadcast channel's view now and the candidates of [week] (under the lock they take): for tests. */
+    internal fun broadcastNow(): BroadcastView? = synchronized(host.lock) { broadcastView() }
+    internal fun candidatesNow(week: Int): List<BroadcastPicks.Candidate> = synchronized(host.lock) {
+        val w = host.world() ?: return@synchronized emptyList()
+        w.plan?.let { candidatesOf(w, it, week) }.orEmpty()
+    }
 
     /** True when [key] adapts to its opponent (its matches are played again only from a log). */
     internal fun adaptive(key: String): Boolean = host.adaptive(key)
@@ -399,7 +418,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         val resim = x.current && m != null && m.played && !x.adaptive && x.present && x.format != null
         // A team match is played back whole: boards logged alone (a highlight's) are re-simulated with the rest.
         val partial = f.kind == JobKind.TEAM && x.logs.size < f.lineupA.size && resim
-        if (x.logs.isNotEmpty() && !partial) {
+        // A highlight's game the kept boards lack (last season's series keeps its deciding game only): its genes first.
+        val lacks = snapshotFirst && highlight != null && x.logs.none { l -> maxOf(0, l.ref.board) == highlight.board && l.games.any { it.index == highlight.game } }
+        if (x.logs.isNotEmpty() && !partial && !lacks) {
             val boards = x.logs.map { log -> log.games.map { g -> log.turns(rules, g.index) } to log }
             if (boards.any { (turns, _) -> turns.any { it == null } }) return@withContext Resolved(ReplaySource.NONE, note = CORRUPT)
             if (x.current && x.match != null && !sameResult(x.match, x.logs)) return@withContext Resolved(ReplaySource.NONE, note = CORRUPT)
@@ -531,7 +552,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     private fun quickReport(w: LeagueWorld, loadKey: String, key: String, view: LeagueView?): MatchReport {
         val ref = MatchRef.decode(key)?.whole ?: return missing(loadKey, key)
         val x = facts(ref, null)
-        val f = x.fixture ?: return missing(loadKey, key)
+        val f = x.fixture ?: return fromFeed(loadKey, ref, x, view) ?: missing(loadKey, key)
         val p = w.plan
         val s = p?.league?.takeIf { x.current }
         val m = x.match
@@ -588,6 +609,26 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             news = news, comp = f.comp, label = f.label, season = ref.season, week = f.week, placeA = place(f.a), placeB = place(f.b),
             team = team, firstTo = f.firstTo,
             deltaA = delta?.let { if (it.a == f.a) it.deltaA else it.deltaB }, deltaB = delta?.let { if (it.a == f.a) it.deltaB else it.deltaA },
+        )
+    }
+
+    /**
+     * A match the league no longer holds (a past season's with no log or highlight kept), as the
+     * results feed still shows it: its sides and games, and why it cannot be played again.
+     */
+    private fun fromFeed(loadKey: String, ref: MatchRef, x: Facts, view: LeagueView?): MatchReport? {
+        val item = view?.feed?.firstOrNull { it.ref?.let { r -> MatchRef.decode(r)?.whole } == ref } ?: return null
+        val comp = item.comp ?: ref.comp
+        val f = Fixture(comp, ref.id, item.a, item.b, 0L, label = item.label, week = item.week)
+        val games = item.games.mapIndexed { i, g -> GameReport(i, "${i + 1}판", g.a, g.b, i % 2 == 0, g.aYacht, g.bYacht, g.aBonus, g.bBonus, null, null, null, null, null, null, emptyList()) }
+        val won = games.sumOf { won(it) }
+        val result = boardResult(games, null)
+        return MatchReport(
+            loadKey, ref.encode(), titleOf(null, f, ref.season), ReportState.PLAYED, item.a, item.b, item.aName, item.bName, null, null, null, null,
+            if (games.isEmpty()) "" else "${num(won)} : ${num(games.size - won)}", result,
+            listOf(BoardReport(maxOf(0, ref.board), item.a, item.b, item.aName, item.bName, games, games.sumOf { it.scoreA ?: 0 }, games.sumOf { it.scoreB ?: 0 }, result)),
+            ReplaySource.NONE, false, false, if (x.current) NOT_FOUND else PAST, emptyList(), null, emptyList(), comp = comp, label = item.label,
+            season = ref.season, week = item.week, deltaA = item.deltaA, deltaB = item.deltaB,
         )
     }
 
@@ -748,14 +789,33 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         var job: Job? = null
     }
 
-    private inner class Session(val match: WMatch, var board: Int, var game: Int, val queue: List<String>?, val at: Int) {
+    /** A session of the match [match] (pick [at] of [channel] on the broadcast channel). */
+    private inner class Session(val match: WMatch, var board: Int, var game: Int, val channel: Channel?, val at: Int) {
         val steps = HashMap<Triple<Int, Int, Boolean>, Steps>()
 
         /** Ticks the end of the game shown, and its broadcaster's lines before it, have been held for. */
         var hold = 0
         var introHold = 0
-        var summary = queue != null
+        var summary = channel?.summary ?: false
     }
+
+    /**
+     * One run of the broadcast channel: its picks ([queue], refs in pick order), the ones shown or
+     * passed over in this run ([done]), the ones watched before it (not played again, [skip]),
+     * and whether it plays in 요약.
+     */
+    private class Channel(val queue: List<String>, val skip: Set<String>) {
+        val done: MutableSet<Int> = ConcurrentHashMap.newKeySet()
+
+        @Volatile var summary = true
+
+        /** Pick [i] is still to be shown in this run. */
+        fun open(i: Int): Boolean = i !in done && queue[i] !in skip
+    }
+
+    /** The channel playing (under [watchLock]), and the pick it waits for or works out while no session plays. */
+    private var channel: Channel? = null
+    private var pending = 0
 
     /** Plays [key]'s match again (▶ 다시 보기) from game [game] of board [board] (-1: the key's board, else the first). */
     fun watch(key: String, board: Int = -1, game: Int = 0) {
@@ -766,7 +826,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         loading = host.scope.launch(Dispatchers.Default) {
             val m = matchOf(ref, WatchKind.REPLAY)
             synchronized(watchLock) {
-                if (watch?.kind != WatchKind.REPLAY || session != null) return@launch
+                if (!isActive || watch?.kind != WatchKind.REPLAY || session != null) return@launch
                 val match = m.first ?: return@launch fail(m.second ?: CHANGED)
                 val i = match.boards.indexOfFirst { it.board == at }.takeIf { it >= 0 } ?: 0
                 begin(Session(match, i, 0, null, 0), game)
@@ -779,11 +839,18 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         open(WatchKind.HIGHLIGHT, h.caption)
         loading = host.scope.launch(Dispatchers.Default) {
             val ref = MatchRef(h.season, h.fixture.comp, h.fixture.id, h.board)
-            val r = runCatching { resolve(ref, h, snapshotFirst = true) }.getOrElse { Resolved(ReplaySource.NONE, note = CORRUPT) }
+            val job = coroutineContext[Job]
+            val r = try {
+                resolve(ref, h, snapshotFirst = true, cancelled = { job?.isActive == false })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Resolved(ReplaySource.NONE, note = CORRUPT)
+            }
             val played = r.boards.firstOrNull { maxOf(0, it.log.ref.board) == h.board }
             val i = played?.log?.games?.indexOfFirst { it.index == h.game } ?: -1
             synchronized(watchLock) {
-                if (watch?.kind != WatchKind.HIGHLIGHT || session != null) return@launch
+                if (!isActive || watch?.kind != WatchKind.HIGHLIGHT || session != null) return@launch
                 if (played == null || i < 0) return@launch fail(r.note ?: CHANGED)
                 val g = wGame(played.log, played.log.games[i], played.turns[i], host.estimate())
                 val m = WMatch(WatchKind.HIGHLIGHT, ref, h.caption, listOf(WBoard(h.board, h.a, h.b, listOf(g))), emptyList(), 0, false, null, null, false, emptyMap(), r.source)
@@ -802,7 +869,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         loading = host.scope.launch(Dispatchers.Default) {
             val m = runCatching { friendly(a, b) }.getOrNull()
             synchronized(watchLock) {
-                if (watch?.kind != WatchKind.FRIENDLY || session != null) return@launch
+                // Left (or another friendly asked for) meanwhile: this one is on the ladder all the same.
+                if (!isActive || watch?.kind != WatchKind.FRIENDLY || session != null) return@launch
                 if (m == null) return@launch fail("친선 경기를 둘 수 없어요. 선수가 리그에 없어요.")
                 begin(Session(m, 0, 0, null, 0), 0)
             }
@@ -843,8 +911,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     /**
      * '📺 이번 주 중계' from pick [from] (a ref; null: the first played pick not yet watched): the
-     * played picks in pick order, each followed by a countdown to the next; a pick not played yet
-     * waits ("곧 시작해요"). 요약 중계 by default.
+     * played picks in pick order, each followed by a countdown to the next, then the ones still to
+     * be played, waited for ("곧 시작해요"); picks watched before are passed over. 요약 중계 by default.
      */
     fun startBroadcast(from: String? = null) {
         open(WatchKind.BROADCAST, "📺 이번 주 중계")
@@ -857,45 +925,103 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
                 return@launch
             }
             val queue = picks.map { it.ref }
-            val start = from?.let { queue.indexOf(it) }?.takeIf { it >= 0 } ?: picks.indexOfFirst { it.played && it.ref !in watched }.takeIf { it >= 0 } ?: 0
-            playPick(queue, start, summary = true)
+            val before = picks.filter { it.watched && it.ref != from }.map { it.ref }.toSet()
+            // Every pick watched already: the channel plays them all again.
+            val ch = Channel(queue, if (queue.all { it in before }) emptySet() else before)
+            val start = from?.let { queue.indexOf(it) }?.takeIf { it >= 0 } ?: synchronized(host.lock) { nextOf(ch, -1) } ?: 0
+            synchronized(watchLock) {
+                if (!isActive || watch?.kind != WatchKind.BROADCAST || session != null) return@launch
+                channel = ch
+            }
+            playPick(ch, start)
         }
     }
 
-    /** Pick [i] of [queue]: played, it is shown; not yet, the screen waits for it (and says how to get it played). */
-    private suspend fun playPick(queue: List<String>, i: Int, summary: Boolean) {
-        val ref = MatchRef.decode(queue[i])?.whole ?: return
+    /**
+     * [ch]'s next pick after pick [after] (under the lock): the first one still to be shown that
+     * is played (pick order, from [after] round to it), else the first one still to be played;
+     * null when every pick was shown.
+     */
+    private fun nextOf(ch: Channel, after: Int): Int? {
+        val p = host.world()?.plan
+        return BroadcastPicks.next(ch.queue.size, after, ch::open) { playedNow(p, ch.queue[it]) }
+    }
+
+    /** True when the match of [key] is played (one of a season closed since counts as played). */
+    private fun playedNow(p: SeasonPlan?, key: String): Boolean {
+        val ref = MatchRef.decode(key)?.whole ?: return false
+        if (p == null) return false
+        if (ref.season != p.number) return ref.season < p.number
+        return SeasonMatches.of(p, ref)?.played == true
+    }
+
+    /**
+     * Pick [first] of [ch]: played, it is worked out and shown; not yet, the screen waits for it
+     * (and says how to get it played), unless another pick still to be shown is played by then. A
+     * pick that cannot be shown is passed over (its reason told when no pick is left).
+     */
+    private suspend fun playPick(ch: Channel, first: Int) {
+        val me = currentCoroutineContext()[Job]
+        var i = first
         while (true) {
-            val (played, waiting) = synchronized(host.lock) {
-                val p = host.world()?.plan
-                val m = p?.let { SeasonMatches.of(it, ref) }
-                (m?.played == true) to (m == null || p.number != ref.season)
+            while (true) {
+                val (played, other) = synchronized(host.lock) {
+                    val p = host.world()?.plan
+                    val now = playedNow(p, ch.queue[i])
+                    now to (if (now) null else nextOf(ch, i)?.takeIf { it != i && playedNow(p, ch.queue[it]) })
+                }
+                if (played) break
+                if (other != null) {
+                    i = other
+                    continue
+                }
+                synchronized(watchLock) {
+                    if (me?.isActive == false || !waits(ch, i, if (host.running()) "곧 시작해요 · 지금 ${host.view()?.live?.size ?: 0}경기 진행 중" else UNPLAYED_PICK)) return
+                }
+                delay(1_000)
             }
-            if (played) break
-            if (waiting) return synchronized(watchLock) { fail("이 경기는 이번 시즌에 열리지 않아요.") }
-            synchronized(watchLock) {
-                val w = watch ?: return
-                if (w.kind != WatchKind.BROADCAST) return
-                val live = host.view()?.live?.size ?: 0
-                val text = if (host.running()) "곧 시작해요 · 지금 ${live}경기 진행 중" else "아직 치르지 않은 경기예요. 이번 주를 진행하면 바로 볼 수 있어요."
-                session = null
-                watch = w.copy(waiting = text, steps = emptyList(), shown = 0, complete = false, queue = BroadcastQueue(i, queue.size, null, null), ref = ref.encode())
+            // Played: worked out (a re-simulation may take seconds), then shown.
+            synchronized(watchLock) { if (me?.isActive == false || !waits(ch, i, COMPUTING)) return }
+            val m = matchOf(MatchRef.decode(ch.queue[i])?.whole ?: return, WatchKind.BROADCAST)
+            val shown = synchronized(watchLock) {
+                if (me?.isActive == false || watch?.kind != WatchKind.BROADCAST || channel !== ch) return
+                ch.done += i
+                val match = m.first ?: return@synchronized false
+                watched += ch.queue[i]
+                begin(Session(match, 0, 0, ch, i), 0)
+                true
             }
-            delay(1_000)
-        }
-        val m = matchOf(ref, WatchKind.BROADCAST)
-        synchronized(watchLock) {
-            if (watch?.kind != WatchKind.BROADCAST) return
-            val match = m.first ?: return fail(m.second ?: CHANGED)
-            watched += ref.encode()
-            begin(Session(match, 0, 0, queue, i).also { it.summary = summary }, 0)
+            if (shown) break
+            i = synchronized(host.lock) { nextOf(ch, i) } ?: return synchronized(watchLock) { if (me?.isActive != false && channel === ch) fail(m.second ?: CHANGED) }
         }
         refreshPicks()
     }
 
+    /** The screen waits for pick [i] of [ch] ([text]: why), no game shown; false when the channel was left (under [watchLock]). */
+    private fun waits(ch: Channel, i: Int, text: String): Boolean {
+        val w = watch ?: return false
+        if (w.kind != WatchKind.BROADCAST || channel !== ch) return false
+        session?.steps?.values?.forEach { it.job?.cancel() }
+        session = null
+        pending = i
+        watch = w.copy(
+            waiting = text, steps = emptyList(), shown = 0, complete = false, message = null, ended = false,
+            queue = BroadcastQueue(i, ch.queue.size, null, null), ref = MatchRef.decode(ch.queue[i])?.whole?.encode(),
+        )
+        return true
+    }
+
     /** The match of [ref] to watch, resolved and named; or why it cannot be shown. */
     private suspend fun matchOf(ref: MatchRef, kind: WatchKind): Pair<WMatch?, String?> {
-        val r = runCatching { resolve(ref) }.getOrElse { Resolved(ReplaySource.NONE, note = CORRUPT) }
+        // The screen left (or another match asked for): the re-simulation stops and nothing is shown.
+        val job = currentCoroutineContext()[Job]
+        val r = try {
+            resolve(ref, cancelled = { job?.isActive == false })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Resolved(ReplaySource.NONE, note = CORRUPT)
+        }
         if (r.source == ReplaySource.NONE || r.boards.isEmpty()) return null to (r.note ?: CHANGED)
         val est = host.estimate()
         return synchronized(host.lock) {
@@ -965,7 +1091,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         stop()
         watch = WatchView(
             "", "", "", "", emptyList(), false, 0, true, title, kind = kind,
-            pace = host.watchPace(), waiting = if (kind == WatchKind.FRIENDLY) "경기를 준비하는 중…" else "경기를 다시 계산하는 중이에요…",
+            pace = host.watchPace(), waiting = if (kind == WatchKind.FRIENDLY) "경기를 준비하는 중…" else COMPUTING,
         )
     }
 
@@ -993,11 +1119,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         val m = s.match
         val bd = m.boards[board]
         val g = bd.games[game]
-        val short = s.summary && game < bd.games.lastIndex
+        val short = short(s, board, game)
         val st = steps(s, board, game, short)
         // The next game's steps meanwhile (the next board's first after a board's last).
-        if (game < bd.games.lastIndex) steps(s, board, game + 1, s.summary && game + 1 < bd.games.lastIndex)
-        else if (board < m.boards.lastIndex) steps(s, board + 1, 0, s.summary && m.boards[board + 1].games.size > 1)
+        if (game < bd.games.lastIndex) steps(s, board, game + 1, short(s, board, game + 1))
+        else if (board < m.boards.lastIndex) steps(s, board + 1, 0, short(s, board + 1, 0))
         val names = host.name(g.first) to host.name(g.second)
         watch = WatchView(
             g.first, g.second, names.first, names.second, st.list, st.done, 0, playing,
@@ -1008,8 +1134,19 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             matchScore = matchScore(m, board, game),
             intro = (if (board == 0 && game == 0) m.intro else emptyList()) + gameIntro(m, bd, g),
             outro = outro(m, board, game),
-            summary = short, queue = s.queue?.let { q -> BroadcastQueue(s.at, q.size, null, null) }, pace = host.watchPace(),
+            summary = short, queue = s.channel?.let { ch -> BroadcastQueue(s.at, ch.queue.size, null, null) }, pace = host.watchPace(),
         )
+    }
+
+    /**
+     * 요약 중계 shows game [game] of board [board] short (its last [SUMMARY_HALF_TURNS] half-turns):
+     * every game but the one that decides the match, a team match's last game of its last board.
+     */
+    private fun short(s: Session, board: Int, game: Int): Boolean {
+        if (!s.summary) return false
+        val m = s.match
+        val last = game == m.boards[board].games.lastIndex
+        return !(last && (!m.team || board == m.boards.lastIndex))
     }
 
     /** [b]'s games won so far as "2:1". */
@@ -1243,34 +1380,38 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
                 return true
             }
         }
-        val q = s.queue
-        if (q != null && s.at < q.lastIndex) {
-            countdown(s, q)
+        val ch = s.channel
+        if (ch != null && ch.queue.indices.any(ch::open)) {
+            countdown(s, ch)
             return false
         }
         val w = watch ?: return false
-        val coming = broadcast?.coming?.size ?: 0
-        watch = w.copy(
-            playing = false, ended = true,
-            outro = w.outro + if (q != null) listOf("이번 주 중계가 끝났어요. 다음 주 빅매치는 ${coming}경기예요.") else emptyList(),
-        )
+        watch = w.copy(playing = false, ended = true, outro = w.outro + if (ch != null) listOf(channelEnd()) else emptyList())
         return false
     }
 
-    /** The 4-second card before the channel's next pick ("지금 보기 ⏭⏭" skips it, "멈추기" stops). */
-    private fun countdown(s: Session, q: List<String>) {
+    /** "이번 주 중계가 끝났어요. 다음 주 빅매치는 3경기예요." */
+    private fun channelEnd(): String = "이번 주 중계가 끝났어요. 다음 주 빅매치는 ${broadcast?.coming?.size ?: 0}경기예요."
+
+    /** The 4-second card before the channel's next pick ("지금 보기 ⏭⏭" skips it, "멈추기" holds it). */
+    private fun countdown(s: Session, ch: Channel) {
         loop?.cancel()
         loop = host.scope.launch {
-            val next = withContext(Dispatchers.Default) { synchronized(host.lock) { runCatching { nextTitle(q[s.at + 1]) }.getOrNull() } }
+            val next = withContext(Dispatchers.Default) { synchronized(host.lock) { runCatching { nextOf(ch, s.at)?.let { it to nextTitle(ch.queue[it]) } }.getOrNull() } }
             for (sec in COUNTDOWN downTo 1) {
                 synchronized(watchLock) {
                     if (session !== s) return@launch
-                    watch = watch?.copy(playing = true, queue = BroadcastQueue(s.at, q.size, next, sec))
+                    watch = watch?.copy(playing = true, queue = BroadcastQueue(s.at, ch.queue.size, next?.second, sec))
                 }
                 delay(1_000)
             }
-            synchronized(watchLock) { if (session !== s) return@launch }
-            nextPick(s)
+            synchronized(watchLock) {
+                if (session !== s) return@launch
+                val i = next?.first ?: return@launch run {
+                    watch = watch?.let { w -> w.copy(playing = false, ended = true, queue = BroadcastQueue(s.at, ch.queue.size, null, null), outro = w.outro + channelEnd()) }
+                }
+                loading = host.scope.launch(Dispatchers.Default) { playPick(ch, i) }
+            }
         }
     }
 
@@ -1284,18 +1425,12 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         return "${titleOf(p, f, ref.season)}, ${side(f.a)} 대 ${Ko.ieyo(side(f.b))}"
     }
 
-    private fun nextPick(s: Session) {
-        val q = s.queue ?: return
-        if (s.at >= q.lastIndex) return
-        val summary = s.summary
-        loading = host.scope.launch(Dispatchers.Default) { playPick(q, s.at + 1, summary) }
-    }
-
     /** Pauses the game (the steps go on being worked out). */
     fun pause() {
         synchronized(watchLock) {
             loop?.cancel()
-            watch = watch?.copy(playing = false)
+            // A countdown to the channel's next pick stops too (▶ 재생 starts it again).
+            watch = watch?.let { w -> w.copy(playing = false, queue = w.queue?.copy(countdown = null)) }
         }
     }
 
@@ -1341,9 +1476,23 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     /** The channel's next pick now (⏭⏭). */
     fun nextMatch() {
         synchronized(watchLock) {
-            val s = session ?: return
+            val ch = channel ?: return
+            if (watch?.kind != WatchKind.BROADCAST) return
+            val s = session
+            val at = s?.at ?: pending
+            // The last pick plays on (its end says the channel is over).
+            if (s != null && ch.queue.indices.none(ch::open)) return
             loop?.cancel()
-            nextPick(s)
+            // A pick waited for (or being worked out) is passed over.
+            if (s == null) {
+                loading?.cancel()
+                ch.done += at
+                if (ch.queue.indices.none(ch::open)) return fail(channelEnd())
+            }
+            loading = host.scope.launch(Dispatchers.Default) {
+                val i = synchronized(host.lock) { nextOf(ch, at) } ?: return@launch
+                playPick(ch, i)
+            }
         }
     }
 
@@ -1376,13 +1525,13 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     /** 요약 중계 (true) or every game in full: from the next game on. */
     fun setSummary(on: Boolean) {
         synchronized(watchLock) {
-            val s = session ?: return
-            s.summary = on
+            channel?.summary = on
+            session?.summary = on
         }
     }
 
-    /** Whether the channel plays its games in 요약 (the current session's setting). */
-    val summaryOn: Boolean get() = synchronized(watchLock) { session?.summary ?: true }
+    /** Whether the channel plays its games in 요약 (the current run's setting). */
+    val summaryOn: Boolean get() = synchronized(watchLock) { channel?.summary ?: true }
 
     /** Leaves the watch screen: nothing goes on being played or worked out. */
     fun stop() {
@@ -1391,6 +1540,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             loading?.cancel()
             session?.steps?.values?.forEach { it.job?.cancel() }
             session = null
+            channel = null
             watch = null
         }
     }
@@ -1439,18 +1589,18 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         val s = p.league
         val favs = host.favourites()
         val players = favs.filter { ':' !in it }.toSet()
-        val clubs = favs.filter { it.startsWith(LeagueSelector.CLUB) }.map { it.removePrefix(LeagueSelector.CLUB) }.toSet()
-        val book = w.clubs
+        val followedClubs = favs.filter { it.startsWith(LeagueSelector.CLUB) }.map { it.removePrefix(LeagueSelector.CLUB) }.toSet()
+        val clubs = w.clubs
         val ranked = w.members.map { it to w.rating(it) }.filter { !it.second.isNaN() }.sortedByDescending { it.second }
         val rankOf = HashMap<String, Int>(ranked.size * 2).also { m -> ranked.forEachIndexed { i, (k, _) -> m[k] = i } }
         val n = maxOf(1, ranked.size)
         fun pct(k: String) = (rankOf[k] ?: n).toDouble() / n
         // The top-3 clubs of each league and the members they count (a national season's club table).
         val counted = HashMap<String, Set<String>>()
-        if (s.leagues.national && book != null) {
+        if (s.leagues.national && clubs != null) {
             runCatching {
                 val honours = w.honours.all.filter { it.season == p.number - 1 }
-                for (lg in s.leagues.list) for (row in yacht.engine.league.ClubTable.of(s, book, lg.id, honours).take(CLUB_TOP)) counted[row.club] = row.counted.toSet()
+                for (lg in s.leagues.list) for (row in yacht.engine.league.ClubTable.of(s, clubs, lg.id, honours).take(CLUB_TOP)) counted[row.club] = row.counted.toSet()
             }
         }
         val race = RaceTable(s)
@@ -1459,14 +1609,16 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             if (f.comp == Comp.FRIENDLY || f.comp == Comp.LAB) return@mapNotNull null
             val team = f.kind == JobKind.TEAM
             val keys = if (team) f.lineupA + f.lineupB else listOf(f.a, f.b)
+            // Played before it could be picked, with a side that adapts and no log kept: it could not be shown.
+            if (m.played && keys.any { host.adaptive(it) } && book.boards(m.ref).isEmpty()) return@mapNotNull null
             val lg = if (team) null else s.leagueOf(f.a)
             val rank = if (!s.leagues.national) 0 else lg?.let { host.leagueRank(it.id) } ?: Int.MAX_VALUE
             val tier = if (f.comp == Comp.LEAGUE) s.divisionOf(f.a)?.let { s.leagues.tier(it) } else null
             val star = keys.any { it in players } ||
-                (f.comp == Comp.LEAGUE && tier == 0 && keys.any { k -> book?.clubOf(k)?.let { it in clubs } == true }) ||
+                (f.comp == Comp.LEAGUE && tier == 0 && keys.any { k -> clubs?.clubOf(k)?.let { it in followedClubs } == true }) ||
                 (f.comp.byTeams && (nationKey(f.a) in favs || nationKey(f.b) in favs))
-            val club = if (team) null else book?.clubOf(f.a)
-            val mates = f.comp == Comp.LEAGUE && club != null && club == book?.clubOf(f.b) && counted[club]?.let { f.a in it && f.b in it } == true
+            val club = if (team) null else clubs?.clubOf(f.a)
+            val mates = f.comp == Comp.LEAGUE && club != null && club == clubs?.clubOf(f.b) && counted[club]?.let { f.a in it && f.b in it } == true
             val ra = w.rating(f.a)
             val rb = w.rating(f.b)
             // One pick a league (a legacy season's one league: one a division).
@@ -1512,6 +1664,13 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         val p = w.plan ?: return null
         ensure(w, p)
         ensurePicks(w, p)
+        // Picks read back from the book (the app started again in the same week) were chosen from
+        // candidates no longer in memory: worked out again for the rows' reasons and tags.
+        if (candidatesSeason != p.number) {
+            candidates.clear()
+            candidatesSeason = p.number
+        }
+        for (week in listOf(p.week, p.week + 1)) if (week !in candidates) candidates[week] = runCatching { candidatesOf(w, p, week) }.getOrDefault(emptyList())
         val picks = book.picks.toMap()
         fun pick(week: Int, ref: MatchRef): BroadcastPick? {
             val m = SeasonMatches.of(p, ref) ?: return null
@@ -1564,6 +1723,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         const val RESIMS = 8
         const val RESIM_MS = 10_000L
 
+        /** Team matches whose boards' sides the ▶ rule keeps at hand (more than the results feed shows). */
+        private const val LINEUPS = 64
+
         /** Followed players whose matches are logged in memory, and of followed clubs the best members of the first ones. */
         const val FOLLOWED_PLAYERS = 8
         const val FOLLOWED_CLUBS = 2
@@ -1614,6 +1776,10 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         const val NOT_PLAYED = "아직 치르지 않은 경기예요."
         const val NOT_FOUND = "이 경기의 기록을 지금은 불러올 수 없어요."
         const val NO_TABLES = "계산표를 불러오는 중이에요. 잠시 뒤에 다시 해 주세요."
+
+        /** The watch screen while a match is worked out, and while a pick of the channel waits for the league (stopped). */
+        const val COMPUTING = "경기를 다시 계산하는 중이에요…"
+        const val UNPLAYED_PICK = "아직 치르지 않은 경기예요. 이번 주를 진행하면 바로 볼 수 있어요."
 
         /** A nation's team is followed as "nation:{code}". */
         private fun nationKey(team: String) = LeagueSelector.NATION + team
@@ -1760,6 +1926,16 @@ internal object BroadcastPicks {
             out += c
         }
         return out
+    }
+
+    /**
+     * The channel's next pick after pick [after] of [n] (-1: from the first): the first one still
+     * to be shown ([open]) that is [played], in pick order from [after] round to it; else the first
+     * one still to be played; null when none is left.
+     */
+    fun next(n: Int, after: Int, open: (Int) -> Boolean, played: (Int) -> Boolean): Int? {
+        val order = (1..n).map { (after + it).mod(n) }.filter(open)
+        return order.firstOrNull(played) ?: order.firstOrNull()
     }
 
     /** The pick's headline reason. */

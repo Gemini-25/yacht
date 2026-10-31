@@ -8,6 +8,7 @@ import yacht.engine.league.JobKind
 import yacht.engine.league.MatchRef
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The broadcast channel's choice (UX 3.7): the score of a match, the diversity caps, star picks and next week's picks. */
@@ -132,5 +133,29 @@ class BroadcastPicksTest {
         assertEquals(1, more.count { it.star }, "one star pick left")
         // Nothing to add once the week is full.
         assertEquals(emptyList(), BroadcastPicks.choose(now, now.take(6)))
+    }
+
+    @Test
+    fun theChannelPlaysThePlayedPicksFirstThenWaitsForTheRest() {
+        val played = setOf(0, 2, 4)
+        val done = HashSet<Int>()
+        fun next(after: Int) = BroadcastPicks.next(6, after, { it !in done }, { it in played })
+        // From the start: the first played pick, then the next played one (not the unplayed one between).
+        assertEquals(0, next(-1))
+        done += 0
+        assertEquals(2, next(0))
+        done += 2
+        assertEquals(4, next(2))
+        done += 4
+        // Every played pick shown: the first still to be played, from after the last shown, round.
+        assertEquals(5, next(4))
+        done += 5
+        assertEquals(1, next(5))
+        done += setOf(1, 3)
+        assertNull(next(1))
+        // Started at a tapped pick: the played ones after it, then round to those before it.
+        assertEquals(4, BroadcastPicks.next(6, 3, { it != 3 }, { it in played }))
+        assertEquals(0, BroadcastPicks.next(6, 4, { it !in setOf(3, 4) }, { it in played }))
+        assertNull(BroadcastPicks.next(0, -1, { true }, { true }))
     }
 }

@@ -235,4 +235,62 @@ class MatchCenterTest {
             assertTrue(MatchCenter.LOGS in read.files())
         }
     }
+
+    @Test
+    fun replayIsOfferedOnlyWhenItCanBePlayed() {
+        val h = Host(world())
+        val c = MatchCenter(h)
+        val all = fixtures(h.w!!)
+        val plain = all.first { f -> listOf(f.a, f.b).none { it == "p0" } }
+        val adaptive = all.first { "p0" in listOf(it.a, it.b) }
+        synchronized(h.lock) {
+            // This season's match of two players who play the same again: ▶ before any log.
+            assertTrue(c.canReplay(MatchRef(1, Comp.LEAGUE, plain.id), plain.a, plain.b))
+            // A side that adapts, one who left, another season, a friendly: no ▶ without a log.
+            assertTrue(!c.canReplay(MatchRef(1, Comp.LEAGUE, adaptive.id), adaptive.a, adaptive.b))
+            assertTrue(!c.canReplay(MatchRef(1, Comp.LEAGUE, plain.id), plain.a, "gone"))
+            assertTrue(!c.canReplay(MatchRef(2, Comp.LEAGUE, plain.id), plain.a, plain.b))
+            assertTrue(!c.canReplay(MatchRef(1, Comp.FRIENDLY, -1), plain.a, plain.b))
+        }
+        // Logged (an adaptive side is always kept): ▶.
+        val ref = play(c, h, adaptive.id)
+        synchronized(h.lock) { assertTrue(c.canReplay(ref, adaptive.a, adaptive.b)) }
+    }
+
+    @Test
+    fun picksReadBackKeepTheirReasons() {
+        val h = Host(world())
+        val c = MatchCenter(h)
+        // One match of the first week: the week's picks are made (and the week stays).
+        play(c, h, h.w!!.plan!!.league.matchday(0).first().id)
+        val made = assertNotNull(c.broadcastNow())
+        assertTrue(made.picks.isNotEmpty())
+        val bytes = synchronized(h.lock) { c.files().getValue(MatchCenter.LOGS) }
+        // The app started again in the same week: the saved picks, each with its reason.
+        val again = MatchCenter(h)
+        synchronized(h.lock) { again.load(bytes) }
+        val read = assertNotNull(again.broadcastNow())
+        assertEquals(made.picks.map { it.ref }, read.picks.map { it.ref })
+        assertEquals(made.picks.map { it.reason }, read.picks.map { it.reason })
+        assertTrue(read.picks.all { it.reason.isNotEmpty() })
+    }
+
+    @Test
+    fun aPlayedMatchThatCannotBeShownIsNoCandidate() {
+        val h = Host(world())
+        val c = MatchCenter(h)
+        val w = h.w!!
+        val p = w.plan!!
+        val lf = p.league.matchday(0).first { "p0" in listOf(it.a, it.b) }
+        val ref = MatchRef(p.number, Comp.LEAGUE, lf.id)
+        assertTrue(c.candidatesNow(1).any { it.ref == ref }, "a match to come is a candidate")
+        // Taken by a worker (everyone else busy), played with no log (before it could be picked) and recorded.
+        assertEquals(lf.id, p.league.next(keys.toSet() - setOf(lf.a, lf.b))?.id)
+        val r = assertNotNull(LeagueMatch.playJob(rules, p.league.job(lf), { ais[it] }, p.config.matchFormat))
+        synchronized(h.lock) { w.recordJob(r) }
+        assertTrue(p.league.isPlayed(lf.id))
+        // An adaptive side's match cannot be played again without its log: no candidate.
+        assertTrue(c.candidatesNow(1).none { it.ref == ref })
+        assertTrue(c.candidatesNow(1).isNotEmpty())
+    }
 }

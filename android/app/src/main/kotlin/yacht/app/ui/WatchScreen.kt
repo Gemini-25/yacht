@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
 import yacht.app.core.LeagueTab
+import yacht.app.core.MatchCenter
 import yacht.app.core.Page
 import yacht.app.core.Screen
 import yacht.app.core.WatchKind
@@ -158,15 +159,15 @@ internal fun WatchBody(w: WatchView, rules: RuleSet, actions: WatchActions, modi
     }
 }
 
-/** A pick not played yet, or a match being worked out. */
+/** A pick not played yet (the league stopped: ▶ 이번 주 진행), or a match being worked out. */
 @Composable
 private fun WaitingCard(w: WatchView, actions: WatchActions, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
     Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val pick = w.kind == WatchKind.BROADCAST && w.queue != null
-        if (!pick || actions.running) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        val unplayed = w.kind == WatchKind.BROADCAST && w.waiting == MatchCenter.UNPLAYED_PICK && !actions.running
+        if (!unplayed) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
         Text(w.waiting.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, textAlign = TextAlign.Center)
-        if (pick && !actions.running) Button(onClick = actions.playWeek) { Text("▶ 이번 주 진행") }
+        if (unplayed) Button(onClick = actions.playWeek) { Text("▶ 이번 주 진행") }
     }
 }
 
@@ -268,7 +269,7 @@ private fun Lines(lines: List<String>, bg: androidx.compose.ui.graphics.Color, f
     }
 }
 
-/** The channel's next match in [seconds] ("지금 보기 ⏭⏭", "멈추기"). */
+/** The channel's next match in [seconds] ("지금 보기 ⏭⏭"; "멈추기" holds it, ▶ 재생 counts down again). */
 @Composable
 private fun Countdown(w: WatchView, seconds: Int, actions: WatchActions) {
     val cs = MaterialTheme.colorScheme
@@ -281,7 +282,7 @@ private fun Countdown(w: WatchView, seconds: Int, actions: WatchActions) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = actions.nextMatch) { Text("지금 보기 ⏭⏭") }
-                OutlinedButton(onClick = actions.stop) { Text("멈추기") }
+                OutlinedButton(onClick = actions.pause) { Text("멈추기") }
             }
         }
     }

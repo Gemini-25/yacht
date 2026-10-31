@@ -538,6 +538,8 @@ class LeagueController(
                 form = null
                 nav.week = null
                 showNewSeason(shown)
+                // The channel's view went with the league replaced: asked for again at the next snapshot.
+                pickedWeek = null
             }
         }
         publish(force = true)
@@ -1591,6 +1593,8 @@ class LeagueController(
         calendar = null
         form = null
         preview = null
+        // The channel's view went with the old league: asked for again at the next snapshot.
+        pickedWeek = null
         // The new league from its start: its week in play, 1부 (its first season then opens on a
         // followed player's division), the current round, the chart's default players.
         nav.week = null
