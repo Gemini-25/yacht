@@ -137,9 +137,9 @@ private fun run(args: Array<String>): Int {
         loadAsset = { name -> if (name == "league_seed.txt" && seedFile.exists()) seedFile.readText() else null },
     )
     c.errorListener = { e -> record("caught by the app's safety net", e) }
-    onMain { c.start() }
+    act("appStart") { c.start() }
     waitFor("tables", 120_000) { c.tables != null }
-    onMain { c.changeThinkTime(ThinkTime.FAST) }
+    act("thinkTime") { c.changeThinkTime(ThinkTime.FAST) }
     val rng = Random(seed)
     val deadline = System.currentTimeMillis() + (minutes * 60_000).toLong()
     var games = 0
@@ -151,13 +151,13 @@ private fun run(args: Array<String>): Int {
     onMain { c.screen = Screen.LEAGUE }
     waitFor("league view", 60_000) { c.league.view != null }
     if (players != null) {
-        onMain { c.league.changeConfig(c.league.config.copy(generated = players)) }
+        act("players") { c.league.changeConfig(c.league.config.copy(generated = players)) }
         // The rules file is written off the main thread: the league read below takes it.
         Thread.sleep(1000)
     }
-    onMain { c.league.loadSeed() }
+    act("loadSeed") { c.league.loadSeed() }
     waitFor("seed", 60_000) { (c.league.view?.matches ?: 0L) > 0L }
-    onMain {
+    act("leagueGo") {
         c.league.changeSpeed(speed ?: if (leagueHeavy) LeagueSpeed.FULL else LeagueSpeed.NORMAL)
         c.league.start()
     }
@@ -169,7 +169,7 @@ private fun run(args: Array<String>): Int {
             0, 1, 2 -> { playGame(c, rng, DiceSource.RANDOM); games++ }
             3 -> { playGame(c, rng, DiceSource.MANUAL); games++ }
             4, 5 -> {
-                if (onMain { c.newRankedGame() }) { playGame(c, rng, null); games++ }
+                if (act("newRanked") { c.newRankedGame() }) { playGame(c, rng, null); games++ }
             }
             6 -> if (rng.nextBoolean()) watch(c, rng) else pages(c, rng)
             7 -> myAis(c, rng)
@@ -177,21 +177,21 @@ private fun run(args: Array<String>): Int {
                 // Background and back, as when the phone is locked: with ‘나가면 멈춤’ the league
                 // stops and goes on when the app is back; with ‘나가도 계속’ it never stops.
                 val mode = LeagueBackground.entries[rng.nextInt(LeagueBackground.entries.size)]
-                onMain { c.chooseLeagueBackground(mode) }
+                act("chooseBackground") { c.chooseLeagueBackground(mode) }
                 val wasRunning = onMain { c.league.running }
-                onMain { c.onBackground() }
+                act("appBackground") { c.onBackground() }
                 Thread.sleep(rng.nextInt(1500).toLong())
                 if (mode == LeagueBackground.KEEP && wasRunning && !onMain { c.league.running }) failures += "league stopped in the background with 나가도 계속"
-                onMain { c.onForeground() }
+                act("appForeground") { c.onForeground() }
                 if (wasRunning) waitFor("league going on after the app came back ($mode)", 60_000) { c.league.running }
-                if (rng.nextBoolean()) onMain { c.league.start() }
+                if (rng.nextBoolean()) act("leagueStart") { c.league.start() }
             }
             9 -> {
                 var built: ByteArray? = null
-                onMain { c.backup { _, b -> built = b } }
+                act("backup") { c.backup { _, b -> built = b } }
                 waitFor("backup", 60_000) { built != null }
                 var note: String? = null
-                onMain { c.restore(built!!) { note = it } }
+                act("restore") { c.restore(built!!) { note = it } }
                 waitFor("restore", 60_000) { note != null }
             }
             10 -> {
@@ -200,15 +200,15 @@ private fun run(args: Array<String>): Int {
                 if (keys.size >= 2 && rng.nextBoolean()) {
                     val a = keys[rng.nextInt(keys.size)]
                     val b = keys.filter { it != a }[rng.nextInt(keys.size - 1)]
-                    onMain { c.league.startLab(a, b, if (rng.nextBoolean()) 200 else 0) }
-                    if (rng.nextInt(3) == 0) onMain { c.league.stopLab() }
+                    act("startLab") { c.league.startLab(a, b, if (rng.nextBoolean()) 200 else 0) }
+                    if (rng.nextInt(3) == 0) act("stopLab") { c.league.stopLab() }
                 }
                 // A preview and a scouting report off the main thread.
-                if (keys.size >= 2) onMain { c.league.loadPreview(keys[0], keys[1]) }
-                onMain { c.league.changeSpeed(LeagueSpeed.entries[rng.nextInt(LeagueSpeed.entries.size)]) }
-                if (rng.nextInt(3) == 0) onMain { c.league.stop() }
+                if (keys.size >= 2) act("preview") { c.league.loadPreview(keys[0], keys[1]) }
+                act("speed") { c.league.changeSpeed(LeagueSpeed.entries[rng.nextInt(LeagueSpeed.entries.size)]) }
+                if (rng.nextInt(3) == 0) act("leagueStop") { c.league.stop() }
                 Thread.sleep(300)
-                onMain { c.league.start() }
+                act("leagueStart") { c.league.start() }
             }
             else -> review(c, rng)
         }
@@ -224,9 +224,9 @@ private fun run(args: Array<String>): Int {
         }
     }
     // Closed while the league runs (not the player's stop): the next app goes on by itself.
-    onMain { c.league.start() }
+    act("leagueStart") { c.league.start() }
     waitFor("league running before closing", 120_000) { c.league.running }
-    onMain { c.shutdown() }
+    act("shutdown") { c.shutdown() }
     waitFor("league stop", 120_000) { !c.league.running }
     waitFor("resume mark", 30_000) { File(dir, "league/resume.txt").exists() }
     Thread.sleep(1_000)
@@ -235,15 +235,15 @@ private fun run(args: Array<String>): Int {
         loadAsset = { name -> if (name == "league_seed.txt" && seedFile.exists()) seedFile.readText() else null },
     )
     again.errorListener = { e -> record("caught by the app's safety net (reopened)", e) }
-    onMain { again.start() }
+    act("reopen") { again.start() }
     waitFor("league going on by itself after reopening", 180_000) { again.league.running }
-    onMain { again.league.stop() }
+    act("reopenStop") { again.league.stop() }
     waitFor("league stop (reopened)", 120_000) { !again.league.running }
     if (File(dir, "league/resume.txt").exists()) {
         Thread.sleep(1_000)
         if (File(dir, "league/resume.txt").exists()) failures += "the player's stop left the resume mark"
     }
-    onMain { again.shutdown() }
+    act("reopenShutdown") { again.shutdown() }
     liveHeap()
     println("done: $actions actions, $games games, league ${c.league.view?.matches} matches, peak heap ${peakHeap shr 20} MB (live after GC at most ${peakLive shr 20} MB) of ${Runtime.getRuntime().maxMemory() shr 20} MB")
     println("lock held: ${c.league.timings}")
@@ -300,13 +300,13 @@ private fun watchSeasons(c: AppController, folder: File): Map<String, Long> {
 /** One game to the end (or abandoned), with random detours. [source] null: the ranked game already started. */
 private fun playGame(c: AppController, rng: Random, source: DiceSource?) {
     if (source != null) {
-        onMain {
+        act("newGame") {
             c.changeStyle(if (rng.nextInt(3) == 0) PlayStyle.SOLO else PlayStyle.ASSISTED)
             c.changeAiPace(AiPace.entries[rng.nextInt(AiPace.entries.size)])
             c.newGame(source, if (rng.nextBoolean()) Side.ME else Side.OPP, if (source == DiceSource.MANUAL) "친구 ${rng.nextInt(3)}" else null)
         }
     } else {
-        onMain { c.changeAiPace(AiPace.entries[rng.nextInt(AiPace.entries.size)]) }
+        act("aiPace") { c.changeAiPace(AiPace.entries[rng.nextInt(AiPace.entries.size)]) }
     }
     val abandonAt = if (rng.nextInt(6) == 0) rng.nextInt(20) else Int.MAX_VALUE
     var steps = 0
@@ -380,7 +380,7 @@ private fun playGame(c: AppController, rng: Random, source: DiceSource?) {
         if (rng.nextInt(15) == 0) act("undoMine") { c.undo() }
     }
     if (rng.nextBoolean()) {
-        onMain { c.openReview(c.state!!) }
+        act("gameReview") { c.openReview(c.state!!) }
         Thread.sleep(200)
     }
 }
@@ -418,35 +418,35 @@ private fun watch(c: AppController, rng: Random) {
             if (keys.size < 2) return
             val a = keys[rng.nextInt(keys.size)]
             val b = keys.filter { it != a }[rng.nextInt(keys.size - 1)]
-            onMain { center.watchFriendly(a, b) }
+            act("watchFriendly") { center.watchFriendly(a, b) }
         }
-        1 -> onMain { center.startBroadcast() }
+        1 -> act("broadcast") { center.startBroadcast() }
         else -> {
             val ref = lg.view?.feed?.mapNotNull { it.ref }?.pick(rng) ?: return
             val page = Page.Match(ref)
-            onMain { center.loadReport(page) }
+            act("report") { center.loadReport(page) }
             Thread.sleep(rng.nextInt(3_000).toLong())
             if (rng.nextBoolean()) {
-                onMain { center.closeReport(page) }
+                act("closeReport") { center.closeReport(page) }
                 return
             }
-            onMain { center.watch(ref) }
+            act("replay") { center.watch(ref) }
         }
     }
-    onMain { c.screen = Screen.WATCH }
+    act("toWatch") { c.screen = Screen.WATCH }
     val until = System.currentTimeMillis() + rng.nextInt(20_000)
     while (System.currentTimeMillis() < until) {
         when (rng.nextInt(8)) {
-            0 -> onMain { center.pause() }
-            1 -> onMain { center.resume() }
-            2 -> onMain { center.skipTurn() }
-            3 -> onMain { center.nextGame() }
-            4 -> onMain { center.setPace(WatchPace.entries[rng.nextInt(WatchPace.entries.size)]) }
+            0 -> act("watchPause") { center.pause() }
+            1 -> act("watchResume") { center.resume() }
+            2 -> act("watchSkip") { center.skipTurn() }
+            3 -> act("watchNextGame") { center.nextGame() }
+            4 -> act("watchPace") { center.setPace(WatchPace.entries[rng.nextInt(WatchPace.entries.size)]) }
         }
         Thread.sleep(300)
         if (center.watch?.complete == true && rng.nextBoolean()) break
     }
-    onMain {
+    act("watchEnd") {
         if (rng.nextBoolean()) center.stop()
         c.screen = Screen.LEAGUE
     }
@@ -461,8 +461,9 @@ private fun pages(c: AppController, rng: Random) {
     val lg = c.league
     val keys = lg.view?.rows?.filter { !it.isMe }?.map { it.key }.orEmpty()
     val league = lg.view?.season?.leagues?.pick(rng)?.id
-    onMain {
-        when (rng.nextInt(7)) {
+    val which = rng.nextInt(7)
+    act("page:" + listOf("player", "leaders", "room", "reviews", "ranking", "federation", "clubTable")[which]) {
+        when (which) {
             0 -> keys.pick(rng)?.let { k -> lg.nav.open(Page.Player(k)); lg.analytics.loadPlayer(k, StatScope.SEASON, lg.center) }
             1 -> lg.analytics.loadLeaders(LeaderFilter())
             2 -> lg.analytics.loadRoom()
@@ -473,13 +474,13 @@ private fun pages(c: AppController, rng: Random) {
         }
     }
     Thread.sleep(rng.nextInt(1_500).toLong())
-    onMain { if (rng.nextBoolean()) lg.nav.back() }
+    act("pageBack") { if (rng.nextBoolean()) lg.nav.back() }
 }
 
 private fun myAis(c: AppController, rng: Random) {
     val lg = c.league
     if (lg.customs.size > 3 || rng.nextInt(4) == 0) {
-        lg.customs.randomOrNull()?.let { s -> onMain { lg.deleteCustom(s.id) } }
+        lg.customs.randomOrNull()?.let { s -> act("deleteCustom") { lg.deleteCustom(s.id) } }
         return
     }
     val base = CustomBase.entries[rng.nextInt(CustomBase.entries.size)]
@@ -488,35 +489,35 @@ private fun myAis(c: AppController, rng: Random) {
         CustomMistake.entries[rng.nextInt(3)], rng.nextDouble() * 0.5, yacht = rng.nextDouble() * 40 - 10, zero = rng.nextDouble() * 10,
         saveChoice = rng.nextBoolean(), future = 0.5 + rng.nextDouble(),
     )
-    onMain { lg.saveCustom(spec) }
+    act("saveCustom") { lg.saveCustom(spec) }
     // Edit it right away sometimes (its results are dropped).
-    if (rng.nextBoolean()) onMain { lg.saveCustom(spec.copy(amount = rng.nextDouble() * 0.3)) }
+    if (rng.nextBoolean()) act("editCustom") { lg.saveCustom(spec.copy(amount = rng.nextDouble() * 0.3)) }
     if (rng.nextInt(3) == 0) {
-        onMain { lg.nav.open(Page.Player(spec.key)) }
+        act("openCustom") { lg.nav.open(Page.Player(spec.key)) }
         Thread.sleep(100)
-        onMain { lg.nav.back() }
+        act("closeCustom") { lg.nav.back() }
     }
 }
 
 private fun review(c: AppController, rng: Random) {
-    onMain { c.openHistory() }
+    act("history") { c.openHistory() }
     Thread.sleep(300)
     val g = c.history.randomOrNull() ?: return
-    onMain { c.openReview(g) }
+    act("openReview") { c.openReview(g) }
     g.decisions.filter { it.isMistake }.randomOrNull()?.let { d ->
-        onMain { c.loadWhatIf(d) }
+        act("whatIf") { c.loadWhatIf(d) }
         waitFor("what-if", 120_000, quiet = true) { d in c.whatIfs || d !in c.whatIfBusy }
     }
-    onMain { c.luck(g); c.gameSummary(g) }
+    act("luck") { c.luck(g); c.gameSummary(g) }
     if (rng.nextInt(3) == 0) {
-        onMain { c.openQuiz() }
+        act("quiz") { c.openQuiz() }
         waitFor("quiz", 120_000, quiet = true) { c.quiz != null }
         val q = c.quiz ?: return
         val open = Category.ALL.filter { !q.me.isFilled(it) }
-        onMain { c.quizScore(open[rng.nextInt(open.size)]) }
-        onMain { c.closeQuiz() }
+        act("quizScore") { c.quizScore(open[rng.nextInt(open.size)]) }
+        act("closeQuiz") { c.closeQuiz() }
     }
-    onMain { c.screen = Screen.HOME }
+    act("toHome") { c.screen = Screen.HOME }
 }
 
 /** Longest time each action held the main thread (over 1 s on this server is an ANR risk on a phone). */
