@@ -627,7 +627,11 @@ data class GameReport(
     val tags: List<DramaTag>,
 )
 
-/** A match in a player's or club's list; [ref] null for one that cannot be opened. */
+/**
+ * A match in a player's or club's list; [ref] null for one that cannot be opened; [result] from
+ * the list's side (+1 won, 0 drawn, -1 lost, null not played); [comp] where it was played (null
+ * when unknown).
+ */
 data class PlayerMatch(
     val ref: String?,
     val week: Int,
@@ -638,6 +642,7 @@ data class PlayerMatch(
     val result: Int?,
     val score: String,
     val replay: Boolean,
+    val comp: Comp? = null,
 )
 
 /** One line of a leaderboard. */
@@ -660,28 +665,54 @@ data class StatCell(val label: String, val value: String, val rank: Int?, val bo
 /** One box of the player page's box table: its average and zero rate, and the league's. */
 data class BoxRow(val category: Category, val avg: Double, val league: Double, val zeroRate: Double, val leagueZero: Double)
 
-/** The player page; [key] equals its page's load key. */
+/**
+ * The player page ([LeagueAnalytics.loadPlayer]); [key] equals its page's load key, [profile]'s
+ * key is the player's. The numbers are of [scope]; "the league" is the player's league this
+ * season (every member of the season for a player outside it). [badge] and [leagueLabel] come
+ * from the league's host only.
+ */
 data class PlayerPage(
     val key: String,
     val profile: ProfileView,
+    /** Its ladder line in the screen's snapshot; null for a player no longer in the league. */
     val row: LadderRow?,
     val badge: ClubBadge?,
     val leagueLabel: String?,
+    /** Its place in its division's table this season. */
     val position: Int?,
     /** The six shown first, then the rest. */
     val cells: List<StatCell>,
+    /** The 12 boxes in [Category.ALL] order. */
     val box: List<BoxRow>,
+    /** Upper section sum (the player's average, the league's), and the bonus rate (0..1) likewise. */
     val upper: Pair<Double, Double>,
     val bonus: Pair<Double, Double>,
+    /** Games by score, [yacht.engine.league.AiStats.BIN]-point bars; null before its first game. */
     val histogram: IntArray?,
+    /** This season's matches, newest first (league fixtures by week, then the knockout ties). */
     val matches: List<PlayerMatch>,
     val previous: List<PlayerMatch>,
     val highlights: List<Highlight>,
+    /** Articles about it, newest first. */
     val news: List<Article>,
+    /** Records it holds. */
     val records: List<LeagueRecord>,
+    /** Its milestones, newest first. */
     val milestones: List<LeagueEvent>,
+    /** Its next league fixture this season. */
     val next: FollowMatch?,
     val scope: StatScope,
+    /** This season's division (global index) and its tier's label inside its league ("1부", "3부 B조"). */
+    val division: Int? = null,
+    val tierLabel: String? = null,
+    /** The league's median game score ([histogram]'s line), NaN without games. */
+    val median: Double = Double.NaN,
+    /** Its rival (라이벌: the member it met most with a close record, [yacht.engine.league.Ladder.rival]). */
+    val rival: Matchup? = null,
+    /** The dynasties it built (연속 우승). */
+    val dynasties: List<Dynasty> = emptyList(),
+    /** The names of the clubs its season lines name, by id. */
+    val clubNames: Map<String, String> = emptyMap(),
 )
 
 /** A season review in the 결산 list; [kept] when its full review is still there to open. */

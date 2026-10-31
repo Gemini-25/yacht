@@ -167,6 +167,43 @@ fun LineChart(values: List<Double>, modifier: Modifier = Modifier, height: Dp = 
     }
 }
 
+/**
+ * 점수 분포: games by score in bars of [binPoints] points ([bins], lowest first; the last bar takes
+ * everything above), with [median] (a score, NaN for none) as a dashed line, and the scale under it.
+ */
+@Composable
+fun ScoreHistogram(bins: IntArray, median: Double, binPoints: Int, modifier: Modifier = Modifier, height: Dp = 110.dp) {
+    val top = bins.maxOrNull()?.takeIf { it > 0 } ?: return
+    val cs = MaterialTheme.colorScheme
+    val bar = gameColors.me
+    val line = cs.tertiary
+    val grid = cs.outlineVariant
+    val span = bins.size * binPoints
+    Column(modifier) {
+        Canvas(Modifier.fillMaxWidth().height(height)) {
+            val w = size.width
+            val h = size.height
+            val slot = w / bins.size
+            drawLine(grid, Offset(0f, h), Offset(w, h), strokeWidth = 1f)
+            for ((i, n) in bins.withIndex()) {
+                if (n == 0) continue
+                val bh = h * n / top
+                drawRect(bar, topLeft = Offset(slot * i + slot * 0.12f, h - bh), size = androidx.compose.ui.geometry.Size(slot * 0.76f, bh))
+            }
+            if (!median.isNaN()) {
+                val x = w * (median / span).toFloat().coerceIn(0f, 1f)
+                drawLine(line, Offset(x, 0f), Offset(x, h), strokeWidth = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f)))
+            }
+        }
+        Row(Modifier.fillMaxWidth()) {
+            val small = MaterialTheme.typography.labelSmall
+            Text("0", style = small, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text("${span / 2}", style = small, color = cs.onSurfaceVariant)
+            Text("$span", style = small, color = cs.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
 /** Horizontal bars (e.g. P(win) per AI, box averages), value in 0..1 of [max]. */
 @Composable
 fun BarRow(label: String, value: Double, max: Double, text: String, color: Color = gameColors.me) {
