@@ -50,11 +50,27 @@ import yacht.engine.league.Comp
 import yacht.engine.league.Family
 import yacht.engine.league.Ladder
 
-/** Shows division [d] in the 리그 tab: its tier and group, at its current round with the chart's default players. */
+/**
+ * Shows division [d] of [tiers] in the 리그 tab (a national season: [d] of the shown league, as
+ * [SeasonView.divisions] counts them): its tier and group, at its current round with the chart's
+ * default players. A division [tiers] does not have shows the 1부.
+ */
 internal fun LeagueNav.showDivision(tiers: yacht.engine.league.Tiers, d: Int) {
-    tier = tiers.tier(d)
-    group = tiers.group(d)
+    val at = d.takeIf { it in 0 until tiers.size } ?: 0
+    tier = if (tiers.size == 0) 0 else tiers.tier(at)
+    group = if (tiers.size == 0) 0 else tiers.group(at)
     round = null
+    chartKeys = emptyList()
+}
+
+/**
+ * Shows the season's division [d] (its index among all of [season]'s divisions, as a player's
+ * `LadderRow.division`) in the 리그 tab: in a national season its league at its tier.
+ */
+internal fun LeagueNav.showSeasonDivision(season: SeasonView, d: Int) {
+    if (!season.national) return showDivision(season.tiers, d)
+    val info = season.leagues.firstOrNull { d in it.first until it.first + it.tiers } ?: return
+    selectLeague(info.id, d - info.first)
     chartKeys = emptyList()
 }
 
@@ -249,9 +265,30 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
 // ---- season ------------------------------------------------------------------------------------
 
 /**
- * 순위 › 리그: "리그 순위표", the tier chips with "보기 ▾" ([Sheet.TABLE_MODE]) at the end of
- * the same row, a pyramid's group chips, the division in the view picked, the zone legend with
- * "ⓘ 규칙", and next season's newcomers under the last tier.
+ * The league selector's header (UX 1.7): "{icon} {league} ▾" with its rank, players and tiers; a
+ * tap opens the selector ([Sheet.LEAGUES]). Nothing in a legacy season (one league, no choice).
+ */
+@Composable
+internal fun LeagueHeader(lg: LeagueController, season: SeasonView) {
+    val info = season.shown?.takeIf { season.national } ?: return
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surface).clickable { lg.nav.sheet = Sheet.LEAGUES }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text("${info.icon} ${info.label} ▾", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = cs.primary)
+        Text(
+            listOfNotNull(info.rank?.let { "리그 랭킹 ${it}위" }, "선수 ${"%,d".format(info.members)}명", "${info.tiers}개 부").joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * 순위 › 리그: "리그 순위표", in a national season the shown league's header ([LeagueHeader]),
+ * the tier chips with "보기 ▾" ([Sheet.TABLE_MODE]) at the end of the same row, a pyramid's group
+ * chips, the division in the view picked, the zone legend with "ⓘ 규칙", and next season's
+ * newcomers under the last tier.
  */
 @Composable
 internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
@@ -272,15 +309,23 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
     val tier = nav.tier.coerceIn(0, tiers.count - 1)
     val d = tiers.groups(tier).let { g -> (g.first + nav.group).coerceIn(g.first, g.last) }
     val label = tiers.label(d)
+    // The loaders take the season's index of the division; a national division is named with its league ("한국 2부").
+    val gd = season.firstDivision + d
+    val national = season.national
+    val info = season.shown
+    val title = info?.takeIf { national }?.let { yacht.engine.league.LeagueIds.division(it.id, tiers.tier(d)) } ?: label
     // 최근 폼: read again as results come in (the played count moves on).
-    if (mode == TableMode.FORM) androidx.compose.runtime.LaunchedEffect(d, season.number, season.played) { lg.loadForm(d) }
+    if (mode == TableMode.FORM) androidx.compose.runtime.LaunchedEffect(gd, season.number, season.played) { lg.loadForm(gd) }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                // A national division plays its own rounds over the season's weeks (a lower tier can play fewer).
+                val rounds = season.roundsOf(d)
+                val now = if (national) minOf((season.positions.getOrNull(d)?.size ?: 0) + 1, rounds) else minOf(season.currentMatchday + 1, rounds)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("리그 순위표", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Text(
-                        "시즌 ${season.number}" + (if (season.matchdays > 0) " · ${minOf(season.currentMatchday + 1, season.matchdays)}/${season.matchdays}라운드" else "") +
+                        "시즌 ${season.number}" + (if (rounds > 0) " · $now/${rounds}라운드" else "") +
                             " · ${season.played}/${season.total}경기",
                         style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
                     )
@@ -289,6 +334,10 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                     progress = { if (season.total == 0) 0f else season.played.toFloat() / season.total },
                     modifier = Modifier.fillMaxWidth().height(3.dp),
                 )
+                if (national) LeagueHeader(lg, season)
+                else if (season.nextNational) {
+                    Text("리그 · 이번 시즌은 지역 피라미드로 치러요. 다음 시즌부터 국가 리그로 나뉘어요.", style = MaterialTheme.typography.labelSmall, color = cs.secondary)
+                }
             }
         }
         item {
@@ -322,12 +371,12 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
         when (mode) {
             TableMode.LUCK -> {
                 // 판 승점제: the 완승 bonus is in both columns (luck is only who took the level matches).
-                val bonus = season.format.sweepBonus
+                val bonus = season.bonus
                 item { LuckHeader(bonus) }
                 val rows = season.divisions[d].sortedWith(compareByDescending<SeasonRow> { fairPoints(it, bonus) }.thenByDescending { it.diff })
                 itemsIndexed(rows, key = { _, r -> "a-${r.key}" }) { i, r -> LuckRow(i, r, season.divisions[d].indexOf(r), bonus) { onOpen(r.key) } }
             }
-            TableMode.ROUND -> item { CalendarCard(lg, d, season.number, season.played, season.format.sweepBonus, onOpen) }
+            TableMode.ROUND -> item { CalendarCard(lg, gd, season.number, season.played, season.bonus, onOpen) }
             TableMode.CHART -> item { RankChartCard(lg, season, d) }
             TableMode.ODDS -> {
                 item {
@@ -338,30 +387,30 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                 }
                 val rows = season.divisions[d]
                 if (rows.none { it.odds != null }) item { Text("확률을 계산하는 중이에요. 리그가 돌아가면 곧 나와요.", style = MaterialTheme.typography.bodySmall) }
-                else items(rows, key = { "o-${it.key}" }) { r -> OddsRow(r, tiers.tier(d), tiers.count, label) { onOpen(r.key) } }
+                else items(rows, key = { "o-${it.key}" }) { r -> OddsRow(r, tiers.tier(d), tiers.count, label, national) { onOpen(r.key) } }
             }
             TableMode.H2H -> item {
                 // The table's order when opened (it reorders with nearly every result); the
                 // numbers come again every few seconds in the same order, keeping the cell picked.
-                val keys = remember(d, season.number) { season.divisions[d].map { it.key } }
+                val keys = remember(gd, season.number, season.league) { season.divisions[d].map { it.key } }
                 androidx.compose.runtime.LaunchedEffect(keys, lg.running) {
-                    lg.loadH2h(label, keys)
+                    lg.loadH2h(title, keys)
                     // Only while the league runs (it stops when the app is hidden).
                     while (lg.running) {
                         kotlinx.coroutines.delay(H2H_REFRESH_MS)
-                        lg.loadH2h(label, keys)
+                        lg.loadH2h(title, keys)
                     }
                 }
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                     Column(Modifier.padding(10.dp)) {
                         val m = lg.h2h
-                        if (m == null || m.title != label) Text("상대 전적을 모으는 중…", style = MaterialTheme.typography.bodySmall)
+                        if (m == null || m.title != title) Text("상대 전적을 모으는 중…", style = MaterialTheme.typography.bodySmall)
                         else H2hGrid(m)
                     }
                 }
             }
             TableMode.FORM -> {
-                val form = lg.form?.takeIf { it.division == d && it.season == season.number }
+                val form = lg.form?.takeIf { it.division == gd && it.season == season.number }
                 if (form == null) item { Text("최근 폼을 불러오는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
                 else itemsIndexed(season.divisions[d], key = { _, r -> "f-${r.key}" }) { i, r -> FormRow(i, r, form.form[r.key].orEmpty()) { onOpen(r.key) } }
             }
@@ -373,7 +422,7 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                         Text("경기", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("승-무-패", Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("득실", Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                        if (season.format.sweepBonus) Text("완승", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        if (season.bonus) Text("완승", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("승점", Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                     }
                 }
@@ -388,7 +437,7 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                         Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                         Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                         Text("%+d".format(r.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                        if (season.format.sweepBonus) Text("${r.sweeps}", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                        if (season.bonus) Text("${r.sweeps}", Modifier.width(30.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                         Text("${r.points}", Modifier.width(36.dp).padding(end = 6.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
                     }
                 }
@@ -411,11 +460,24 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                 )
             }
         }
-        // Newcomers join the lowest tier: their line goes under it.
+        if (national && info != null) {
+            item {
+                val top = tiers.tier(d) == 0
+                Text(
+                    "🌍 나라마다 자기 리그에서 뛰고, 선수가 적은 나라는 연합 리그에 모여요. 리그마다 따로 승강해요." +
+                        (if (top && info.cclSlots > 0) " 1부에는 다음 시즌 대륙 챔피언스 출전권 ${info.cclSlots}장이 걸려 있어요." else "") +
+                        if (top && info.clDirect) " 우승하면 챔피언스 리그에 바로 나가요." else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.secondary,
+                )
+            }
+        }
+        // Newcomers join the lowest tier (of their nation's league): their line goes under it.
         if (season.newcomers.isNotEmpty() && tiers.tier(d) == tiers.count - 1) {
             item {
+                val where = info?.takeIf { national }?.let { yacht.engine.league.LeagueIds.division(it.id, tiers.count - 1) } ?: "${tiers.count}부"
                 Text(
-                    "다음 시즌 ${tiers.count}부 합류 대기 ${season.newcomers.size}명: ${season.newcomers.take(10).joinToString(", ")}" +
+                    "다음 시즌 $where 합류 대기 ${season.newcomers.size}명: ${season.newcomers.take(10).joinToString(", ")}" +
                         if (season.newcomers.size > 10) " 외" else "",
                     style = MaterialTheme.typography.labelSmall,
                     color = cs.secondary,
@@ -464,9 +526,13 @@ private fun FormRow(i: Int, r: SeasonRow, form: String, onClick: () -> Unit) {
     }
 }
 
-/** One AI's chances: the title (or a playoff place) at the top, promotion and relegation below. */
+/**
+ * One AI's chances: the title (or a playoff place) at the top, promotion and relegation below. At
+ * the top of a national league ([national]) the third chance is a place on next season's
+ * international stage (its 대륙 챔피언스, or the 챔피언스 리그 straight away), not the 챔스 alone.
+ */
 @Composable
-private fun OddsRow(r: SeasonRow, tier: Int, tiers: Int, label: String, onClick: () -> Unit) {
+private fun OddsRow(r: SeasonRow, tier: Int, tiers: Int, label: String, national: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val o = r.odds ?: return
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -475,7 +541,7 @@ private fun OddsRow(r: SeasonRow, tier: Int, tiers: Int, label: String, onClick:
             if (tier == 0) {
                 add("우승" to o.title)
                 add("4강 PO" to o.playoff)
-                add("챔스" to o.champions)
+                add((if (national) "국제" else "챔스") to o.champions)
             } else {
                 add("$label 1위" to o.leader)
                 add("승격" to o.promotion)
@@ -579,23 +645,24 @@ private fun CalendarCard(lg: LeagueController, division: Int, season: Int, playe
 @Composable
 private fun androidx.compose.foundation.layout.ColumnScope.CalendarBody(lg: LeagueController, cal: yacht.app.core.CalendarView, bonus: Boolean, onOpen: (String) -> Unit, onRound: (Int?) -> Unit) {
     val cs = MaterialTheme.colorScheme
+    // The division's own rounds; ◀ and ▶ go to the matchdays of the rounds before and after.
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { onRound(cal.matchday - 1) }, enabled = cal.matchday > 0) { Text("◀") }
+        TextButton(onClick = { onRound(cal.prev) }, enabled = cal.prev != null) { Text("◀") }
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("${cal.matchday + 1}라운드 / ${cal.matchdays}", fontWeight = FontWeight.Bold)
+            Text("${cal.round + 1}라운드 / ${cal.rounds}", fontWeight = FontWeight.Bold)
             Text(
                 when {
-                    cal.matchday < cal.current -> "끝난 라운드"
-                    cal.matchday == cal.current -> "진행 중인 라운드"
+                    cal.round < cal.currentRound -> "끝난 라운드"
+                    cal.round == cal.currentRound -> "진행 중인 라운드"
                     else -> "다가오는 라운드"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = cs.onSurfaceVariant,
             )
         }
-        TextButton(onClick = { onRound(cal.matchday + 1) }, enabled = cal.matchday < cal.matchdays - 1) { Text("▶") }
+        TextButton(onClick = { onRound(cal.next) }, enabled = cal.next != null) { Text("▶") }
     }
-    if (cal.matchday != cal.current) {
+    if (cal.round != cal.currentRound) {
         TextButton(onClick = { onRound(null) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("지금 라운드로") }
     }
     for (f in cal.items) {

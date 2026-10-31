@@ -80,8 +80,10 @@ data class LadderRow(
     val nation: String = "",
     val flag: String = "",
     val age: Int? = null,
-    /** Its division as shown ("3부", "3부 B조"), null when not in this season. */
+    /** Its division as shown ("한국 1부"; a legacy season's "3부", "3부 B조"), null when not in this season. */
     val divisionLabel: String? = null,
+    /** Its league this season ("KR"; "" in a legacy season or when not in this season). */
+    val league: String = "",
 ) {
     /** The name with its flag, as lists show it ("🇧🇷 루카스 시우바"). */
     val shown: String get() = if (flag.isEmpty()) name else "$flag $name"
@@ -214,19 +216,28 @@ data class SeasonHistoryItem(
     val relegatedCount: Int = relegated.size,
 )
 
+/**
+ * The season as 순위 › 리그 shows it: in a national season only the shown league ([league]) has
+ * its tables here, its divisions from the season's division [firstDivision] on (a legacy season:
+ * every division, from 0), so [divisions], [positions], [order], [rounds] and [tiers] are indexed
+ * by the division's place in that league; the loaders (`loadForm`, `loadRound`) take the season's
+ * index, [firstDivision] + that place.
+ */
 data class SeasonView(
     val number: Int,
+    /** The whole season's league fixtures played and in all. */
     val played: Int,
     val total: Int,
     val divisions: List<List<SeasonRow>>,
-    /** AIs that join the lowest division next season. */
+    /** AIs that join the lowest division next season (of the shown league in a national season). */
     val newcomers: List<String>,
     /** Latest first. */
     val history: List<SeasonHistoryItem>,
-    /** Places after each finished matchday per division, in [order] (순위 변동 그래프). */
+    /** Places after each finished round per division, in [order] (순위 변동 그래프). */
     val positions: List<List<ShortArray>> = emptyList(),
     /** Each division's AIs in the order [positions] uses. */
     val order: List<List<String>> = emptyList(),
+    /** The league stage's matchdays and the one in play (a national season: the shown league's 1부 rounds and the ones it finished). */
     val matchdays: Int = 0,
     val currentMatchday: Int = 0,
     /** Which tier each division is in (a regional pyramid's groups), and how many go up from each lower group. */
@@ -236,7 +247,26 @@ data class SeasonView(
     val format: MatchFormat = MatchFormat.MIRRORED,
     /** The rules the season began with (a change applies from the next season). */
     val rules: LeagueConfig? = null,
-)
+    /** The season's leagues for the selector (one entry, id "", in a legacy season), in league order. */
+    val leagues: List<LeagueInfo> = emptyList(),
+    /** The league shown ("" in a legacy season): the one picked, else the default (see `LeagueSelector.defaultLeague`). */
+    val league: String = "",
+    /** National leagues this season, and in the next (its rules as they are now). */
+    val national: Boolean = false,
+    val nextNational: Boolean = false,
+    /** 2-0 sweeps earn a bonus point this season (판 승점제's 완승 보너스, the season's own rule). */
+    val bonus: Boolean = format.sweepBonus,
+    /** The season's index of [divisions]' first. */
+    val firstDivision: Int = 0,
+    /** Rounds each division plays (a national season's lower tiers can play fewer than [matchdays]); empty: [matchdays] each. */
+    val rounds: List<Int> = emptyList(),
+) {
+    /** The shown league's entry of [leagues]. */
+    val shown: LeagueInfo? get() = leagues.firstOrNull { it.id == league }
+
+    /** Rounds division [d] (of [divisions]) plays. */
+    fun roundsOf(d: Int): Int = rounds.getOrNull(d) ?: matchdays
+}
 
 /** One fixture in the calendar (일정표): its games once played, or whether it is being played. */
 data class CalendarItem(
@@ -419,8 +449,26 @@ data class PastPlayer(
     val hometown: String,
 )
 
-/** A matchday of a division in the calendar. */
-data class CalendarView(val division: Int, val matchday: Int, val matchdays: Int, val current: Int, val items: List<CalendarItem>, val season: Int = 0)
+/**
+ * A matchday of a division in the calendar: [matchday] of the league stage's [matchdays], the
+ * one in play [current], as the division's round [round] of its [rounds] (the round in play
+ * [currentRound]); [prev] and [next] are the matchdays of its rounds before and after (null at
+ * either end). A legacy season plays every division's rounds on matchdays of the same number; a
+ * national season spreads a shorter division's rounds over the weeks.
+ */
+data class CalendarView(
+    val division: Int,
+    val matchday: Int,
+    val matchdays: Int,
+    val current: Int,
+    val items: List<CalendarItem>,
+    val season: Int = 0,
+    val round: Int = matchday,
+    val rounds: Int = matchdays,
+    val currentRound: Int = current,
+    val prev: Int? = (matchday - 1).takeIf { it >= 0 },
+    val next: Int? = (matchday + 1).takeIf { it < matchdays },
+)
 
 /**
  * 최근 폼 of a division: each player's last results in it ('W', 'D', 'L' by the season's rule,
@@ -487,22 +535,38 @@ data class ClubBadge(val id: String, val name: String, val city: String, val nat
 /** A league of the selector and the pages: its tiers, size, ranking and continental places. */
 data class LeagueInfo(
     val id: String,
+    /** "한국 리그" / "아시아 연합 리그"; a legacy season's "리그". */
     val label: String,
     val short: String,
+    /** Its flag, its confederation's globe, or 🌐. */
     val icon: String,
     val confed: Confed?,
     /** Its first division's index among the season's divisions. */
     val first: Int,
+    /** Each division's label ("1부", "2부"; a legacy pyramid's "3부 B조"), from [first] on. */
     val tierLabels: List<String>,
     val sizes: List<Int>,
     val members: Int,
-    /** 1-based; null before it is ranked. */
+    /** 1-based in the league ranking (in a first national season by strength); null in a legacy season. */
     val rank: Int?,
+    /** Its 리그 계수 (the sum of the ranking's seasons); null before a national season closed with it. */
     val coefficient: Double?,
+    /** Next season's places in its 대륙 챔피언스 from its 1부, and the champion straight into the 챔피언스 리그. */
     val cclSlots: Int,
     val clDirect: Boolean,
+    /** A followed player, club or nation plays in it, or the league itself is followed. */
     val followed: Boolean,
-)
+    /** Nations whose players play in it (a 연합 리그 has several). */
+    val nations: Int = 1,
+) {
+    /** Its tiers (a national league is a ladder: one division a tier). */
+    val tiers: Int get() = sizes.size
+
+    val national: Boolean get() = id.isNotEmpty()
+
+    /** A 연합 리그 (of a confederation, or the 국제 연합 리그). */
+    val union: Boolean get() = id == yacht.engine.league.LeagueIds.WORLD || yacht.engine.league.LeagueIds.isRegion(id)
+}
 
 /** The home dashboard's one banner, the most pressing first. */
 sealed interface HomeBanner {

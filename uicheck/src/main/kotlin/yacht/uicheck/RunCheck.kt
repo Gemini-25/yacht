@@ -13,6 +13,7 @@ import yacht.app.core.Screen
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
 import yacht.engine.Tables
+import yacht.engine.league.LeagueConfig
 import yacht.engine.league.PlayerMaker
 import java.io.File
 import java.io.RandomAccessFile
@@ -25,7 +26,7 @@ import kotlin.system.exitProcess
  * Runs the app's real league controller (no UI) and says how it goes, to catch a league that
  * stops or stalls by itself.
  *
- * Usage: runcheck <tables dir> <minutes> [ECO|NORMAL|FULL] [seed|new] [make|week|size]
+ * Usage: runcheck <tables dir> <minutes> [ECO|NORMAL|FULL] [seed|new] [make|week|size|national]
  * - every 5 s: running, matches, season and week, matches in flight, why it stopped;
  * - `seed` starts from the shipped seed league; `make` adds three made players while it runs;
  * - `week` presses ▶ in 1주씩 sixty times (each run must stop by itself one week on, with
@@ -38,6 +39,11 @@ import kotlin.system.exitProcess
  *   uicheck/src/main/resources/size_baseline.txt (run from the repository); `check` fails when the
  *   folder, its 30-season projection or the CPU per season (by more than 5%, in seconds and per
  *   reference) is above that baseline (beyond the run-to-run noise, see [SIZE_MARGIN]).
+ * - `national [shots dir|-] [players]` (minutes and seed are not read): a new league of national leagues
+ *   ([NATIONAL_CONFIG]) plays one season and the rollover; it fails on any error the app is told
+ *   of (every snapshot included), and draws every league's 순위 › 리그 in every view halfway
+ *   through the season and again in the next one (into the shots dir, else a temporary one),
+ *   each checked against its selector row.
  * Exits 1 when a check fails.
  */
 fun main(args: Array<String>) {
@@ -55,6 +61,9 @@ fun main(args: Array<String>) {
 private fun run(args: Array<String>) {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
     if (args.getOrElse(4) { "" } == "size") return sizes(tablesDir, LeagueSpeed.valueOf(args.getOrElse(2) { "FULL" }), args.drop(5))
+    if (args.getOrElse(4) { "" } == "national") {
+        return national(tablesDir, LeagueSpeed.valueOf(args.getOrElse(2) { "FULL" }), args.getOrNull(5)?.takeIf { it != "-" }?.let(::File), args.getOrNull(6)?.toInt() ?: NATIONAL_PLAYERS)
+    }
     val minutes = args.getOrElse(1) { "5" }.toDouble()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val c = AppController(
@@ -430,6 +439,98 @@ private fun measure(tablesDir: File, speed: LeagueSpeed, players: Int, cache: Fi
     val ref = refs.sorted()[refs.size / 2]
     println("$players players: reference ${refs.joinToString(" ") { "%.2f".format(it) }} s")
     return SizeRun(players, files, cpu, ref) to folder
+}
+
+// ---- national: a league of national leagues end to end -----------------------------------------
+
+/**
+ * The rules of a `national` run: the national default, scaled to 300 players (as NationalSmokeTest:
+ * its leagues are the four 연합 리그) or to the players asked for (1000 makes some nations' own
+ * leagues and 대륙 챔피언스 sections).
+ */
+private fun nationalConfig(players: Int) = LeagueConfig.DEFAULT.copy(generated = players, leagueMin = 20, divisionSize = 16)
+private const val NATIONAL_PLAYERS = 300
+private const val NATIONAL_SEED = 20261031L
+private const val NATIONAL_MINUTES = 40L
+
+/**
+ * `national`: a new league under [nationalConfig] (written as its saved rules, as a player who
+ * picked them would have) from [NATIONAL_SEED], played at [speed] by the real controller through
+ * its first season and the rollover. Every error the app is told of fails the run (a snapshot
+ * that throws, a failing odds run, a stop). Halfway through season 1, and again once season 2 is
+ * open, every league's 순위 › 리그 is drawn in every view ([ShotsWorld.everyLeague]) and the
+ * screens a national season changes are shot ([ShotsWorld.nationalShots]), into [shots] (a
+ * temporary folder, deleted, when null).
+ */
+private fun national(tablesDir: File, speed: LeagueSpeed, shots: File?, players: Int = NATIONAL_PLAYERS) {
+    val dir = Files.createTempDirectory("yacht-national").toFile()
+    val out = (shots ?: File(dir, "shots")).apply { mkdirs() }
+    val folder = File(dir, "league").apply { mkdirs() }
+    File(folder, "config.txt").writeText(nationalConfig(players).encode())
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val c = AppController(scope, GameStorage(dir), loadTables = { load(tablesDir) }, loadAsset = { null })
+    val errors = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+    c.errorListener = { e -> errors += e.also { it.printStackTrace() } }
+    val lg = c.league
+    lg.leagueSeed = { NATIONAL_SEED }
+    c.start()
+    while (c.tables == null) Thread.sleep(50)
+    c.screen = Screen.LEAGUE
+    while (lg.view == null) Thread.sleep(50)
+    check(lg.config.national) { "the national rules were not read: ${lg.config}" }
+    lg.changeSpeed(speed)
+    val t0 = System.currentTimeMillis()
+    val deadline = t0 + NATIONAL_MINUTES * 60_000
+    fun waitUntil(what: String, cond: () -> Boolean) {
+        var told = 0L
+        while (!cond()) {
+            check(errors.isEmpty()) { "${errors.size} errors, the first: ${errors.first()}" }
+            check(lg.stopReason == null) { "stopped: ${lg.stopReason}" }
+            check(System.currentTimeMillis() < deadline) { "$what, not in $NATIONAL_MINUTES minutes" }
+            if (System.currentTimeMillis() - told > 10_000) {
+                told = System.currentTimeMillis()
+                val v = lg.view
+                println("t=${(told - t0) / 1000}s $what: running=${lg.running} season=${v?.clock?.season} week=${v?.clock?.week} played=${v?.season?.played}/${v?.season?.total} leagues=${v?.season?.leagues?.size}")
+            }
+            Thread.sleep(100)
+        }
+    }
+    lg.start()
+    waitUntil("season 1 started") { lg.running && (lg.view?.matches ?: 0L) > 0L && lg.view?.season != null }
+    val first = lg.view!!.season!!
+    check(first.national && first.leagues.size > 1) { "season 1 is not national: ${first.leagues.map { it.id }}" }
+    println("season 1: " + first.leagues.joinToString { "${it.id}(${it.sizes.joinToString("+")}, rank ${it.rank}, ccl ${it.cclSlots})" } + "; shown ${first.league}")
+    // Halfway through the league stage: every league shown in turn while it plays on (the
+    // snapshot keeps up with the picks), then stopped (a season of 300 plays in a minute or two,
+    // faster than its views are drawn) for the views with their data.
+    waitUntil("season 1 halfway") { lg.view?.season?.let { it.played * 2 >= it.total } == true }
+    ShotsWorld.everyLeague(c, null, "nat1")
+    lg.stop()?.let { j -> kotlinx.coroutines.runBlocking { j.join() } }
+    val drawn1 = ShotsWorld.everyLeague(c, out, "nat1")
+    ShotsWorld.nationalShots(c, out, "nat1")
+    println("season 1: $drawn1 league table views drawn")
+    check(lg.view?.season?.number == 1) { "season 1 moved on while stopped" }
+    // The rest of the season, its close and the next season's opening, then the league stops.
+    val m1 = lg.view?.matches ?: 0L
+    lg.start()
+    waitUntil("season 1 going on") { lg.running && (lg.view?.matches ?: 0L) > m1 }
+    lg.stopAfterSeason(1)
+    waitUntil("season 1 played") { !lg.running }
+    waitUntil("season 2 open") { (lg.view?.clock?.season ?: 0) >= 2 && lg.view?.season?.number == 2 }
+    val second = lg.view!!.season!!
+    check(second.national && second.leagues.size > 1) { "season 2 is not national: ${second.leagues.map { it.id }}" }
+    println("season 2: " + second.leagues.joinToString { "${it.id}(${it.sizes.joinToString("+")}, rank ${it.rank}, ccl ${it.cclSlots})" } + "; shown ${second.league}")
+    if (lg.review != null) lg.dismissReview()
+    val drawn2 = ShotsWorld.everyLeague(c, out, "nat2")
+    ShotsWorld.nationalShots(c, out, "nat2")
+    println("season 2: $drawn2 league table views drawn")
+    check(errors.isEmpty()) { "${errors.size} errors, the first: ${errors.first()}" }
+    println("timings: ${lg.timings}")
+    c.shutdown()?.let { j -> kotlinx.coroutines.runBlocking { j.join() } }
+    scope.cancel()
+    // The league and, without a shots folder of its own, the pictures.
+    dir.deleteRecursively()
+    println("national: green in ${(System.currentTimeMillis() - t0) / 1000} s")
 }
 
 private fun load(dir: File): Tables {
