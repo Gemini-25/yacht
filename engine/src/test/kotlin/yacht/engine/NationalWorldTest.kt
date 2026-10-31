@@ -173,6 +173,25 @@ class NationalWorldTest {
         for (row in after.rows) assertEquals(played.rank(row.id) - row.rank, row.change, "${row.id}: ${ranks(played)} -> ${ranks(after)}")
     }
 
+    /**
+     * A new national league ranks its leagues by strength in the ratings it was drawn with; after
+     * its first season (the ratings have moved far from the newcomers' priors) the ranking the
+     * close publishes counts each league's climb from that one, and a replayed close (the ladder
+     * read back aged) ranks the same.
+     */
+    @Test
+    fun theRankingAfterASeasonCountsFromTheOneItWasPlayedUnder() {
+        val run = WorldRun(national)
+        run.w.openFirstSeason(7L)
+        val played = run.w.plan!!.ranking
+        assertTrue(played.rows.size >= 4, ranks(played).toString())
+        run.play()
+        val before = run.beforeClose()
+        val (close, _) = run.rollover(national)
+        climbsFrom(played, close.ranking)
+        replaysTheSame(run, before, run.w.encodeFiles(), national, national, "a new league", close.ranking)
+    }
+
     @Test
     fun aLegacyLeagueMigratesAndPlaysTwoNationalSeasons() {
         val run = WorldRun(legacy)
