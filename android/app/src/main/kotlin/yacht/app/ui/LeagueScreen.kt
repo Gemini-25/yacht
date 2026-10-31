@@ -78,8 +78,7 @@ fun LeagueScreen(c: AppController) {
     val cs = MaterialTheme.colorScheme
     var resetAsk by remember { mutableStateOf(false) }
     var rankedAsk by remember { mutableStateOf(false) }
-    // Until the player page comes, a player is a dialog over the page (or tab) under it.
-    val page = nav.pages.lastOrNull { it !is Page.Player }
+    val page = nav.page
     Box(Modifier.fillMaxSize().background(cs.background)) {
         Column(Modifier.fillMaxSize()) {
             if (page == null) {
@@ -112,17 +111,10 @@ fun LeagueScreen(c: AppController) {
             nav.sheet = Sheet.NONE
             resetAsk = true
         }
-    }
-    (nav.page as? Page.Player)?.let { p ->
-        androidx.compose.runtime.key(p) {
-            val open: (String) -> Unit = { nav.open(Page.Player(it)) }
-            val row = v?.rows?.firstOrNull { it.key == p.key }
-            if (row != null) AiDetail(c, row, open, onCompare = { nav.replaceTop(Page.Compare(row.key)) }) { nav.close(p) }
-            else if (v != null) PastProfileDialog(lg, p.key, open) { nav.close(p) }
-        }
+        PlayerActionsSheet(c)
     }
     if (rankedAsk) RankedStartDialog(c) { rankedAsk = false }
-    lg.review?.let { if (nav.page !is Page.Player) SeasonReviewDialog(lg, it) }
+    lg.review?.let { SeasonReviewDialog(lg, it) }
     if (resetAsk) {
         AlertDialog(
             onDismissRequest = { resetAsk = false },
@@ -260,6 +252,7 @@ private fun PageBar(lg: LeagueController, v: LeagueView?, page: Page) {
                 TextButton(onClick = { lg.toggleFavourite(nationFavourite(page.code)) }) { Text(if (fav) "★ 응원 중" else "☆ 응원") }
             }
             Page.News -> TextButton(onClick = { nav.newsFollowed = !nav.newsFollowed }) { Text(if (nav.newsFollowed) "★ 응원만" else "☆ 전체") }
+            is Page.Player -> PlayerBarActions(lg, page)
             else -> {}
         }
         if (lg.running) {
@@ -300,6 +293,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
     val nav = lg.nav
     val open: (String) -> Unit = { nav.open(Page.Player(it)) }
     when (page) {
+        is Page.Player -> PlayerPageBody(c, v, page)
         is Page.Competition -> CompetitionScreen(lg, v, page, open)
         is Page.Match -> MatchStub(c, v, page)
         is Page.Club -> ClubPageBody(lg, v.clubs, page.id, open)
