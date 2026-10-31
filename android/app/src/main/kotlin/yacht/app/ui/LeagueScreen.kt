@@ -53,10 +53,8 @@ import yacht.app.core.Sheet
 import yacht.app.core.TableMode
 import yacht.app.core.TablesView
 import yacht.engine.league.Comp
-import yacht.engine.league.Competitions
 import yacht.engine.league.Nations
 import yacht.engine.league.WeekStage
-import yacht.engine.league.byTeams
 
 /** Shows a followed player's division in 순위 › 리그 (the first division without one). */
 private fun LeagueNav.showFollowed(season: SeasonView?, favourites: Set<String>) {
@@ -89,7 +87,7 @@ fun LeagueScreen(c: AppController) {
                     onSettings = { nav.sheet = Sheet.SETTINGS },
                 )
             } else {
-                PageBar(lg, v, page)
+                PageBar(c, v, page)
             }
             val clock = v?.clock
             if (clock != null) WeekBar(clock, Modifier.fillMaxWidth().height(4.dp).clickable { showWeek(nav) }) else Spacer(Modifier.height(4.dp))
@@ -180,7 +178,7 @@ private fun TabBody(c: AppController, v: LeagueView, onRanked: () -> Unit) {
                         onComp = { comp -> showComp(nav, comp) },
                         onNews = { nav.open(Page.News) },
                     )
-                    MatchesView.RESULTS -> FeedList(lg, v)
+                    MatchesView.RESULTS -> FeedList(c, v)
                     MatchesView.BROADCAST -> LiveBoardView(c)
                     MatchesView.HIGHLIGHTS -> Highlights(c, v)
                 }
@@ -240,7 +238,8 @@ private fun RankingTab(lg: LeagueController) {
 
 /** A page's bar (56 dp): ←, its title, its actions, and 🔴 while the league runs (a tap: back to the tab). */
 @Composable
-private fun PageBar(lg: LeagueController, v: LeagueView?, page: Page) {
+private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
+    val lg = c.league
     val cs = MaterialTheme.colorScheme
     val nav = lg.nav
     Row(Modifier.fillMaxWidth().height(56.dp).background(cs.background).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -253,6 +252,7 @@ private fun PageBar(lg: LeagueController, v: LeagueView?, page: Page) {
             }
             Page.News -> TextButton(onClick = { nav.newsFollowed = !nav.newsFollowed }) { Text(if (nav.newsFollowed) "★ 응원만" else "☆ 전체") }
             is Page.Player -> PlayerBarActions(lg, page)
+            is Page.Match -> MatchBarAction(c, page)
             else -> {}
         }
         if (lg.running) {
@@ -295,7 +295,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
     when (page) {
         is Page.Player -> PlayerPageBody(c, v, page)
         is Page.Competition -> CompetitionScreen(lg, v, page, open)
-        is Page.Match -> MatchStub(c, v, page)
+        is Page.Match -> MatchReportPage(c, v, page)
         is Page.Club -> ClubPageBody(lg, v.clubs, page.id, open)
         Page.Market -> MarketBody(lg, v.clubs)
         is Page.Nation -> NationPage(lg, page.code, open)
@@ -313,58 +313,5 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         }
         // The followed players, the federation, the leaderboards, the reviews, match lists and the league pages come later.
         else -> CenterText("곧 볼 수 있어요.")
-    }
-}
-
-/**
- * [Page.Match] until the match reports come: what the screen already knows of the match (a
- * round's fixture, a match in play, the scoreboard's, a highlight to play again), and the preview
- * of a round's match still to come (경기 프리뷰, a dialog before).
- */
-@Composable
-private fun MatchStub(c: AppController, v: LeagueView, page: Page.Match) {
-    val lg = c.league
-    val cs = MaterialTheme.colorScheme
-    // "season:compCode:id[:board[:game]]"
-    val f = page.key.split(':')
-    val season = f.getOrNull(0)?.toIntOrNull()
-    val comp = f.getOrNull(1)?.singleOrNull()?.let { Comp.of(it) }
-    val id = f.getOrNull(2)?.toIntOrNull()
-    val fixture = f.take(3).joinToString(":")
-    val current = season != null && season == v.clock?.season
-    val item = lg.calendar?.takeIf { comp == Comp.LEAGUE && it.season == season }?.items?.firstOrNull { it.id == id }
-    val live = if (current) v.live.firstOrNull { it.comp == comp && it.id == id } else null
-    val frame = if (current) lg.liveFrames.firstOrNull { it.fixture.comp == comp && it.fixture.id == id } else null
-    val highlight = (v.highlights + v.allTime).let { all -> all.firstOrNull { it.id == page.key } ?: all.firstOrNull { it.id.startsWith("$fixture:") } }
-    fun side(k: String) = if (comp?.byTeams == true) Competitions.teamLabel(k) else lg.name(k)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            listOfNotNull(comp?.let { compIcon(it) + " " + it.label }, season?.let { "시즌 $it" }).joinToString(" · "),
-            style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant,
-        )
-        val sides = item?.let { it.a to it.b } ?: live?.let { it.a to it.b } ?: frame?.let { it.fixture.a to it.fixture.b }
-        sides?.let { (a, b) -> Text("${side(a)}  대  ${side(b)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium) }
-        when {
-            item?.games != null -> Text(item.games.joinToString("  ") { "${it.a}:${it.b}" }, style = MaterialTheme.typography.titleSmall)
-            live != null || item?.live == true -> Text("⚔️ 경기 중이에요. 끝나면 바로 결과가 보여요.", style = MaterialTheme.typography.bodySmall, color = cs.tertiary)
-            frame != null && frame.finished -> Text("${halfText(frame.scoreA)} : ${halfText(frame.scoreB)}", style = MaterialTheme.typography.titleSmall)
-            item != null -> {
-                Text("아직 치르지 않은 경기예요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                androidx.compose.runtime.LaunchedEffect(item.a, item.b) { lg.loadPreview(item.a, item.b) }
-                val p = lg.preview?.takeIf { it.a == item.a && it.b == item.b }
-                if (p == null) Text("프리뷰를 준비하는 중…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) else PreviewBody(p)
-            }
-            sides == null && highlight == null -> Text("이 경기의 기록을 지금은 불러올 수 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-        }
-        highlight?.let { h ->
-            HighlightCard(lg.name(h.a), lg.name(h.b), h, "▶ 다시 보기") {
-                lg.replayHighlight(h) { c.aiPace.stepMs.coerceAtLeast(400L) }
-                c.screen = Screen.WATCH
-            }
-        }
-        Text(
-            "판마다의 점수, 칸별 점수, 승리 확률 흐름과 평점을 담은 경기 리포트는 곧 여기서 볼 수 있어요.",
-            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
-        )
     }
 }

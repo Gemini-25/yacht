@@ -40,10 +40,11 @@ val chartColors = listOf(
 
 /**
  * 승률 흐름: the first player's P(win) after each half-turn ([curve], percent), with the 50%
- * line; above the middle the first player leads.
+ * line; above the middle the first player leads. [mark]: a half-turn to mark (the game's
+ * decisive one), drawn as a dashed line with a dot on the curve.
  */
 @Composable
-fun WinCurve(curve: ByteArray, firstName: String, secondName: String, modifier: Modifier = Modifier, height: Dp = 80.dp) {
+fun WinCurve(curve: ByteArray, firstName: String, secondName: String, modifier: Modifier = Modifier, height: Dp = 80.dp, mark: Int? = null) {
     if (curve.isEmpty()) return
     val cs = MaterialTheme.colorScheme
     val first = gameColors.me
@@ -77,6 +78,11 @@ fun WinCurve(curve: ByteArray, firstName: String, secondName: String, modifier: 
             }
             drawPath(fill, first.copy(alpha = 0.12f))
             drawPath(path, cs.onSurface.copy(alpha = 0.85f), style = Stroke(width = 3f))
+            if (mark != null && mark in 0 until n) {
+                val x = step * (mark + 1)
+                drawLine(cs.tertiary, Offset(x, 0f), Offset(x, h), strokeWidth = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f)))
+                drawCircle(cs.tertiary, radius = 6f, center = Offset(x, y(curve[mark].toInt())))
+            }
             val last = curve.last().toInt()
             drawCircle(if (last >= 50) first else second, radius = 5f, center = Offset(w, y(last)))
         }

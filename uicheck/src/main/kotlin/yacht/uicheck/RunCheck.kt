@@ -9,12 +9,15 @@ import yacht.app.core.GameStorage
 import yacht.app.core.LeagueRunMode
 import yacht.app.core.LeagueSpeed
 import yacht.app.core.MatchCenter
+import yacht.app.core.Page
+import yacht.app.core.ReplaySource
 import yacht.app.core.Screen
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
 import yacht.engine.Tables
 import yacht.engine.league.Comp
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.LogClass
 import yacht.engine.league.PlayerMaker
 import java.io.File
 import java.io.RandomAccessFile
@@ -45,6 +48,12 @@ import kotlin.system.exitProcess
  *   of (every snapshot included), and draws every league's 순위 › 리그 in every view halfway
  *   through the season and again in the next one (into the shots dir, else a temporary one),
  *   each checked against its selector row.
+ * - `replay [players]` (minutes and seed are not read): a new league ([REPLAY_PLAYERS] players by
+ *   default) plays to week [REPLAY_WEEK]; the match log book stays within its budget at every save;
+ *   then [REPLAY_FIXTURES] played league and cup fixtures without an adaptive side must load a
+ *   report that plays them again (from a log or a re-simulation), [REPLAY_FIXTURES] logged boards
+ *   must decode to the turns a re-simulation plays, every logged board to its stored scores, and
+ *   after a reset the book must be empty and its file gone.
  * Exits 1 when a check fails.
  */
 fun main(args: Array<String>) {
@@ -62,6 +71,7 @@ fun main(args: Array<String>) {
 private fun run(args: Array<String>) {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
     if (args.getOrElse(4) { "" } == "size") return sizes(tablesDir, LeagueSpeed.valueOf(args.getOrElse(2) { "FULL" }), args.drop(5))
+    if (args.getOrElse(4) { "" } == "replay") return replay(tablesDir, LeagueSpeed.valueOf(args.getOrElse(2) { "FULL" }), args.getOrNull(5)?.toInt() ?: REPLAY_PLAYERS)
     if (args.getOrElse(4) { "" } == "national") {
         return national(tablesDir, LeagueSpeed.valueOf(args.getOrElse(2) { "FULL" }), args.getOrNull(5)?.takeIf { it != "-" }?.let(::File), args.getOrNull(6)?.toInt() ?: NATIONAL_PLAYERS)
     }
@@ -546,6 +556,136 @@ private fun national(tablesDir: File, speed: LeagueSpeed, shots: File?, players:
     // The league and, without a shots folder of its own, the pictures.
     dir.deleteRecursively()
     println("national: green in ${(System.currentTimeMillis() - t0) / 1000} s")
+}
+
+// ---- replay: reports and replays of real matches, the log book ---------------------------------
+
+private const val REPLAY_PLAYERS = 300
+private const val REPLAY_SEED = 20261101L
+private const val REPLAY_WEEK = 5
+private const val REPLAY_FIXTURES = 30
+private const val REPLAY_MINUTES = 40L
+
+/** Saves of the book checked against its budget before the league stops. */
+private const val REPLAY_SAVES = 3
+
+/** Bytes a book file may hold beyond its blocks' records: headers, block and record counts, the picks trailer, the CRC. */
+private const val BOOK_OVERHEAD = 1_024
+
+/**
+ * `replay`: a new league of [players] under the app's default rules, from [REPLAY_SEED], played at
+ * [speed] to week [REPLAY_WEEK] (and on until [REPLAY_FIXTURES] boards without an adaptive side are
+ * logged), checking matchlogs.bin against its budget after every save on the way; then stopped, and:
+ * the reports of [REPLAY_FIXTURES] played league and cup fixtures without an adaptive side must play
+ * them again (source LOG or RESIM); [REPLAY_FIXTURES] logged boards must decode to the very turns a
+ * re-simulation plays; every logged board must decode to its stored scores; and a reset must leave
+ * the book empty and its file gone.
+ */
+private fun replay(tablesDir: File, speed: LeagueSpeed, players: Int) {
+    val dir = Files.createTempDirectory("yacht-replay").toFile()
+    val folder = File(dir, "league").apply { mkdirs() }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val c = AppController(scope, GameStorage(dir), loadTables = { load(tablesDir) }, loadAsset = { null })
+    val errors = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+    c.errorListener = { e -> errors += e.also { it.printStackTrace() } }
+    val lg = c.league
+    val center = lg.center
+    File(folder, "config.txt").writeText(lg.config.copy(generated = players).encode())
+    lg.leagueSeed = { REPLAY_SEED }
+    c.start()
+    while (c.tables == null) Thread.sleep(50)
+    c.screen = Screen.LEAGUE
+    while (lg.view == null) Thread.sleep(50)
+    lg.changeSpeed(speed)
+    val rules = c.tables!!.rules
+    val t0 = System.currentTimeMillis()
+    val deadline = t0 + REPLAY_MINUTES * 60_000
+    val logFile = File(folder, MatchCenter.LOGS)
+    var lastSize = -1L
+    var checkedSaves = 0
+    /** The file against the budget now (each new size is a save). */
+    fun checkBook() {
+        val size = if (logFile.exists()) logFile.length() else return
+        if (size == lastSize) return
+        lastSize = size
+        val (caps, current) = center.locked { center.bookCaps() to center.bookBytes(yacht.engine.league.MatchLogBook.CURRENT) }
+        check(current <= caps.current) { "the current block holds $current B over its ${caps.current} B" }
+        val most = caps.current.toLong() + caps.previous + yacht.engine.league.MatchLogBook.ARCHIVE_SEASONS.toLong() * caps.archiveSeason + BOOK_OVERHEAD
+        check(size <= most) { "matchlogs.bin is $size B, over its budget $most B ($caps)" }
+        checkedSaves++
+    }
+    fun logged() = center.locked { center.loggedBoards().filter { l -> l.ref.season == lg.view?.clock?.season && !center.adaptive(l.a) && !center.adaptive(l.b) } }
+    fun waitUntil(what: String, cond: () -> Boolean) {
+        var told = 0L
+        while (!cond()) {
+            check(errors.isEmpty()) { "${errors.size} errors, the first: ${errors.first()}" }
+            check(lg.stopReason == null) { "stopped: ${lg.stopReason}" }
+            check(System.currentTimeMillis() < deadline) { "$what, not in $REPLAY_MINUTES minutes" }
+            checkBook()
+            if (System.currentTimeMillis() - told > 10_000) {
+                told = System.currentTimeMillis()
+                val v = lg.view
+                println("t=${(told - t0) / 1000}s $what: season=${v?.clock?.season} week=${v?.clock?.week} played=${v?.season?.played}/${v?.season?.total} logged=${logged().size} file=${logFile.length()} B")
+            }
+            Thread.sleep(200)
+        }
+    }
+    lg.start()
+    // On past week 5 until a few saves (one every 30 s) were checked against the budget.
+    waitUntil("week $REPLAY_WEEK") { (lg.view?.clock?.week ?: 0) >= REPLAY_WEEK && logged().size >= REPLAY_FIXTURES && checkedSaves >= REPLAY_SAVES }
+    lg.stop()?.let { j -> kotlinx.coroutines.runBlocking { j.join() } }
+    checkBook()
+    val season = lg.view!!.clock!!.season
+    println("replay: stopped in season $season week ${lg.view?.clock?.week}; ${logged().size} boards logged without an adaptive side; $checkedSaves saves checked")
+
+    // Reports of played league and cup fixtures without an adaptive side: every one plays again.
+    fun <T> spread(list: List<T>, n: Int): List<T> = if (list.size <= n) list else List(n) { list[it * list.size / n] }
+    val played = center.matchesNow().filter { m -> m.played && (m.ref.comp == Comp.LEAGUE || m.ref.comp == Comp.CUP) && m.fixture.players.none { center.adaptive(it) } }
+    val cups = spread(played.filter { it.ref.comp == Comp.CUP }, REPLAY_FIXTURES / 2)
+    val chosen = cups + spread(played.filter { it.ref.comp == Comp.LEAGUE }, REPLAY_FIXTURES - cups.size)
+    check(chosen.size == REPLAY_FIXTURES) { "only ${chosen.size} played fixtures without an adaptive side" }
+    val sources = java.util.TreeMap<String, Int>()
+    var replayed = 0
+    for (m in chosen) {
+        val page = Page.Match(m.ref.encode())
+        center.loadReport(page)
+        waitUntil("the report of ${m.ref}") { center.report(page)?.loading == false }
+        val r = center.report(page)!!
+        sources.merge(r.source.name, 1, Int::plus)
+        val games = r.boards.all { b -> b.games?.isNotEmpty() == true && b.games!!.all { it.boxA != null && it.curve != null } }
+        if (r.replayable && (r.source == ReplaySource.LOG || r.source == ReplaySource.RESIM) && games) replayed++
+        else println("NOT PLAYED AGAIN ${m.ref} (${m.fixture.label}): ${r.source} games=$games ${r.note}")
+    }
+    println("replay: $replayed/${chosen.size} reports play their match again (${chosen.count { it.ref.comp == Comp.CUP }} cup ties); sources $sources")
+    check(replayed == chosen.size) { "$replayed/${chosen.size} reports play their match again" }
+
+    // Logged boards: decoded, they are the very turns a re-simulation plays.
+    val boards = spread(logged(), REPLAY_FIXTURES)
+    for (log in boards) {
+        val again = center.replayNow(log.ref.whole) ?: error("${log.ref}: played again, it does not end as stored")
+        val board = again.firstOrNull { it.ref.board == log.ref.board } ?: error("${log.ref}: no such board played again")
+        for (g in log.games) {
+            val a = log.turns(rules, g.index) ?: error("${log.ref} game ${g.index}: the log does not decode")
+            check(a == board.turns(rules, g.index)) { "${log.ref} game ${g.index}: the logged turns differ from the re-simulated ones" }
+        }
+    }
+    println("replay: ${boards.size} logged boards decode to the re-simulated turns")
+    // Every logged board (adaptive ones too) decodes to its stored scores.
+    val all = center.locked { center.loggedBoards() }
+    for (log in all) for (g in log.games) checkNotNull(log.turns(rules, g.index)) { "${log.ref} game ${g.index}: does not decode to ${g.scoreA}:${g.scoreB}" }
+    println("replay: all ${all.size} logged boards decode to their scores (${all.count { it.has(LogClass.ADAPTIVE) }} adaptive)")
+
+    // A reset: an empty book and no file.
+    lg.reset()
+    waitUntil("the reset") { (lg.view?.matches ?: -1L) == 0L }
+    Thread.sleep(2_000)
+    check(center.locked { center.loggedBoards().isEmpty() }) { "the book kept boards after a reset" }
+    check(!logFile.exists()) { "matchlogs.bin is still there after a reset" }
+    check(errors.isEmpty()) { "${errors.size} errors, the first: ${errors.first()}" }
+    c.shutdown()?.let { j -> kotlinx.coroutines.runBlocking { j.join() } }
+    scope.cancel()
+    dir.deleteRecursively()
+    println("replay: green in ${(System.currentTimeMillis() - t0) / 1000} s")
 }
 
 private fun load(dir: File): Tables {

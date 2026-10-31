@@ -4,9 +4,11 @@ import kotlinx.coroutines.CoroutineScope
 import yacht.engine.OppModel
 import yacht.engine.Tables
 import yacht.engine.league.CustomAiSpec
+import yacht.engine.league.Fixture
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.MatchPreview
 import yacht.engine.league.WinEstimate
 import java.io.File
 
@@ -61,4 +63,17 @@ internal interface LeagueHost {
 
     /** League members this season. */
     fun members(): Int
+
+    /** League [id]'s 0-based place in this season's league ranking (by strength before one is published); 0 in a legacy season. Under the lock. */
+    fun leagueRank(id: String): Int = 0
+
+    /** The screen's snapshot soon (a result the screen shows was recorded). */
+    fun publish() {}
+
+    /** The preview of [a] against [b] ([fixture]: where; odds of their league when kept), or null (under the lock). */
+    fun preview(a: String, b: String, fixture: Fixture?): MatchPreview? = null
+
+    /** The watch screen's pace (ui.txt), and a new one to save. */
+    fun watchPace(): WatchPace = WatchPace.NORMAL
+    fun saveWatchPace(p: WatchPace) {}
 }
