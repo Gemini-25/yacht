@@ -10,9 +10,13 @@ import yacht.app.core.AiPace
 import yacht.app.core.AppController
 import yacht.app.core.GameStorage
 import yacht.app.core.LeagueBackground
+import yacht.app.core.LeaderFilter
 import yacht.app.core.LeagueSpeed
+import yacht.app.core.Page
 import yacht.app.core.Screen
+import yacht.app.core.StatScope
 import yacht.app.core.ThinkTime
+import yacht.app.core.WatchPace
 import yacht.engine.Category
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
@@ -41,7 +45,8 @@ import kotlin.system.exitProcess
  * AIs, backups, going to the background) on a single "main" thread like Android's, under a
  * phone-sized heap. Reports every uncaught exception (each would close the app on a phone),
  * state written off the main thread, the peak heap, and stuck states.
- * Usage: stress <tables dir> <minutes> [seed] [players]
+ * Every season tells its wall and CPU seconds; the end tells the league files at their largest.
+ * Usage: stress <tables dir> <minutes> [seed] [players] [ECO|NORMAL|FULL]
  */
 private val failures = ConcurrentLinkedQueue<String>()
 private val offMain = ConcurrentHashMap<String, Int>()
@@ -81,8 +86,9 @@ private fun run(args: Array<String>): Int {
     val tablesDir = File(args.getOrElse(0) { "../tables" })
     val minutes = args.getOrElse(1) { "5" }.toDouble()
     val seed = args.getOrElse(2) { "1" }.toLong()
-    // Players in the league (the default rules' when not given).
+    // Players in the league (the default rules' when not given), and its speed (by the seed when not given).
     val players = args.getOrNull(3)?.toInt()
+    val speed = args.getOrNull(4)?.let { LeagueSpeed.valueOf(it) }
     Thread.setDefaultUncaughtExceptionHandler { t, e -> record("thread ${t.name}", e) }
     mainExecutor.submit {}.get()
     StateWrites.observer = {
@@ -152,9 +158,10 @@ private fun run(args: Array<String>): Int {
     onMain { c.league.loadSeed() }
     waitFor("seed", 60_000) { (c.league.view?.matches ?: 0L) > 0L }
     onMain {
-        c.league.changeSpeed(if (leagueHeavy) LeagueSpeed.FULL else LeagueSpeed.NORMAL)
+        c.league.changeSpeed(speed ?: if (leagueHeavy) LeagueSpeed.FULL else LeagueSpeed.NORMAL)
         c.league.start()
     }
+    val largest = watchSeasons(c, File(dir, "league"))
 
     while (System.currentTimeMillis() < deadline && failures.isEmpty()) {
         actions++
@@ -164,7 +171,7 @@ private fun run(args: Array<String>): Int {
             4, 5 -> {
                 if (onMain { c.newRankedGame() }) { playGame(c, rng, null); games++ }
             }
-            6 -> watch(c, rng)
+            6 -> if (rng.nextBoolean()) watch(c, rng) else pages(c, rng)
             7 -> myAis(c, rng)
             8 -> {
                 // Background and back, as when the phone is locked: with ‘나가면 멈춤’ the league
@@ -240,6 +247,7 @@ private fun run(args: Array<String>): Int {
     liveHeap()
     println("done: $actions actions, $games games, league ${c.league.view?.matches} matches, peak heap ${peakHeap shr 20} MB (live after GC at most ${peakLive shr 20} MB) of ${Runtime.getRuntime().maxMemory() shr 20} MB")
     println("lock held: ${c.league.timings}")
+    println("league files at their largest (bytes): " + largest.entries.sortedBy { it.key }.joinToString(" ") { "${it.key}=${it.value}" })
     if (offMain.isNotEmpty()) {
         println("state written off the main thread:")
         for ((k, n) in offMain.entries.sortedByDescending { it.value }) println("  $n× $k")
@@ -254,6 +262,39 @@ private fun run(args: Array<String>): Int {
     }
     println(if (failures.isEmpty()) "NO FAILURES" else "${failures.size} FAILURES")
     return if (failures.isEmpty()) 0 else 1
+}
+
+/**
+ * Tells each season of [c]'s league as it ends: its wall and CPU seconds (the whole process, the
+ * person's games included) and matches; and keeps every file of [folder] at the largest size it
+ * was seen at (season.txt is largest just before its close), which it returns.
+ */
+private fun watchSeasons(c: AppController, folder: File): Map<String, Long> {
+    val largest = ConcurrentHashMap<String, Long>()
+    val os = ManagementFactory.getOperatingSystemMXBean() as com.sun.management.OperatingSystemMXBean
+    Thread {
+        var season = c.league.view?.season?.number
+        var t0 = System.currentTimeMillis()
+        var cpu0 = os.processCpuTime
+        var m0 = c.league.view?.matches ?: 0L
+        while (true) {
+            folder.listFiles()?.filter { it.isFile && !it.name.startsWith(".") }?.forEach { f -> largest.merge(f.name, f.length(), ::maxOf) }
+            val v = c.league.view
+            val now = v?.season?.number
+            if (v != null && now != null && season != null && now != season) {
+                println(
+                    "  season $season over: ${(System.currentTimeMillis() - t0) / 1000} s, CPU ${(os.processCpuTime - cpu0) / 1_000_000_000} s, " +
+                        "${v.matches - m0} matches; season.txt at most ${largest["season.txt"]} B, folder ${folder.listFiles()?.filter { it.isFile }?.sumOf { it.length() }} B",
+                )
+                t0 = System.currentTimeMillis()
+                cpu0 = os.processCpuTime
+                m0 = v.matches
+            }
+            season = now ?: season
+            Thread.sleep(2_000)
+        }
+    }.apply { isDaemon = true; start() }
+    return largest
 }
 
 /** One game to the end (or abandoned), with random detours. [source] null: the ranked game already started. */
@@ -363,26 +404,76 @@ private fun detour(c: AppController, rng: Random) {
     }
 }
 
+/**
+ * Watching (MatchCenter): a friendly between two league players, the week's broadcast, or a
+ * recent match's report and then its replay (from the log book or a re-simulation); controls
+ * pressed at random while it plays.
+ */
 private fun watch(c: AppController, rng: Random) {
-    val pair = onMain { c.league.featured(Random(rng.nextLong())) } ?: return
-    onMain {
-        c.league.startWatch(pair.first, pair.second) { 30L }
-        c.screen = Screen.WATCH
+    val lg = c.league
+    val center = lg.center
+    val keys = lg.view?.rows?.filter { !it.isMe }?.map { it.key }.orEmpty()
+    when (rng.nextInt(3)) {
+        0 -> {
+            if (keys.size < 2) return
+            val a = keys[rng.nextInt(keys.size)]
+            val b = keys.filter { it != a }[rng.nextInt(keys.size - 1)]
+            onMain { center.watchFriendly(a, b) }
+        }
+        1 -> onMain { center.startBroadcast() }
+        else -> {
+            val ref = lg.view?.feed?.mapNotNull { it.ref }?.randomOrNull(rng) ?: return
+            val page = Page.Match(ref)
+            onMain { center.loadReport(page) }
+            Thread.sleep(rng.nextInt(3_000).toLong())
+            if (rng.nextBoolean()) {
+                onMain { center.closeReport(page) }
+                return
+            }
+            onMain { center.watch(ref) }
+        }
     }
+    onMain { c.screen = Screen.WATCH }
     val until = System.currentTimeMillis() + rng.nextInt(20_000)
     while (System.currentTimeMillis() < until) {
-        when (rng.nextInt(6)) {
-            0 -> onMain { c.league.pauseWatch() }
-            1 -> onMain { c.league.resumeWatch { 30L } }
-            2 -> onMain { c.league.skipWatchTurn() }
+        when (rng.nextInt(8)) {
+            0 -> onMain { center.pause() }
+            1 -> onMain { center.resume() }
+            2 -> onMain { center.skipTurn() }
+            3 -> onMain { center.nextGame() }
+            4 -> onMain { center.setPace(WatchPace.entries[rng.nextInt(WatchPace.entries.size)]) }
         }
         Thread.sleep(300)
-        if (c.league.watch?.complete == true && rng.nextBoolean()) break
+        if (center.watch?.complete == true && rng.nextBoolean()) break
     }
     onMain {
-        if (rng.nextBoolean()) c.league.stopWatch()
+        if (rng.nextBoolean()) center.stop()
         c.screen = Screen.LEAGUE
     }
+}
+
+/**
+ * The league's pages as a person opens them: a player page, the leaderboards, the records room,
+ * the reviews, the ranking, the 요트협회 and a league's club table, each loaded off the main
+ * thread while the league plays on.
+ */
+private fun pages(c: AppController, rng: Random) {
+    val lg = c.league
+    val keys = lg.view?.rows?.filter { !it.isMe }?.map { it.key }.orEmpty()
+    val league = lg.view?.season?.leagues?.randomOrNull(rng)?.id
+    onMain {
+        when (rng.nextInt(7)) {
+            0 -> keys.randomOrNull(rng)?.let { k -> lg.nav.open(Page.Player(k)); lg.analytics.loadPlayer(k, StatScope.SEASON, lg.center) }
+            1 -> lg.analytics.loadLeaders(LeaderFilter())
+            2 -> lg.analytics.loadRoom()
+            3 -> lg.analytics.loadReviews()
+            4 -> lg.worldPages.loadRanking()
+            5 -> lg.worldPages.loadFederation()
+            else -> league?.let { lg.worldPages.loadClubTable(it) }
+        }
+    }
+    Thread.sleep(rng.nextInt(1_500).toLong())
+    onMain { if (rng.nextBoolean()) lg.nav.back() }
 }
 
 private fun myAis(c: AppController, rng: Random) {
@@ -401,9 +492,9 @@ private fun myAis(c: AppController, rng: Random) {
     // Edit it right away sometimes (its results are dropped).
     if (rng.nextBoolean()) onMain { lg.saveCustom(spec.copy(amount = rng.nextDouble() * 0.3)) }
     if (rng.nextInt(3) == 0) {
-        onMain { lg.detail = spec.key }
+        onMain { lg.nav.open(Page.Player(spec.key)) }
         Thread.sleep(100)
-        onMain { lg.detail = null }
+        onMain { lg.nav.back() }
     }
 }
 
