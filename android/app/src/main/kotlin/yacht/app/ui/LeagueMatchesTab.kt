@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -22,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +36,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import yacht.app.core.AppController
+import yacht.app.core.BroadcastPick
+import yacht.app.core.BroadcastView
 import yacht.app.core.FeedItem
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
@@ -57,23 +61,20 @@ internal fun matchKey(season: Int, comp: Comp, id: Int): String? =
 /** True when [k] (a player, or a nation's team) is followed. */
 internal fun followed(k: String, favourites: Set<String>): Boolean = k in favourites || nationFavourite(k) in favourites
 
-/**
- * Watches a featured game (a top player against a rival, played afresh as a friendly): the league
- * screen's old 👀 경기 관전, kept on 경기 › 중계 until the broadcast channel replaces it.
- */
-internal fun watchFeatured(c: AppController) {
-    val lg = c.league
-    val (a, b) = lg.featured(java.util.Random()) ?: return
-    lg.startWatch(a, b) { c.aiPace.stepMs.coerceAtLeast(400L) }
+/** Plays the match of [ref] again on the watch screen (▶ of a list's row). */
+internal fun watchMatch(c: AppController, ref: String) {
+    c.league.center.watch(ref)
     c.screen = Screen.WATCH
 }
 
 /**
  * 경기 › 결과: "필터 ▾" ([Sheet.RESULTS_FILTER]), the matches being played (folded to one line,
- * each opening its report), and the results, newest first.
+ * each opening its report), and the results, newest first: a card opens its report, ▶ plays it
+ * again (when it can be: UX 3.3).
  */
 @Composable
-internal fun FeedList(lg: LeagueController, v: LeagueView) {
+internal fun FeedList(c: AppController, v: LeagueView) {
+    val lg = c.league
     val cs = MaterialTheme.colorScheme
     val nav = lg.nav
     val filter = nav.results
@@ -118,8 +119,14 @@ internal fun FeedList(lg: LeagueController, v: LeagueView) {
         }
         val clock = v.clock
         // 완승 보너스 only for this season's results (an older season's rule is not known here).
-        val bonusSeason = v.season?.takeIf { it.format.sweepBonus }?.number
-        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { FeedCard(lg, it, clock, bonusSeason != null && it.season == bonusSeason) }
+        val bonusSeason = v.season?.takeIf { it.bonus }?.number
+        items(shown, key = { "${it.time}-${it.a}-${it.b}" }) { m ->
+            FeedCard(
+                lg, m, clock, bonusSeason != null && m.season == bonusSeason,
+                onOpen = m.ref?.let { r -> { nav.open(Page.Match(r)) } },
+                onWatch = m.ref?.takeIf { m.replay }?.let { r -> { watchMatch(c, r) } },
+            )
+        }
     }
 }
 
@@ -157,10 +164,11 @@ private fun whereLine(m: FeedItem, clock: yacht.app.core.ClockView?): String? {
 /**
  * One result. A series of more than two games shows the games won ("3-1", a drawn game half)
  * with the scores below; [bonus]: this season's rule gives a 2-0 sweep in a league or group
- * match the bonus point (완승 +1).
+ * match the bonus point (완승 +1). [onOpen] opens its report, [onWatch] (▶) plays it again;
+ * null when it has none (a friendly) or cannot be.
  */
 @Composable
-private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?, bonus: Boolean) {
+private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?, bonus: Boolean, onOpen: (() -> Unit)? = null, onWatch: (() -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     val aPts: Int = m.games.map { if (it.a > it.b) 2 else if (it.a == it.b) 1 else 0 }.sum()
     val bPts = m.games.size * 2 - aPts
@@ -170,9 +178,17 @@ private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.Cl
     val sweep = bonus && table && m.games.size == 2
     val aSweep = sweep && yacht.engine.league.TieRule.sweptByA(m.games)
     val bSweep = sweep && yacht.engine.league.TieRule.sweptByB(m.games)
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+    Card(Modifier.fillMaxWidth().clickable(enabled = onOpen != null) { onOpen?.invoke() }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            whereLine(m, clock)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(whereLine(m, clock).orEmpty(), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (onWatch != null) {
+                    Text(
+                        "▶", style = MaterialTheme.typography.labelLarge, color = cs.primary,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onWatch).padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FeedSide(m.aName, m.deltaA, aPts > bPts, Modifier.weight(1f), TextAlign.Start, if (aSweep) "완승 +1" else null)
                 Text(
@@ -256,18 +272,30 @@ internal fun Highlights(c: AppController, v: LeagueView) {
                 )
             }
         }
-        items(list, key = { "hl-${it.id}" }) { h -> HighlightCard(lg.name(h.a), lg.name(h.b), h, "리포트 ›") { nav.open(Page.Match(h.id)) } }
+        items(list, key = { "hl-${it.id}" }) { h ->
+            HighlightCard(lg.name(h.a), lg.name(h.b), h, "리포트 ›", onPlay = {
+                lg.center.watchHighlight(h)
+                c.screen = Screen.WATCH
+            }) { nav.open(Page.Match(h.id)) }
+        }
     }
 }
 
 /** A highlight: where, the score, its drama tags and its win curve ([action]: what a tap does, at the top right). */
 @Composable
-internal fun HighlightCard(aName: String, bName: String, h: Highlight, action: String, onClick: () -> Unit) {
+internal fun HighlightCard(aName: String, bName: String, h: Highlight, action: String, onPlay: (() -> Unit)? = null, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("시즌 ${h.season} · ${h.caption}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+                // ▶ plays the highlight's game again (from its log, else from the genes it keeps).
+                if (onPlay != null) {
+                    Text(
+                        "▶", style = MaterialTheme.typography.labelLarge, color = cs.primary,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onPlay).padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
                 Text(action, style = MaterialTheme.typography.labelMedium, color = cs.primary)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -292,8 +320,9 @@ internal fun HighlightCard(aName: String, bName: String, h: Highlight, action: S
 }
 
 /**
- * 경기 › 중계: for now 👀 경기 관전 (a featured friendly to watch) and the 스코어보드, the newest
- * finished fixtures replayed turn by turn, six at a time; a card opens its match report.
+ * 경기 › 중계: '📺 이번 주 중계' (the week's picks, ▶ 연속 재생, a pick to start from, followed
+ * players' other matches, next week's picks so far), then the 스코어보드, the newest finished
+ * fixtures replayed turn by turn, six at a time; a card opens its match report.
  */
 @Composable
 internal fun LiveBoardView(c: AppController) {
@@ -304,9 +333,27 @@ internal fun LiveBoardView(c: AppController) {
     }
     val frames = lg.liveFrames
     val season = lg.view?.clock?.season
+    // The picks once the week moves, and their results as the week is played.
+    val played = lg.view?.season?.played ?: 0
+    LaunchedEffect(lg.view?.clock?.week, season, played / PICKS_REFRESH) { lg.center.refreshPicks() }
+    val b = lg.center.broadcast?.takeIf { it.season == season }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // Until the broadcast channel comes: a featured game to watch turn by turn, as the old 👀 경기 관전.
-        item { LinkLine("👀 경기 관전", "상위 선수와 라이벌이 새로 두는 친선 경기를 턴마다 지켜봐요.") { watchFeatured(c) } }
+        item { BroadcastHeader(c, b) }
+        if (b != null) {
+            items(b.picks, key = { "pick-${it.ref}" }) { p -> PickRow(p) { startBroadcast(c, p.ref) } }
+            if (b.followedMore > 0) {
+                item {
+                    LinkLine("★ 내 선수 경기 ${b.followedMore}", "응원하는 선수의 이번 주 다른 경기를 결과에서 봐요.") {
+                        lg.nav.matches = yacht.app.core.MatchesView.RESULTS
+                        lg.nav.results = ResultsFilter.FOLLOWED
+                    }
+                }
+            }
+            if (b.coming.isNotEmpty()) {
+                item { Text("다음 주 빅매치", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp)) }
+                items(b.coming, key = { "next-${it.ref}" }) { p -> PickRow(p) { lg.nav.open(Page.Match(p.ref)) } }
+            }
+        }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("📺 스코어보드", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
@@ -374,6 +421,72 @@ private fun LiveCard(c: AppController, f: LiveFrame, onOpen: (() -> Unit)?) {
             // A series' bar runs over the game in play: over the whole tie it would tell the length too.
             val bar = if (series && !f.finished) ((f.boards.firstOrNull()?.halfTurn ?: 0) / (LiveBoard.GAME_STEPS - 1).toFloat()).coerceIn(0f, 1f) else f.progress.toFloat()
             LinearProgressIndicator(progress = { bar }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/** Results a week's picks are worked out again after (their played marks and scores). */
+private const val PICKS_REFRESH = 20
+
+/** Starts the broadcast channel at [from] (a pick's ref; null: the first played one not watched). */
+internal fun startBroadcast(c: AppController, from: String? = null) {
+    c.league.center.startBroadcast(from)
+    c.screen = Screen.WATCH
+}
+
+/** '📺 이번 주 중계' with ▶ 연속 재생 (or why nothing is on yet). */
+@Composable
+private fun BroadcastHeader(c: AppController, b: BroadcastView?) {
+    val cs = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("📺 이번 주 중계" + (b?.let { " · ${it.week}주차" } ?: ""), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            if (b != null && b.picks.any { it.played }) Button(onClick = { startBroadcast(c) }) { Text("▶ 연속 재생") }
+        }
+        Text(
+            when {
+                b == null -> "이번 주 빅매치를 고르는 중이에요…"
+                b.picks.isEmpty() -> "이번 주에는 중계할 경기가 없어요."
+                else -> "결승, 우승 경쟁, 응원하는 선수의 경기를 골라 요약으로 이어서 보여 줘요. 경기를 누르면 거기서부터 봐요."
+            },
+            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+        )
+    }
+}
+
+/** One pick: where, both sides, why it was picked and its tags, the result once played (✓ watched) or "곧 시작". */
+@Composable
+private fun PickRow(p: BroadcastPick, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(compIcon(p.comp) + " " + p.title, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(
+                    when {
+                        p.watched -> "✓ 봤어요"
+                        p.played -> "▶"
+                        else -> "곧 시작"
+                    },
+                    style = MaterialTheme.typography.labelMedium, color = if (p.played) cs.primary else cs.onSurfaceVariant, fontWeight = FontWeight.Bold,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(p.a, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 2)
+                Text(p.result ?: "vs", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
+                Text(p.b, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End, maxLines = 2)
+            }
+            if (p.reason.isNotEmpty() || p.tags.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (p.reason.isNotEmpty()) Text(p.reason, style = MaterialTheme.typography.labelSmall, color = cs.secondary, fontWeight = FontWeight.Bold)
+                    for (t in p.tags.filter { it != p.reason }.take(3)) {
+                        Text(
+                            t, style = MaterialTheme.typography.labelSmall, color = cs.onSecondaryContainer,
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.secondaryContainer).padding(horizontal = 6.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }

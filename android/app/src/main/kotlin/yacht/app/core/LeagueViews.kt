@@ -108,6 +108,10 @@ data class FeedItem(
     val week: Int = SeasonCalendar.NONE,
     /** The season it was played in (0 when unknown). */
     val season: Int = 0,
+    /** Its match ref ("season:code:id[:board]") to open its report; null for a friendly or a match not found. */
+    val ref: String? = null,
+    /** It can be played again (▶, UX 3.3): its log is kept, or it is this season's with no adaptive side. */
+    val replay: Boolean = false,
 )
 
 /** A match being played: its two sides (team ids for team matches), where, and its fixture id in its competition. */
@@ -510,7 +514,20 @@ data class WatchStep(
     val second: yacht.engine.Board,
 )
 
-/** A game being watched: the two AIs, the steps worked out so far, and the one shown. */
+/** What the watch screen plays: a real match again, a highlight, the broadcast channel, or a friendly played now. */
+enum class WatchKind { REPLAY, HIGHLIGHT, BROADCAST, FRIENDLY }
+
+/** One game of the board being watched, for the game strip: "1판 · 김민준 선공", its score from side A once known. */
+data class WatchGameInfo(val index: Int, val label: String, val first: String, val second: String, val scoreA: Int?, val scoreB: Int?)
+
+/** The broadcast queue: pick [index] of [total] (0-based), the next one's title, and the seconds before it starts (null: no countdown). */
+data class BroadcastQueue(val index: Int, val total: Int, val next: String?, val countdown: Int?)
+
+/**
+ * A game being watched: the two sides of the game shown ([first] moves first), its steps worked
+ * out so far and the one shown, and around it the match (its games and boards, the score so far),
+ * the broadcaster's lines before and after the game, and the broadcast queue.
+ */
 data class WatchView(
     val first: String,
     val second: String,
@@ -521,11 +538,37 @@ data class WatchView(
     val complete: Boolean,
     val shown: Int,
     val playing: Boolean,
-    /** A highlight's caption when one is replayed (not counted anywhere). */
+    /** The match header ("요트컵 8강 · 19주차"), or a highlight's caption. */
     val title: String? = null,
-    /** Why it cannot be shown (an AI changed since), instead of the game. */
+    /** Why it cannot be shown (an AI changed since, a log that does not read), instead of the game. */
     val message: String? = null,
-)
+    val kind: WatchKind = WatchKind.FRIENDLY,
+    /** The real match's ref ("season:code:id"); null for a friendly. */
+    val ref: String? = null,
+    /** The game shown (its index in the board's games) and the board's games. */
+    val game: Int = 0,
+    val games: List<WatchGameInfo> = emptyList(),
+    /** The board shown (team matches) of [boards], and each board's line ("1번 보드 김민준 2:0 이서연"). */
+    val board: Int = 0,
+    val boards: Int = 1,
+    val boardLines: List<String> = emptyList(),
+    /** The match so far: "1 : 0" (series "시리즈 2 : 1", team "보드 2 : 1"); null for a single game. */
+    val matchScore: String? = null,
+    /** Broadcaster lines before the first throw of this game, and after its last step. */
+    val intro: List<String> = emptyList(),
+    val outro: List<String> = emptyList(),
+    /** 요약 중계: this game shows only its last half-turns (the deciding game plays in full). */
+    val summary: Boolean = false,
+    val queue: BroadcastQueue? = null,
+    val pace: WatchPace = WatchPace.NORMAL,
+    /** The match is over and nothing comes after it (the end lines show). */
+    val ended: Boolean = false,
+    /** A broadcast pick still to be played, the league stopped (▶ 이번 주 진행) or running ("곧 시작해요"). */
+    val waiting: String? = null,
+) {
+    /** Every step of the game is shown. */
+    val atEnd: Boolean get() = complete && shown >= steps.size
+}
 
 // ---- the redesigned screens' views (the competition page's in use; the rest filled later) ------------
 
@@ -625,7 +668,11 @@ data class BroadcastPick(
     val watched: Boolean,
 )
 
-data class BroadcastView(val season: Int, val week: Int, val picks: List<BroadcastPick>, val followedMore: Int)
+/**
+ * '📺 이번 주 중계': the picks of [week] (pick order), followed players' other matches this week
+ * ([followedMore]), and next week's picks so far ([coming]).
+ */
+data class BroadcastView(val season: Int, val week: Int, val picks: List<BroadcastPick>, val followedMore: Int, val coming: List<BroadcastPick> = emptyList())
 
 /** Where a replay comes from: a saved decision log, a re-simulation, a highlight's genes, or none. */
 enum class ReplaySource { LOG, RESIM, SNAPSHOT, NONE }
@@ -656,6 +703,20 @@ data class MatchReport(
     val stakes: List<String>,
     val preview: MatchPreview?,
     val news: List<Article>,
+    /** Where: its competition (null when not known), round label, season and week ([SeasonCalendar.NONE]: none). */
+    val comp: Comp? = null,
+    val label: String = "",
+    val season: Int = 0,
+    val week: Int = SeasonCalendar.NONE,
+    /** "1부 3위" of each side in a league match. */
+    val placeA: String? = null,
+    val placeB: String? = null,
+    /** A team match (its sides are team ids, [boards] its pairings), and a series' games to win (0: none). */
+    val team: Boolean = false,
+    val firstTo: Int = 0,
+    /** Rating changes of each side over the match, when the results feed still has them. */
+    val deltaA: Int? = null,
+    val deltaB: Int? = null,
 )
 
 /** One board of a report; [games] is null until the detail phase of an unlogged tie. */

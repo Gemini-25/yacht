@@ -11,18 +11,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import yacht.engine.Advisor
 import yacht.engine.Board
 import yacht.engine.Category
 import yacht.engine.EvTable
-import yacht.engine.Mode
 import yacht.engine.OppModel
 import yacht.engine.Player
 import yacht.engine.TableIO
 import yacht.engine.Tables
-import yacht.engine.explain.AiStep
-import yacht.engine.explain.Commentary
-import yacht.engine.explain.OutlookAnalysis
 import yacht.engine.league.CloneProfile
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.CustomAis
@@ -49,9 +44,7 @@ import yacht.engine.league.Origin
 import yacht.engine.league.Club
 import yacht.engine.league.ClubLeague
 import yacht.engine.league.SeasonReview
-import yacht.engine.league.Highlight
 import yacht.engine.league.LiveFrame
-import yacht.engine.league.WatchTurn
 import yacht.engine.league.BoxProfile
 import yacht.engine.league.LabResult
 import yacht.engine.league.MatchFormat
@@ -68,11 +61,12 @@ import yacht.engine.league.PlayerRecord
 import yacht.engine.league.leagueAi
 import yacht.engine.league.WinEstimate
 import yacht.engine.league.TierName
-import yacht.engine.league.WatchMatch
 import yacht.engine.league.GameScore
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueMatch
+import yacht.engine.league.LogSink
+import yacht.engine.league.MatchRef
 import yacht.engine.league.LeagueRoster
 import yacht.engine.league.Matchmaker
 import yacht.engine.league.LeagueTables
@@ -383,10 +377,26 @@ class LeagueController(
         }
 
         override fun members(): Int = synchronized(lock) { world?.members?.size ?: 0 }
+
+        override fun leagueRank(id: String): Int = synchronized(lock) {
+            val p = world?.plan ?: return 0
+            if (!p.league.leagues.national) return 0
+            selector(p).rank(id).let { if (it == Int.MAX_VALUE) it else it - 1 }
+        }
+
+        override fun publish() = this@LeagueController.publish(force = true)
+
+        override fun preview(a: String, b: String, fixture: Fixture?): MatchPreview? = synchronized(lock) { world?.let { previewOf(it, a, b, fixture) } }
+
+        override fun watchPace(): WatchPace = uiPrefs.watchPace
+
+        override fun saveWatchPace(p: WatchPace) {
+            scope.launch { updateUiPrefs { it.copy(watchPace = p) } }
+        }
     }
 
-    /** Watching real matches (for now the friendly, played as the league screen's 관전 is). */
-    val center: MatchCenter = MatchCenter(host) { a, b -> startWatch(a, b) { uiPrefs.watchPace.ms } }
+    /** Watching real matches: reports, replays, the match log book and the broadcast channel. */
+    val center: MatchCenter = MatchCenter(host)
 
     /** Player pages, leaderboards, reviews and match lists, on request. */
     val analytics: LeagueAnalytics = LeagueAnalytics(host)
@@ -497,6 +507,7 @@ class LeagueController(
         rebuildRoster()
         val w = synchronized(lock) { LeagueWorld.decode(texts, ladderKeys(), reserved) }
         w.players = players
+        val logs = runCatching { logFile.takeIf { it.exists() }?.readBytes() }.getOrNull()
         synchronized(lock) {
             world = w
             pendingPlayers = null
@@ -504,6 +515,8 @@ class LeagueController(
             configureWorld(w, cfg)
             legendAis.clear()
             oddsNow = emptyMap()
+            // The match logs of this league (another league's, or none: an empty book).
+            runCatching { center.load(logs) }
         }
         val first = !loaded.isCompleted
         loaded.complete(Unit)
@@ -940,6 +953,8 @@ class LeagueController(
         // the finished season again and closes it the same way (not a checkpoint from before).
         saveAsync()
         val closing = w.closeSeason()
+        // The match logs: last season's finals, highlights and picks kept, its best games archived.
+        runCatching { center.closing(w, p) }
         if (closing.rosterChanged) rebuildRoster()
         // The next season: members and clubs as closed (they must replay the same), its shape
         // (divisions, format, competitions) from the rules as they are now.
@@ -1050,10 +1065,12 @@ class LeagueController(
             }
             publish()
             var recorded = false
+            // Every decision of a season match, for the match logs (the lab's and friendlies' are not kept).
+            val sink = if (job.comp == Comp.LAB || job.comp == Comp.FRIENDLY) null else LogSink()
             try {
                 // The lab always plays mirrored matches (its statistics assume them).
                 val format = if (job.comp == Comp.LAB) MatchFormat.MIRRORED else seasonFormat
-                val played = LeagueMatch.playJob(t.rules, job, { aiOf(it) }, format, estimate, { flag.get() }, scout = { models[it] })
+                val played = LeagueMatch.playJob(t.rules, job, { aiOf(it) }, format, estimate, { flag.get() }, scout = { models[it] }, log = sink)
                 // A lab AI that is gone ends the experiment (a forfeit would count as a result).
                 if (played == null && job.comp == Comp.LAB) {
                     if (!flag.get()) {
@@ -1074,6 +1091,9 @@ class LeagueController(
                         lastDelta[m.a] = m.deltaA
                         lastDelta[m.b] = m.deltaB
                     }
+                    // Its refs for the feed (until the ladder keeps them), and its logs when it is worth keeping.
+                    if (played != null) refsOf(result, rec.matches)
+                    if (played != null) runCatching { center.offer(result, sink) }.onFailure { e -> scope.launch { onError(e) } }
                     recorded = true
                     lastRecord = System.currentTimeMillis()
                     meter(result)
@@ -1720,19 +1740,8 @@ class LeagueController(
 
     // ---- watching a game -------------------------------------------------------------------------
 
-    var watch by mutableStateOf<WatchView?>(null)
-        private set
-    private var watchJob: Job? = null
-    private var playJob: Job? = null
-
-    /** A game worth watching: a top-20 AI (any AI before ratings) against a rival near its rating. */
-    fun featured(rng: Random): Pair<String, String>? {
-        // From the screen's snapshot, not under the lock (a rollover may hold it).
-        val rows = view?.rows.orEmpty().filter { !it.isMe && it.key in byKey }
-        val top = rows.filter { it.rank != null }.take(20).map { it.key }
-        val first = top.ifEmpty { roster.map { it.key } }.randomOrNull(kotlin.random.Random(rng.nextLong())) ?: return null
-        return rivalOf(first, rng)?.let { first to it }
-    }
+    /** The watch screen's game ([MatchCenter.watch]). */
+    val watch: WatchView? get() = center.watch
 
     /** An opponent to watch [key] against: someone near its rating (from the snapshot). */
     fun rivalOf(key: String, rng: Random): String? {
@@ -1742,147 +1751,16 @@ class LeagueController(
         return Matchmaker.opponentFor(pool, r, rng) ?: byKey.keys.firstOrNull { it != key }
     }
 
-    /**
-     * Plays one game of [first] against [second] and shows it throw by throw at [pace] ms per
-     * step, with the commentary of each throw and [first]'s P(win). The game counts on the ladder.
-     */
-    fun startWatch(first: String, second: String, pace: () -> Long) {
-        val t = tables ?: return
-        val a = byKey[first] ?: return
-        val b = byKey[second] ?: return
-        watchGame(first, second, pace, null) {
-            val rng = Random()
-            val turns = WatchMatch.play(t.rules, a.make(Random(rng.nextLong())), b.make(Random(rng.nextLong())), rng)
-            val last = turns.last()
-            synchronized(lock) {
-                ladder?.let { l ->
-                    if (l.entry(first) != null && l.entry(second) != null) {
-                        l.record(
-                            first, second,
-                            listOf(GameScore(last.first.total, last.second.total, (last.first[Category.YACHT] ?: 0) > 0, (last.second[Category.YACHT] ?: 0) > 0, last.first.bonus > 0, last.second.bonus > 0)),
-                            comp = Comp.FRIENDLY, label = WATCH_LABEL, season = plan?.number ?: 0,
-                        )
-                    }
-                }
-            }
-            publish(force = true)
-            // The watched game is on the ladder: saved now, the league may not be running.
-            save()
-            turns
-        }
-    }
+    /** Pauses the game watched (the app hidden). */
+    fun pauseWatch() = center.pause()
 
-    /**
-     * Replays a highlight (하이라이트 다시보기) from its deal through the same code, throw by
-     * throw; not counted anywhere. When an AI has changed since, the scores differ and the
-     * screen says so instead.
-     */
-    fun replayHighlight(h: Highlight, pace: () -> Long) {
-        val t = tables ?: return
-        val x = extra ?: return
-        // A player as it was in that game (its genes were kept), else as it is now.
-        fun aiOf(k: String): LeagueAi? = h.snapshot(k)?.let { s ->
-            leagueAi(PlayerRecord(k, name(k), "", Origin.of(k), 1, null, null, s), t, x)
-        } ?: byKey[k]
-        if (aiOf(h.first) == null || aiOf(h.second) == null) {
-            watch = WatchView(h.first, h.second, name(h.first), name(h.second), emptyList(), true, 0, false, h.caption, "이 경기의 선수가 리그를 떠나서 다시 볼 수 없어요.")
-            return
-        }
-        watchGame(h.first, h.second, pace, h.caption) {
-            // The records as they stand now (a 상대 맞춤 AI may then play otherwise: said so).
-            val models = synchronized(lock) { world?.let { w -> listOf(h.first, h.second).associateWith { k -> w.oppModel(t, k) } } }.orEmpty()
-            val r = h.replay(t.rules, ::aiOf, scout = { models[it] }) ?: return@watchGame null
-            if (!r.same) null.also { scope.launch { watch = watch?.copy(message = r.message, complete = true, playing = false) } } else r.turns
-        }
-    }
-
-    private fun watchGame(first: String, second: String, pace: () -> Long, title: String?, play: suspend () -> List<WatchTurn>?) {
-        val t = tables ?: return
-        stopWatch()
-        watch = WatchView(first, second, name(first), name(second), emptyList(), false, 0, true, title)
-        val steps = ArrayList<WatchStep>()
-        watchJob = scope.launch {
-            val turns = withContext(Dispatchers.Default) { play() } ?: return@launch
-            val advisor = Advisor(t.withoutRisk())
-            val outlook = OutlookAnalysis(t)
-            val talk = Commentary(t)
-            var x = Board(t.rules)
-            var y = Board(t.rules)
-            for ((i, turn) in turns.withIndex()) {
-                val (mover, other) = if (turn.side == 0) x to y else y to x
-                val moverName = name(if (turn.side == 0) first else second)
-                val waitingName = name(if (turn.side == 0) second else first)
-                val made = withContext(Dispatchers.Default) {
-                    runCatching {
-                        val plan = advisor.planTurn(mover, other, Mode.WIN, depth = 1)
-                        val otherWin = (1 - plan.startValue).coerceIn(0.0, 1.0)
-                        val after = outlook.winAfter(other, mover, otherWin)
-                        talk.aiSteps(
-                            plan, mover, turn.throws, turn.held, turn.category, after?.let { w -> { c: Board -> w(c) } }, otherWin,
-                            judge = true, who = moverName, viewer = waitingName,
-                        )
-                    }.getOrNull()
-                } ?: turn.throws.mapIndexed { k, d ->
-                    val end = k == turn.throws.size - 1
-                    AiStep(k + 1, d.sorted(), turn.held.getOrNull(k), if (end) turn.category else null, if (end) turn.points else 0, null, emptyList())
-                }
-                for (st in made) {
-                    // myWin is the waiting side's P(win): as the first player's.
-                    val winFirst = st.myWin?.let { if (turn.side == 0) 1 - it else it }
-                    val end = st.category != null
-                    steps += WatchStep(
-                        i / 2 + 1, turn.side, st.throwNo, st.dice, st.held, st.category, st.points, winFirst,
-                        st.lines.filter { !it.tag.contains("승률") }, if (end) turn.first else x, if (end) turn.second else y,
-                    )
-                }
-                x = turn.first
-                y = turn.second
-                watch = watch?.copy(steps = steps.toList(), complete = i == turns.size - 1)
-            }
-        }
-        playJob = scope.launch { playLoop(pace) }
-    }
-
-    private suspend fun playLoop(pace: () -> Long) {
-        while (true) {
-            val w = watch ?: return
-            if (!w.playing) return
-            if (w.shown < w.steps.size) watch = w.copy(shown = w.shown + 1)
-            else if (w.complete) {
-                watch = w.copy(playing = false)
-                return
-            }
-            delay(maxOf(300L, pace()))
-        }
-    }
-
-    fun pauseWatch() {
-        playJob?.cancel()
-        watch = watch?.copy(playing = false)
-    }
-
-    fun resumeWatch(pace: () -> Long) {
-        val w = watch ?: return
-        if (w.playing) return
-        watch = w.copy(playing = true)
-        playJob = scope.launch { playLoop(pace) }
-    }
-
-    /** Jumps to the end of the current turn (or the next one). */
-    fun skipWatchTurn() {
-        val w = watch ?: return
-        var i = w.shown
-        while (i < w.steps.size && w.steps[i].category == null) i++
-        watch = w.copy(shown = minOf(w.steps.size, i + 1))
-    }
-
-    fun stopWatch() {
-        watchJob?.cancel()
-        playJob?.cancel()
-        watch = null
-    }
+    /** Leaves the watch screen. */
+    fun stopWatch() = center.stop()
 
     // ---- the screen ------------------------------------------------------------------------------
+
+    /** The week (season, week) the broadcast picks were last asked for (main thread). */
+    private var pickedWeek: Pair<Int, Int>? = null
 
     /** At most a few screen updates per second, however fast matches finish. */
     private fun publish(force: Boolean = false) {
@@ -1924,6 +1802,12 @@ class LeagueController(
                 if (seq < shownSnapshot) return@launch
                 shownSnapshot = seq
                 view = v
+                // A new week in play: its broadcast picks (and next week's) for the channel.
+                val week = v.clock?.let { it.season to it.week }
+                if (week != pickedWeek) {
+                    pickedWeek = week
+                    center.refreshPicks()
+                }
                 if (running) {
                     val minutes = (System.currentTimeMillis() - runStart) / 60_000.0
                     pace = if (minutes > 0.05) runMatches / minutes else 0.0
@@ -1986,10 +1870,12 @@ class LeagueController(
         }
         val curves = world?.live
         val feed = l.feed.take(FEED).map { m ->
+            val ref = refOf(m)
+            val curve = (ref?.let { curves?.curveOf(it) } ?: curves?.curves(m.a, m.b))?.firstOrNull()
             FeedItem(
                 m.a, name(m.a), m.b, name(m.b), m.games, m.deltaA, m.deltaB, m.time, m.notes,
-                curves?.curves(m.a, m.b)?.firstOrNull()?.let { c -> if (c.a == m.a) c.curveA() else IntArray(c.curveA().size) { 100 - c.curveA()[it] } },
-                m.comp, m.label, m.week, m.season,
+                curve?.let { c -> if (c.a == m.a) c.curveA() else IntArray(c.curveA().size) { 100 - c.curveA()[it] } },
+                m.comp, m.label, m.week, m.season, ref?.encode(), ref != null && runCatching { center.canReplay(ref, m.a, m.b) }.getOrDefault(false),
             )
         }
         // Built again only when a competition can have moved (a result, a new week, a new stage);
@@ -2015,6 +1901,43 @@ class LeagueController(
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
             s?.let { runCatching { clockView(it) }.getOrNull() },
         )
+    }
+
+    /**
+     * Refs of the feed's records (under the lock), by [feedKey]: those this run recorded, from their
+     * job ([refsOf]), and the others' looked up once in this season's matches ("" when not found).
+     * Records the ladder keeps with a ref ([MatchRecord.ref]) need neither.
+     */
+    private val recordRefs = object : LinkedHashMap<String, String>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > RECORD_REFS
+    }
+
+    private fun feedKey(m: yacht.engine.league.MatchRecord) = "${m.time}|${m.a}|${m.b}"
+
+    /** Notes the refs of [r]'s boards for their feed [records] (under the lock). */
+    private fun refsOf(r: JobResult, records: List<yacht.engine.league.MatchRecord>) {
+        val f = r.fixture
+        val season = plan?.number ?: return
+        if (f.comp == Comp.FRIENDLY || f.comp == Comp.LAB || f.id < 0) return
+        for (m in records) {
+            if (m.ref != null) continue
+            val board = r.boards.indexOfFirst { it.a == m.a && it.b == m.b }.takeIf { it >= 0 } ?: continue
+            recordRefs[feedKey(m)] = MatchRef(season, f.comp, f.id, if (f.kind == JobKind.TEAM) board else -1).encode()
+        }
+    }
+
+    /** [m]'s match (under the lock): its own ref, the one its job gave, or this season's match of its two sides that week. */
+    private fun refOf(m: yacht.engine.league.MatchRecord): MatchRef? {
+        m.ref?.let { return it }
+        val c = m.comp ?: return null
+        if (c == Comp.FRIENDLY || c == Comp.LAB || c == Comp.LEGEND) return null
+        val key = feedKey(m)
+        recordRefs[key]?.let { return MatchRef.decode(it) }
+        val p = plan ?: return null
+        if (m.season != p.number) return null
+        val found = runCatching { yacht.engine.league.SeasonMatches.find(p, c, m.week, m.a, m.b) }.getOrNull()?.ref
+        recordRefs[key] = found?.encode().orEmpty()
+        return found
     }
 
     /** The season's weeks; rows equal to the last snapshot's are handed over as the same objects. */
@@ -2506,27 +2429,29 @@ class LeagueController(
     /** Builds the preview of [a] against [b] (a fixture of this season when [fixtureId] is given). */
     fun loadPreview(a: String, b: String) {
         scope.launch(Dispatchers.Default) {
-            val v = synchronized(lock) {
-                val w = world ?: return@synchronized null
-                val season = w.plan?.league
-                val profiles = profilesOf(w)
-                // The odds of their league (a national season keeps a few leagues' odds); two sides
-                // of two leagues (대륙 챔피언스) each with their own league's, where it is kept.
-                val odds = w.plan?.let { p ->
-                    val tables = listOfNotNull(season?.leagueOf(a)?.id, season?.leagueOf(b)?.id).distinct().mapNotNull { oddsOf(p, it) }
-                    when {
-                        !p.league.leagues.national -> oddsOf(p, null)
-                        tables.size < 2 -> tables.firstOrNull()
-                        else -> tables[0].let { t -> OddsTable(t.season, t.played, t.total, t.runs, t.drawRate, tables.flatMap { it.rows }, t.league) }
-                    }
-                }
-                Preview.of(
-                    a, b, w.ladder, season, odds, profiles[a], profiles[b],
-                    BoxProfile.league(profiles.values), { k -> name(k) },
-                )
-            }
+            val v = synchronized(lock) { world?.let { previewOf(it, a, b, null) } }
             scope.launch { preview = v }
         }
+    }
+
+    /** The preview of [a] against [b] in [w] (under the lock); [fixture] adds its competition and round. */
+    private fun previewOf(w: LeagueWorld, a: String, b: String, fixture: Fixture?): MatchPreview {
+        val season = w.plan?.league
+        val profiles = profilesOf(w)
+        // The odds of their league (a national season keeps a few leagues' odds); two sides
+        // of two leagues (대륙 챔피언스) each with their own league's, where it is kept.
+        val odds = w.plan?.let { p ->
+            val tables = listOfNotNull(season?.leagueOf(a)?.id, season?.leagueOf(b)?.id).distinct().mapNotNull { oddsOf(p, it) }
+            when {
+                !p.league.leagues.national -> oddsOf(p, null)
+                tables.size < 2 -> tables.firstOrNull()
+                else -> tables[0].let { t -> OddsTable(t.season, t.played, t.total, t.runs, t.drawRate, tables.flatMap { it.rows }, t.league) }
+            }
+        }
+        return Preview.of(
+            a, b, w.ladder, season, odds, profiles[a], profiles[b],
+            BoxProfile.league(profiles.values), { k -> name(k) }, fixture,
+        )
     }
 
     /** Every member's box profile from its career statistics (under the lock). */
@@ -2688,6 +2613,9 @@ class LeagueController(
         private const val CHECKPOINT_MS = 30_000L
         private const val PUBLISH_MS = 300L
         private const val FEED = 60
+
+        /** Feed records whose refs are remembered (more than the feed shows). */
+        private const val RECORD_REFS = 200
 
         /** Leagues of a national season whose odds are kept (the one shown, then the followed players'). */
         private const val ODDS_LEAGUES = 4
