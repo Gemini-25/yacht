@@ -2,10 +2,11 @@ package yacht.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -223,12 +224,14 @@ private fun topNews(v: LeagueView): List<Article> {
 }
 
 /** The footer: the ranked game and the makers, the clone's invitation, and the league's counts. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Footer(c: AppController, v: LeagueView, onRanked: () -> Unit) {
     val lg = c.league
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Wrapped, not scrolled: at 360 dp the third chip went off the edge.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             AssistChip(onClick = onRanked, label = { Text("🎮 랭크전") })
             AssistChip(onClick = { c.editingPlayer = null; c.screen = Screen.MAKER }, label = { Text("🧑 선수 만들기") })
             AssistChip(onClick = { c.editingAi = null; c.screen = Screen.BUILDER }, label = { Text("🛠 AI 만들기") })
