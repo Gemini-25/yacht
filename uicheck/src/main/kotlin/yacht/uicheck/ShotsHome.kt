@@ -176,16 +176,17 @@ internal object ShotsHome : LeagueShots {
      */
     private fun fullHomeCheck(c: AppController, out: File) {
         val lg = c.league
-        val real = lg.home.view ?: return
-        val v = lg.view ?: return
-        val clock = v.clock ?: return
-        val shownSeason = v.season ?: return
+        // The check runs on the stopped national league or fails: a skipped check would pass unseen.
+        val real = lg.home.view ?: error("lg01b_home_full: no home")
+        val v = lg.view ?: error("lg01b_home_full: no league view")
+        val clock = v.clock ?: error("lg01b_home_full: no season in play")
+        val shownSeason = v.season ?: error("lg01b_home_full: no season shown")
         val season = clock.season
         val keys = v.rows.filter { it.rank != null && !it.isMe }.sortedBy { it.rank }.map { it.key }.take(6)
-        if (keys.size < 6) return
+        check(keys.size >= 6) { "lg01b_home_full: ${keys.size} ranked players (6 needed)" }
         // The longest names, wherever a line can wrap.
         val long = v.rows.filter { !it.isMe && it.origin != yacht.engine.league.Origin.BASE }.map { it.key }.sortedByDescending { lg.name(it).length }.take(10)
-        if (long.size < 10) return
+        check(long.size >= 10) { "lg01b_home_full: ${long.size} players besides the hand-made AIs (10 needed)" }
         fun name(k: String) = lg.name(k)
         fun match(k: String, played: Boolean) = FollowMatch("$season:L:0", 12, "한국 1부", k, name(k), if (played) 1 else null, if (played) "2:0" else null, played, if (played) null else 61)
         val cards = (0 until 3).map { i ->
