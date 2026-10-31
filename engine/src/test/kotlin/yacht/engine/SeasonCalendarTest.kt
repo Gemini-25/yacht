@@ -577,8 +577,9 @@ class SeasonCalendarTest {
         assertTrue(articles.filter { it.kind.startsWith("draw") }.all { it.week == SeasonCalendar.PRESEASON })
         val again = NewsBook.decode(w.news.encode())
         assertEquals(articles, again.all)
-        // A line without the week (older versions) reads as an article of no known week.
-        val old = w.news.encode().lines().joinToString("\n") { l -> if (l.startsWith("a ") && l.split(' ').size == 9) l.substringBeforeLast(' ') else l }
+        // A line without the week (older versions) reads as an article of no known week. (Lines
+        // written before articles had refs and scopes end before their "@" and "#" tokens.)
+        val old = w.news.encode().lines().joinToString("\n") { l -> l.split(' ').take(9).let { f -> if (l.startsWith("a ") && f.size == 9) f.take(8).joinToString(" ") else l } }
         assertTrue(NewsBook.decode(old).all.all { it.week == SeasonCalendar.NONE })
         assertEquals(articles.map { it.headline }, NewsBook.decode(old).all.map { it.headline })
         // The feed says where each match was played.

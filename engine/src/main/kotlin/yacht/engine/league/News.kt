@@ -17,7 +17,17 @@ data class Article(
     val importance: Int,
     /** The week of the season it happened in ([SeasonCalendar]); [SeasonCalendar.NONE] for older news. */
     val week: Int = SeasonCalendar.NONE,
-)
+    /** The match it is about ([MatchRef.encode], a board or game of it at most), for the match report; null when none. */
+    val ref: String? = null,
+    /**
+     * Where it happened: a league's id (a national league's news), a [Confed]'s name (its 대륙
+     * 챔피언스), or "" for the world (the international stage, awards, a legacy season's league).
+     */
+    val scope: String = "",
+) {
+    /** Its lane in the [NewsBook]: [NewsBook.MAJOR] from importance 3 up. */
+    val major: Boolean get() = importance >= NewsBook.MAJOR_FROM
+}
 
 /**
  * Korean particles (조사) chosen by the sound the word before ends in: the last Hangul syllable's
@@ -78,6 +88,9 @@ object News {
     private class T(val headline: String, val body: String)
 
     private val SEGMENT = Regex("""\[\[(.*?)]]""")
+
+    /** A knockout round from the last eight on ("8강", "승자조 4강", "결승"; not "128강"). */
+    private val LAST_EIGHT = Regex("(^| )(8강|4강|결승)")
     private val SLOT = Regex("""\{(\w+)(?:\|([가-힣]+))?}""")
     private val SPACES = Regex(" {2,}")
 
@@ -94,6 +107,8 @@ object News {
         "federation_decision", "federation_assembly", "club_title", "club_champions", "club_reform", "club_founded",
         "club_dissolved", "club_digest", "transfer_abroad", "return_home", "transfer_window", "youth", "market_digest",
         "draw_ccl", "draw_clubcup", "milestones", "dynasties", "pupils", "learned_rules",
+        // The news desk's ([NewsDesk]).
+        "league_upset", "club_race", "intl_week", "cup_digest", "group_digest", "milestones_week", "record_chase",
     )
 
     /** Titles of cups held every few seasons: a run of them is counted in editions (대회). */
@@ -128,7 +143,8 @@ object News {
     /**
      * The article of [e]. [name] gives an AI's display name; [club] a club id's and [team] a
      * team id's (family teams and all-star sides). With [rating], a knockout win by an AI rated
-     * 100 or more below its opponent is written as a giant killing.
+     * 100 or more below its opponent is written as a giant killing. The article links the
+     * event's match ([LeagueEvent.ref]) and takes its [scope] (a league, a confederation, "").
      */
     fun article(
         e: LeagueEvent,
@@ -136,7 +152,8 @@ object News {
         club: (String) -> String = { it },
         team: (String) -> String = Competitions::teamLabel,
         rating: ((String) -> Double)? = null,
-    ): Article = write(e, name, club, team, rating, null)
+        scope: (LeagueEvent) -> String = { "" },
+    ): Article = write(e, name, club, team, rating, null, scope)
 
     /** [article], with the rating gap of a knockout win already known from its `upset` event ([upsetGap]). */
     private fun write(
@@ -146,6 +163,7 @@ object News {
         team: (String) -> String,
         rating: ((String) -> Double)?,
         upsetGap: Double?,
+        scope: (LeagueEvent) -> String,
     ): Article {
         val v = HashMap<String, String>()
         v["season"] = e.season.toString()
@@ -173,7 +191,10 @@ object News {
         val (list, importance) = templates(e, v, arg, club, team, rating, upsetGap, name)
         val chosen = pick(list, v, e)
         val t = chosen ?: T(PLAIN_HEADLINE, "[[{seeds}의 ]]새 소식이 들어왔어요. 자세한 내용은 피드에서 볼 수 있어요.")
-        return Article(e.season, e.kind, fill(t.headline, v), fill(t.body, v), e.keys, e.comp, (if (chosen == null) 1 else importance).coerceIn(1, 5), e.week)
+        return Article(
+            e.season, e.kind, fill(t.headline, v), fill(t.body, v), e.keys, e.comp, (if (chosen == null) 1 else importance).coerceIn(1, 5), e.week,
+            e.ref, runCatching { scope(e) }.getOrDefault(""),
+        )
     }
 
     /**
@@ -187,6 +208,7 @@ object News {
         club: (String) -> String = { it },
         team: (String) -> String = Competitions::teamLabel,
         rating: ((String) -> Double)? = null,
+        scope: (LeagueEvent) -> String = { "" },
     ): List<Article> {
         val rounds = events.filter { it.kind == "cup_round" && it.keys.size >= 2 }
         fun sameTie(r: LeagueEvent, e: LeagueEvent) =
@@ -206,7 +228,7 @@ object News {
             } else {
                 null
             }
-            out += write(e, name, club, team, rating, gap)
+            out += write(e, name, club, team, rating, gap, scope)
         }
         return out
     }
@@ -256,23 +278,28 @@ object News {
             ) to 3
         }
         "comeback" -> {
+            // (p, then the desk's: the competition's code, the fixture's label, the league, the tier).
             arg(0)?.let { v["p"] = percent(it) }
+            where(arg(1), arg(2), arg(3), arg(4))?.let { v["where"] = it }
             listOf(
-                T("대역전극! {a}, {b}에 뒤집기", "{a|은} 승리 확률이 {p}%까지 떨어졌지만 끝내 경기를 뒤집었어요. {b|은} 다 잡은 경기를 놓쳤어요."),
-                T("승리 확률 {p}%에서 살아난 {a}", "한때 승리 확률이 {p}%에 그쳐 모두가 끝났다고 생각했어요. {a|이} 끝까지 버텨 {b|을} 꺾었어요."),
-                T("{b}, 다 잡은 경기 놓쳐", "{b|은} 승리를 눈앞에 두고 {a}에게 역전을 허용했어요. {a}의 승리 확률은 한때 {p}%에 불과했어요."),
-                T("역전 드라마: {a}, {b} 제압", "{a|이} 끌려가던 경기를 뒤집고 {b|을} 꺾었어요. 끝까지 포기하지 않은 결과예요."),
+                T("대역전극! {a}, {b}에 뒤집기", "[[{where}에서 ]]{a|은} 승리 확률이 {p}%까지 떨어졌지만 끝내 경기를 뒤집었어요. {b|은} 다 잡은 경기를 놓쳤어요."),
+                T("승리 확률 {p}%에서 살아난 {a}", "[[{where}에서 ]]한때 승리 확률이 {p}%에 그쳐 모두가 끝났다고 생각했어요. {a|이} 끝까지 버텨 {b|을} 꺾었어요."),
+                T("{b}, 다 잡은 경기 놓쳐", "[[{where}에서 ]]{b|은} 승리를 눈앞에 두고 {a}에게 역전을 허용했어요. {a}의 승리 확률은 한때 {p}%에 불과했어요."),
+                T("역전 드라마: {a}, {b} 제압", "[[{where}에서 ]]{a|이} 끌려가던 경기를 뒤집고 {b|을} 꺾었어요. 끝까지 포기하지 않은 결과예요."),
             ).let { all -> if (v["p"] != null) all.dropLast(1) else all } to 3
         }
         "record" -> {
-            // The stats module names records by RecordKind; older codes are lower case.
-            arg(0)?.let { v["rec"] = runCatching { RecordKind.valueOf(it).label }.getOrNull() ?: RECORD_LABELS[it.lowercase(Locale.ROOT)] ?: it.replace('_', ' ') }
-            arg(1)?.let { v["value"] = number(it) }
-            arg(2)?.let { v["prev"] = number(it) }
+            // The stats module names records by RecordKind (its values with their unit: "87점 차",
+            // "레이팅 차 514"); older codes are lower case, their values plain numbers.
+            val kind = arg(0)?.let { runCatching { RecordKind.valueOf(it) }.getOrNull() }
+            arg(0)?.let { v["rec"] = kind?.label ?: RECORD_LABELS[it.lowercase(Locale.ROOT)] ?: it.replace('_', ' ') }
+            fun shown(s: String): String = kind?.let { k -> s.toDoubleOrNull()?.let { k.withUnit(it) } } ?: number(s)
+            arg(1)?.let { v["value"] = shown(it) }
+            arg(2)?.let { v["prev"] = shown(it) }
             listOf(
                 T("신기록! {a}, {rec} 경신", "{a|이} {rec} 기록을 {value|으로} 새로 썼어요.[[ 종전 기록은 {prev|이었어요}.]] 리그 역사에 이름을 남겼어요."),
                 T("{rec} 새 역사: {a}", "{rec} 기록이 {value|으로} 바뀌었어요. 새 주인공은 {a|이에요}.[[ 종전 기록은 {prev|이었어요}.]]"),
-                T("기록 경신: {rec} {value}", "{a|이} {rec}에서 {value|을} 찍었어요.[[ 종전 기록 {prev}보다 앞선 숫자예요.]] 오래 회자될 기록이에요."),
+                T("기록 경신: {rec} {value}", "{a|이} {rec}에서 {value|을} 찍었어요.[[ 종전 기록 {prev|을} 넘어섰어요.]] 오래 회자될 기록이에요."),
             ) to 4
         }
         "milestone" -> milestone(arg(0).orEmpty(), arg(1), v)
@@ -368,7 +395,7 @@ object News {
                     listOf(
                         T("자이언트 킬링! {a}, {b} 잡고 {round} 통과", "레이팅이 {gap}점 낮은 {a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 꺾었어요. 컵 대회다운 반전이에요."),
                         T("{comp}의 이변: 강호 {b} 탈락", "강호 {b|이} {round}에서 {a}에게[[ {score|으로}]] 졌어요. {a|은} 레이팅 {gap}점 차를 뛰어넘었어요."),
-                    ) to 3
+                    ) to if (LAST_EIGHT.containsMatchIn(arg(0).orEmpty())) 3 else 2
                 }
                 else -> listOf(
                     T("{comp} {round}: {a}, {b} 꺾고 진출", "{a|이} {comp} {round}에서 {b|을}[[ {score|으로}]] 물리쳤어요. 다음 라운드에서 또 한 번 승리를 노려요."),
@@ -1162,7 +1189,156 @@ object News {
                 T("클럽 대항전 개막, {group}에 {seeds}", "각 리그 클럽 1위들이 맞붙는 클럽 대항전이 시작돼요. {group}에서는 {seeds|이} 경쟁해요."),
             ) to 2
         }
+        else -> deskTemplates(e, v, arg, name)
+    }
+
+    /**
+     * The news desk's kinds ([NewsDesk], design_ux 5.1): the week's league upsets, the club race,
+     * the international stage's points, and the digests of a cup stage, a group stage and the
+     * week's milestones; the players near a record.
+     */
+    private fun deskTemplates(
+        e: LeagueEvent,
+        v: MutableMap<String, String>,
+        arg: (Int) -> String?,
+        name: (String) -> String,
+    ): Pair<List<T>, Int> = when (e.kind) {
+        "league_upset" -> {
+            // [winner, loser] (gap, league or "-", tier, score, the league's rank or "-").
+            arg(0)?.let { v["gap"] = number(it) }
+            val id = arg(1) ?: LeagueIds.LEGACY
+            val tier = arg(2)?.toIntOrNull() ?: 0
+            v["div"] = LeagueIds.division(id, tier)
+            v["lg"] = LeagueIds.label(id)
+            arg(3)?.let { v["score"] = it }
+            val rank = arg(4)?.toIntOrNull() ?: Int.MAX_VALUE
+            listOf(
+                T("이변! {a}, {b} 격파", "{div}에서 레이팅이 {gap}점 낮은 {a|이} {b|을} {score|으로} 꺾었어요. 이번 주 손꼽히는 이변이에요."),
+                T("{b}, {a}에게 덜미", "{b|은} {div}에서 한참 아래로 본 {a}에게 {score|으로} 졌어요. 레이팅 차는 {gap}점이었어요."),
+                T("약자의 반란: {a}", "{a|이} 레이팅 {gap}점 차를 뒤집고 {b|을} 눌렀어요. {lg} 순위 싸움이 더 뜨거워졌어요."),
+            ) to if (tier == 0 && (id == LeagueIds.LEGACY || rank < LeagueWorld.LEAGUE_TITLES)) 3 else 2
+        }
+        "club_race" -> {
+            // [leader club, second club] (league, gap x 10, "lead" | "close").
+            arg(0)?.let { v["lg"] = LeagueIds.label(it) }
+            arg(1)?.toIntOrNull()?.let { v["gap"] = String.format(Locale.ROOT, "%.1f", it / 10.0) }
+            if (arg(2) == "lead") listOf(
+                T("{a}, {lg} 클럽 순위 1위로", "{a|이} {b|을} 제치고 {lg} 클럽 순위 맨 위에 올랐어요. 두 클럽의 차이는 {gap}점이에요."),
+            ) to 3 else listOf(
+                T("클럽 순위 접전: {a}·{b}", "{lg} 클럽 순위에서 {a|와} {b}의 차이가 {gap}점으로 줄었어요. 선수들의 남은 경기에 클럽 우승이 걸렸어요."),
+            ) to 3
+        }
+        "intl_week" -> {
+            // [] (competition code, stage, "league:points" for the 1 to 3 leagues that earned most, then "lead" when the first leads the season).
+            arg(1)?.let { v["stage"] = it }
+            val gains = e.args.drop(2).filter { ':' in it }.mapNotNull { p ->
+                val id = p.substringBefore(':')
+                p.substringAfter(':').takeIf { it.isNotEmpty() && id.isNotEmpty() }?.let { LeagueIds.label(id) to it }
+            }
+            gains.firstOrNull()?.let { (lg, p) ->
+                v["l1"] = lg
+                v["p1"] = p
+            }
+            // The others with the particle after the last league's name, not after its points.
+            gains.drop(1).takeIf { it.isNotEmpty() }?.let { rest ->
+                v["rest"] = rest.joinToString(", ") { (lg, p) -> "$lg(${p}점)" } + Josa.after(rest.last().first, "이")
+            }
+            if (e.args.lastOrNull() == "lead") listOf(
+                T("{l1}, 국제 무대에서 웃었어요", "{comp} {stage} 결과로 {l1|이} 이번 시즌 국제 성적 점수 레이스 선두에 섰어요. 이번 단계에서만 {p1}점을 보탰어요."),
+                T("국제 무대 결산: {l1} 강세", "{comp} {stage}에서 {l1} 선수들이 국제 성적 점수 {p1}점을 벌었어요.[[ {rest} 뒤를 이었어요.]] {l1|은} 이번 시즌 레이스 선두예요."),
+            ) to 2 else listOf(
+                T("국제 무대 결산: {l1} 강세", "{comp} {stage}에서 {l1} 선수들이 국제 성적 점수 {p1}점을 벌었어요.[[ {rest} 뒤를 이었어요.]]"),
+            ).let { all -> if (v["rest"] == null) listOf(T("국제 무대 결산: {l1} 강세", "{comp} {stage}에서 {l1} 선수들이 국제 성적 점수 {p1}점을 벌었어요. 다른 리그는 이번 단계에서 점수를 보태지 못했어요.")) else all } to 2
+        }
+        "cup_digest" -> {
+            // [≤ 8 notable winners] (stage, ties, upsets, the top seed out or "-", next week or "-").
+            arg(0)?.let { v["stage"] = it }
+            arg(1)?.let { v["n"] = number(it) }
+            val upsets = arg(2)?.toIntOrNull() ?: 0
+            val out = arg(3)?.let { name(it) }
+            // The winners it names beat better seeds (the stage's other notable ties).
+            val who = shortList(e.keys, name, 2)?.let { if (e.keys.size > 2) "$it 등" else it }
+            val gone = out?.let { "톱시드 ${it}도 짐을 쌌어요" }
+            v["surprise"] = when {
+                upsets > 0 && who != null -> "${who + Josa.after(who, "이")} 높은 시드를 꺾는 등 이변이 ${upsets}번 나왔" + (gone?.let { "고, $it." } ?: "어요.")
+                upsets > 0 -> "이변이 ${upsets}번 나왔" + (gone?.let { "고, $it." } ?: "어요.")
+                who != null -> "${who + Josa.after(who, "이")} 높은 시드를 꺾었" + (gone?.let { "고, $it." } ?: "어요.")
+                out != null -> "톱시드 ${out + Josa.after(out, "이")} 탈락했어요."
+                else -> "큰 이변 없이 시드 순서대로 흘러갔어요."
+            }
+            arg(4)?.let { v["next"] = it }
+            if (upsets > 0) v["u"] = upsets.toString()
+            listOf(
+                T("{comp} {stage} 결과[[: 이변 {u}번]]", "{stage} {n}경기가 모두 끝났어요. {surprise} 다음 라운드는 {next}주차예요."),
+                T("{comp} {stage} 결과[[: 이변 {u}번]]", "{stage} {n}경기가 모두 끝났어요. {surprise} 다음 라운드를 기다려요."),
+            ).let { all -> if (v["next"] != null) all.take(1) else all.drop(1) } to 2
+        }
+        "group_digest" -> {
+            // [≤ 8 group winners] (stage, qualified, eliminated, top seeds among them).
+            arg(0)?.let { v["stage"] = it }
+            arg(1)?.let { v["q"] = it }
+            arg(2)?.let { v["out"] = it }
+            arg(3)?.takeIf { it != "0" }?.let { v["fallen"] = it }
+            shortList(e.keys, name, DIGEST_SHOWN)?.let { v["firsts"] = if (e.keys.size > DIGEST_SHOWN) "$it 등" else it }
+            listOf(
+                T("{comp} {stage} 결과", "{q}명이 토너먼트에 올랐[[고, {out}명은 여기서 멈췄]]어요.[[ 톱시드 {fallen}명도 짐을 쌌어요.]][[ {firsts|이} 조 1위로 다음 단계에 나서요.]]"),
+            ) to 2
+        }
+        "milestones_week" -> {
+            // [≤ 20 players] ("kind:value:count" each).
+            val counts = e.args.mapNotNull { a ->
+                val f = a.split(':')
+                val n = f.getOrNull(2)?.toIntOrNull() ?: return@mapNotNull null
+                milestoneLabel(f[0], f.getOrNull(1)) to n
+            }
+            val total = counts.sumOf { it.second }
+            if (total > 0) v["n"] = total.toString()
+            if (counts.isNotEmpty()) v["list"] = counts.joinToString(", ") { (label, n) -> "$label ${n}명" }
+            // A few names; "등" when there are more milestones than it names.
+            shortList(e.keys, name, DIGEST_SHOWN)?.let { v["who"] = if (total <= minOf(e.keys.size, DIGEST_SHOWN)) it else "$it 등" }
+            listOf(
+                T("이번 주의 이정표 {n}개", "이번 주에 이정표 {n}개가 나왔어요. {list|이에요}.[[ {who|이} 이름을 올렸어요.]]"),
+            ) to 1
+        }
+        "record_chase" -> {
+            // [player, holder] (record kind, how far in Korean, value, record).
+            val kind = arg(0)?.let { runCatching { RecordKind.valueOf(it) }.getOrNull() }
+            kind?.let { v["rec"] = it.label }
+            arg(1)?.let { v["chase"] = it }
+            // The record's holder chasing its own season record is no second name.
+            if (e.keys.getOrNull(1) == e.keys.firstOrNull()) v.remove("b")
+            listOf(
+                T("{a}, {rec} 기록에 다가서요", "{a|이} {rec} 기록에 다가섰어요. {chase|이에요}.[[ 기록의 주인은 {b|이에요}.]]"),
+                T("기록 추격: {a}", "{a|이} {rec} 기록을 바짝 쫓고 있어요. {chase|이에요}.[[ 지금 기록은 {b}의 것이에요.]]"),
+            ) to if (kind != null && kind in RecordChase.CAREER) 3 else 2
+        }
         else -> emptyList<T>() to 1
+    }
+
+    /** Names shown in a digest's sentence (its keys are many more). */
+    private const val DIGEST_SHOWN = 3
+
+    /** The first [n] of [keys] by [name], joined by "·"; null without any. */
+    private fun shortList(keys: List<String>, name: (String) -> String, n: Int): String? =
+        keys.filter { it != "-" }.take(n).map(name).filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.joinToString("·")
+
+    /** "한국 1부 경기" (a league match of league [id], tier [tier]) or "요트컵 16강" (a competition's [label]), from a desk event's arguments; null when unknown. */
+    private fun where(code: String?, label: String?, id: String?, tier: String?): String? {
+        val comp = code?.singleOrNull()?.let { Comp.of(it) } ?: return null
+        if (comp == Comp.LEAGUE) return "${LeagueIds.division(id ?: LeagueIds.LEGACY, tier?.toIntOrNull() ?: 0)} 경기"
+        return listOfNotNull(comp.label, label).joinToString(" ")
+    }
+
+    /** "통산 요트 100개", "통산 1,000경기", "300점 경기 10번" for a milestone of [kind] at [value]. */
+    private fun milestoneLabel(kind: String, value: String?): String {
+        val n = value?.let { number(it) }.orEmpty()
+        return when (kind) {
+            "games" -> "통산 ${n}경기"
+            "wins" -> "통산 ${n}승"
+            "yachts" -> "통산 요트 ${n}개"
+            "300" -> "300점 경기 ${n}번"
+            else -> "$kind $n".trim()
+        }
     }
 
     /**
@@ -1337,20 +1513,42 @@ class TitleRaceWatch {
     }
 }
 
-/** The newest [MAX] articles, newest first (league/news.txt). Not thread-safe: callers synchronise. */
+/**
+ * The newest articles in two lanes, newest first (league/news.txt): [MAJOR] of importance 3 and
+ * up, [MINOR] of the rest, each dropping its own oldest, so a week of small news cannot push a
+ * season's champions, awards and review out of the book. Not thread-safe: callers synchronise.
+ */
 class NewsBook {
     private val list = ArrayDeque<Article>()
+
+    /** Articles of the [MAJOR] lane in [list]. */
+    private var majors = 0
 
     /** Every article kept, newest first. */
     val all: List<Article> get() = list.toList()
 
     val size: Int get() = list.size
 
-    /** Adds [a] as the newest (an article equal to one of the last few is not added twice). */
+    /** Adds [a] as the newest (an article equal to one of the last few is not added twice); its lane drops its oldest beyond its size. */
     fun add(a: Article) {
         if (list.take(RECENT).any { it == a }) return
         list.addFirst(a)
-        while (list.size > MAX) list.removeLast()
+        if (a.major) majors++
+        trim(a.major)
+    }
+
+    /** Drops the oldest articles of one lane down to its size. */
+    private fun trim(major: Boolean) {
+        val cap = if (major) MAJOR else MINOR
+        var n = if (major) majors else list.size - majors
+        if (n <= cap) return
+        val it = list.listIterator(list.size)
+        while (n > cap && it.hasPrevious()) {
+            if (it.previous().major != major) continue
+            it.remove()
+            n--
+            if (major) majors--
+        }
     }
 
     /** Adds [articles] in order (the last one ends up newest). */
@@ -1368,8 +1566,10 @@ class NewsBook {
             append("a ").append(a.season).append(' ').append(MediaText.esc(a.kind)).append(' ').append(a.comp?.code ?: '-').append(' ')
             append(MediaText.list(a.keys)).append(' ').append(MediaText.esc(a.headline)).append(' ').append(MediaText.esc(a.body)).append(' ')
             append(a.importance)
-            // The week, a field older versions do not read.
+            // The week, then the match ("@ref") and the scope ("#KR"): fields older versions do not read.
             if (a.week != SeasonCalendar.NONE) append(' ').append(a.week)
+            a.ref?.takeIf { it.isNotEmpty() && ' ' !in it }?.let { append(" @").append(it) }
+            if (a.scope.isNotEmpty() && ' ' !in a.scope) append(" #").append(a.scope)
             append('\n')
         }
     }
@@ -1377,10 +1577,18 @@ class NewsBook {
     companion object {
         const val FILE = "news.txt"
         const val HEADER = "news 1"
-        const val MAX = 200
+
+        /** Articles of importance [MAJOR_FROM] and up kept, and of the others: 200 in all, as before the lanes. */
+        const val MAJOR = 120
+        const val MINOR = 80
+        const val MAX = MAJOR + MINOR
+        const val MAJOR_FROM = 3
         private const val RECENT = 10
 
-        /** Reads news.txt; throws when it is not one (the caller starts fresh), skips bad or cut lines. */
+        /**
+         * Reads news.txt; throws when it is not one (the caller starts fresh), skips bad or cut
+         * lines and lines of other kinds (the [NewsDesk]'s).
+         */
         fun decode(text: String): NewsBook {
             val lines = text.lines()
             require(lines.firstOrNull()?.trim() == HEADER) { "not a news file" }
@@ -1392,10 +1600,18 @@ class NewsBook {
                     val importance = f[7].toInt()
                     require(importance in 1..5)
                     val comp = if (f[3] == "-") null else Comp.of(f[3].single())
-                    val week = f.getOrNull(8)?.toIntOrNull() ?: SeasonCalendar.NONE
-                    val a = Article(f[1].toInt(), MediaText.unesc(f[2]), MediaText.unesc(f[5]), MediaText.unesc(f[6]), MediaText.unlist(f[4]), comp, importance, week)
+                    // Optional fields after the importance: the week (a number), "@ref", "#scope".
+                    val extra = f.drop(8)
+                    val week = extra.firstOrNull()?.toIntOrNull() ?: SeasonCalendar.NONE
+                    val ref = extra.firstOrNull { it.startsWith('@') && it.length > 1 }?.drop(1)
+                    val scope = extra.firstOrNull { it.startsWith('#') }?.drop(1).orEmpty()
+                    val a = Article(
+                        f[1].toInt(), MediaText.unesc(f[2]), MediaText.unesc(f[5]), MediaText.unesc(f[6]), MediaText.unlist(f[4]), comp, importance, week, ref, scope,
+                    )
+                    // Oldest first in the file: each lane keeps its newest.
                     book.list.addFirst(a)
-                    while (book.list.size > MAX) book.list.removeLast()
+                    if (a.major) book.majors++
+                    book.trim(a.major)
                 }
             }
             return book

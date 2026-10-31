@@ -44,6 +44,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
     /** News articles made from the events, newest first (league/news.txt). */
     var news = NewsBook()
 
+    /**
+     * 뉴스 데스크: the season's match news and competition rounds, written as each week's best and
+     * as digests ([NewsDesk]); what it holds is saved with the news.
+     */
+    var desk = NewsDesk()
+
     /** The newest finished fixtures, replayed on the live scoreboard, and the feed's win curves (memory only). */
     val live = LiveBoard()
 
@@ -135,6 +141,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         if (config.national) clubs = ClubBook.found(members, ::nationOf, ::rating, known, leagueSeed, config)
         val p = Offseason.first(leagueSeed, context(Int.MAX_VALUE), known + 1)
         plan = p
+        desk.begin(p)
         val out = opened(p)
         rank(p)
         return out
@@ -218,7 +225,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
 
     /**
      * Records a finished job: statistics first (they want the ratings from before the match),
-     * then every rated board on the ladder, then the season (friendlies are only on the ladder).
+     * the news desk's look at it (the same ratings), then every rated board on the ladder, then
+     * the season (friendlies are only on the ladder). A job that moves the season into a new
+     * week closes the desk's week before it ([NewsDesk.close]).
      */
     fun recordJob(r: JobResult, nowMs: Long = 0L): Recorded {
         // Lab games count for the experiment only.
@@ -232,8 +241,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         // Friendlies and exhibitions have no week of their own: their news goes in the week in play.
         val week = if (f.week != SeasonCalendar.NONE) f.week else plan?.let { p -> runCatching { p.week }.getOrNull() } ?: SeasonCalendar.NONE
         val counted = runCatching { stats.record(r, StatsContext(season, { ladder.rating(it) }, ::derbyTown)) }.getOrDefault(emptyList()).map { it.at(week) }
-        note(counted)
-        out += counted
+        out += counted + note(counted)
+        plan?.let { p -> runCatching { desk.offer(r, p) { k -> ladder.rating(k) } } }
         val matches = ArrayList<MatchRecord>()
         if (f.rated) {
             for ((i, b) in r.boards.withIndex()) {
@@ -257,21 +266,36 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                         listOfNotNull(titleRace.check(p.league))
                     }
                     val e = races.map { it.at(week) }
-                    note(e)
-                    out += e
+                    out += e + note(e)
                 }
             }
         }
         live.add(r, nowMs, season)
+        plan?.let { p -> out += closeWeek(p) }
         return Recorded(matches, out)
     }
 
-    /** Records a finished season fixture in the season alone; returns its news. */
+    /** Records a finished season fixture in the season alone; returns its news (the news desk's digests it finished included). */
     fun record(r: JobResult): List<LeagueEvent> {
         val out = ArrayList(plan?.record(r).orEmpty().map { it.at(r.fixture.week) })
         weekPick(r)?.let { out += it }
-        note(out)
-        return out
+        return out + note(out, r.fixture)
+    }
+
+    /** The news desk's weeks before the one [p] is in, closed once: their news. */
+    private fun closeWeek(p: SeasonPlan): List<LeagueEvent> {
+        if (desk.season != p.number) return emptyList()
+        val now = runCatching { p.week }.getOrNull() ?: return emptyList()
+        if (now <= desk.week) return emptyList()
+        val e = runCatching { desk.close(deskContext(p), now) }.getOrDefault(emptyList())
+        told(e)
+        return e
+    }
+
+    /** What the news desk reads at a week's close: an article's match is not written up again. */
+    private fun deskContext(p: SeasonPlan): NewsDesk.Context {
+        val linked by lazy(LazyThreadSafetyMode.NONE) { news.all.mapNotNullTo(HashSet()) { it.ref } }
+        return NewsDesk.Context(p, stats, affiliation) { ref -> ref in linked }
     }
 
     /**
@@ -363,6 +387,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         // The league coefficients of the season, and the ranking after it.
         if (national) runCatching { federation.putCoefficients(p.number, Coefficients.season(p)) }
         val ranking = rankingAfter(p, config) ?: LeagueRanking.EMPTY
+        // The news desk's last week and whatever it still holds.
+        val flushed = runCatching { desk.flush(deskContext(p)) }.getOrDefault(emptyList())
+        told(flushed)
         // Awards, records, hall of fame, dynasties and the season's archive, from the book as it
         // was before this season; then the season's honours go in once, awards included. A
         // national season's lines carry each player's club, and its hall of fame counts the
@@ -383,8 +410,6 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         // A national season's awards are the 요트협회's (its MVP is 올해의 선수).
         end?.let { e -> out += if (national) e.events.map { if (it.kind == "award") it.copy(args = it.args + News.NATIONAL) else it } else e.events }
         out += runCatching { stats.honourRecords(honours, p.number, ::ageAt) }.getOrDefault(emptyList())
-        // The season's three best games go to the archive.
-        runCatching { archive.putHighlights(p.number, highlights.archiveLines(p.number)) }
         out += if (national) runCatching { nationalTitles(p, h, moves) }.getOrDefault(emptyList()) else legacyTitles(p, h)
         // The 요트협회: the ranking it publishes, and the proposals voted on during the season
         // (P(n - 1)) decided: the user's choice, else the 선수 위원회. Nothing is pending at a
@@ -397,6 +422,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             leagueRankingEvent(p.number, ranking)?.let { out += it }
             // Void ones only when the federation was off: the others' voids are told at the open.
             for (x in federation.of(p.number - 1)) if (!x.pending && (x.result != Proposal.VOID || x.by == Proposal.NONE)) out += decision(p.number, x)
+            // The season's review learns the ranking's moves and the 요트협회's decisions.
+            runCatching { archive.amendReview(p.number, ranking = reviewRanking(ranking), federation = reviewDecisions(p.number)) }
         }
         // The season's national cups go into the records, and a world champion's favourite style
         // comes into fashion (newcomers take it up more often for a few seasons).
@@ -452,7 +479,24 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val changed = r.born.isNotEmpty() || r.retired.isNotEmpty() || players.reformed == p.number || config.aging
         val closed = (if (national) digested(p.number, out) else out).map { it.at(SeasonCalendar.CLOSING) }
         note(closed)
-        return Closing(p.number, h + end?.awards.orEmpty() + picks, closed, changed, adopted, ranking)
+        return Closing(p.number, h + end?.awards.orEmpty() + picks, flushed + closed, changed, adopted, ranking)
+    }
+
+    /** The league ranking's biggest moves for the season's review: up to [REVIEW_MOVES] climbers, then as many fallers (league id, places). */
+    private fun reviewRanking(ranking: LeagueRanking): List<Pair<String, Int>> {
+        val rows = ranking.rows.filter { it.change != 0 }
+        val up = rows.filter { it.change > 0 }.sortedWith(compareByDescending<LeagueRank> { it.change }.thenBy { it.rank }).take(REVIEW_MOVES)
+        val down = rows.filter { it.change < 0 }.sortedWith(compareBy<LeagueRank> { it.change }.thenBy { it.rank }).take(REVIEW_MOVES)
+        return (up + down).map { it.id to it.change }
+    }
+
+    /** The 요트협회's decisions on season [season]'s vote for its review: "‘자동 승강 인원 2명 → 1명’ 가결". */
+    private fun reviewDecisions(season: Int): List<String> = federation.of(season - 1).filter { !it.pending }.map { x ->
+        "‘${x.title}’ " + when (x.result) {
+            Proposal.YES -> "가결"
+            Proposal.NO -> "부결"
+            else -> "무효"
+        }
     }
 
     /**
@@ -651,10 +695,15 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         val news = ArrayList<LeagueEvent>()
         if (next.league.leagues.national) news += formation(p, next)
         news += runCatching { assembly(p) }.getOrDefault(emptyList())
+        // The closing season's review learns its transfers abroad, and the decisions as they stand after the voids.
+        if (p.league.leagues.national) runCatching {
+            archive.amendReview(p.number, federation = reviewDecisions(p.number), transfers = affiliation?.moved(p.number, ClubMoveType.ABROAD)?.size ?: 0)
+        }
         val preseason = news.map { it.at(SeasonCalendar.PRESEASON) }
         note(preseason)
         closingGone = emptySet()
         plan = next
+        desk.begin(next)
         val opening = opened(next)
         rank(next)
         return market + preseason + opening
@@ -721,13 +770,65 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         return out
     }
 
-    /** Keeps the events and writes them up as news articles (a club's id by its name, dissolved clubs too). */
-    private fun note(e: List<LeagueEvent>) {
-        if (e.isEmpty()) return
+    /**
+     * Keeps the events and writes them up as news articles, but those the news desk holds for its
+     * digests ([NewsDesk.sift]; [f] is the fixture they come from). Returns the desk's own news it
+     * wrote with them (the digest of a big knockout stage that [f] finished).
+     */
+    private fun note(e: List<LeagueEvent>, f: Fixture? = null): List<LeagueEvent> {
+        if (e.isEmpty() && f == null) return emptyList()
+        keep(e)
+        val shown = runCatching { desk.sift(e, plan, f) }.getOrDefault(e)
+        val made = shown.filter { it.kind in NewsDesk.KINDS && it !in e }
+        keep(made)
+        write(shown)
+        return made
+    }
+
+    /** Keeps and writes up events the news desk made or let go: [note] without the desk. */
+    private fun told(e: List<LeagueEvent>) {
+        keep(e)
+        write(e)
+    }
+
+    private fun keep(e: List<LeagueEvent>) {
         for (x in e) events.addLast(x)
         while (events.size > EVENTS) events.removeFirst()
+    }
+
+    /** The articles of [e] (a club's id by its name, dissolved clubs too), each with its match and scope. */
+    private fun write(e: List<LeagueEvent>) {
+        if (e.isEmpty()) return
         runCatching {
-            news.add(News.articles(e, { k -> Nations.flagged(k) ?: name(k) }, { id -> clubs?.nameOf(id) ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }))
+            news.add(News.articles(e, { k -> Nations.flagged(k) ?: name(k) }, { id -> clubs?.nameOf(id) ?: id }, Competitions::teamLabel, { k -> ladder.rating(k) }, ::scopeOf))
+        }
+    }
+
+    /**
+     * Where [e] happened ([Article.scope]): a national league's id for its league news (its
+     * titles, moves, races, upsets, a player's move into it; a 1부 or playoff match by its first
+     * player's league), a confederation's name for its 대륙 챔피언스, "" for the rest and for a
+     * legacy season.
+     */
+    private fun scopeOf(e: LeagueEvent): String {
+        val p = plan ?: return ""
+        val leagues = p.league.leagues
+        fun id(i: Int): String = e.args.getOrNull(i)?.takeIf { it != LeagueIds.LEGACY && it != "-" && LeagueIds.known(it) }.orEmpty()
+        val byArg = when (e.kind) {
+            "league_title", "league_moves", "league_formed", "club_title", "club_race" -> id(0)
+            "league_upset", "transfer_abroad", "return_home" -> id(1)
+            "title_race" -> id(2)
+            "comeback" -> if (e.comp == Comp.LEAGUE) id(3) else ""
+            "player_of_week" -> id(4)
+            else -> null
+        }
+        if (byArg != null) return byArg
+        if (!leagues.national) return ""
+        return when (e.comp) {
+            Comp.CONT_CHAMPIONS -> e.args.lastOrNull()?.takeIf { it.startsWith("@") }?.drop(1)
+                ?.let { t -> Confed.entries.firstOrNull { ContinentalChampions.title(it) == t }?.name }.orEmpty()
+            Comp.LEAGUE, Comp.TITLE_PLAYOFF, Comp.PROMOTION_PLAYOFF -> e.keys.firstOrNull()?.let { p.league.leagueOf(it)?.id }.orEmpty()
+            else -> ""
         }
     }
 
@@ -751,7 +852,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         put(CLUBS, clubs?.encode() ?: "")
         put(FEDERATION, federation.encode())
         put(HIGHLIGHTS, highlights.encode())
-        put(NEWS, news.encode())
+        // The news desk's pending lines after the articles (older versions skip them).
+        put(NEWS, news.encode() + desk.encode())
         put(LAB, lab.encode())
         put(NATIONS, nations.encode())
         put(LADDER, ladder.encode())
@@ -775,6 +877,9 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         /** A national close's digested kinds: articles kept as they are, and players a digest names. */
         const val SINGLES = 2
         const val DIGEST_NAMES = 6
+
+        /** The league ranking's climbers (and fallers) a season's review keeps. */
+        const val REVIEW_MOVES = 5
 
         const val LADDER = "ladder.txt"
         const val SEASON = "season.txt"
@@ -840,6 +945,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             w.archive = files[ARCHIVE]?.let { t -> readOrNull { Archive.decode(t) } } ?: Archive()
             w.highlights = files[HIGHLIGHTS]?.let { t -> readOrNull { HighlightBook.decode(t) } } ?: HighlightBook()
             w.news = files[NEWS]?.let { t -> readOrNull { NewsBook.decode(t) } } ?: NewsBook()
+            w.desk = files[NEWS]?.let { t -> readOrNull { NewsDesk.decode(t) } } ?: NewsDesk()
             w.lab = files[LAB]?.let { t -> readOrNull { LabBook.decode(t) } } ?: LabBook()
             w.nations = files[NATIONS]?.let { t -> readOrNull { NationBook.decode(t) } } ?: NationBook()
             // A season in progress that the stats do not know (stats.txt is newer than the
@@ -857,6 +963,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                     w.stats.startSeason(p.number, keys.associateWith { ladder.rating(it) }, keys.filter { w.players[it]?.born == p.number })
                 }
                 w.rank(p)
+                // A desk of another season (or none): it starts this season's weeks afresh.
+                if (w.desk.season != p.number) w.desk.begin(p)
             }
             return w
         }

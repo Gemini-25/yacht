@@ -374,6 +374,29 @@ class MediaTest {
             e("title", listOf("ai1"), listOf("L0.KR"), Comp.LEAGUE), e("title", listOf("ai1"), listOf("CCL.EUROPE"), Comp.CONT_CHAMPIONS),
             e("cup_round", two, listOf("아시아 4강", "2-0", "@아시아 챔피언스"), Comp.CONT_CHAMPIONS),
             e("final", listOf("c1", "c2"), listOf("3-2"), Comp.CLUB_CUP), e("qualified", listOf("c2"), listOf("4강", "B조 1위"), Comp.CLUB_CUP),
+        ) + deskSamples(s)
+    }
+
+    /** The news desk's kinds, as [yacht.engine.league.NewsDesk] makes them. */
+    private fun deskSamples(s: Int): List<LeagueEvent> {
+        fun e(kind: String, keys: List<String>, args: List<String> = emptyList(), comp: Comp? = null) = LeagueEvent(kind, s, keys, args, comp)
+        val two = listOf("ai1", "ai2")
+        val four = listOf("ai1", "ai2", "ai3", "ai4")
+        return listOf(
+            e("league_upset", two, listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE), e("league_upset", two, listOf("160", "-", "1", "합계 431-420", "0"), Comp.LEAGUE),
+            e("league_upset", listOf("ai4", "ai3"), listOf("1514", "XAS", "1", "2-0", "-"), Comp.LEAGUE),
+            e("comeback", two, listOf("3", "C", "16강", "-", "-"), Comp.CUP), e("comeback", two, listOf("4", "L", "3주차", "KR", "0"), Comp.LEAGUE),
+            e("club_race", listOf("c1", "c2"), listOf("KR", "25", "lead"), Comp.CLUB), e("club_race", listOf("c2", "c1"), listOf("JP", "18", "close"), Comp.CLUB),
+            e("intl_week", emptyList(), listOf("E", "8강", "KR:2.3", "JP:1.5", "CN:0.8", "lead"), Comp.CHAMPIONS),
+            e("intl_week", emptyList(), listOf("E", "4강", "GB:2.0", "SE:1.0", "-"), Comp.CHAMPIONS),
+            e("intl_week", emptyList(), listOf("T", "1차전", "XAS:1.0", "-"), Comp.CONT_CHAMPIONS),
+            e("cup_digest", listOf("ai4", "ai3"), listOf("128강", "64", "7", "ai1", "9"), Comp.CUP), e("cup_digest", emptyList(), listOf("256강", "1024", "0", "-", "6"), Comp.CUP),
+            e("cup_digest", listOf("ai4"), listOf("64강", "32", "3", "-", "-"), Comp.CUP), e("cup_digest", emptyList(), listOf("32강", "16", "0", "ai2", "12"), Comp.CUP),
+            e("group_digest", four, listOf("조별 리그", "8", "8"), Comp.CHAMPIONS), e("group_digest", two, listOf("조별 리그", "16", "16"), Comp.CONT_CHAMPIONS),
+            e("milestones_week", four, listOf("yachts:100:7", "wins:100:4")), e("milestones_week", two, listOf("games:1000:2")),
+            e("record_chase", two, listOf("CAREER_YACHTS", "통산 최다 요트까지 4개", "1230", "1233")),
+            e("record_chase", listOf("ai3", "ai3"), listOf("SEASON_POINTS", "기록 페이스 +3점", "40", "88")),
+            e("record_chase", listOf("ai4", "ai1"), listOf("STREAK", "연승 기록까지 2연승", "15", "16")),
         )
     }
 
@@ -548,10 +571,14 @@ class MediaTest {
     @Test
     fun theNewsBookKeepsTheNewest200AndSurvivesACut() {
         val book = NewsBook()
-        repeat(250) { i -> book.add(Article(1 + i / 100, "upset", "헤드라인 $i", "본문 $i, 쉼표와 100% 그리고 a_b.\n둘째 줄이에요.", listOf("ai$i", "-"), if (i % 2 == 0) Comp.CUP else null, 1 + i % 5)) }
+        val importance = { i: Int -> 1 + i % 5 }
+        repeat(250) { i -> book.add(Article(1 + i / 100, "upset", "헤드라인 $i", "본문 $i, 쉼표와 100% 그리고 a_b.\n둘째 줄이에요.", listOf("ai$i", "-"), if (i % 2 == 0) Comp.CUP else null, importance(i))) }
         assertEquals(NewsBook.MAX, book.size)
         assertEquals("헤드라인 249", book.all.first().headline)
-        assertEquals("헤드라인 50", book.all.last().headline)
+        // Two lanes, each its newest: 120 of importance 3 and up, 80 of the others.
+        val kept = (249 downTo 0).filter { importance(it) >= 3 }.take(NewsBook.MAJOR) + (249 downTo 0).filter { importance(it) < 3 }.take(NewsBook.MINOR)
+        assertEquals(kept.sortedDescending().map { "헤드라인 $it" }, book.all.map { it.headline })
+        assertEquals(NewsBook.MAJOR, book.all.count { it.major })
         // The same article twice in a row is kept once.
         book.add(book.all.first())
         assertEquals("헤드라인 248", book.all[1].headline)
@@ -568,9 +595,76 @@ class MediaTest {
         val made = News.articles(samples(2), { names[it] ?: it }, { clubs[it] ?: it })
         val fresh = NewsBook()
         fresh.add(made)
-        assertTrue(fresh.size in made.size - 5..made.size, "${fresh.size} of ${made.size}")
+        // (Each lane holds its own newest.)
+        val fits = minOf(made.count { it.major }, NewsBook.MAJOR) + minOf(made.count { !it.major }, NewsBook.MINOR)
+        assertTrue(fresh.size in fits - 5..fits, "${fresh.size} of ${made.size}")
         assertEquals(made.last(), fresh.all.first())
         assertEquals(fresh.all, NewsBook.decode(fresh.encode()).all)
+    }
+
+    @Test
+    fun theDesksArticlesAndRecordsReadWithTheirNumbers() {
+        val name = { k: String -> names[k] ?: k }
+        val club = { k: String -> clubs[k] ?: k }
+        fun texts(kind: String, keys: List<String>, args: List<String>, comp: Comp? = null) =
+            (1..8).map { s -> News.article(LeagueEvent(kind, s, keys, args, comp), name, club).let { it.headline + " / " + it.body } }
+        // A record reads with its unit, and the comeback record goes up in points.
+        val comeback = texts("record", listOf("ai1", "ai2"), listOf("COMEBACK_POINTS", "87", "80"))
+        assertTrue(comeback.all { "87점 차" in it && "80점 차" in it && "0으로" !in it }, comeback.toString())
+        assertTrue(comeback.any { "87점 차로" in it }, comeback.toString())
+        val upset = texts("record", listOf("ai1", "ai2"), listOf("UPSET", "1514", "1420"))
+        assertTrue(upset.all { "레이팅 차 1,514" in it && "레이팅 차 1,420" in it }, upset.toString())
+        assertTrue(texts("record", listOf("ai1"), listOf("best_game", "341", "330")).all { "341" in it })
+        // League upsets name the division and the score; a legacy league's has no league name.
+        val league = texts("league_upset", listOf("ai1", "ai2"), listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE)
+        assertTrue(league.any { "한국 1부에서" in it && "2-0으로" in it }, league.toString())
+        assertTrue(texts("league_upset", listOf("ai1", "ai2"), listOf("160", "-", "1", "합계 431-420", "0"), Comp.LEAGUE).none { "한국" in it || "null" in it })
+        assertEquals(3, News.article(LeagueEvent("league_upset", 2, listOf("ai1", "ai2"), listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE), name).importance)
+        assertEquals(2, News.article(LeagueEvent("league_upset", 2, listOf("ai1", "ai2"), listOf("214", "KR", "1", "2-0", "0"), Comp.LEAGUE), name).importance)
+        assertEquals(2, News.article(LeagueEvent("league_upset", 2, listOf("ai1", "ai2"), listOf("214", "SE", "0", "2-0", "12"), Comp.LEAGUE), name).importance)
+        // A comeback says where it happened.
+        assertTrue(texts("comeback", listOf("ai1", "ai2"), listOf("3", "C", "16강", "-", "-"), Comp.CUP).all { it.contains("요트컵 16강에서") && "3%" in it })
+        assertTrue(texts("comeback", listOf("ai1", "ai2"), listOf("4", "L", "3주차", "KR", "0"), Comp.LEAGUE).all { "한국 1부 경기에서" in it })
+        // The international stage: the particle follows the last league's name, not its points.
+        val intl = texts("intl_week", emptyList(), listOf("E", "8강", "KR:2.3", "JP:1.5", "CN:0.8", "-"), Comp.CHAMPIONS)
+        assertTrue(intl.all { "한국 리그 선수들이 국제 성적 점수 2.3점을" in it && "일본 리그(1.5점), 중국 리그(0.8점)가 뒤를" in it }, intl.toString())
+        // Digests count what they hold and name a few.
+        val cup = texts("cup_digest", listOf("ai4", "ai3"), listOf("128강", "64", "7", "ai1", "9"), Comp.CUP)
+        assertTrue(cup.all { "64경기가 모두 끝났어요" in it && "이변이 7번" in it && "톱시드 김민준도" in it && "9주차" in it && "이서연·목표 180점이" in it }, cup.toString())
+        assertTrue(texts("cup_digest", emptyList(), listOf("256강", "1024", "0", "-", "-"), Comp.CUP).all { "1,024경기" in it && "다음 라운드를 기다려요" in it })
+        val week = texts("milestones_week", listOf("ai1", "ai2", "ai3", "ai4"), listOf("yachts:100:7", "wins:100:4"))
+        assertTrue(week.all { "이정표 11개" in it && "통산 요트 100개 7명, 통산 100승 4명이에요" in it && " 등이 이름을" in it }, week.toString())
+        assertTrue(texts("milestones_week", listOf("ai1", "ai2"), listOf("games:1000:2")).all { "김민준·승률 AI (앱 기본)이 이름을" in it })
+        assertTrue(texts("group_digest", listOf("ai1", "ai2"), listOf("조별 리그", "16", "16"), Comp.CONT_CHAMPIONS).all { "대륙 챔피언스 조별 리그 결과" in it && "16명은 여기서" in it })
+        assertTrue(texts("club_race", listOf("c1", "c2"), listOf("KR", "25", "lead"), Comp.CLUB).all { "서울 타이거즈" in it && "2.5점" in it })
+        // Near a record: how far it is, and whose it is.
+        val chase = texts("record_chase", listOf("ai1", "ai2"), listOf("CAREER_YACHTS", "통산 최다 요트까지 4개", "1230", "1233"))
+        assertTrue(chase.all { "통산 최다 요트까지 4개예요" in it && "승률 AI (앱 기본)" in it }, chase.toString())
+        assertTrue(texts("record_chase", listOf("ai3", "ai3"), listOf("SEASON_POINTS", "기록 페이스 +3점", "40", "88")).all { "기록 페이스 +3점이에요" in it })
+    }
+
+    @Test
+    fun articlesKeepTheirMatchAndScopeAndOlderReadersTheirWeek() {
+        val name = { k: String -> names[k] ?: k }
+        val e = LeagueEvent("league_upset", 3, listOf("ai1", "ai2"), listOf("214", "KR", "0", "2-0", "0"), Comp.LEAGUE, 12, "3:L:44")
+        val a = News.articles(listOf(e), name, scope = { "KR" }).single()
+        assertEquals("3:L:44", a.ref)
+        assertEquals("KR", a.scope)
+        val noWeek = a.copy(week = yacht.engine.league.SeasonCalendar.NONE, scope = "", ref = "3:C:1029:0:2")
+        val book = NewsBook()
+        for (x in listOf(a, noWeek, a.copy(ref = null, scope = "ASIA", headline = "다른 기사"))) book.add(x)
+        val text = book.encode()
+        assertTrue(text.lines().any { it.endsWith(" 12 @3:L:44 #KR") }, text)
+        assertEquals(book.all, NewsBook.decode(text).all)
+        // 945de5e's reader: the week is the field after the importance, and nothing after it is read.
+        for (line in text.lines().filter { it.startsWith("a ") }) {
+            val f = line.split(' ')
+            val week = f.getOrNull(8)?.toIntOrNull()
+            assertTrue(week == 12 || week == null, line)
+        }
+        // A news file with the desk's lines reads as the articles alone.
+        val desk = yacht.engine.league.NewsDesk()
+        assertEquals(book.all, NewsBook.decode(text + desk.encode() + "desk 3 12\nc 1.5 x|y\n").all)
     }
 
     @Test

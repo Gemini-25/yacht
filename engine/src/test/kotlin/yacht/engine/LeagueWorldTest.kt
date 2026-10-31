@@ -14,6 +14,7 @@ import yacht.engine.league.LeagueWorld
 import yacht.engine.league.TieRule
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /** Whole seasons through [LeagueWorld] with made-up results (no dice): competitions, rollover, evolution, saving. */
@@ -310,7 +311,8 @@ class LeagueWorldTest {
         // A legacy league: the 요트협회 keeps the season's statistics and tables nothing; no
         // national news; the club league goes on. Read back as it was written.
         assertTrue(w.federation.proposals.isEmpty() && w.federation.assembled == 1 && w.federation.stats(1) != null)
-        assertTrue(w.news.all.none { it.kind.startsWith("federation") || it.kind.startsWith("league_") || it.kind == "national_reform" })
+        // (The news desk's league upsets are any league's.)
+        assertTrue(w.news.all.none { it.kind.startsWith("federation") || it.kind.startsWith("league_") && it.kind != "league_upset" || it.kind == "national_reform" })
         assertEquals(yacht.engine.league.ClubBook.CLUB_LEAGUE, w.clubs!!.format)
         assertTrue(w.plan!!.comps.any { it.comp == Comp.CLUB })
         val back = LeagueWorld.decode(files, w.ladder.keys, emptyList(), config)
@@ -510,5 +512,54 @@ class LeagueWorldTest {
         // A season not being closed has none.
         w.plan!!.closing = null
         assertEquals(null, LeagueWorld.decode(w.encodeFiles(), w.ladder.keys, emptyList()).plan!!.closing)
+    }
+
+    /**
+     * A national season's review learns at the close the league ranking's moves and the 요트협회's
+     * decisions, and at the open its transfers abroad; its leaders come with it. The feed's lines
+     * lead to their matches, and the news desk's lines go with the news.
+     */
+    @Test
+    fun aNationalSeasonsReviewLearnsItsRankingDecisionsAndTransfers() {
+        val config = LeagueConfig.DEFAULT.copy(generated = 420, leagueMin = 20, divisionSize = 16, transfers = 10, nationCup = false)
+        val run = WorldRun(config)
+        run.w.openFirstSeason(9L)
+        val closings = ArrayList<LeagueWorld.Closing>()
+        for (s in 1..2) {
+            run.play()
+            run.beforeClose()
+            closings += run.rollover(config).first
+        }
+        // Every `m` line of the feed carries its fixture's id and board.
+        val feed = run.w.ladder.encode().lines().filter { it.startsWith("m ") }
+        assertTrue(feed.isNotEmpty() && feed.all { it.substringAfterLast(' ').matches(Regex("#\\d+:\\d+")) }, feed.take(2).toString())
+        var moves = 0
+        var decided = 0
+        for ((i, c) in closings.withIndex()) {
+            val n = i + 1
+            val r = assertNotNull(run.w.archive.review(n), "review $n")
+            assertTrue(r.leaders.isNotEmpty() && r.numbers.isNotEmpty())
+            // The biggest climbers, then the biggest fallers, as the close published them.
+            val rows = c.ranking.rows.filter { it.change != 0 }
+            val want = rows.filter { it.change > 0 }.sortedWith(compareByDescending<yacht.engine.league.LeagueRank> { it.change }.thenBy { it.rank }).take(LeagueWorld.REVIEW_MOVES) +
+                rows.filter { it.change < 0 }.sortedWith(compareBy<yacht.engine.league.LeagueRank> { it.change }.thenBy { it.rank }).take(LeagueWorld.REVIEW_MOVES)
+            assertEquals(want.map { it.id to it.change }, r.ranking)
+            moves += r.ranking.size
+            // Every proposal voted on during the season, as decided (or made void at the open).
+            val proposals = run.w.federation.of(n - 1).filter { !it.pending }
+            assertEquals(proposals.map { "‘${it.title}’" }, r.federation.map { it.substringBeforeLast(' ') })
+            assertTrue(r.federation.all { it.endsWith(" 가결") || it.endsWith(" 부결") || it.endsWith(" 무효") }, r.federation.toString())
+            decided += proposals.size
+            assertEquals(run.w.clubs!!.moved(n, yacht.engine.league.ClubMoveType.ABROAD).size, r.transfers)
+        }
+        assertTrue(moves > 0 && decided > 0, "moves $moves, decided $decided")
+        // The desk's pending lines are saved with the news and read back.
+        val files = run.w.encodeFiles()
+        val news = files.getValue(LeagueWorld.NEWS)
+        assertTrue(news.lines().any { it.startsWith("desk ") }, news.takeLast(200))
+        val back = run.read(files)
+        assertEquals(run.w.desk.encode(), back.desk.encode())
+        assertEquals(run.w.news.all, back.news.all)
+        assertTrue(run.w.news.all.any { it.scope.isNotEmpty() } && run.w.news.all.any { it.ref != null })
     }
 }
