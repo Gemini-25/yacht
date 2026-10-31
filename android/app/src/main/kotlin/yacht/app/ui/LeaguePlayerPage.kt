@@ -653,8 +653,10 @@ private fun RatingTrend(p: PlayerPage) {
     val cs = MaterialTheme.colorScheme
     SectionLabel("⭐ 평점 추이")
     if (t.size >= 2) LineChart(t.map { it.second }, labels = "시즌 ${t.first().first}" to "시즌 ${t.last().first}")
+    // The last point is this season's while it runs (no season line yet), else the latest season closed.
+    val running = p.profile.lines.none { it.season == t.last().first }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("최근 시즌 평균 ", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        Text(if (running) "이번 시즌 평균 " else "최근 시즌 평균 ", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         RatingText(t.last().second, digits = 2, tagged = true, style = MaterialTheme.typography.labelMedium)
         t.maxByOrNull { it.second }?.takeIf { t.size >= 2 && it.first != t.last().first }?.let { (s, r) ->
             Text("  · 최고 ", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
