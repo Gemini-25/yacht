@@ -15,6 +15,7 @@ import yacht.app.ui.MatchReportBody
 import yacht.app.ui.WatchActions
 import yacht.app.ui.WatchBody
 import yacht.engine.RuleSet
+import yacht.engine.explain.Ko
 import yacht.engine.league.Comp
 import yacht.engine.league.Origin
 import yacht.engine.league.SeasonMatch
@@ -164,7 +165,7 @@ internal object ShotsWatch : LeagueShots {
         lg.watch?.takeIf { it.message == null && it.steps.isNotEmpty() }?.let { w ->
             val names = top.take(10).map { it.name }
             shotOf(out, "lg66b_countdown", heightDp = 1300) {
-                WatchBody(w.copy(shown = w.steps.size, complete = true, playing = true, queue = BroadcastQueue(1, 6, "요트컵 8강, ${names.getOrElse(2) { "김민준" }} 대 ${names.getOrElse(3) { "이서연" }}이에요", 3)), rules, WatchActions())
+                WatchBody(w.copy(shown = w.steps.size, complete = true, playing = true, queue = BroadcastQueue(1, 6, "요트컵 8강, ${names.getOrElse(2) { "김민준" }} 대 ${Ko.ieyo(names.getOrElse(3) { "이서연" })}", 3)), rules, WatchActions())
             }
             shotOf(out, "lg66c_watch_team", heightDp = 1300) {
                 WatchBody(
