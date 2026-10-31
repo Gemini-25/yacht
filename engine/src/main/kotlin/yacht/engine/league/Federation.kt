@@ -36,7 +36,7 @@ enum class Lever(val key: String, val label: String) {
  * at the default division size, inside the SIZE kinds' dead band.
  */
 enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Double, val structureFree: Boolean = false) {
-    /** Many promoted players go straight back down (elevator: about 20% with autoSwap 2, 37% with 3): autoSwap - 1. */
+    /** Many promoted players go straight back down (elevator: about 23% with autoSwap 2, 36% with 3): autoSwap - 1. */
     SWAP_DOWN(Lever.AUTO_SWAP, 0.38, 0.50),
 
     /** Few go back down and the 2부 champions outscore the 1부's middle: autoSwap + 1. */

@@ -1017,24 +1017,72 @@ shared with other builds. **RunCheck `size`** plays new leagues of the app's def
 fixed seed for 3 seasons at FULL speed, stopping after each close, and reads the folder after the
 close's saves; it also times a fixed reference workload, since the shared machine's speed drifts
 (its `ref` was 3.05-3.20 s when the baseline was recorded and 3.3-4.9 s now). The baseline
-(`uicheck/src/main/resources/size_baseline.txt`) was recorded on the 945de5e engine.
+(`uicheck/src/main/resources/size_baseline.txt`) was recorded on the 945de5e engine at 200 and
+1000 players. It has no 3000-player league, so the same RunCheck on the 945de5e engine (S2's tree)
+was run again at 3000, and at 1000 for a same-day comparison.
 
-| | 200 players: baseline → now | 1000 players: baseline → now |
-|---|---|---|
-| folder after 3 seasons | 478,915 → 407,905 B (−15%) | 2,191,785 → 1,580,207 B (−28%) |
-| 30-season projection | 666,355 → 693,985 B (+4.1%, see below) | 2,770,875 → 2,320,697 B (−16%) |
-| CPU a season (process) | 66.0 → 57.6 s (−13%) | 176.0 → 150.2 s (−15%) |
-| CPU per reference | 20.6 → 13.0 (−37%) | 57.7 → 35.3 (−39%) |
+| | 200: baseline → now | 1000: baseline → now | 3000: 945de5e today → now |
+|---|---|---|---|
+| folder after 3 seasons | 478,915 → 407,905 B (−15%) | 2,191,785 → 1,580,207 B (−28%) | 6,675,303 → 4,902,474 B (−27%) |
+| 30-season projection | 666,355 → 693,985 B (+4.1%, see below) | 2,770,875 → 2,320,697 B (−16%) | 8,198,853 → 6,580,824 B (−20%) |
+| CPU a season (process) | 66.0 → 57.6 s (−13%) | 176.0 → 150.2 s (−15%) | 673.2 → 498.6 s (−26%) |
+| CPU per reference | 20.6 → 13.0 (−37%) | 57.7 → 35.3 (−39%) | 162 → 118 (−27%) |
 
+- **Against ENG 8** (the design's estimate: −25% of the match work a season at 1000 players, −18%
+  at 3000): the 945de5e engine measured the same day took 220 s a season at 1000 players (ref
+  4.54 s), so the new one is −32% in seconds and −27% per reference there, and −26% / −27% at 3000.
+  The first season of each run is the dearest (the AIs and their tables are built: 161 / 589 s new,
+  264 / 787 s old at 1000 / 3000).
 - Where the bytes went at 1000 players: ladder.txt −689 KB (about 20 league opponents twice
   instead of about 49 once: fewer pairs), clubs.txt +20 KB, archive.txt +25 KB (the `sx` lines and
   the kept reviews), matchlogs.bin +14 KB, news.txt +9 KB (refs, scope, the desk's lines),
-  federation.txt +2.5 KB, roster +5 KB.
+  federation.txt +2.5 KB, roster +5 KB. At 3000: ladder.txt −1.92 MB, archive.txt +59 KB, clubs.txt
+  +55 KB (ENG 8.2: about 62), matchlogs.bin +26 KB, news.txt +10 KB, federation.txt +2.5 KB,
+  honours.txt −9 KB (28 leagues' titles instead of the pyramid's groups); season.txt after the open
+  is the same size (185 KB).
+- ladder.txt is not in the projection (RunCheck counts archive.txt, honours.txt and matchlogs.bin):
+  its pair table grows while new pairs meet, now about half as fast (1000 players: +129 then
+  +82 KB a season, 945de5e +268 then +242 KB; 3000: +488 then +408 KB, 945de5e +955 then +723 KB).
 - **The 200-player projection** (the folder after season 3 plus 30 times season 3's growth of
   archive.txt, honours.txt and matchlogs.bin) is above the gate's +3% margin. The growth it
-  extrapolates is not a steady one: archive.txt grows 6.5 KB from season 2 to 3 while its kept
-  reviews fill up (3 below 500 members, about 2 KB each), then about 3.3 KB a season like the
-  baseline's 3.2 KB (an 8-season probe with made-up results: +5.0, +4.9, then +3.0-3.7 KB; the
-  part without the reviews +3.1-3.4 KB every season). With the steady growth the projection is
-  about 600 KB (−10%).
+  extrapolates is not a steady one: archive.txt grows 6.5-6.7 KB a season while its kept reviews
+  fill up (3 below 500 members, about 2 KB each), then 3-4 KB like the baseline's 3.2 KB. Played
+  for 6 seasons (RunCheck with `SIZE_SEASONS` 6, a local change), archive.txt grows +6.5, +6.7,
+  +3.9, +3.6, +2.9 KB; the folder is 451 KB after season 6 and the projection from season 6 is
+  579 KB (−13% against the baseline's 666 KB); the CPU 88, 62, 59, 50, 49, 47 s a season (ref
+  4.11 s).
 
+**Stress** (`stress/`: the app's controllers on a plain JVM under a 512 MB heap, a person's ranked
+games, watching, the league's pages, their AIs, backups and going to the background at random
+while the league plays at FULL; `stress ../tables <minutes> <seed> <players> FULL`):
+
+| | 1000 players, 15 min (seed 1) | 3000 players, 25 min (seed 2) |
+|---|---|---|
+| seasons, failures | 10, none | 4 (the first at 1000, then grown to 3000), none |
+| a season: wall / process CPU / matches | 50-136 s / 181-359 s / 19.5-20.7k | 252-284 s / 649-693 s / 64-67k (the season that grew the league: 683 s / 1,754 s) |
+| heap: peak / live after a GC | 372 / 99 MB | 462 / 148 MB |
+| lock held to record a match (avg / max) | 0.29 / 250 ms | 0.30 / 244 ms |
+| lock held for a rollover | 0.44 / 0.74 s | 1.31 / 1.98 s |
+| lock held to save | 0.11 / 0.51 s | 0.19 / 0.51 s |
+| lock held for a snapshot | 12 / 133 ms | 26 / 446 ms |
+| season.txt at its largest | 756 KB | 2.48 MB |
+
+- v4's stress (DESIGN.md, the 945de5e engine): 7 seasons in 15 min at 1000 players, 8 in 20 min
+  at 3000, live heap 72 / 150 MB; at 3000 a rollover 0.55 / 0.66 s, a save 0.10 / 0.24 s, a
+  snapshot 12 / 74 ms. The seasons at 3000 took longer here on a busier machine (load 5-9 from
+  another stage's builds; RunCheck's same-day comparison above is the fair one), but the rollover
+  and the snapshot under the lock are about twice v4's at 3000 players.
+- **season.txt** at its largest (just before the close): 756 KB at 1000 players (the `r` lines
+  550 KB: 19.5k results at 28.2 B; `pos` 106 KB, `standing` 50 KB, the knockouts' and playoffs'
+  `e` entries 17 KB) and 2.48 MB at 3000 (`r` 1.87 MB for 65.2k results, `pos` 367 KB, `standing`
+  155 KB, `e` 54 KB). That is below today's 0.95-0.98 MB and about 2.8 MB (−20% to −23% and −11%)
+  but 8-10% above ENG 8.2's 0.69 MB and 2.3 MB, which counted the league results at 27 B and left
+  out the cups' results and the `e` lines.
+- No exception in either run. The harness reports state written off the main thread by the match
+  centre's step publisher (`MatchCenter.publishSteps`, `show`, `waits` on a background
+  dispatcher: 68 and 130 writes) besides the controllers' constructors, and one action that held
+  the main thread over 100 ms (`changeObjective`, 366 ms).
+- The federation through the app (federation on): at 1000 players the ten assemblies tabled 0, 1,
+  1, 0, 1, 0, 1, 2, 2, 2 proposals and the committee adopted 2 of 8 (clDirect 7 → 8, the title
+  playoff off); at 3000 the season after the league grew from 1000 pressed SWAP_UP at 1.49 (5 of
+  78 promoted went back down) and adopted autoSwap 3.
