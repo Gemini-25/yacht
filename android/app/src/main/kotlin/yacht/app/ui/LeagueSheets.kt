@@ -91,10 +91,57 @@ internal fun LeagueSheets(c: AppController, v: LeagueView?, onReset: () -> Unit)
         Sheet.LADDER_FILTER -> v?.let { LeagueSheet("선수 필터", close) { LadderFilterSheet(lg, it) } }
         Sheet.RATING_INFO -> LeagueSheet("레이팅과 티어", close) { RatingInfo() }
         Sheet.STAGE -> StageSheet(lg)
-        // The league selector (S10), the leaderboards' and the ranking's filters, a player's actions: later.
+        Sheet.LEAGUES -> v?.season?.let { LeagueSelectorSheet(lg, v, it) }
+        // The leaderboards' and the ranking's filters, a player's actions: later.
         else -> {}
     }
 }
+
+/**
+ * 리그 고르기 (UX 1.7): ★ 응원 (the followed leagues), 국가 리그 by the league ranking and 연합
+ * 리그, each a line on its ranking, players, tiers and continental places; a tap shows that league
+ * at a followed player's tier there (else its 1부).
+ */
+@Composable
+private fun LeagueSelectorSheet(lg: yacht.app.core.LeagueController, v: LeagueView, season: yacht.app.core.SeasonView) {
+    val nav = lg.nav
+    val close = { nav.sheet = Sheet.NONE }
+    val sections = remember(season.leagues) { yacht.app.core.LeagueSelector.sections(season.leagues) }
+    LeagueSheet("리그 고르기", close) {
+        if (sections.isEmpty()) SheetNote("이번 시즌은 리그가 하나예요.")
+        for ((title, infos) in sections) {
+            SheetHeading(title)
+            for (info in infos) {
+                SheetChoice(selectorTitle(info), selectorLine(info), info.id == season.league) {
+                    val favs = lg.favourites
+                    val tier = v.rows.filter { it.key in favs && it.league == info.id }.mapNotNull { r -> r.division?.minus(info.first) }.minOrNull()
+                    nav.selectLeague(info.id, tier ?: 0)
+                    close()
+                }
+            }
+        }
+        if (sections.isNotEmpty()) {
+            SheetNote(
+                "나라마다 자기 리그에서 뛰고, 선수가 적은 나라는 대륙별 연합 리그에 모여요. 리그 랭킹은 국제 대회 성적(국제 성적 점수)으로 매기고, " +
+                    "첫 국가 리그 시즌은 리그마다 상위 5명의 레이팅으로 매겨요.",
+            )
+        }
+    }
+}
+
+/** A league's line title in the selector: "1위 🇰🇷 한국 리그"; a 연합 리그 by its icon and name. */
+private fun selectorTitle(info: yacht.app.core.LeagueInfo): String =
+    if (info.union) "${info.icon} ${info.label}" else (info.rank?.let { "${it}위 " } ?: "") + "${info.icon} ${info.label}"
+
+/** A league's line in the selector: its 국제 성적 점수 (once it has one), players, tiers and next season's places. */
+private fun selectorLine(info: yacht.app.core.LeagueInfo): String = listOfNotNull(
+    info.coefficient?.takeIf { !info.union }?.let { "국제 성적 점수 ${String.format(java.util.Locale.ROOT, "%.3f", it)}" },
+    "${info.nations}개국".takeIf { info.union },
+    "선수 ${"%,d".format(info.members)}명",
+    "${info.tiers}개 부",
+    "대륙 챔피언스 ${info.cclSlots}장".takeIf { info.cclSlots > 0 },
+    "챔스 직행".takeIf { info.clDirect },
+).joinToString(" · ")
 
 /**
  * A bottom sheet drawn inside the league screen (so a screenshot renders it and back closes it

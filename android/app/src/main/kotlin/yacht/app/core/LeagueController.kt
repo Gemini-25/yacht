@@ -77,6 +77,13 @@ import yacht.engine.league.LeagueRoster
 import yacht.engine.league.Matchmaker
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.Tier
+import yacht.engine.league.Coefficients
+import yacht.engine.league.HonourKind
+import yacht.engine.league.LeagueIds
+import yacht.engine.league.LeagueRanking
+import yacht.engine.league.MemoryCoefficients
+import yacht.engine.league.Pyramid
+import yacht.engine.league.Season
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.Random
@@ -205,6 +212,8 @@ class LeagueController(
     val nav: LeagueNav = LeagueNav {
         shownLeague = nav.league
         publish(force = true)
+        // The odds of a league picked now come at once (while the league runs, the upkeep keeps them).
+        scope.launch(Dispatchers.Default) { runCatching { refreshOdds() } }
     }
 
     /** [nav]'s league, for the snapshot off the main thread. */
@@ -355,7 +364,10 @@ class LeagueController(
         }
 
         override fun badge(key: String): ClubBadge? = null
-        override fun leagueLabel(key: String): String? = null
+
+        // A national season's league by name ("한국 리그"); none in a legacy season (its divisions say "3부" alone).
+        override fun leagueLabel(key: String): String? =
+            synchronized(lock) { world?.plan?.league?.leagueOf(key) }?.takeIf { it.national }?.let { LeagueIds.label(it.id) }
         override fun favourites(): Set<String> = favourites
         override fun view(): LeagueView? = view
         override fun running(): Boolean = running
@@ -491,7 +503,7 @@ class LeagueController(
             // The rules just read (the controller's own reach the screen below).
             configureWorld(w, cfg)
             legendAis.clear()
-            oddsNow = null
+            oddsNow = emptyMap()
         }
         val first = !loaded.isCompleted
         loaded.complete(Unit)
@@ -851,7 +863,7 @@ class LeagueController(
                         when {
                             why != null -> stopReason = why
                             week != null -> weekDone = week
-                            else -> stopReason = "리그가 저절로 멈췄어요. ‘이어서’를 누르면 다시 해요."
+                            else -> stopReason = "리그가 저절로 멈췄어요. ▶를 누르면 다시 해요."
                         }
                         scope.launch {
                             withContext(kotlinx.coroutines.NonCancellable) { save() }
@@ -961,15 +973,18 @@ class LeagueController(
     }
 
     /**
-     * The division of [w]'s season a new season opens on (under the lock): the first with one of
-     * [favs], else 1부; as its tier and group, null without a season.
+     * The division of [w]'s season a new season opens on (under the lock): in the league it shows
+     * ([shownOf]: in a national season the one picked, else a followed player's), the first with
+     * one of [favs], else its 1부; as its tier and group there, null without a season.
      */
     private fun followedDivision(w: LeagueWorld, favs: Set<String>): Pair<Int, Int>? {
-        val s = w.plan?.league ?: return null
-        if (s.divisions.isEmpty()) return null
-        val tiers = s.tiers.takeIf { it.size == s.divisions.size } ?: yacht.engine.league.Tiers.linear(s.divisions.size)
-        val d = s.divisions.indices.firstOrNull { i -> s.divisions[i].any { it in favs } } ?: 0
-        return tiers.tier(d) to tiers.group(d)
+        val p = w.plan ?: return null
+        val s = p.league
+        // The default league of these favourites (after a restore, the backup's, not the ones still in memory).
+        val lg = shownOf(p, selector(p, favs))?.let { s.leagues.byId(it) } ?: return null
+        if (lg.size == 0) return null
+        val d = lg.divisions.firstOrNull { i -> s.divisions[i].any { it in favs } } ?: lg.first
+        return lg.tiers.tier(d - lg.first) to lg.tiers.group(d - lg.first)
     }
 
     /**
@@ -1084,6 +1099,8 @@ class LeagueController(
             } finally {
                 synchronized(lock) {
                     if (!recorded && job.comp != Comp.FRIENDLY) world?.release(job)
+                    // A competition's view may have moved (see CompsKey).
+                    if (recorded && job.comp != Comp.LEAGUE && job.comp != Comp.FRIENDLY && job.comp != Comp.LAB) compResults++
                     if (job.comp == Comp.LAB) labInFlight-- else {
                         busy -= job.players.toSet()
                         live.remove(job.a to job.b)
@@ -1202,7 +1219,7 @@ class LeagueController(
     }
 
     private fun reasonOf(e: Throwable): String =
-        "리그가 오류로 멈췄어요: ${e.javaClass.simpleName}${e.message?.let { ": " + it.take(120) } ?: ""}. ‘이어서’를 누르면 다시 해 봐요."
+        "리그가 오류로 멈췄어요: ${e.javaClass.simpleName}${e.message?.let { ": " + it.take(120) } ?: ""}. ▶를 누르면 다시 해 봐요."
 
     private fun clearResume() {
         scope.launch(fileWrites) { runCatching { resumeFile.delete() } }
@@ -1266,24 +1283,84 @@ class LeagueController(
         scope.launch { onError(IllegalStateException(found)) }
     }
 
-    /** The latest 우승·승강 확률, made off the lock at most every 10% of the season. */
+    /**
+     * The latest 우승·승강 확률 by league ("" for a legacy season's one league), each made off the
+     * lock at most every 10% of the season: in a national season of at most [ODDS_LEAGUES] leagues,
+     * the one shown first, then the followed players' by rank ([oddsLeagues]).
+     */
     @Volatile
-    private var oddsNow: OddsTable? = null
+    private var oddsNow: Map<String, OddsTable> = emptyMap()
 
-    private fun refreshOdds(force: Boolean = false) {
-        var seed = 0L
-        val input = synchronized(lock) {
+    /** [oddsNow] is replaced under this (a refresh's tables come in one by one). */
+    private val oddsLock = Any()
+
+    /** A refresh of [oddsNow] is running, and another was asked for meanwhile ([refreshOdds]). */
+    private val oddsRunning = AtomicBoolean(false)
+    private val oddsAgain = AtomicBoolean(false)
+
+    /**
+     * Brings [oddsNow] up to date, one refresh at a time: the upkeep and every league picked ask
+     * for one, and a request while one runs makes it go round once more (for the leagues wanted
+     * then) instead of running the same leagues' odds side by side.
+     */
+    private fun refreshOdds() {
+        oddsAgain.set(true)
+        while (oddsAgain.get() && oddsRunning.compareAndSet(false, true)) {
+            try {
+                while (oddsAgain.getAndSet(false)) refreshOddsOnce()
+            } finally {
+                oddsRunning.set(false)
+            }
+        }
+    }
+
+    private fun refreshOddsOnce() {
+        var from: LeagueWorld? = null
+        var wanted: List<String> = emptyList()
+        val jobs = synchronized(lock) {
             val w = world ?: return
             val p = w.plan ?: return
-            val o = oddsNow
-            if (!force && o != null && !o.stale(p.league)) return
-            // From the season's seed and progress: the same league gives the same odds.
-            seed = p.seed xor p.league.fixturesPlayed.toLong()
-            Odds.input(p, { k -> w.rating(k) })
+            from = w
+            wanted = oddsLeagues(p)
+            val now = oddsNow
+            wanted.mapNotNull { id ->
+                val o = now[id]
+                if (o != null && !o.stale(p.league)) return@mapNotNull null
+                // From the season's seed and progress (and the league): the same league gives the same odds.
+                val seed = p.seed xor p.league.fixturesPlayed.toLong() xor (if (id.isEmpty()) 0L else LeagueIds.code(id).toLong() shl 48)
+                val input = if (p.league.leagues.national) Odds.input(p, { k -> w.rating(k) }, id) else Odds.input(p, { k -> w.rating(k) })
+                Triple(id, seed, input)
+            }
         }
-        val table = runCatching { Odds.run(input, Odds.runsFor(Odds.left(input)), seed) }.getOrNull() ?: return
-        oddsNow = table
-        publish()
+        for ((id, seed, input) in jobs) {
+            val table = runCatching { Odds.run(input, Odds.runsFor(Odds.left(input)), seed) }.getOrNull() ?: continue
+            synchronized(oddsLock) {
+                // Not over a league that replaced the one these are of (a reset, a restore).
+                if (world !== from) return
+                oddsNow = oddsNow.filterKeys { it in wanted } + (id to table)
+            }
+            // The shown league's first: it need not wait for the followed ones.
+            publish()
+        }
+    }
+
+    /**
+     * The leagues whose odds are kept (under the lock): a legacy season's one; else the league shown,
+     * then the followed players' leagues by rank, at most [ODDS_LEAGUES].
+     */
+    private fun oddsLeagues(p: SeasonPlan): List<String> {
+        val s = p.league
+        if (!s.leagues.national) return listOf(LeagueIds.LEGACY)
+        val sel = selector(p)
+        val shown = shownOf(p, sel) ?: return emptyList()
+        val followed = favourites.mapNotNull { s.leagueOf(it)?.id }.distinct().sortedBy { sel.rank(it) }
+        return (listOf(shown) + followed).distinct().take(ODDS_LEAGUES)
+    }
+
+    /** [p]'s odds table of league [id] (a legacy season's for any id), when it is of this season. */
+    private fun oddsOf(p: SeasonPlan, id: String?): OddsTable? {
+        val key = if (p.league.leagues.national) id ?: return null else LeagueIds.LEGACY
+        return oddsNow[key]?.takeIf { it.season == p.number }
     }
 
     /** The full fit of the ladder when it changed since the last one; the lock is held only to copy and to apply. */
@@ -1304,7 +1381,8 @@ class LeagueController(
     }
 
     /** Knockout and group competitions (capped so the league always has a worker). */
-    private fun isCup(c: Comp) = c == Comp.CUP || c == Comp.CHAMPIONS || c == Comp.SUPER || c == Comp.TITLE_PLAYOFF || c == Comp.PROMOTION_PLAYOFF
+    private fun isCup(c: Comp) =
+        c == Comp.CUP || c == Comp.CHAMPIONS || c == Comp.CONT_CHAMPIONS || c == Comp.SUPER || c == Comp.TITLE_PLAYOFF || c == Comp.PROMOTION_PLAYOFF
 
     /** Updates each AI's ms per game from a finished job (half of each game's time per side). */
     private fun meter(r: JobResult) {
@@ -1455,7 +1533,7 @@ class LeagueController(
         lastDelta.clear()
         startRanks = emptyMap()
         legendAis.clear()
-        oddsNow = null
+        oddsNow = emptyMap()
     }
 
     /** Forgets every result and season (my AIs and the built tables stay). */
@@ -1876,6 +1954,7 @@ class LeagueController(
         val ranking = l.ranking().filter { it != Ladder.ME || l.entry(it)!!.games > 0 }
         val ids = world?.players?.alive?.associate { it.key to it.identity }.orEmpty()
         val season = s?.number ?: 1
+        val leagues = s?.league?.leagues
         val all = ranking.mapNotNull { k ->
             val me = k == Ladder.ME
             val ai = byKey[k]
@@ -1883,6 +1962,7 @@ class LeagueController(
             val e = l.entry(k)!!
             val rank = l.rankOf(k)
             val rating = l.rating(k)
+            val d = s?.league?.divisionOf(k)
             LadderRow(
                 k, name(k), ai?.family ?: Family.MINE, ai?.desc ?: "랭크전으로 매긴 내 레이팅", ai?.heavy ?: false, rank,
                 rating.takeIf { !it.isNaN() }?.roundToInt(),
@@ -1890,10 +1970,11 @@ class LeagueController(
                 l.tier(k), e.games, e.wins, e.ties, e.losses, e.winRate, e.avgScore, e.best, e.yachts, e.bonuses,
                 // The rating history is read with the profile (thousands of rows, every snapshot).
                 e.streak, e.bestStreak, e.recent.joinToString(""), emptyList(), e.peak.takeIf { !it.isNaN() }?.roundToInt(),
-                lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, s?.league?.divisionOf(k),
+                lastDelta[k] ?: 0, rank?.let { r -> startRanks[k]?.let { it - r } }, k in busy, me, d,
                 Origin.of(k), world?.hometown(k) ?: "",
                 ids[k]?.nation ?: "", ids[k]?.let { Nations.of(it.nation)?.flag } ?: "", ids[k]?.let { id -> world?.players?.get(k)?.let { p -> id.age(season, p.born) } },
-                divisionLabel = s?.league?.let { league -> league.divisionOf(k)?.let { league.tiers.label(it) } },
+                divisionLabel = d?.let { leagues?.label(it) },
+                league = d?.let { leagues?.of(it)?.id }.orEmpty(),
             )
         }
         // A league of generated players only: the hand-made AIs (still there for ranked games
@@ -1911,11 +1992,16 @@ class LeagueController(
                 m.comp, m.label, m.week, m.season,
             )
         }
-        // A view equal to the last one is handed over as the same object, so the screen skips it.
-        val comps = s?.let { runCatching { Competitions.views(it) }.getOrNull() }.orEmpty()
-            .map { c -> lastComps.firstOrNull { it == c } ?: c }
-            .let { if (it == lastComps) lastComps else it }
+        // Built again only when a competition can have moved (a result, a new week, a new stage);
+        // a view equal to the last one is handed over as the same object, so the screen skips it.
+        val compsKey = s?.let { CompsKey(it, compResults, it.week, it.comps.size, it.post.size, it.postStarted) }
+        val comps = if (compsKey != null && compsKey == lastCompsKey) lastComps else {
+            s?.let { runCatching { Competitions.views(it) }.getOrNull() }.orEmpty()
+                .map { c -> lastComps.firstOrNull { it == c } ?: c }
+                .let { if (it == lastComps) lastComps else it }
+        }
         lastComps = comps
+        lastCompsKey = compsKey
         val clubs = world?.clubs?.let { b ->
             val cl = s?.competition(Comp.CLUB) as? ClubLeague
             clubNames = b.clubs.associate { it.id to it.name }
@@ -1954,6 +2040,17 @@ class LeagueController(
 
     /** The last snapshot's views (reused when equal: see [snapshot]); under the lock. */
     private var lastComps: List<Pair<Comp, CompetitionView>> = emptyList()
+    private var lastCompsKey: CompsKey? = null
+
+    /**
+     * What a season's competition views move with: its results besides the league's ([compResults]),
+     * its week (stages open with it) and its competitions (the post-season's are added at the end of
+     * the league). The plan compares by identity.
+     */
+    private data class CompsKey(val plan: SeasonPlan, val results: Long, val week: Int, val comps: Int, val post: Int, val postStarted: Boolean)
+
+    /** Results recorded for the competitions besides the league (friendlies and the lab not counted); under the lock. */
+    private var compResults = 0L
     private var lastClubs: ClubsView? = null
     private var lastHistory: List<SeasonHistoryItem> = emptyList()
     private var historyFor = -1
@@ -1972,13 +2069,51 @@ class LeagueController(
         return lastHistory
     }
 
+    /** [selector]'s last result and what it was built from (under the lock). */
+    private var selectorBuilt: LeagueSelector.Built? = null
+    private var selectorFor: Triple<Season, LeagueRanking, Set<String>>? = null
+
+    /**
+     * [p]'s league selector (under the lock) for favourites [favs]: its leagues, each nation's league
+     * and the default, built again only when the season, its ranking or the favourites change (a few
+     * dozen rows).
+     */
+    private fun selector(p: SeasonPlan, favs: Set<String> = favourites): LeagueSelector.Built {
+        val was = selectorFor
+        selectorBuilt?.let { b -> if (was != null && was.first === p.league && was.second === p.ranking && was.third == favs) return b }
+        val w = world
+        val b = LeagueSelector.build(
+            p.league, p.ranking, p.config, favs,
+            nation = { k -> w?.players?.get(k)?.identity?.nation },
+            rating = { k -> w?.rating(k) ?: Double.NaN },
+            clubNation = { id -> w?.clubs?.nationOf(id) },
+        )
+        selectorBuilt = b
+        selectorFor = Triple(p.league, p.ranking, favs)
+        return b
+    }
+
+    /** The league [p] shows (under the lock): the one picked while this season has it, else the default; null without leagues. */
+    private fun shownOf(p: SeasonPlan, sel: LeagueSelector.Built = selector(p)): String? {
+        val leagues = p.league.leagues
+        if (!leagues.national) return leagues.list.firstOrNull()?.id
+        return shownLeague?.takeIf { leagues.byId(it) != null } ?: sel.default.takeIf { leagues.byId(it) != null } ?: leagues.list.firstOrNull()?.id
+    }
+
+    /**
+     * The season for 순위 › 리그 (under the lock): the shown league's tables only (a legacy season's
+     * one league: every division), with the zones as the off-season will read them on today's
+     * tables, its odds, its newcomers and the selector's leagues.
+     */
     private fun seasonView(p: SeasonPlan): SeasonView {
         val s = p.league
-        // The zones as the off-season will read them, on today's tables.
+        val sel = selector(p)
+        val lg = shownOf(p, sel)?.let { s.leagues.byId(it) }
+        val national = s.leagues.national
         val zone = HashMap<String, Int>()
         var swap = 0
-        for (t in 0 until s.tiers.count - 1) {
-            val c = yacht.engine.league.Pyramid.crossing(s, p.config, t)
+        if (lg != null) for (t in 0 until lg.tiers.count - 1) {
+            val c = Pyramid.crossing(s, p.config, lg, t)
             if (t == 0) swap = c.swap
             for (k in c.up) zone[k] = 1
             for (k in c.down) zone[k] = -1
@@ -1989,24 +2124,36 @@ class LeagueController(
         }
         val book = world?.players
         fun shown(k: String) = book?.get(k)?.identity?.nation?.let { Nations.of(it)?.flag }?.let { "$it ${name(k)}" } ?: name(k)
-        val divisions = s.divisions.indices.map { d ->
-            val table = s.table(d)
-            table.mapIndexed { i, st ->
+        val odds = oddsOf(p, lg?.id)
+        val range = lg?.divisions ?: IntRange.EMPTY
+        val divisions = range.map { d ->
+            s.table(d).map { st ->
                 SeasonRow(
                     st.key, shown(st.key), st.played, st.wins, st.draws, st.losses, st.points, st.diff, st.avgScore, st.yachts,
                     zone[st.key] ?: 0,
                     st.aggPoints,
-                    oddsNow?.takeIf { it.season == s.number }?.get(st.key),
+                    odds?.get(st.key),
                     st.sweeps,
                 )
             }
         }
         val inLeague = s.standings.keys
+        // Next season's newcomers: members not in this season (the rules keep the rest out); in a
+        // national season those of the shown league's nations, who join its last tier.
+        val newcomers = world?.members.orEmpty().filter { it !in inLeague }
+            .filter { k -> !national || sel.leagueOfNation(book?.get(k)?.identity?.nation ?: Nations.KR.code) == lg?.id }
+        // A national league's 1부 plays its own rounds over the season's weeks.
+        val top = lg?.top
         return SeasonView(
-            // Next season's newcomers: members not in this season (the rules keep the rest out).
-            s.number, s.fixturesPlayed, s.fixturesTotal, divisions, world?.members.orEmpty().filter { it !in inLeague }.map { name(it) },
+            s.number, s.fixturesPlayed, s.fixturesTotal, divisions, newcomers.map { name(it) },
             history(),
-            s.positions.map { it.toList() }, s.divisions, s.matchdays, s.currentMatchday, s.tiers, swap, s.format, p.config,
+            range.map { s.positions[it].toList() }, range.map { s.divisions[it] },
+            if (national && top != null) s.roundsOf(top) else s.matchdays,
+            if (national && top != null) minOf(s.positions[top].size, s.roundsOf(top)) else s.currentMatchday,
+            lg?.tiers ?: yacht.engine.league.Tiers.linear(0), swap, s.format, p.config,
+            leagues = sel.infos, league = lg?.id.orEmpty(), national = national, nextNational = config.national, bonus = s.bonus,
+            firstDivision = lg?.first ?: 0,
+            rounds = if (national) range.map { s.roundsOf(it) } else emptyList(),
         )
     }
 
@@ -2014,94 +2161,15 @@ class LeagueController(
     var profile by mutableStateOf<ProfileView?>(null)
         private set
 
-    /** Loads [key]'s profile into [profile]. */
+    /** Loads [key]'s profile into [profile] (as the player page reads it, [profileOf]). */
     fun loadProfile(key: String) {
         scope.launch(Dispatchers.Default) {
             val v = synchronized(lock) {
                 val w = world ?: return@synchronized null
-                val b = w.players
-                val alive = b[key]
-                val past = if (alive == null) b.retiredRecord(key) else null
-                fun nm(k: String?) = k?.let { name(it) }
-                ProfileView(
-                    key, name(key), Origin.of(key).let { if (past != null) past.origin else it }, alive?.hometown ?: past?.hometown ?: w.hometown(key),
-                    alive?.born ?: past?.born, past?.retired, b.legend(key) != null,
-                    b.ancestors(key).map { gen -> gen.map { nm(it) } }, b.descendants(key).map { gen -> gen.map { name(it) } },
-                    w.honours.of(key).sortedByDescending { it.season }, w.honours.titles(key),
-                    (alive?.spec ?: b.legend(key)?.spec)?.describe(),
-                ).let { pv -> matchups(key).let { (best, worst) -> pv.copy(best = best, worst = worst) } }.copy(
-                    season = w.stats.season(key)?.copy(), career = w.stats.career(key)?.copy(),
-                    league = runCatching { w.stats.liveMeta() }.getOrNull() ?: w.stats.meta,
-                    lines = w.archive.lines(key).sortedBy { it.season }, hallOfFame = w.archive.inHallOfFame(key),
-                    identity = runCatching { identityView(w, key) }.getOrNull(),
-                    ratingHistory = w.ladder.entry(key)?.history?.toList().orEmpty(),
-                )
+                profileOf(w, key, ::name)
             }
             scope.launch { profile = v }
         }
-    }
-
-    /** [key]'s identity view (under the lock), null for a player without one (base AIs and mine). */
-    private fun identityView(w: LeagueWorld, key: String): IdentityView? {
-        val b = w.players
-        val season = w.plan?.number ?: (b.evolvedSeason + 1)
-        val alive = b[key]
-        val legend = b.legend(key)
-        val past = if (alive == null) b.retiredRecord(key) else null
-        val id = alive?.identity ?: legend?.identity
-        val code = id?.nation ?: past?.nation ?: return null
-        val nat = Nations.of(code) ?: return null
-        val honours = w.honours.of(key)
-        val age = when {
-            alive != null && id != null -> id.age(season, alive.born)
-            past != null && past.retiredAge > 0 -> past.retiredAge
-            else -> null
-        }
-        val spec = alive?.spec ?: legend?.spec
-        val gene = spec?.play
-        val record = alive ?: legend?.asPlayer()
-        val chips = buildList {
-            when (spec?.mistake) {
-                yacht.engine.league.CustomMistake.FEEL -> add("🎲 감으로 두는 편")
-                yacht.engine.league.CustomMistake.SLIP -> add("🎯 가끔 실수")
-                yacht.engine.league.CustomMistake.NONE -> add("💎 실수 없음")
-                null -> {}
-            }
-            spec?.temper?.takeIf { it != yacht.engine.league.Temper.NONE }?.let { add("🌀 ${it.label}") }
-            spec?.belief?.let { add("🤔 " + (yacht.engine.league.CustomAiSpec.BELIEFS[it] ?: "규칙 착각")) }
-        }
-        val notes = buildList {
-            gene?.let { g ->
-                yacht.engine.league.PlayStyles.recipe(g.primary)?.let { add(it.desc) }
-                g.secondary?.let { s -> yacht.engine.league.PlayStyles.recipe(s)?.let { add("+${it.name}: ${it.desc}") } }
-                g.overlay?.let { o -> yacht.engine.league.PlayStyles.overlay(o)?.let { add("${it.name}: ${it.desc}") } }
-                // Its own tastes and situational habits (generator v2; none for older genes).
-                addAll(g.notes())
-            }
-        }
-        val cap = w.nations.cap(key)
-        val compatriots = b.alive.filter { it.identity?.nation == code }
-        val rank = if (alive == null) null else compatriots.map { it.key }.sortedByDescending { w.ladder.rating(it).takeIf { r -> !r.isNaN() } ?: 0.0 }.indexOf(key).takeIf { it >= 0 }?.plus(1)
-        val members = w.members.toSet()
-        return IdentityView(
-            nat.flag, code, nat.name, (id?.gender ?: past?.gender)?.label ?: "", age, age?.let { yacht.engine.league.Profiles.stage(it) }.takeIf { alive != null },
-            // A fixed age (영원히 현역) leaves no meaningful debut age.
-            id?.takeIf { it.fixedAge == null }?.debutAge ?: past?.debutAge?.takeIf { it > 0 },
-            nickname = record?.let { yacht.engine.league.Nicknames.of(it, honours, season) },
-            abilities = id?.abilities?.toList(),
-            change = if (alive != null && id != null) id.abilities.diff(id.lastAbl) else emptyList(),
-            peak = id?.peakAbl?.toList(),
-            // The ceiling it grows toward: never shown below what it already is.
-            potential = id?.let { maxOf(it.potential, it.abilities.overall) },
-            outlook = if (alive != null && id != null && age != null) yacht.engine.league.Profiles.outlook(id, age) else null,
-            tendencies = gene?.let { yacht.engine.league.Tendencies.of(it.style()).toList() },
-            style = gene?.label, styleNotes = notes, chips = chips,
-            school = yacht.engine.league.Schools.of(code).motto.takeIf { it.isNotEmpty() },
-            rival = w.ladder.rival(key, members)?.let { (o, p, g) -> Triple(name(o), p, g) },
-            caps = cap?.caps ?: 0, capTitles = cap?.titles ?: 0, capBoards = cap?.let { Triple(it.won, it.drawn, it.lost) },
-            nationRank = rank, nationPlayers = compatriots.size,
-            weeks = honours.count { it.kind == "POTW" },
-        )
     }
 
     /** The records room, archive and meta, read on request. */
@@ -2210,8 +2278,9 @@ class LeagueController(
                 for (r in b.retired) nationOf[r.key] = r.nation
                 for (l in b.legends) nationOf[l.key] = l.identity?.nation ?: l.record.nation
                 for (p in b.alive) nationOf[p.key] = p.identity?.nation ?: Nations.KR.code
-                val honours = w.honours.all.filter { nationOf[it.key] == code && it.kind in NATION_HONOURS }
-                    .groupingBy { it.kind }.eachCount().entries.sortedByDescending { it.value }.map { it.key to it.value }
+                // A national league's title ("L0.KR") counts as a 1부 title ("L0"), whichever league it was won in.
+                val honours = w.honours.all.filter { nationOf[it.key] == code && HonourKind.base(it.kind) in NATION_HONOURS }
+                    .groupingBy { HonourKind.base(it.kind) }.eachCount().entries.sortedByDescending { it.value }.map { it.key to it.value }
                 val legends = b.legends.filter { nationOf[it.key] == code }.reversed().take(10).map { l ->
                     NationPlayer(l.key, l.name, "시즌 ${l.record.born}–${l.record.retired}" + if (l.record.titles > 0) " · 우승 ${l.record.titles}회" else "")
                 }
@@ -2299,7 +2368,7 @@ class LeagueController(
                 val met = l.opponents(a).firstOrNull { it.first == b }?.let { (_, p, g) -> p / g to g }
                 CompareView(
                     a, b, name(a), name(b),
-                    runCatching { identityView(w, a) }.getOrNull(), runCatching { identityView(w, b) }.getOrNull(),
+                    runCatching { identityOf(w, a, ::name) }.getOrNull(), runCatching { identityOf(w, b, ::name) }.getOrNull(),
                     lines, met,
                 )
             } ?: return@launch
@@ -2441,8 +2510,18 @@ class LeagueController(
                 val w = world ?: return@synchronized null
                 val season = w.plan?.league
                 val profiles = profilesOf(w)
+                // The odds of their league (a national season keeps a few leagues' odds); two sides
+                // of two leagues (대륙 챔피언스) each with their own league's, where it is kept.
+                val odds = w.plan?.let { p ->
+                    val tables = listOfNotNull(season?.leagueOf(a)?.id, season?.leagueOf(b)?.id).distinct().mapNotNull { oddsOf(p, it) }
+                    when {
+                        !p.league.leagues.national -> oddsOf(p, null)
+                        tables.size < 2 -> tables.firstOrNull()
+                        else -> tables[0].let { t -> OddsTable(t.season, t.played, t.total, t.runs, t.drawRate, tables.flatMap { it.rows }, t.league) }
+                    }
+                }
                 Preview.of(
-                    a, b, w.ladder, season, oddsNow?.takeIf { it.season == season?.number }, profiles[a], profiles[b],
+                    a, b, w.ladder, season, odds, profiles[a], profiles[b],
                     BoxProfile.league(profiles.values), { k -> name(k) },
                 )
             }
@@ -2467,7 +2546,12 @@ class LeagueController(
     var calendar by mutableStateOf<CalendarView?>(null)
         private set
 
-    /** Loads [matchday] of [division] into [calendar] (null: the current matchday). */
+    /**
+     * Loads [matchday] of [division] (the season's index) into [calendar] (null: the current
+     * matchday). A division of a national season shows its own round on [matchday] or the next one
+     * after it (the last when none; a division with fewer rounds than the season has matchdays plays
+     * them spread over the weeks), and its own round in play (null: that one).
+     */
     fun loadCalendar(division: Int, matchday: Int? = null) {
         // Only the newest request is shown (an older one can finish later).
         val request = calendarRequests.incrementAndGet()
@@ -2476,12 +2560,27 @@ class LeagueController(
                 val s = plan?.league ?: return@synchronized null
                 if (s.divisions.isEmpty()) return@synchronized null
                 val d = division.coerceIn(0, s.divisions.size - 1)
-                val md = (matchday ?: s.currentMatchday).coerceIn(0, maxOf(0, s.matchdays - 1))
-                val items = s.matchday(md).filter { it.division == d }.map { f ->
+                val n = s.roundsOf(d)
+                fun items(md: Int) = s.matchday(md).filter { it.division == d }.map { f ->
                     val games = s.result(f.id)
                     CalendarItem(f.id, f.a, name(f.a), f.b, name(f.b), games, !s.isPlayed(f.id) && live.containsKey(f.a to f.b), games?.let { TieRule.match(it, s.format) })
                 }
-                CalendarView(d, md, s.matchdays, s.currentMatchday, items, s.number)
+                // A national division (even one of the most rounds) by its own rounds, the round in play its own.
+                if (!s.leagues.national || n == 0) {
+                    val md = (matchday ?: s.currentMatchday).coerceIn(0, maxOf(0, s.matchdays - 1))
+                    CalendarView(d, md, s.matchdays, s.currentMatchday, items(md), s.number)
+                } else {
+                    // Its rounds in order, and the first one still to play (all played: past the last).
+                    val done = s.roundCounts(d)
+                    val current = done.indexOfFirst { !it.done }.let { if (it < 0) n else it }
+                    val round = matchday?.let { md -> (0 until n).firstOrNull { s.weekOf(d, it) >= md } ?: (n - 1) } ?: minOf(current, n - 1)
+                    val md = s.weekOf(d, round)
+                    CalendarView(
+                        d, md, s.matchdays, s.currentMatchday, items(md), s.number, round, n, current,
+                        prev = if (round > 0) s.weekOf(d, round - 1) else null,
+                        next = if (round < n - 1) s.weekOf(d, round + 1) else null,
+                    )
+                }
             }
             scope.launch { if (request == calendarRequests.get()) calendar = v }
         }
@@ -2489,8 +2588,11 @@ class LeagueController(
 
     private val calendarRequests = java.util.concurrent.atomic.AtomicInteger()
 
-    /** Loads [round] of [division] into [calendar] (null: the round being played); a round is a matchday. */
-    fun loadRound(division: Int, round: Int? = null): Unit = loadCalendar(division, round)
+    /**
+     * Loads the round of [division] (the season's index) played on [matchday] into [calendar]
+     * (null: the round being played); a legacy season plays round k on matchday k.
+     */
+    fun loadRound(division: Int, matchday: Int? = null): Unit = loadCalendar(division, matchday)
 
     /** The recent form (최근 폼) asked for last, read off the main thread on request. */
     var form by mutableStateOf<FormView?>(null)
@@ -2523,6 +2625,18 @@ class LeagueController(
 
     /** A past season for the hall of fame, from its honours. */
     private fun historyItem(season: Int, h: List<Honour>): SeasonHistoryItem {
+        // A national season's champions: each league's (its 1부 after the playoff), in league order, named with their league.
+        val national = h.filter { HonourKind.isTopTitle(it.kind) && HonourKind.leagueOf(it.kind) != null }
+            .sortedBy { LeagueIds.order(HonourKind.leagueOf(it.kind)!!) }
+        if (national.isNotEmpty()) {
+            return SeasonHistoryItem(
+                season, national.map { "${LeagueIds.short(HonourKind.leagueOf(it.kind)!!)} ${name(it.key)}" },
+                h.firstOrNull { it.kind == "SCORER" }?.let { name(it.key) }, 0.0, h.firstOrNull { it.kind == "YACHT" }?.let { name(it.key) }, 0,
+                emptyList(), emptyList(),
+                h.filter { it.kind in SHOWN_TITLES }.sortedBy { SHOWN_TITLES.indexOf(it.kind) }.map { it.kind to teamOrName(it.kind, it.key) },
+                national.map { 0 },
+            )
+        }
         val titles = h.filter { DIVISION.matches(it.kind) }.sortedBy { it.kind.drop(1).toIntOrNull() ?: 0 }
         // A pyramid's dozens of moves: those into 1부 and 2부 by name, the rest counted.
         val up = h.filter { it.kind.startsWith("UP") }
@@ -2543,17 +2657,6 @@ class LeagueController(
         "FAMILY", "ALLSTAR", "WC", "WC2", "WC4", "CC", "CC2" -> Competitions.teamLabel(key)
         else -> name(key)
     }
-
-    /** Best and worst opponents of [key] with at least [min] games against them. */
-    fun matchups(key: String, min: Int = 4): Pair<List<Matchup>, List<Matchup>> = synchronized(lock) {
-        val l = ladder ?: return emptyList<Matchup>() to emptyList()
-        val all = l.keys.filter { it != key }.mapNotNull { o ->
-            val (w, g) = l.headToHead(key, o)
-            if (g < min) null else Matchup(o, name(o), w / g, g)
-        }
-        all.sortedByDescending { it.score }.take(3) to all.sortedBy { it.score }.take(3)
-    }
-
 
     companion object {
         private val DIVISION = Regex("L\\d")
@@ -2585,6 +2688,9 @@ class LeagueController(
         private const val CHECKPOINT_MS = 30_000L
         private const val PUBLISH_MS = 300L
         private const val FEED = 60
+
+        /** Leagues of a national season whose odds are kept (the one shown, then the followed players'). */
+        private const val ODDS_LEAGUES = 4
 
         /** Share of matches given to AIs waiting for the next season, so they get a rating. */
         private const val CLUB_MOVES = 60
@@ -2632,5 +2738,127 @@ class LockTimings {
     @Synchronized
     override fun toString(): String = sums.entries.sortedBy { it.key }.joinToString(" · ") { (k, a) ->
         "$k ${a[0].toInt()}× avg ${"%.2f".format(a[1] / a[0])} max ${"%.1f".format(a[2])} ms"
+    }
+}
+
+/**
+ * The league selector's data (UX 1.7) from a season: its leagues as [LeagueInfo] rows in league
+ * order, the league each nation plays in, and the league shown when none is picked. Pure (the
+ * controller calls it under its lock when the season, the ranking or the favourites change).
+ */
+internal object LeagueSelector {
+    /** Favourites of a nation, a club and a league start with these; the others are players. */
+    const val NATION = "nation:"
+    const val CLUB = "club:"
+    const val LEAGUE = "league:"
+
+    /** A season's selector: [infos] in league order, [nationLeague] (nation code to the league most of its players play in), [default]. */
+    class Built(val infos: List<LeagueInfo>, val nationLeague: Map<String, String>, val default: String) {
+        private val byId = infos.associateBy { it.id }
+
+        fun info(id: String): LeagueInfo? = byId[id]
+
+        /** 1-based rank of league [id] ([Int.MAX_VALUE] when unranked or unknown). */
+        fun rank(id: String): Int = byId[id]?.rank ?: Int.MAX_VALUE
+
+        /** The league players of nation [code] play in ([leagueOf]); null in a season without leagues. */
+        fun leagueOfNation(code: String): String? = leagueOf(code, nationLeague, byId.keys) ?: infos.firstOrNull()?.id
+    }
+
+    /**
+     * Nation [code]'s league among [ids]: where most of its players play ([nationLeague]), else its
+     * confederation's 연합 리그, else the 국제 연합 리그, else Korea's (where players without a nation
+     * play); null when none of them is there.
+     */
+    private fun leagueOf(code: String, nationLeague: Map<String, String>, ids: Set<String>): String? =
+        nationLeague[code]
+            ?: Nations.of(code)?.confed?.let { LeagueIds.region(it) }?.takeIf { it in ids }
+            ?: LeagueIds.WORLD.takeIf { it in ids }
+            ?: nationLeague[Nations.KR.code]
+
+    /**
+     * [season]'s selector. [ranking] is the one the season is played under (EMPTY, or without a
+     * row for a league: by strength, as the first national season's draws rank them); [config] the
+     * season's rules (no 대륙 챔피언스 or 챔피언스 리그 places when it does not play them); [nation] a
+     * player's nation code (null: none, so Korea's); [clubNation] a club's nation.
+     */
+    fun build(
+        season: Season,
+        ranking: LeagueRanking,
+        config: LeagueConfig,
+        favourites: Set<String>,
+        nation: (String) -> String?,
+        rating: (String) -> Double,
+        clubNation: (String) -> String? = { null },
+    ): Built {
+        val leagues = season.leagues
+        val keys = leagues.list.associate { lg -> lg.id to lg.divisions.flatMap { season.divisions[it] } }
+        // Each nation's league: where most of its players play this season (a player abroad plays elsewhere).
+        val counts = HashMap<String, HashMap<String, Int>>()
+        for ((id, ks) in keys) for (k in ks) {
+            val code = nation(k)?.takeIf { Nations.of(it) != null } ?: Nations.KR.code
+            counts.getOrPut(code) { HashMap() }.merge(id, 1, Int::plus)
+        }
+        val order = leagues.list.withIndex().associate { (i, lg) -> lg.id to i }
+        val nationLeague = counts.mapValues { (_, m) ->
+            m.entries.minWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { order.getValue(it.key) }).key
+        }
+        val nationsIn = nationLeague.values.groupingBy { it }.eachCount()
+        val strength = { id: String -> Coefficients.strength(keys[id].orEmpty(), rating) }
+        val ranked = if (leagues.national) Coefficients.order(keys.keys, ranking, strength) else emptyList()
+        // The places as the draws would give them by strength, for a league the ranking has no row for.
+        val byStrength = if (leagues.national) Coefficients.ranking(MemoryCoefficients(), leagues, season.number - 1, strength, config) else null
+
+        // Followed: a player's league, a club's and a nation's, and the leagues followed themselves.
+        val players = favourites.filter { ':' !in it && season.divisionOf(it) != null }
+        val clubs = favourites.filter { it.startsWith(CLUB) }.sorted()
+            .mapNotNull { f -> clubNation(f.removePrefix(CLUB))?.let { leagueOf(it, nationLeague, keys.keys) } }
+        val nations = favourites.filter { it.startsWith(NATION) }.map { it.removePrefix(NATION) }
+            .sortedBy { c -> Nations.ALL.indexOfFirst { it.code == c } }.mapNotNull { leagueOf(it, nationLeague, keys.keys) }
+        val followed = HashSet<String>()
+        for (k in players) season.leagueOf(k)?.let { followed += it.id }
+        followed += clubs
+        followed += nations
+        followed += favourites.filter { it.startsWith(LEAGUE) }.map { it.removePrefix(LEAGUE) }.filter { it in keys }
+
+        val infos = leagues.list.map { lg ->
+            val row = ranking.of(lg.id)
+            val guess = byStrength?.of(lg.id)
+            LeagueInfo(
+                lg.id, LeagueIds.label(lg.id), LeagueIds.short(lg.id), LeagueIds.icon(lg.id), leagues.confedOf(lg.id), lg.first,
+                (0 until lg.size).map { lg.tiers.label(it) }, lg.divisions.map { season.divisions[it].size }, keys[lg.id].orEmpty().size,
+                ranked.indexOf(lg.id).takeIf { it >= 0 }?.plus(1),
+                row?.coefficient,
+                // Places only in what the season's rules play (as the odds count them, `Odds.input`).
+                if (config.continentalCl) row?.cclSlots ?: guess?.cclSlots ?: 0 else 0,
+                config.champions && (row?.clDirect ?: guess?.clDirect ?: false),
+                lg.id in followed,
+                nationsIn[lg.id] ?: 0,
+            )
+        }
+        // The best-rated followed player's league, else a followed club's, a followed nation's, Korea's, the best-ranked.
+        val best = players.maxWithOrNull(compareBy<String> { rating(it).takeIf { r -> !r.isNaN() } ?: Double.NEGATIVE_INFINITY }.thenByDescending { it })
+        val default = best?.let { season.leagueOf(it)?.id }
+            ?: clubs.firstOrNull()
+            ?: nations.firstOrNull()
+            ?: nationLeague[Nations.KR.code]
+            ?: infos.minByOrNull { it.rank ?: Int.MAX_VALUE }?.id
+            ?: LeagueIds.LEGACY
+        return Built(infos, nationLeague, default)
+    }
+
+    /**
+     * The selector sheet's sections, each in its order: ★ 응원 (the followed leagues by rank),
+     * 국가 리그 (nations' own leagues by rank), 연합 리그 (XAS, XEU, XAM, XAF, then XWO). A legacy
+     * season's one league makes none: there is nothing to pick.
+     */
+    fun sections(infos: List<LeagueInfo>): List<Pair<String, List<LeagueInfo>>> {
+        if (infos.none { it.national }) return emptyList()
+        val byRank = compareBy<LeagueInfo> { it.rank ?: Int.MAX_VALUE }.thenBy { LeagueIds.order(it.id) }
+        return listOf(
+            "★ 응원" to infos.filter { it.followed }.sortedWith(byRank),
+            "국가 리그" to infos.filter { !it.followed && !it.union }.sortedWith(byRank),
+            "연합 리그" to infos.filter { !it.followed && it.union }.sortedBy { LeagueIds.order(it.id) },
+        ).filter { it.second.isNotEmpty() }
     }
 }

@@ -48,6 +48,8 @@ import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionNotes
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Confed
+import yacht.engine.league.ContinentalChampions
+import yacht.engine.league.LeagueIds
 import yacht.engine.league.Nations
 import yacht.engine.league.Competitions
 import yacht.engine.league.GroupTable
@@ -248,9 +250,13 @@ internal fun StageSheet(lg: LeagueController) {
     val clock = lg.view?.clock
     val stages = remember(loaded.view) { competitionStages(loaded.view) }
     val mine = remember(clock?.weeks, page.comp) { stagesByComp(clock)[page.comp].orEmpty() }
+    // Sections (대륙 챔피언스' confederations, the title playoffs' leagues) each under their heading, their stages without the prefix.
+    val parts = (loaded.view as? CompetitionView.Sections)?.parts
     LeagueSheet("단계 고르기", { nav.sheet = Sheet.NONE }) {
         for ((i, s) in stages.withIndex()) {
-            SheetChoice(s.label, stageNote(page.comp, loaded.view, s, mine, clock), i == loaded.stage) {
+            val part = parts?.getOrNull(s.part)
+            if (part != null && stages.getOrNull(i - 1)?.part != s.part) SheetHeading(sectionIcon(part.title) + " " + part.title)
+            SheetChoice(if (part != null) s.label.removePrefix(part.title + " · ") else s.label, stageNote(page.comp, loaded.view, s, mine, clock), i == loaded.stage) {
                 nav.replaceTop(page.copy(stage = i))
                 nav.sheet = Sheet.NONE
             }
@@ -340,6 +346,8 @@ private fun StageStrip(stages: List<WeekStage>, c: ClockView) {
 fun compIcon(c: Comp): String = when (c) {
     Comp.CUP -> "🏆"
     Comp.CHAMPIONS -> "⭐"
+    Comp.CONT_CHAMPIONS -> "🎖"
+    Comp.CLUB_CUP -> "🏟"
     Comp.SUPER -> "🥇"
     Comp.ALL_STAR -> "🌟"
     Comp.FAMILY -> "🧬"
@@ -356,8 +364,18 @@ fun compIcon(c: Comp): String = when (c) {
     else -> "🏅"
 }
 
-/** The icon of a continental tournament by its name ("아시아컵" 🌏). */
-private fun sectionIcon(title: String): String = Confed.entries.firstOrNull { it.cup == title }?.icon ?: "🗺"
+/**
+ * The icon of a competition's section by its name: a continental tournament's globe ("아시아컵",
+ * "아시아 챔피언스" 🌏), a national league's flag or a 연합 리그's globe (its title playoff, "한국
+ * 리그" 🇰🇷).
+ */
+private fun sectionIcon(title: String): String =
+    Confed.entries.firstOrNull { it.cup == title || ContinentalChampions.title(it) == title }?.icon
+        ?: SECTION_LEAGUES.firstOrNull { LeagueIds.label(it) == title }?.let { LeagueIds.icon(it) }?.takeIf { it.isNotEmpty() }
+        ?: "🗺"
+
+/** Every league id a season can have (a title playoff's sections are named after them). */
+private val SECTION_LEAGUES: List<String> = Nations.ALL.map { it.code } + Confed.entries.map { LeagueIds.region(it) } + LeagueIds.WORLD
 
 /**
  * A national cup's extras: the host, the nations that sit out, and the MVP (boards won) and
