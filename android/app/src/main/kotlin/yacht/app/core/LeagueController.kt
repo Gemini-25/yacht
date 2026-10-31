@@ -30,6 +30,9 @@ import yacht.engine.league.HonourBook
 import yacht.engine.league.JobKind
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.Federation
+import yacht.engine.league.Proposal
+import yacht.engine.league.ClubBook
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.LeagueWorld
@@ -298,7 +301,7 @@ class LeagueController(
     }
 
     /** The league's rules (saved); structural changes apply from the next season. */
-    var config by mutableStateOf(LeagueConfig())
+    var config by mutableStateOf(LeagueConfig.DEFAULT)
         private set
 
     /** The seed a new league's first season is drawn from (fixed by the harness, to measure the same league again). */
@@ -357,7 +360,7 @@ class LeagueController(
             return if (flag == null) name(key) else "$flag ${name(key)}"
         }
 
-        override fun badge(key: String): ClubBadge? = null
+        override fun badge(key: String): ClubBadge? = synchronized(lock) { nationalClubs()?.let { b -> b.clubOf(key)?.let { badges(b)[it] } } }
 
         // A national season's league by name ("한국 리그"); none in a legacy season (its divisions say "3부" alone).
         override fun leagueLabel(key: String): String? =
@@ -427,18 +430,19 @@ class LeagueController(
      * The saved rules, or the defaults. Rules saved before the pyramid with the old default of
      * 200 players take today's default (a league of thousands): the players come in at the
      * next season's close and the league becomes a pyramid. Rules saved before 판 승점제 move
-     * to it and to series and double-elimination knockouts ([LeagueConfig.migrated]) from the
-     * next season (the season in play keeps its own).
+     * to it and to series and double-elimination knockouts, and rules saved before national
+     * leagues move to them ([LeagueConfig.migrated]), from the next season (the season in play
+     * keeps its own and closes under it). No rules file: a new league's ([LeagueConfig.DEFAULT]).
      */
     private fun readConfig(): LeagueConfig = runCatching {
         configFile.takeIf { it.exists() }?.readText()?.let { text ->
             val m = LeagueConfig.migrated(text)
             val c = if (!text.lines().any { it.startsWith("pyramid ") } && m.generated == OLD_DEFAULT_PLAYERS) m.copy(generated = LeagueConfig.DEFAULT_PLAYERS) else m
-            // Moved on once: saved as version 2 (the season in play keeps its own copy).
+            // Moved on once: saved as the current version (the season in play keeps its own copy).
             if (LeagueConfig.versionOf(text) < LeagueConfig.VERSION) runCatching { configFile.writeTextAtomically(c.encode()) }
             c
         }
-    }.getOrNull() ?: LeagueConfig()
+    }.getOrNull() ?: LeagueConfig.DEFAULT
 
     private fun readFavourites(): Set<String> =
         runCatching { favouriteFile.takeIf { it.exists() }?.readLines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() }.getOrNull().orEmpty()
@@ -505,7 +509,7 @@ class LeagueController(
         if (!closing && players.size < cfg.generated) players.ensureGenerated(cfg.generated, season, cfg.generated - players.size)
         synchronized(lock) { pendingPlayers = players }
         rebuildRoster()
-        val w = synchronized(lock) { LeagueWorld.decode(texts, ladderKeys(), reserved) }
+        val w = synchronized(lock) { LeagueWorld.decode(texts, ladderKeys(), reserved, cfg) }
         w.players = players
         val logs = runCatching { logFile.takeIf { it.exists() }?.readBytes() }.getOrNull()
         synchronized(lock) {
@@ -959,15 +963,18 @@ class LeagueController(
         runCatching { center.closing(w, p) }
         if (closing.rosterChanged) rebuildRoster()
         // The next season: members and clubs as closed (they must replay the same), its shape
-        // (divisions, format, competitions) from the rules as they are now.
-        configureWorld(
-            w,
-            config.copy(
-                generated = rules.generated, aging = rules.aging, childShare = rules.childShare, baseAis = rules.baseAis, guests = rules.guests,
-                onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
-                clubs = rules.clubs, squad = rules.squad,
-            ),
-        )
+        // (divisions, format, competitions) from the rules as they are now, with the 요트협회's
+        // changes adopted at this close. Those are saved after the finished season and before the
+        // next one (the writes go in order): a close replayed after a kill finds the season's own
+        // closing rules, and the adopted changes in the rules already or not yet, and applying
+        // them again changes nothing.
+        val (next, opening) = rulesAfterClose(config, rules, closing)
+        if (next != config) {
+            val text = next.encode()
+            scope.launch(fileWrites) { runCatching { configFile.writeTextAtomically(text) } }
+            scope.launch { adopt(closing.ruleChanges) }
+        }
+        configureWorld(w, opening)
         w.openSeason()
         timings.note("rollover", System.nanoTime() - t0)
         val news = historyItem(closing.season, closing.honours)
@@ -979,6 +986,18 @@ class LeagueController(
             showNewSeason(shown)
         }
         saveAsync()
+    }
+
+    /**
+     * The 요트협회's adopted [changes] in the rules the screen shows (main thread), as the rollover
+     * saved them; the rules changed by hand meanwhile take them too where they still can.
+     */
+    private fun adopt(changes: List<Proposal>) {
+        val now = Federation.applyTo(config, changes).first
+        if (now == config) return
+        config = now
+        val text = now.encode()
+        scope.launch(fileWrites) { runCatching { configFile.writeTextAtomically(text) } }
     }
 
     /** The first season of a new league (under the lock); the 리그 tab then opens on it. */
@@ -1844,6 +1863,7 @@ class LeagueController(
         val ids = world?.players?.alive?.associate { it.key to it.identity }.orEmpty()
         val season = s?.number ?: 1
         val leagues = s?.league?.leagues
+        val book = nationalClubs()
         val all = ranking.mapNotNull { k ->
             val me = k == Ladder.ME
             val ai = byKey[k]
@@ -1864,6 +1884,7 @@ class LeagueController(
                 ids[k]?.nation ?: "", ids[k]?.let { Nations.of(it.nation)?.flag } ?: "", ids[k]?.let { id -> world?.players?.get(k)?.let { p -> id.age(season, p.born) } },
                 divisionLabel = d?.let { leagues?.label(it) },
                 league = d?.let { leagues?.of(it)?.id }.orEmpty(),
+                club = book?.clubOf(k),
             )
         }
         // A league of generated players only: the hand-made AIs (still there for ranked games
@@ -1893,19 +1914,46 @@ class LeagueController(
         }
         lastComps = comps
         lastCompsKey = compsKey
-        val clubs = world?.clubs?.let { b ->
+        // A club league's book (a legacy season) as its tab shows it; national clubs as badges
+        // only, built again when the book changes (their tables and pages are loaded on request).
+        val clubs = world?.clubs?.takeIf { it.format != ClubBook.AFFILIATION }?.let { b ->
             val cl = s?.competition(Comp.CLUB) as? ClubLeague
             clubNames = b.clubs.associate { it.id to it.name }
             ClubsView(cl?.table().orEmpty(), b.clubs, b.history.takeLast(CLUB_MOVES).reversed(), cl?.matches().orEmpty(), cl?.lineups.orEmpty())
         }?.let { if (it == lastClubs) lastClubs else it }
         lastClubs = clubs
+        val clubBadges = book?.let { badges(it) }.orEmpty()
         val w = world
         w?.lab?.let { b -> val v = b.current?.results to b.history; scope.launch { lab = v } }
         return LeagueView(
             rows, feed, l.matches, l.games, live.values.map { LiveMatch(it.a, it.b, it.comp, it.label, it.week, it.firstTo, it.id) }, s?.let { seasonView(it) }, comps, clubs,
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
             s?.let { runCatching { clockView(it) }.getOrNull() },
+            clubBadges,
         )
+    }
+
+    /** The national clubs' book (under the lock); null without one (a legacy league's is a club league's). */
+    private fun nationalClubs(): ClubBook? = world?.clubs?.takeIf { it.format == ClubBook.AFFILIATION }
+
+    /** [badges]' last result and the book version it was built for (under the lock). */
+    private var badgeMap: Map<String, ClubBadge> = emptyMap()
+    private var badgeVersion = -1
+
+    /**
+     * Every club of national book [b] as badges by id, dissolved ones too while their ids are
+     * theirs (honours, moves and season lines name them); built again only when the book changes
+     * ([ClubBook.version]), else the same map. Also the names [name] gives club ids. Under the lock.
+     */
+    private fun badges(b: ClubBook): Map<String, ClubBadge> {
+        if (b.version == badgeVersion) return badgeMap
+        val m = LinkedHashMap<String, ClubBadge>()
+        for (g in b.gone) m[g.id] = ClubBadge(g.id, g.name, "", g.nation, g.emblem)
+        for (c in b.clubs) m[c.id] = ClubBadge(c.id, c.name, c.city, c.nation, c.emblem)
+        badgeMap = m
+        badgeVersion = b.version
+        clubNames = m.mapValues { it.value.name }
+        return m
     }
 
     /**
@@ -2051,6 +2099,7 @@ class LeagueController(
             }
         }
         val book = world?.players
+        val clubs = nationalClubs()
         fun shown(k: String) = book?.get(k)?.identity?.nation?.let { Nations.of(it)?.flag }?.let { "$it ${name(k)}" } ?: name(k)
         val odds = oddsOf(p, lg?.id)
         val range = lg?.divisions ?: IntRange.EMPTY
@@ -2062,6 +2111,7 @@ class LeagueController(
                     st.aggPoints,
                     odds?.get(st.key),
                     st.sweeps,
+                    clubs?.clubOf(st.key),
                 )
             }
         }
@@ -2563,7 +2613,7 @@ class LeagueController(
                 season, national.map { "${LeagueIds.short(HonourKind.leagueOf(it.kind)!!)} ${name(it.key)}" },
                 h.firstOrNull { it.kind == "SCORER" }?.let { name(it.key) }, 0.0, h.firstOrNull { it.kind == "YACHT" }?.let { name(it.key) }, 0,
                 emptyList(), emptyList(),
-                h.filter { it.kind in SHOWN_TITLES }.sortedBy { SHOWN_TITLES.indexOf(it.kind) }.map { it.kind to teamOrName(it.kind, it.key) },
+                h.filter { it.kind in NATIONAL_TITLES }.sortedBy { NATIONAL_TITLES.indexOf(it.kind) }.map { it.kind to teamOrName(it.kind, it.key) },
                 national.map { 0 },
             )
         }
@@ -2585,6 +2635,8 @@ class LeagueController(
     /** An honour's winner: a club, a family or an all-star side by its label, else the AI's name. */
     private fun teamOrName(kind: String, key: String): String = when (kind) {
         "FAMILY", "ALLSTAR", "WC", "WC2", "WC4", "CC", "CC2" -> Competitions.teamLabel(key)
+        // A club by its name, a dissolved one too.
+        "CLUBCUP", "CLUBCUP2" -> world?.clubs?.nameOf(key) ?: name(key)
         else -> name(key)
     }
 
@@ -2593,6 +2645,10 @@ class LeagueController(
 
         /** Honours the season history lists after the division champions, in this order. */
         val SHOWN_TITLES = listOf("REG", "L0R", "CL", "CL2", "CUP", "CUP2", "SUPER", "CLUB", "FAMILY", "ALLSTAR", "WC", "WC2", "CC", "WCMVP", "MVP", "ROOKIE", "MIP")
+
+        /** A national season's: the world stage and each confederation's 대륙 챔피언스 first, the 클럽 대항전 among the cups. */
+        val NATIONAL_TITLES = listOf("CL", "CL2") + yacht.engine.league.Confed.entries.map { HonourKind.of("CCL", it.name) } +
+            listOf("CUP", "CUP2", "SUPER", "CLUBCUP", "FAMILY", "ALLSTAR", "WC", "WC2", "CC", "WCMVP", "MVP", "ROOKIE", "MIP")
 
         /** League files a backup restores (when this phone's league has no games yet); one the backup lacks is removed. */
         val SAVED = LeagueWorld.FILES + listOf("config.txt", "favourites.txt", UiPrefs.FILE, MatchCenter.LOGS)
@@ -2672,6 +2728,21 @@ class LockTimings {
     override fun toString(): String = sums.entries.sortedBy { it.key }.joinToString(" · ") { (k, a) ->
         "$k ${a[0].toInt()}× avg ${"%.2f".format(a[1] / a[0])} max ${"%.1f".format(a[2])} ms"
     }
+}
+
+/**
+ * The rules after a season closed under [rules] (its closing copy): the app's [config] with the
+ * 요트협회's changes adopted at [closing] ([Federation.applyTo]), the rules to save (first), and the
+ * rules the next season opens with (second): those, with the members and clubs as the season
+ * closed with (the close made its players and clubs by them, and a replay must make the same).
+ */
+internal fun rulesAfterClose(config: LeagueConfig, rules: LeagueConfig, closing: LeagueWorld.Closing): Pair<LeagueConfig, LeagueConfig> {
+    val next = Federation.applyTo(config, closing.ruleChanges).first
+    return next to next.copy(
+        generated = rules.generated, aging = rules.aging, childShare = rules.childShare, baseAis = rules.baseAis, guests = rules.guests,
+        onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
+        clubs = rules.clubs, squad = rules.squad,
+    )
 }
 
 /**

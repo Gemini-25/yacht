@@ -4,7 +4,6 @@ import yacht.engine.league.ClubBook
 import yacht.engine.league.Comp
 import yacht.engine.league.HonourKind
 import yacht.engine.league.LeagueConfig
-import yacht.engine.league.LeaguePreset
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.Nations
@@ -22,6 +21,13 @@ import kotlin.test.assertTrue
  */
 class MigrationVariantsTest {
     private val base = listOf("ev") + (1..39).map { "b%02d".format(it) }
+
+    /** 945de5e's 빠른 시즌 and 강자만 presets (the presets are national leagues since the flip). */
+    private val oldFast = LeagueConfig(
+        divisions = 2, matchFormat = MatchFormat.SINGLE, clubs = 0, familyCup = false, nationCup = false, titlePlayoff = false, promotionPlayoff = false,
+        longKnockouts = false, seriesKnockouts = false, doubleElimination = false,
+    )
+    private val oldElite = LeagueConfig(divisions = 2, onlyTop = 48, clubs = 8, familyCup = false, nationCup = false, aging = false, guests = false)
 
     /** The rollover of [run]'s legacy season into [next]; then the national season is played and closed too. */
     private fun migrates(run: WorldRun, next: LeagueConfig, check: (WorldRun) -> Unit) {
@@ -48,7 +54,7 @@ class MigrationVariantsTest {
 
     @Test
     fun aFastLeagueWithoutClubsFoundsThem() {
-        val legacy = LeaguePreset.FAST.config.copy(generated = 260)
+        val legacy = oldFast.copy(generated = 260)
         assertEquals(0, legacy.clubs)
         val fast = LeagueConfig.DEFAULT.copy(
             generated = 260, leagueMin = 20, divisionSize = 16, doubleRoundRobin = false, matchFormat = MatchFormat.SINGLE, titlePlayoff = false,
@@ -83,7 +89,7 @@ class MigrationVariantsTest {
 
     @Test
     fun theStrongest48FormOneInternationalLeague() {
-        val elite = LeaguePreset.ELITE.config.copy(generated = 200, nationCup = false)
+        val elite = oldElite.copy(generated = 200, nationCup = false)
         val national = LeagueConfig.DEFAULT.copy(generated = 200, onlyTop = 48, aging = false, guests = false, familyCup = false, nationCup = false)
         val run = WorldRun(elite)
         assertEquals(48, run.w.members.size)
@@ -103,10 +109,12 @@ class MigrationVariantsTest {
         val run = WorldRun(legacy)
         run.w.openFirstSeason(9L)
         run.play()
-        // Saved before the close with its closing rules (a version 2 config), then read back by an
-        // app whose rules are national now.
-        val files = run.beforeClose()
-        assertTrue("\nclosecfg config 2\n" in files.getValue(LeagueWorld.SEASON), files.getValue(LeagueWorld.SEASON).lines().filter { it.startsWith("closecfg") }.toString())
+        // Saved before the close with its closing rules, as a build before the flip wrote them (a
+        // version 2 config), then read back by an app whose rules are national now.
+        val saved = run.beforeClose()
+        val season = saved.getValue(LeagueWorld.SEASON)
+        assertTrue("\nclosecfg config ${LeagueConfig.VERSION}\n" in season, season.lines().filter { it.startsWith("closecfg") }.toString())
+        val files = saved + (LeagueWorld.SEASON to season.replace("\nclosecfg config ${LeagueConfig.VERSION}\n", "\nclosecfg config 2\n"))
         run.rules = national
         run.w = run.read(files)
         assertEquals(legacy, run.w.plan!!.closing)

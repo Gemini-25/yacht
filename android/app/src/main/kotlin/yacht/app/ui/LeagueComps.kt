@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.ClockView
+import yacht.app.core.ClubBadge
 import yacht.app.core.CompetitionPage
 import yacht.app.core.CompetitionStage
 import yacht.app.core.LeagueController
@@ -162,7 +164,11 @@ internal fun CompetitionScreen(lg: LeagueController, v: LeagueView, page: Page.C
     val label: (String) -> String = remember(lg) { { k -> if (squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) } }
     // A team (all-star side, family) has no page of its own: its squad is listed below.
     val open: (String) -> Unit = remember { { k -> if (!squads.containsKey(k)) openAi(k) } }
-    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format) { lg.nav.sheet = Sheet.STAGE }
+    // A player's club badge, or a club's own (the 클럽 대항전's sides are clubs); none in a legacy season.
+    val clubOf = remember(v.rows, v.badges) { v.rows.mapNotNull { r -> r.club?.let { c -> v.badges[c]?.let { r.key to it } } }.toMap() }
+    val badges by rememberUpdatedState(v.badges)
+    val badge: (String) -> ClubBadge? = remember(clubOf) { { k -> clubOf[k] ?: badges[k] } }
+    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format, badge = badge) { lg.nav.sheet = Sheet.STAGE }
 }
 
 /**
@@ -178,6 +184,8 @@ internal fun CompetitionBody(
     onOpen: (String) -> Unit,
     clock: ClockView?,
     format: MatchFormat?,
+    /** A side's club badge (national seasons). */
+    badge: (String) -> ClubBadge? = { null },
     onStage: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -198,22 +206,27 @@ internal fun CompetitionBody(
         // A national cup's host, absentees and races, whatever stage is shown.
         notes?.let { n -> item { NotesCard(n, label, name, onOpen) } }
         // One part of the competition: its group tables, or one round of its bracket.
-        fun LazyListScope.part(g: CompetitionView.Groups) {
+        // One part of the competition: its group tables, or one round of its bracket ([heading]: the
+        // part's title over it, which its bracket then does not repeat).
+        fun LazyListScope.part(g: CompetitionView.Groups, heading: String? = null) {
             val round = st?.round ?: -1
             val k = g.knockout
+            val titled = k?.title != heading
             if (round < 0 || k == null) {
-                items(g.groups, key = { "g-${it.label}" }) { t -> GroupCard(t, label, onOpen) }
-                if (g.groups.isEmpty() && k != null) item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), podium = podium, format = format) }
+                items(g.groups, key = { "g-${it.label}" }) { t -> GroupCard(t, label, onOpen, badge) }
+                if (g.groups.isEmpty() && k != null) {
+                    item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), podium = podium, format = format, badge = badge, titled = titled) }
+                }
             } else {
-                item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), round, podium, format) }
+                item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), round, podium, format, badge, titled) }
             }
         }
         when (view) {
-            is CompetitionView.Bracket -> item { BracketCard(view, label, onOpen, roundWeeks(page.comp, mine, view.rounds, leagueWeeks), st?.round, podium, format) }
+            is CompetitionView.Bracket -> item { BracketCard(view, label, onOpen, roundWeeks(page.comp, mine, view.rounds, leagueWeeks), st?.round, podium, format, badge) }
             is CompetitionView.Groups -> part(view)
             is CompetitionView.Sections -> view.parts.getOrNull(st?.part ?: 0)?.let { p ->
                 item { Text(sectionIcon(p.title) + " " + p.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall) }
-                part(p)
+                part(p, p.title)
             }
             // A kind of view this screen does not draw yet.
             else -> {}
@@ -435,6 +448,10 @@ internal fun BracketCard(
     podium: Boolean = true,
     /** The season's match rule (a leg is one game under [MatchFormat.SINGLE]); null: two. */
     format: MatchFormat? = null,
+    /** A side's club badge (national seasons). */
+    badge: (String) -> ClubBadge? = { null },
+    /** Its title on top (off under a heading that already says it). */
+    titled: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val rounds = b.rounds
@@ -442,7 +459,7 @@ internal fun BracketCard(
     val r = round?.takeIf { it in rounds.indices } ?: roundInPlay(rounds) ?: 0
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(b.title, fontWeight = FontWeight.Bold)
+            if (titled) Text(b.title, fontWeight = FontWeight.Bold)
             if (rounds.isEmpty()) {
                 Text("대진이 아직 정해지지 않았어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             } else {
@@ -451,7 +468,7 @@ internal fun BracketCard(
                     Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 }
                 if (double) Text("↓ 승자조에서 지면 패자조로 내려가요 · 패자조에서 지면 탈락", style = MaterialTheme.typography.labelSmall, color = cs.tertiary)
-                RoundTies(rounds[r], double, label, onOpen)
+                RoundTies(rounds[r], double, label, onOpen, badge)
                 if (podium) Podium(rounds, double, label)
             }
         }
@@ -499,7 +516,7 @@ private fun Podium(rounds: List<BracketRound>, double: Boolean, label: (String) 
 }
 
 @Composable
-private fun RoundTies(round: BracketRound, double: Boolean, label: (String) -> String, onOpen: (String) -> Unit) {
+private fun RoundTies(round: BracketRound, double: Boolean, label: (String) -> String, onOpen: (String) -> Unit, badge: (String) -> ClubBadge?) {
     val cs = MaterialTheme.colorScheme
     // Byes go on without a match; an empty losers' tie (both feeders byes) has no one to show.
     val byes = round.ties.count { it.bye && it.winner != null }
@@ -511,7 +528,7 @@ private fun RoundTies(round: BracketRound, double: Boolean, label: (String) -> S
         if (byes > 0) Text("부전승 ${byes}팀", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         for (t in round.ties) {
             if (t.bye) continue
-            TieLine(t.a, t.b, t.scoreA, t.scoreB, t.winner, t.played, t.legs, t.firstTo, round.side, double, t.fromWinners, label, onOpen)
+            TieLine(t.a, t.b, t.scoreA, t.scoreB, t.winner, t.played, t.legs, t.firstTo, round.side, double, t.fromWinners, label, onOpen, badge)
         }
     }
 }
@@ -536,6 +553,7 @@ private fun TieLine(
     fromWinners: String?,
     label: (String) -> String,
     onOpen: (String) -> Unit,
+    badge: (String) -> ClubBadge?,
 ) {
     val cs = MaterialTheme.colorScheme
     val decided = played && winner != null
@@ -554,7 +572,7 @@ private fun TieLine(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceVariant.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Side(a, winner, mark(a), label, onOpen, Modifier.weight(1f), TextAlign.Start)
+        Side(a, winner, mark(a), label, onOpen, Modifier.weight(1f), TextAlign.Start, badge)
         Column(Modifier.padding(horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 when {
@@ -571,7 +589,7 @@ private fun TieLine(
             )
             if (played && firstTo > 0) Text("${firstTo}선승", fontSize = 9.sp, color = cs.onSurfaceVariant)
         }
-        Side(b, winner, mark(b), label, onOpen, Modifier.weight(1f), TextAlign.End)
+        Side(b, winner, mark(b), label, onOpen, Modifier.weight(1f), TextAlign.End, badge)
     }
 }
 
@@ -587,7 +605,7 @@ private data class SideMark(val from: Boolean = false, val drops: Boolean = fals
 }
 
 @Composable
-private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) -> String, onOpen: (String) -> Unit, modifier: Modifier, align: TextAlign) {
+private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) -> String, onOpen: (String) -> Unit, modifier: Modifier, align: TextAlign, badge: (String) -> ClubBadge?) {
     val cs = MaterialTheme.colorScheme
     val won = key != null && key == winner
     val start = align == TextAlign.Start
@@ -597,6 +615,7 @@ private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) 
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (mark.from) Text("↓ ", style = MaterialTheme.typography.bodySmall, color = cs.tertiary, fontWeight = FontWeight.Bold)
+            if (start) ClubMark(key?.let(badge), 14.dp)
             Text(
                 key?.let(label) ?: "?",
                 modifier = Modifier.weight(1f, fill = false),
@@ -608,6 +627,10 @@ private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) 
                 textAlign = align,
             )
             if (mark.drops) Text(" ↓", style = MaterialTheme.typography.bodySmall, color = cs.tertiary, fontWeight = FontWeight.Bold)
+            if (!start) key?.let(badge)?.let { b ->
+                Spacer(Modifier.width(4.dp))
+                ClubEmblem(b.emblem, 14.dp)
+            }
         }
         mark.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1) }
     }
@@ -615,7 +638,7 @@ private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) 
 
 /** A group table; with [GroupTable.bonus] (판 승점제) its 2-0 sweeps, which earned a point each, get a column. */
 @Composable
-internal fun GroupCard(g: GroupTable, label: (String) -> String, onOpen: (String) -> Unit) {
+internal fun GroupCard(g: GroupTable, label: (String) -> String, onOpen: (String) -> Unit, badge: (String) -> ClubBadge? = { null }) {
     val cs = MaterialTheme.colorScheme
     val bonus = g.bonus
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
@@ -633,7 +656,14 @@ internal fun GroupCard(g: GroupTable, label: (String) -> String, onOpen: (String
             for ((i, row) in g.rows.withIndex()) {
                 Row(Modifier.fillMaxWidth().clickable { onOpen(row.key) }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.width(4.dp).height(18.dp).background(if (i < 2) gameColors.good else androidx.compose.ui.graphics.Color.Transparent))
-                    Text(" ${i + 1} ${label(row.key)}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val b = badge(row.key)
+                    if (b == null) {
+                        Text(" ${i + 1} ${label(row.key)}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    } else {
+                        Text(" ${i + 1} ", style = MaterialTheme.typography.bodySmall)
+                        ClubMark(b, 14.dp)
+                        Text(label(row.key), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                     Text("${row.played}", Modifier.width(32.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                     Text("${row.wins}-${row.draws}-${row.losses}", Modifier.width(60.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                     Text("%+d".format(row.diff), Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)

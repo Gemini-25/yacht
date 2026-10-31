@@ -5,6 +5,7 @@ import yacht.engine.league.AiOdds
 import yacht.engine.league.AiStats
 import yacht.engine.league.Article
 import yacht.engine.league.Club
+import yacht.engine.league.ClubDigest
 import yacht.engine.league.ClubMatch
 import yacht.engine.league.ClubMove
 import yacht.engine.league.ClubRow
@@ -84,6 +85,8 @@ data class LadderRow(
     val divisionLabel: String? = null,
     /** Its league this season ("KR"; "" in a legacy season or when not in this season). */
     val league: String = "",
+    /** Its club in national leagues (a key of [LeagueView.badges]); null without one or in a legacy season. */
+    val club: String? = null,
 ) {
     /** The name with its flag, as lists show it ("🇧🇷 루카스 시우바"). */
     val shown: String get() = if (flag.isEmpty()) name else "$flag $name"
@@ -165,9 +168,17 @@ data class LeagueView(
     val allTime: List<Highlight> = emptyList(),
     /** The season's weeks (null before the first season). */
     val clock: ClockView? = null,
+    /**
+     * Every national club's badge by id (dissolved ones too, while their ids are theirs), built
+     * again only when the club book changes; empty in a legacy league, whose club league is [clubs].
+     */
+    val badges: Map<String, ClubBadge> = emptyMap(),
 )
 
-/** The 클럽 tab: this season's club table, every club and the latest transfers and draft picks. */
+/**
+ * The club league of a legacy season (`clubs 1`): its table, every club and the latest transfers
+ * and draft picks. Null with national clubs, which are loaded on request ([WorldPages]).
+ */
 data class ClubsView(
     /** This season's club league table, best first (empty when there is none this season). */
     val table: List<ClubRow>,
@@ -200,6 +211,8 @@ data class SeasonRow(
     val odds: AiOdds? = null,
     /** 2-0 sweeps that earned the bonus point (판 승점제's 완승 보너스), counted in [points]. */
     val sweeps: Int = 0,
+    /** Its club in national leagues (a key of [LeagueView.badges]); null otherwise. */
+    val club: String? = null,
 )
 
 data class SeasonHistoryItem(
@@ -861,7 +874,11 @@ data class AggregateStats(
     val box: List<Double>,
 )
 
-/** A club in the club table (F1 constructors' style); [week] its members' week, "3승 1무 2패". */
+/**
+ * A club in its league's club table (F1 constructors' style): [points] = [leaguePart] (its
+ * [counted] members' league points weighted by tier) + [bonus] (their honour points); [week] its
+ * members' results in the week in play ("3승 1무 2패", "" before any).
+ */
 data class ClubStandingRow(
     val badge: ClubBadge,
     val position: Int,
@@ -873,9 +890,21 @@ data class ClubStandingRow(
     val week: String,
 )
 
-/** 순위 › 클럽 of one league; a legacy season's club league in [legacyRows]; [all] every club by titles. */
-data class ClubTableView(val league: String, val legacy: Boolean, val rows: List<ClubStandingRow>, val all: List<ClubBadge>, val legacyRows: List<ClubRow>)
+/** A club of "클럽 전체 (우승 순)": its members now, money and club-table titles. */
+data class ClubListRow(val badge: ClubBadge, val members: Int, val budget: Int, val titles: Int)
 
+/**
+ * 순위 › 클럽 of national league [league] (the loader's key) in [season]: the club table best first
+ * ([ClubStandingRow.week] counts [week]), and every club of the league's nations by titles, then
+ * money ([all]). A legacy season's club league is [LeagueView.clubs] instead.
+ */
+data class ClubTableView(val league: String, val season: Int, val week: Int, val rows: List<ClubStandingRow>, val all: List<ClubListRow>)
+
+/**
+ * A club's member on its page: [contribution] its points for the club table when counted (null
+ * otherwise), [record] its league W-D-L this season, [abroad] when it plays for a club of a nation
+ * not its own (해외).
+ */
 data class ClubMember(
     val key: String,
     val shown: String,
@@ -887,7 +916,13 @@ data class ClubMember(
     val abroad: Boolean,
 )
 
-/** The club page; [key] equals its page's load key; [places]: (season, place). */
+/**
+ * A national club's page; [key] equals its page's load key. [league] is the league it plays in
+ * this season ("" when none), [places] its club-table place per kept season (only when in the top
+ * 3, newest first), [moves] the moves in and out (newest first), [recent] its members' last league
+ * matches, [gone] the season after which it was dissolved (null while it plays), [cupTitles] its
+ * 클럽 대항전 titles.
+ */
 data class ClubPage(
     val key: String,
     val badge: ClubBadge,
@@ -898,11 +933,13 @@ data class ClubPage(
     val titles: Int,
     val founded: Int,
     val members: List<ClubMember>,
+    val week: String,
     val places: List<Pair<Int, Int>>,
     val moves: List<ClubMove>,
     val recent: List<PlayerMatch>,
-    val aggregate: AggregateStats,
-    val legacy: ClubsView?,
+    val aggregate: AggregateStats?,
+    val gone: Int? = null,
+    val cupTitles: Int = 0,
 )
 
 /**
@@ -911,10 +948,16 @@ data class ClubPage(
  */
 data class CompetitionPage(val key: String, val comp: Comp, val stages: List<String>, val stage: Int, val view: CompetitionView)
 
-/** A league in the league ranking (리그 랭킹); [live] its points this season so far. */
+/** A league in the league ranking (리그 랭킹); [live] its points per entry this season so far (null before its first). */
 data class RankRow(val rank: LeagueRank, val label: String, val short: String, val icon: String, val live: Double?)
 
-data class RankingView(val season: Int, val rows: List<RankRow>, val empty: Boolean)
+/**
+ * 순위 › 랭킹: the ranking national season [season] is played under (its places were drawn by it),
+ * best first; [byStrength] while no national season has closed (the leagues go by the average
+ * rating of their best 5); [published] the season whose close published it (0 when none has).
+ * Empty [rows] in a legacy season, and with [season] 0 before a new league's first.
+ */
+data class RankingView(val season: Int, val rows: List<RankRow>, val byStrength: Boolean, val published: Int)
 
 /** The home's 국제 무대: the stages of the world competitions, the ranking's top and this season's race. */
 data class WorldSnippet(val stages: List<Pair<Comp, String>>, val ranking: List<RankRow>, val live: List<Pair<String, Double>>)
@@ -934,7 +977,12 @@ data class HomeView(
     val footer: HomeFooter,
 )
 
-/** A league's page; [key] equals its page's load key; [tiers]: (tier label, its numbers). */
+/**
+ * A league's page; [key] equals its page's load key. [top] its 1부's first 5, [clubs] its club
+ * table's first 5, [stars] its best 5 by rating, [champions] (season, champion's name) of its kept
+ * 1부 titles, newest first; [moves] the transfers abroad and home of the last window that touch it,
+ * [tiers] each division's label and numbers.
+ */
 data class LeaguePage(
     val key: String,
     val info: LeagueInfo,
@@ -947,7 +995,7 @@ data class LeaguePage(
     val tiers: List<Pair<String, AggregateStats>>,
 )
 
-/** A federation proposal; [choice] the player's (null: none), [result] and [by] as decided. */
+/** A federation proposal; [choice] the player's (null: none), [result] and [by] as decided ([Proposal]'s codes). */
 data class ProposalView(
     val season: Int,
     val number: Int,
@@ -964,7 +1012,22 @@ data class ProposalView(
     val appliesFrom: Int,
 )
 
-data class FederationView(val enabled: Boolean, val pending: List<ProposalView>, val history: List<ProposalView>, val awards: List<Pair<String, String>>, val nextClose: Int)
+/**
+ * The 요트협회's page: [enabled] its rules switch (the next season's), [pending] the proposals on
+ * the vote (decided at the close of season [nextClose]), [history] the decided ones (newest first),
+ * [awards] the last closed season's awards (label, winner) and [awardsSeason] that season (0: none).
+ */
+data class FederationView(
+    val enabled: Boolean,
+    val pending: List<ProposalView>,
+    val history: List<ProposalView>,
+    val awards: List<Pair<String, String>>,
+    val nextClose: Int,
+    val awardsSeason: Int = 0,
+)
+
+/** 이적·드래프트 of national clubs: the kept moves, newest first, and the last window's numbers. */
+data class MarketView(val season: Int, val moves: List<ClubMove>, val digest: ClubDigest?)
 
 // ---- UI preferences (league/ui.txt) ------------------------------------------------------------
 

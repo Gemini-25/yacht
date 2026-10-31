@@ -11,8 +11,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The rules' keys for national leagues, before the flip: VERSION stays 2, so a saved config reads
- * as it did and is never moved on to national leagues; the new keys are written and read back.
+ * The rules' keys for national leagues and the flip to them (VERSION 3): a config saved before
+ * reads as it did (a season's own copy plays on as it began), and a league's own settings move on
+ * once to national leagues; the new keys are written and read back.
  */
 class ConfigV3Test {
     /** config.txt as 945de5e wrote it for the default rules. */
@@ -48,23 +49,57 @@ class ConfigV3Test {
     """.trimIndent() + "\n"
 
     @Test
-    fun aConfigSavedBeforeNationalLeaguesReadsAsBeforeAndIsNotRewritten() {
-        assertEquals(2, LeagueConfig.VERSION)
-        // The app writes config.txt again only when its version is below VERSION.
-        assertFalse(LeagueConfig.versionOf(old) < LeagueConfig.VERSION)
+    fun aConfigSavedBeforeNationalLeaguesReadsAsBeforeAndMovesOnOnce() {
+        assertEquals(3, LeagueConfig.VERSION)
+        // The app writes config.txt again when its version is below VERSION.
+        assertTrue(LeagueConfig.versionOf(old) < LeagueConfig.VERSION)
+        // Read as written (a season's own copy of these rules plays on as it began).
         val c = LeagueConfig.decode(old)
         assertEquals(LeagueConfig(), c)
         assertFalse(c.national)
         assertTrue(c.sweepBonus && c.sweepPoints)
-        assertEquals(c, LeagueConfig.migrated(old), "migrated() moves nothing on")
-        // Written again: the old lines unchanged and first, the new keys after them.
-        assertTrue(c.encode().startsWith(old))
-        // Older still: version 1 moves on to version 2's rules only.
+        // The league's own settings move on: 945de5e's default rules are the national default.
+        val m = LeagueConfig.migrated(old)
+        assertEquals(LeagueConfig.DEFAULT, m)
+        assertTrue(m.national && m.doubleRoundRobin)
+        // Written again as version 3, and read back unchanged: never moved on twice.
+        val text = m.encode()
+        assertTrue(text.startsWith("config 3\n"))
+        assertFalse(LeagueConfig.versionOf(text) < LeagueConfig.VERSION)
+        assertEquals(m, LeagueConfig.migrated(text))
+        // A version 3 league's own choices stay, even where a migration would set them.
+        val mine = m.copy(doubleRoundRobin = false, federation = false, divisionSize = 18)
+        assertEquals(mine, LeagueConfig.migrated(mine.encode()))
+        // The old lines unchanged and first (bar the version), the new keys after them.
+        assertTrue(c.encode().removePrefix("config 3\n").startsWith(old.removePrefix("config 2\n")))
+        // Older still: version 1 moves on to version 2's rules, then to national leagues.
         val v1 = LeagueConfig.migrated("config 1\ndivisions 3\nformat MIRRORED\n")
-        assertFalse(v1.national)
+        assertTrue(v1.national && v1.doubleRoundRobin)
         assertTrue(v1.sweepBonus)
         assertEquals(MatchFormat.GAMES, v1.matchFormat)
         assertFalse(LeagueConfig.decode("config 1\n").national)
+    }
+
+    @Test
+    fun everyKindOfOldLeagueMovesOnToNationalLeagues() {
+        // 945de5e's presets as it saved them: 빠른 시즌 (단판, no club league) plays one round robin.
+        val fast = LeagueConfig.migrated(
+            "config 2\ndivisions 2\nformat SINGLE\nclubs 0\nfamilyCup 0\nnationCup 0\ntitlePlayoff 0\npromotionPlayoff 0\nlongKnockouts 0\nseries 0\ndoubleElim 0\n",
+        )
+        assertTrue(fast.national)
+        assertFalse(fast.doubleRoundRobin)
+        assertEquals(MatchFormat.SINGLE, fast.matchFormat)
+        assertFalse(fast.titlePlayoff || fast.promotionPlayoff || fast.nationCup)
+        // 강자만: its 48 keep their filter (one 국제 연합 리그 of them).
+        val elite = LeagueConfig.migrated("config 2\ndivisions 2\nonlyTop 48\nclubs 8\nfamilyCup 0\nnationCup 0\naging 0\nguests 0\n")
+        assertTrue(elite.national && elite.doubleRoundRobin)
+        assertEquals(48, elite.onlyTop)
+        assertFalse(elite.aging || elite.guests)
+        // A developer's config 2 with the new keys (a build before the flip): the national rules as the default has them.
+        val dev = LeagueConfig.migrated("config 2\nnational 0\ndivisionSize 22\nsweepBonus 0\nfederation 0\nclDirect 3\ngenerated 300\n")
+        assertEquals(LeagueConfig.DEFAULT.copy(generated = 300), dev)
+        // The two-game total of a version 2 league stays (only version 1's moved to 판 승점제).
+        assertEquals(MatchFormat.MIRRORED, LeagueConfig.migrated("config 2\nformat MIRRORED\n").matchFormat)
     }
 
     @Test
@@ -74,7 +109,7 @@ class ConfigV3Test {
             clDirect = 3, clubSize = 10, clubCup = false, federation = false,
         )
         val text = c.encode()
-        assertTrue(text.startsWith("config 2\n"), "version 2 until the flip")
+        assertTrue(text.startsWith("config 3\n"))
         for (line in listOf(
             "national 1", "divisionSize 22", "leagueMin 30", "sweepBonus 0", "transfers 7", "continentalCl 0", "clDirect 3", "clubSize 10",
             "clubCup 0", "federation 0",
@@ -82,7 +117,7 @@ class ConfigV3Test {
             assertTrue("\n$line\n" in text, line)
         }
         assertEquals(c, LeagueConfig.decode(text))
-        // Before the flip a national config 2 (a developer's) is read as written, not moved on.
+        // A version 3 config is read as written, not moved on.
         assertEquals(c, LeagueConfig.migrated(text))
         assertEquals(LeagueConfig.DEFAULT, LeagueConfig.decode(LeagueConfig.DEFAULT.encode()))
         // A value out of its range keeps the default, as any bad value does.
@@ -129,10 +164,19 @@ class ConfigV3Test {
         val d = LeagueConfig.DEFAULT
         assertTrue(d.national && d.doubleRoundRobin)
         assertEquals(LeagueConfig().copy(national = true, doubleRoundRobin = true), d)
+        assertEquals(d, LeagueConfig.decode(d.encode()))
         for (p in LeaguePreset.entries) {
             assertEquals(p.config, LeagueConfig.decode(p.config.encode()), p.name)
-            assertFalse(p.config.national, "${p.name}: no preset offers national leagues before the flip")
+            assertEquals(p.config, LeagueConfig.migrated(p.config.encode()), p.name)
+            assertTrue(p.config.national, "${p.name}: every preset is national leagues")
         }
-        assertEquals(LeagueConfig(), LeaguePreset.REAL.config)
+        assertEquals(d, LeaguePreset.REAL.config)
+        // 빠른 시즌: one round robin of single games, one loss out, none of the extras.
+        val fast = LeaguePreset.FAST.config
+        assertFalse(fast.doubleRoundRobin || fast.titlePlayoff || fast.promotionPlayoff || fast.longKnockouts || fast.seriesKnockouts || fast.doubleElimination)
+        assertFalse(fast.nationCup || fast.clubCup || fast.familyCup || fast.federation)
+        assertEquals(MatchFormat.SINGLE, fast.matchFormat)
+        assertEquals(d.copy(onlyFlawed = true, childShare = 70, guests = false), LeaguePreset.CHAOS.config)
+        assertEquals(48, LeaguePreset.ELITE.config.onlyTop)
     }
 }

@@ -9,11 +9,11 @@ import yacht.engine.league.MatchFormat
  * Built from the engine's own numbers ([KnockoutLength]) so the text follows the rules.
  */
 
-/** How a match is decided under [f] (one sentence or two, 해요체). */
-fun matchRuleText(f: MatchFormat): String = when (f) {
+/** How a match is decided under [f] (one sentence or two, 해요체); [bonus]: a 2-0 sweep earns a point more ([LeagueConfig.sweepPoints]). */
+fun matchRuleText(f: MatchFormat, bonus: Boolean = f.sweepBonus): String = when (f) {
     MatchFormat.GAMES ->
         "같은 주사위로 선공·후공 두 판을 둬요. 2-0이나 1승 1무는 승(3점), 1승 1패나 두 판 모두 무승부면 무(1점), 나머지는 패예요. " +
-            "2-0 완승이면 보너스 1점을 더 받아요(리그·조별 리그). 합계 점수는 승점이 같을 때 순위만 가려요."
+            (if (bonus) "2-0 완승이면 보너스 1점을 더 받아요(리그·조별 리그). " else "") + "합계 점수는 승점이 같을 때 순위만 가려요."
     MatchFormat.MIRRORED ->
         "같은 주사위로 선공·후공 두 판을 둬요. 더 많은 판을 이기면 승(3점), 한 판씩 나눠 가지면 두 판 합계 점수로 가리고, 합계도 같으면 무(1점)예요."
     MatchFormat.BEST_OF_3 ->

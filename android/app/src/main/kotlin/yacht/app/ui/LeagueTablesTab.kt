@@ -153,7 +153,7 @@ internal fun LadderList(lg: LeagueController, v: LeagueView, onOpen: (String) ->
         if (onlyFavourites && rows.isEmpty()) {
             item { Text("선수를 눌러 ‘☆ 응원하기’를 고르면 여기에 모여요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
         }
-        items(rows, key = { it.key }) { r -> LadderItem(r, r.key in favs) { onOpen(r.key) } }
+        items(rows, key = { it.key }) { r -> LadderItem(r, r.key in favs, r.club?.let { v.badges[it] }) { onOpen(r.key) } }
     }
 }
 
@@ -206,7 +206,7 @@ internal fun LadderFilterSheet(lg: LeagueController, v: LeagueView) {
 }
 
 @Composable
-private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
+private fun LadderItem(r: LadderRow, favourite: Boolean, badge: yacht.app.core.ClubBadge?, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -227,6 +227,7 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (favourite) Text("★ ", color = cs.secondary, fontSize = 13.sp)
+                    ClubMark(badge, 14.dp)
                     Text(
                         if (r.isMe) "🙋 나 (랭크전)" else r.shown,
                         fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -267,21 +268,22 @@ private fun LadderItem(r: LadderRow, favourite: Boolean, onClick: () -> Unit) {
 
 /**
  * The league selector's header (UX 1.7): "{icon} {league} ▾" with its rank, players and tiers; a
- * tap opens the selector ([Sheet.LEAGUES]). Nothing in a legacy season (one league, no choice).
+ * tap opens the selector ([Sheet.LEAGUES]), "정보 ›" the league's page. Nothing in a legacy
+ * season (one league, no choice).
  */
 @Composable
 internal fun LeagueHeader(lg: LeagueController, season: SeasonView) {
     val info = season.shown?.takeIf { season.national } ?: return
     val cs = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surface).clickable { lg.nav.sheet = Sheet.LEAGUES }
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-    ) {
-        Text("${info.icon} ${info.label} ▾", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = cs.primary)
-        Text(
-            listOfNotNull(info.rank?.let { "리그 랭킹 ${it}위" }, "선수 ${"%,d".format(info.members)}명", "${info.tiers}개 부").joinToString(" · "),
-            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
-        )
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surface), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).clickable { lg.nav.sheet = Sheet.LEAGUES }.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Text("${info.icon} ${info.label} ▾", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = cs.primary)
+            Text(
+                listOfNotNull(info.rank?.let { "리그 랭킹 ${it}위" }, "선수 ${"%,d".format(info.members)}명", "${info.tiers}개 부").joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = { lg.nav.open(Page.League(info.id)) }) { Text("정보 ›", fontSize = 12.sp) }
     }
 }
 
@@ -295,10 +297,16 @@ internal fun LeagueHeader(lg: LeagueController, season: SeasonView) {
 internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (season == null || season.divisions.isEmpty()) {
-        CenterText(
-            "▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.\n" +
-                matchRuleText(lg.config.matchFormat),
-        )
+        // The rules the first season will open with (national leagues for a new league).
+        val rules = lg.config
+        val how = if (rules.national) {
+            "▶ 리그를 시작하면 선수들이 나라별 국가 리그로 나뉘고 시즌 1이 열려요.\n리그마다 레이팅 순으로 부를 나누고, 같은 부끼리 " +
+                (if (rules.doubleRoundRobin) "홈·원정 두 번씩" else "한 번씩") + " 맞붙어 승점을 쌓아요. 시즌이 끝나면 위아래로 승강" +
+                (if (rules.promotionPlayoff) "하고 승강 플레이오프를 치러요.\n" else "해요.\n")
+        } else {
+            "▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.\n"
+        }
+        CenterText(how + matchRuleText(rules.matchFormat, rules.sweepPoints))
         return
     }
     val tiers = season.tiers.takeIf { it.size == season.divisions.size } ?: yacht.engine.league.Tiers.linear(season.divisions.size)
@@ -306,6 +314,8 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
     val favs = lg.favourites
     fun followed(range: IntRange) = range.firstOrNull { d -> season.divisions[d].any { it.key in favs } }
     val nav = lg.nav
+    // National clubs' badges by id (none in a legacy season).
+    val badges = lg.view?.badges.orEmpty()
     val mode = nav.tableMode
     val tier = nav.tier.coerceIn(0, tiers.count - 1)
     val d = tiers.groups(tier).let { g -> (g.first + nav.group).coerceIn(g.first, g.last) }
@@ -438,6 +448,7 @@ internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (Stri
                     ) {
                         Box(Modifier.width(4.dp).height(30.dp).background(zoneColor(r.zone)))
                         Text("${i + 1}", Modifier.width(24.dp).padding(start = 4.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                        ClubMark(r.club?.let { badges[it] }, 14.dp)
                         Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${r.played}", Modifier.width(30.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
                         Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)

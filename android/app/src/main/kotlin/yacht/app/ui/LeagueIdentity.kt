@@ -311,6 +311,16 @@ fun NationPage(lg: yacht.app.core.LeagueController, code: String, onOpen: (Strin
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("${n.confed} · 선수 ${n.players}명 (여자 ${s.women}명)" + (n.strength?.let { " · 전력 $it" } ?: ""), style = MaterialTheme.typography.labelMedium, color = cs.secondary)
         if (s.motto.isNotEmpty()) Text("🎨 ${s.motto}", style = MaterialTheme.typography.bodySmall)
+        // The league most of its players play in this season (its own, or its confederation's 연합 리그); none in a legacy season.
+        val rows = lg.view?.rows
+        val league = androidx.compose.runtime.remember(rows, code) {
+            rows.orEmpty().filter { it.nation == code && it.league.isNotEmpty() }.groupingBy { it.league }.eachCount().maxByOrNull { it.value }?.key
+        }
+        league?.let { id ->
+            LinkLine("${yacht.engine.league.LeagueIds.icon(id)} ${yacht.engine.league.LeagueIds.label(id)}", "${yacht.engine.league.Nations.of(code)?.short ?: code} 선수들이 뛰는 리그") {
+                lg.nav.open(yacht.app.core.Page.League(id))
+            }
+        }
         Heading("🏆 국가대항전")
         Small(
             if (n.editions == 0) "아직 국가대항전에 나간 적이 없어요."
