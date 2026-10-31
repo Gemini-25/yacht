@@ -494,10 +494,12 @@ class StatsBook(
     /**
      * What this season's match ratings are measured against ([GameFacts.ratings]): the season
      * before's league ([RatingScale]); in a league's first season its own official games so far
-     * (once there are [SCALE_GAMES], before that [RatingScale.FALLBACK]); [RatingScale.V1] for a
-     * season that began before 평점 2.0.
+     * (once there are [SCALE_GAMES], before that [RatingScale.FALLBACK]; a league whose seasons
+     * are shorter than that measures over as many seasons as it takes); [RatingScale.V1] for a
+     * season that began before 평점 2.0. Between a first season's close and the next start (a
+     * friendly then), the next season's.
      */
-    val ratingScale: RatingScale get() = scale ?: measured() ?: RatingScale.FALLBACK
+    val ratingScale: RatingScale get() = scale ?: measured() ?: nextScale ?: RatingScale.FALLBACK
 
     /** The scale of this season's official games so far; null before [SCALE_GAMES]. Rounded as stats.txt keeps it. */
     private fun measured(): RatingScale? {
@@ -564,7 +566,8 @@ class StatsBook(
             rookieKeys.clear()
             seasonStats.clear()
             breaks.clear()
-            resetMeta()
+            // Still measured as it goes: the games so far count on (too few for a scale yet).
+            resetMeta(scaleToo = scale != null)
         }
         // Whole points, as stats.txt keeps them (the same after a restart).
         for ((k, r) in ratings) startRatings.putIfAbsent(k, if (r.isNaN()) r else Math.rint(r))
@@ -734,17 +737,19 @@ class StatsBook(
         }
     }
 
-    /** The season's meta, rating scale data and review trackers start again. */
-    private fun resetMeta() {
+    /** The season's meta, rating scale data ([scaleToo]) and review trackers start again. */
+    private fun resetMeta(scaleToo: Boolean = true) {
         metaCards = 0
         metaSums.fill(0)
         metaZeros.fill(0)
         metaGames = 0
         metaScore = 0
-        scaleGames = 0
-        scaleSum = 0
-        scaleSquares = 0
-        scaleParts = 0
+        if (scaleToo) {
+            scaleGames = 0
+            scaleSum = 0
+            scaleSquares = 0
+            scaleParts = 0
+        }
         topGame = null
         topRaw = Double.NEGATIVE_INFINITY
         topUpset = null
@@ -1078,13 +1083,14 @@ class StatsBook(
         )
         archive.putReview(review, keys.size)
 
-        // The next season's match ratings are measured against this one's games.
+        // The next season's match ratings are measured against this one's games (a season too
+        // short to measure, in a league without a scale yet, hands its games on to the next).
         nextScale = measured() ?: scale?.takeIf { it.version >= 2 }
 
         // The next season starts from nothing.
         seasonStats.clear()
         breaks.clear()
-        resetMeta()
+        resetMeta(scaleToo = nextScale != null)
         ended = n
         return SeasonEnd(n, awards, events, inducted, dynasties, review)
     }

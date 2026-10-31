@@ -437,10 +437,14 @@ class StatsTest {
         val l = lines.first()
         assertEquals(listOf(0, 1, 9, 0, 0, 27), listOf(l.division, l.position, l.wins, l.draws, l.losses, l.points))
         assertEquals(1599.0, l.rating, 1.0)
-        // 평점 2.0 on the fallback scale (too few games for the league's own): a match won 220-180
-        // and 215-185 is worth 6.255 + 6.52 (first in game 1) or 6.675 + 6.1 (second in it).
-        assertEquals(RatingScale.FALLBACK, lg.book.ratingScale)
+        // 평점 2.0 on the fallback scale in season 1 (too few games for the league's own): a match
+        // won 220-180 and 215-185 is worth 6.255 + 6.52 (first in game 1) or 6.675 + 6.1 (second in it).
         assertEquals(6.3875, l.avgRating, 0.006)
+        // A small league's seasons are too short to measure one by one: their games count on until
+        // there are enough (during season 3 here), and the league's scale is its own from then on.
+        val scale = lg.book.ratingScale
+        assertTrue(scale != RatingScale.FALLBACK && kotlin.math.abs(scale.mean - 200.0) < 1, scale.toString())
+        assertTrue(lines[2].avgRating > l.avgRating + 0.3, lines.toString())
         assertEquals(listOf(2, 3), lg.archive.lines("rookie").map { it.season })
         assertEquals(1, lg.archive.lines("rookie").first().division)
         assertEquals(3, lg.book.career("ai1")!!.seasons)
@@ -455,7 +459,7 @@ class StatsTest {
         val review = assertNotNull(s3.review)
         assertEquals(review, lg.archive.pendingReview)
         assertTrue(review.sentences.first().startsWith("3시즌 1부 우승은 선수1이에요."), review.sentences.first())
-        assertTrue(review.sentences.any { it.startsWith("MVP는 평균 평점 6.39의 선수1이에요") }, review.sentences.toString())
+        assertTrue(review.sentences.any { it.startsWith("MVP는 평균 평점 6.98의 선수1이에요") }, review.sentences.toString())
         assertTrue(review.sentences.any { it == "1부 상위 5위 중 5자리를 기대점수형 계열이 차지했어요." }, review.sentences.toString())
         // A record broken: its value in brackets after the record's name, not after the verb.
         val said = s2.review!!.sentences

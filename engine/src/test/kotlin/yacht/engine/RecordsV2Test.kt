@@ -253,6 +253,36 @@ class RecordsV2Test {
     }
 
     @Test
+    fun aLeagueOfShortSeasonsMeasuresItsScaleOverSeveral() {
+        // Seasons of 300 official side-games (a small league): the games of one are too few for a
+        // scale of its own, so they count on into the next until the league has SCALE_GAMES,
+        // rather than every season staying on the fallback (230, a league of hand-made AIs).
+        val book = StatsBook()
+        book.startSeason(1, emptyMap())
+        season(book, 150)
+        assertEquals(RatingScale.FALLBACK, book.ratingScale)
+        book.startSeason(2, emptyMap())
+        assertEquals(RatingScale.FALLBACK, book.ratingScale)
+        season(book, 150, from = 150)
+        assertEquals(RatingScale.FALLBACK, StatsBook.decode(book.encode()).ratingScale)
+        book.startSeason(3, emptyMap())
+        season(book, 200, from = 300)
+        val measured = book.ratingScale
+        assertTrue(measured != RatingScale.FALLBACK && measured.version == 2, measured.toString())
+        // The same as one season of all those games, and the same after a restart.
+        val one = StatsBook().apply { startSeason(1, emptyMap()) }
+        season(one, 500)
+        assertEquals(one.ratingScale, measured)
+        assertEquals(measured, StatsBook.decode(book.encode()).ratingScale)
+        // From then on the league has a scale: the next season is measured against it.
+        book.startSeason(4, emptyMap())
+        assertEquals(measured, book.ratingScale)
+        season(book, 150, from = 500)
+        book.startSeason(5, emptyMap())
+        assertEquals(measured, book.ratingScale)
+    }
+
+    @Test
     fun aSeasonBegunOnTheFirstRatingEndsOnIt() {
         // A stats.txt from before 평점 2.0 in the middle of a season: no "rating" line.
         val old = StatsBook()
