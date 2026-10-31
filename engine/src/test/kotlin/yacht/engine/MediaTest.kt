@@ -649,6 +649,10 @@ class MediaTest {
             assertTrue("자이언트 킬링" in a.headline || "이변" in a.headline, a.headline)
         }
         assertTrue(texts("club_race", listOf("c1", "c2"), listOf("KR", "25", "lead"), Comp.CLUB).all { "서울 타이거즈" in it && "2.5점" in it })
+        // Level on points, a club race says so (no "0.0점"); a title race's lead change is 3 as every title race.
+        val level = texts("club_race", listOf("c1", "c2"), listOf("KR", "0", "lead"), Comp.CLUB) + texts("club_race", listOf("c1", "c2"), listOf("KR", "0", "close"), Comp.CLUB)
+        assertTrue(level.all { ("점수는 같지만" in it || "점수가 같아졌어요" in it) && "0.0" !in it }, level.toString())
+        assertEquals(3, News.article(LeagueEvent("title_race", 2, listOf("ai1", "ai2"), listOf("1", "lead", "KR"), Comp.LEAGUE), name).importance)
         // Near a record: how far it is, and whose it is.
         val chase = texts("record_chase", listOf("ai1", "ai2"), listOf("CAREER_YACHTS", "통산 최다 요트까지 4개", "1230", "1233"))
         assertTrue(chase.all { "통산 최다 요트까지 4개예요" in it && "승률 AI (앱 기본)" in it }, chase.toString())

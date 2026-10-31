@@ -632,10 +632,11 @@ object News {
                     T("선두 다툼 안갯속: {a}·{b} 승점 동률", "{a|과} {b}의 승점이 같아요. 남은 경기에서 한 번만 미끄러져도 순위가 바뀌어요."),
                     T("{a}·{b}, 승점 같은 채 선두 경쟁", "{top} 1위와 2위의 승점이 같아요. 우승의 향방은 마지막까지 알 수 없어요."),
                 ) to 3
+                // (3, as every title race: design_ux 5.2's scale; a title is 4 and up.)
                 arg(1) == "lead" -> listOf(
                     T("선두 교체! {a}, 1위로", "{a|이} {b|을} 끌어내리고 {top} 선두에 올랐어요. 두 선수의 승점 차는 {gap}점이에요."),
                     T("{a}, {top} 선두 등극", "{a|이} 1위 자리를 차지했어요. 2위 {b|과} 승점 {gap}점 차라 아직 안심할 수 없어요."),
-                ) to 4
+                ) to 3
                 else -> listOf(
                     T("우승 경쟁 점입가경: {a}·{b} {gap}점 차", "시즌 막바지, 선두 {a|과} 2위 {b}의 승점 차가 {gap}점으로 좁혀졌어요. 마지막까지 우승의 향방을 알 수 없어요."),
                     T("{b}, 선두 {a} 턱밑 추격", "{b|이} 선두 {a|을} 승점 {gap}점 차로 쫓고 있어요. 남은 라운드가 우승을 가를 거예요."),
@@ -1222,11 +1223,22 @@ object News {
             // [leader club, second club] (league, gap x 10, "lead" | "close").
             arg(0)?.let { v["lg"] = LeagueIds.label(it) }
             arg(1)?.toIntOrNull()?.let { v["gap"] = String.format(Locale.ROOT, "%.1f", it / 10.0) }
-            if (arg(2) == "lead") listOf(
-                T("{a}, {lg} 클럽 순위 1위로", "{a|이} {b|을} 제치고 {lg} 클럽 순위 맨 위에 올랐어요. 두 클럽의 차이는 {gap}점이에요."),
-            ) to 3 else listOf(
-                T("클럽 순위 접전: {a}·{b}", "{lg} 클럽 순위에서 {a|와} {b}의 차이가 {gap}점으로 줄었어요. 선수들의 남은 경기에 클럽 우승이 걸렸어요."),
-            ) to 3
+            // Level on points: the order is the tie-break's.
+            val level = arg(1)?.toIntOrNull() == 0
+            when {
+                arg(2) == "lead" && level -> listOf(
+                    T("{a}, {lg} 클럽 순위 1위로", "{a|이} {b|과} 점수는 같지만 순위에서 앞서 {lg} 클럽 순위 맨 위에 올랐어요."),
+                )
+                arg(2) == "lead" -> listOf(
+                    T("{a}, {lg} 클럽 순위 1위로", "{a|이} {b|을} 제치고 {lg} 클럽 순위 맨 위에 올랐어요. 두 클럽의 차이는 {gap}점이에요."),
+                )
+                level -> listOf(
+                    T("클럽 순위 접전: {a}·{b}", "{lg} 클럽 순위에서 {a|와} {b}의 점수가 같아졌어요. 선수들의 남은 경기에 클럽 우승이 걸렸어요."),
+                )
+                else -> listOf(
+                    T("클럽 순위 접전: {a}·{b}", "{lg} 클럽 순위에서 {a|와} {b}의 차이가 {gap}점으로 줄었어요. 선수들의 남은 경기에 클럽 우승이 걸렸어요."),
+                )
+            } to 3
         }
         "intl_week" -> {
             // [] (competition code, stage, "league:points" for the 1 to 3 leagues that earned most, then "lead" when the first leads the season).
