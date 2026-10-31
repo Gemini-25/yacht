@@ -108,7 +108,7 @@ internal object ShotsLeague : LeagueShots {
                 shot(c, out, "lg55_club", heightDp = 1500)
                 nav.go(LeagueTab.TABLES)
             }
-            nav.open(Page.Market)
+            nav.open(Page.Market())
             shot(c, out, "lg74_market", heightDp = 1300)
             nav.go(LeagueTab.TABLES)
         }

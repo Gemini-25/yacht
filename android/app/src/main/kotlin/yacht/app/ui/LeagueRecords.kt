@@ -82,7 +82,7 @@ private fun MoreList(lg: LeagueController, v: LeagueView) {
         LinkLine("🌱 유망주", "22세 이하 선수를 잠재력 순으로") { nav.open(Page.Prospects) }
         LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { nav.open(Page.Legends) }
         LinkLine("🧬 계열별", "AI 계열마다 선수와 계열 대 계열 전적") { nav.open(Page.Families) }
-        LinkLine("📊 메타 리포트", "칸마다 리그 평균 점수와 0점 비율, 상위권의 성향") { nav.open(Page.Meta) }
+        LinkLine("📊 메타 리포트", "칸마다 리그 평균 점수와 0점 비율, 상위권의 성향") { nav.open(Page.Meta()) }
         if (first != null) LinkLine("⚖ 선수 비교", "두 선수의 기록과 능력치를 나란히") { nav.open(Page.Compare(first.key)) }
         LinkLine("⚗ AI 연구소", "두 AI를 수천 번 붙여서 누가 얼마나 강한지 재요") { nav.open(Page.Lab) }
         if (v.season?.national == true || v.season?.nextNational == true) LinkLine("🏛 요트협회 기록", "안건과 결정, 시상의 역사") { nav.open(Page.Federation) }

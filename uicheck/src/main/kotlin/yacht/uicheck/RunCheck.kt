@@ -39,13 +39,16 @@ import kotlin.system.exitProcess
  * - `week` presses ▶ in 1주씩 sixty times (each run must stop by itself one week on, with
  *   nothing left over), then plays on in 계속; `week lab` the same with an AI lab experiment
  *   running alongside (its games must not cut a week short).
- * - `size [record|check] [players...]` (minutes and seed are not read): new leagues of 200 and
- *   1000 players (or the ones given) from a fixed seed play [SIZE_SEASONS] seasons; it prints
- *   every file's bytes after each season, the CPU seconds each season took and a reference
+ * - `size [record|check|record2|check2] [players...]` (minutes and seed are not read): new leagues
+ *   of 200 and 1000 players (or the ones given) from a fixed seed play [SIZE_SEASONS] seasons; it
+ *   prints every file's bytes after each season, the CPU seconds each season took and a reference
  *   workload's (the machine's speed). `record` writes them to
  *   uicheck/src/main/resources/size_baseline.txt (run from the repository); `check` fails when the
  *   folder, its 30-season projection or the CPU per season (by more than 5%, in seconds and per
  *   reference) is above that baseline (beyond the run-to-run noise, see [SIZE_MARGIN]).
+ *   `record2` and `check2` are the club world's gate ([PHASE2]): the baseline
+ *   size_baseline2.txt (recorded on the engine before the club world), a projection that grows
+ *   clubs.txt and world.txt too, and 10% of room in the folder, the projection and the CPU.
  * - `national [shots dir|-] [players]` (minutes and seed are not read): a new league of national leagues
  *   ([NATIONAL_CONFIG]) plays one season and the rollover; it fails on any error the app is told
  *   of (every snapshot included), and draws every league's 순위 › 리그 in every view halfway
@@ -205,7 +208,6 @@ private const val SIZE_SEASONS = 3
 private const val SIZE_SEED = 20261030L
 private const val SIZE_MINUTES = 60L
 private const val BASELINE = "size_baseline.txt"
-private val BASELINE_SOURCE = File("uicheck/src/main/resources", BASELINE)
 
 /** The files that grow every season and keep growing (the projection's 30 seasons). */
 private val GROWING = listOf("archive.txt", "honours.txt", MatchCenter.LOGS)
@@ -222,6 +224,28 @@ private val GROWING = listOf("archive.txt", "honours.txt", MatchCenter.LOGS)
 private const val SIZE_MARGIN = 1.01
 private const val PROJECTION_MARGIN = 1.03
 private const val CPU_MARGIN = 1.05
+
+/**
+ * A size gate: its baseline (a resource of uicheck, recorded with `record` or `record2`), the
+ * files its projection grows 30 times, and how far above the baseline a run may be and pass.
+ */
+private class SizeGate(val baseline: String, val growing: List<String>, val folder: Double, val projection: Double, val cpu: Double) {
+    val source get() = File("uicheck/src/main/resources", baseline)
+
+    /** A margin as the report says it ("+1%"). */
+    fun pct(m: Double) = "+" + "%.0f".format(java.util.Locale.ROOT, (m - 1) * 100) + "%"
+}
+
+/** `record` / `check`: the league redesign's gate. */
+private val PHASE1 = SizeGate(BASELINE, GROWING, SIZE_MARGIN, PROJECTION_MARGIN, CPU_MARGIN)
+
+/**
+ * `record2` / `check2`: the club world's gate (league phase 2). Its baseline was recorded on the
+ * 3ce4b93 engine, before any club world line; the club world may cost up to 10% in the folder,
+ * in its 30-season projection (which grows clubs.txt and world.txt as well: their histories,
+ * legends, coaches and finals pile up season by season) and in CPU a season.
+ */
+private val PHASE2 = SizeGate("size_baseline2.txt", GROWING + listOf("clubs.txt", "world.txt"), 1.10, 1.10, 1.10)
 
 /**
  * One measured league: [files] its folder after each season (bytes by name), [cpu] the CPU
@@ -241,35 +265,35 @@ private data class SizeRun(
     fun total(seasons: Int = files.size): Long = files[seasons - 1].values.sum()
 
     /**
-     * The folder after its seasons plus 30 more seasons of the last one's growth of [GROWING].
-     * The season reviews grow only until their cap ([Archive.REVIEWS], or [Archive.SMALL_REVIEWS]
-     * below [Archive.SMALL_LEAGUE] players) and then turn over: their growth counts once, up to the
-     * cap, not 30 times (a baseline without [reviews] kept one, replaced each season). ladder.txt
-     * is not projected, here as in the baseline (compare its line).
+     * The folder after its seasons plus 30 more seasons of the last one's growth of [growing]
+     * (a gate's files: [GROWING], or those and the club world's). The season reviews grow only
+     * until their cap ([Archive.REVIEWS], or [Archive.SMALL_REVIEWS] below [Archive.SMALL_LEAGUE]
+     * players) and then turn over: their growth counts once, up to the cap, not 30 times (a
+     * baseline without [reviews] kept one, replaced each season). ladder.txt is not projected,
+     * here as in the baseline (compare its line).
      */
-    val projected: Long
-        get() {
-            var growth = GROWING.sumOf { (files.last()[it] ?: 0L) - (files.getOrNull(files.size - 2)?.get(it) ?: 0L) }
-            var fill = 0L
-            val now = reviews.lastOrNull()
-            if (now != null && reviews.size == files.size && files.size >= 2) {
-                growth -= now.bytes - reviews[reviews.size - 2].bytes
-                val cap = if (players < Archive.SMALL_LEAGUE) Archive.SMALL_REVIEWS else Archive.REVIEWS
-                if (now.count > 0) fill = (cap - now.count).coerceAtLeast(0) * (now.bytes / now.count)
-            }
-            return total() + 30 * growth + fill
+    fun projected(growing: List<String>): Long {
+        var growth = growing.sumOf { (files.last()[it] ?: 0L) - (files.getOrNull(files.size - 2)?.get(it) ?: 0L) }
+        var fill = 0L
+        val now = reviews.lastOrNull()
+        if (now != null && reviews.size == files.size && files.size >= 2) {
+            growth -= now.bytes - reviews[reviews.size - 2].bytes
+            val cap = if (players < Archive.SMALL_LEAGUE) Archive.SMALL_REVIEWS else Archive.REVIEWS
+            if (now.count > 0) fill = (cap - now.count).coerceAtLeast(0) * (now.bytes / now.count)
         }
+        return total() + 30 * growth + fill
+    }
 
     val cpuPerSeason: Double get() = cpu.average()
 
     /** [cpuPerSeason] in units of [ref] (null without it). */
     val cpuRelative: Double? get() = if (ref > 0) cpuPerSeason / ref else null
 
-    fun encode(): String = buildString {
+    fun encode(growing: List<String> = GROWING): String = buildString {
         append("league $players\n")
         for ((i, f) in files.withIndex()) append("files ${i + 1} " + f.entries.joinToString(" ") { "${it.key}=${it.value}" } + "\n")
         for (i in files.indices) append("total ${i + 1} ${total(i + 1)}\n")
-        append("projected $projected\n")
+        append("projected ${projected(growing)}\n")
         for ((i, x) in cpu.withIndex()) append("cpu ${i + 1} ${"%.2f".format(java.util.Locale.ROOT, x)}\n")
         if (ref > 0) append("ref ${"%.2f".format(java.util.Locale.ROOT, ref)}\n")
         for ((i, r) in reviews.withIndex()) append("reviews ${i + 1} ${r.bytes} ${r.count}\n")
@@ -309,9 +333,10 @@ private data class SizeRun(
     }
 }
 
-/** `size`: measures each league, then prints, records or checks against the baseline. */
+/** `size`: measures each league, then prints, records or checks against a gate's baseline ([PHASE1], or [PHASE2] with `record2`/`check2`). */
 private fun sizes(tablesDir: File, speed: LeagueSpeed, args: List<String>) {
-    val mode = args.firstOrNull()?.takeIf { it == "record" || it == "check" }
+    val mode = args.firstOrNull()?.takeIf { it in listOf("record", "check", "record2", "check2") }
+    val gate = if (mode == "record2" || mode == "check2") PHASE2 else PHASE1
     val players = args.drop(if (mode == null) 0 else 1).map { it.toInt() }.ifEmpty { listOf(200, 1000) }
     var cache: File? = null
     val dirs = ArrayList<File>()
@@ -319,61 +344,67 @@ private fun sizes(tablesDir: File, speed: LeagueSpeed, args: List<String>) {
         val (run, folder) = measure(tablesDir, speed, n, cache)
         cache = folder
         dirs += folder.parentFile
-        println(run.encode())
+        println(run.encode(gate.growing))
         run
     }
     for (d in dirs) d.deleteRecursively()
     when (mode) {
-        "record" -> {
-            BASELINE_SOURCE.parentFile.mkdirs()
-            BASELINE_SOURCE.writeText(
-                "# RunCheck size: new leagues under the app's default rules, from the seed $SIZE_SEED, at $speed, $SIZE_SEASONS seasons each.\n" +
+        "record", "record2" -> {
+            gate.source.parentFile.mkdirs()
+            gate.source.writeText(
+                (if (gate === PHASE2) "# The club world's gate (league phase 2): recorded on the engine before the club world, checked with 10% of room.\n" else "") +
+                    "# RunCheck size: new leagues under the app's default rules, from the seed $SIZE_SEED, at $speed, $SIZE_SEASONS seasons each.\n" +
                     "# files n: every file of the league folder after season n's close and its saves, in bytes (the hand-made AIs' table caches, *.bin, not counted).\n" +
-                    "# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of ${GROWING.joinToString()}\n" +
+                    "# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of ${gate.growing.joinToString()}\n" +
                     "# (the season reviews, which stop growing at their cap, to the cap once; ladder.txt is not projected).\n" +
                     "# reviews n: the bytes and the number of the season reviews archive.txt keeps after season n.\n" +
                     "# cpu n: the CPU seconds of the whole process in season n, from its start to the stop right after its close (the first from its first match on).\n" +
                     "# ref: the CPU seconds of a fixed workload on as many threads (the machine's speed: the median of before, between the seasons and after).\n" +
-                    runs.joinToString("") { it.encode() },
+                    runs.joinToString("") { it.encode(gate.growing) },
             )
-            println("recorded $BASELINE_SOURCE")
+            println("recorded ${gate.source}")
         }
-        "check" -> check(runs)
+        "check", "check2" -> check(runs, gate)
     }
 }
 
-/** Fails when a measured league is above the baseline (its folder, the 30-season projection, or the CPU per season by more than 5% in seconds and per reference) beyond the noise. */
-private fun check(runs: List<SizeRun>) {
+/**
+ * Fails when a measured league is above [gate]'s baseline (its folder, the 30-season projection,
+ * or the CPU per season in seconds and per reference) by more than the gate's margins.
+ */
+private fun check(runs: List<SizeRun>, gate: SizeGate) {
     // The source file when run from the repository (a baseline just recorded), else the one built in.
-    val text = BASELINE_SOURCE.takeIf { it.exists() }?.readText() ?: object {}.javaClass.getResource("/$BASELINE")?.readText() ?: error("no $BASELINE")
+    val text = gate.source.takeIf { it.exists() }?.readText() ?: object {}.javaClass.getResource("/${gate.baseline}")?.readText() ?: error("no ${gate.baseline}")
     val baseline = SizeRun.decode(text).associateBy { it.players }
     val failed = ArrayList<String>()
     for (r in runs) {
         val b = baseline[r.players] ?: error("no baseline for ${r.players} players")
-        println("${r.players} players, after ${r.files.size} seasons (baseline -> now):")
+        println("${r.players} players, after ${r.files.size} seasons (${gate.baseline} -> now):")
         for (name in (b.files.last().keys + r.files.last().keys).sorted()) {
             val was = b.files.last()[name] ?: 0L
             val now = r.files.last()[name] ?: 0L
             println("  %-16s %,10d -> %,10d (%+,d)".format(name, was, now, now - was))
         }
+        val bp = b.projected(gate.growing)
+        val rp = r.projected(gate.growing)
         println("  %-16s %,10d -> %,10d (%+,d)".format("total", b.total(), r.total(), r.total() - b.total()))
-        println("  %-16s %,10d -> %,10d (%+,d)".format("30 seasons", b.projected, r.projected, r.projected - b.projected))
-        println("  (30 seasons: archive.txt, honours.txt and the log book grown 30 times their last season's growth, the season reviews to their cap; ladder.txt not projected)")
+        println("  %-16s %,10d -> %,10d (%+,d)".format("30 seasons", bp, rp, rp - bp))
+        println("  (30 seasons: ${gate.growing.joinToString()} grown 30 times their last season's growth, the season reviews to their cap; ladder.txt not projected)")
         println("  %-16s %10.1f -> %10.1f s".format("CPU a season", b.cpuPerSeason, r.cpuPerSeason))
         val was = b.cpuRelative
         val now = r.cpuRelative
         if (was != null && now != null) println("  %-16s %10.2f -> %10.2f (ref %.2f -> %.2f s)".format("CPU per ref", was, now, b.ref, r.ref))
-        if (r.total() > b.total() * SIZE_MARGIN) failed += "${r.players} players: folder ${r.total()} > ${b.total()} + 1%"
-        if (r.projected > b.projected * PROJECTION_MARGIN) failed += "${r.players} players: 30 seasons ${r.projected} > ${b.projected} + 3%"
+        if (r.total() > b.total() * gate.folder) failed += "${r.players} players: folder ${r.total()} > ${b.total()} ${gate.pct(gate.folder)}"
+        if (rp > bp * gate.projection) failed += "${r.players} players: 30 seasons $rp > $bp ${gate.pct(gate.projection)}"
         // Above in seconds and, when both have it, per reference too: a slower machine raises only
         // the first, the reference's own noise only the second, more work both.
-        if (r.cpuPerSeason > b.cpuPerSeason * CPU_MARGIN && (was == null || now == null || now > was * CPU_MARGIN)) {
-            failed += "${r.players} players: CPU a season ${"%.1f".format(r.cpuPerSeason)} > ${"%.1f".format(b.cpuPerSeason)} + 5%" +
-                if (was != null && now != null) " (per ref ${"%.2f".format(now)} > ${"%.2f".format(was)} + 5%)" else ""
+        if (r.cpuPerSeason > b.cpuPerSeason * gate.cpu && (was == null || now == null || now > was * gate.cpu)) {
+            failed += "${r.players} players: CPU a season ${"%.1f".format(r.cpuPerSeason)} > ${"%.1f".format(b.cpuPerSeason)} ${gate.pct(gate.cpu)}" +
+                if (was != null && now != null) " (per ref ${"%.2f".format(now)} > ${"%.2f".format(was)} ${gate.pct(gate.cpu)})" else ""
         }
     }
     check(failed.isEmpty()) { failed.joinToString("; ") }
-    println("size: within the baseline")
+    println("size: within the baseline (${gate.baseline})")
 }
 
 /** The whole process's CPU seconds (every thread). */

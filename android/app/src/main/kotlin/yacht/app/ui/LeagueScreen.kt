@@ -29,8 +29,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -91,7 +95,7 @@ fun LeagueScreen(c: AppController) {
             }
             val clock = v?.clock
             if (clock != null) WeekBar(clock, Modifier.fillMaxWidth().height(4.dp).clickable { showWeek(nav) }) else Spacer(Modifier.height(4.dp))
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(Modifier.weight(1f).fillMaxWidth().shotSection(BODY_SECTION)) {
                 when {
                     v == null -> CenterText("리그 기록을 불러오는 중…")
                     page != null -> PageBody(c, v, page)
@@ -155,9 +159,13 @@ private fun LeagueTabBar(selected: LeagueTab, onTab: (LeagueTab) -> Unit) {
     }
 }
 
-/** A tab's sub-views as one row of chips that never needs scrolling at a phone's width ([state] hoisted for the harness). */
+/**
+ * A row of chips ([state] hoisted for the harness): a tab's sub-views, which never need scrolling
+ * at a phone's width, and a page's tabs or lists ([yacht.app.core.PageChips]), which scroll when a
+ * large font makes them wider than the screen (ChipWidthTest).
+ */
 @Composable
-private fun <T> ChipRow(state: LazyListState, entries: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
+internal fun <T> ChipRow(state: LazyListState, entries: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
     LazyRow(
         Modifier.fillMaxWidth().height(40.dp),
         state = state,
@@ -239,7 +247,8 @@ private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
     val cs = MaterialTheme.colorScheme
     val nav = lg.nav
     Row(Modifier.fillMaxWidth().height(56.dp).background(cs.background).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { nav.close(page) }) { Text("←", fontSize = 20.sp, modifier = Modifier.clearAndSetSemantics { contentDescription = "뒤로" }) }
+        // An encyclopedia page steps back along its reading chain first.
+        IconButton(onClick = { nav.leave(page) }) { Text("←", fontSize = 20.sp, modifier = Modifier.clearAndSetSemantics { contentDescription = "뒤로" }) }
         Text(pageTitle(lg, v, page), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         when (page) {
             is Page.Nation -> {
@@ -272,7 +281,7 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     is Page.Competition -> v?.comps?.firstOrNull { it.first == page.comp }?.second?.title ?: page.comp.label
     is Page.Match -> "경기 리포트"
     is Page.Club -> v?.clubs?.clubs?.firstOrNull { it.id == page.id }?.name ?: v?.badges?.get(page.id)?.name ?: "클럽"
-    Page.Market -> "이적·드래프트"
+    is Page.Market -> "이적·드래프트"
     is Page.Nation -> Nations.of(page.code)?.let { "${it.flag} ${it.name} 대표팀" } ?: page.code
     Page.Nations -> "국가대표 랭킹"
     is Page.Compare -> "선수 비교"
@@ -282,7 +291,7 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     Page.Prospects -> "유망주"
     Page.Legends -> "레전드 보관소"
     Page.Families -> "계열별"
-    Page.Meta -> "메타 리포트"
+    is Page.Meta -> "메타 리포트"
     Page.Follows -> "응원"
     Page.Federation -> "요트협회"
     is Page.Leaderboard -> yacht.app.core.LeagueAnalytics.title(page.kind)
@@ -292,6 +301,14 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     is Page.Matches -> page.title
     is Page.League -> LeagueIds.label(page.id)
     is Page.Player -> lg.name(page.key)
+    // The phase's new pages (UX 14.1); their own stages name them in full (a coach's name, an arc's).
+    is Page.Coach -> "감독"
+    is Page.ClubRanking -> page.scope?.let { "${LeagueIds.label(it)} 클럽 랭킹" } ?: "세계 클럽 랭킹"
+    is Page.Press -> "기자단"
+    Page.Events, is Page.Event -> "세계 정세"
+    is Page.WcStory -> "시즌 ${page.season} 요트 월드컵"
+    is Page.Encyclopedia -> "백과사전"
+    Page.Search -> "백과사전 검색"
 }
 
 /** The open page's body. */
@@ -305,7 +322,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Competition -> CompetitionScreen(lg, v, page, open)
         is Page.Match -> MatchReportPage(c, v, page)
         is Page.Club -> ClubPageBody(lg, v, page, open)
-        Page.Market -> MarketBody(lg, v)
+        is Page.Market -> MarketBody(lg, v)
         is Page.League -> LeaguePageBody(lg, v, page, open)
         Page.Federation -> FederationPage(lg, v)
         is Page.Nation -> NationPage(lg, page.code, open)
@@ -318,7 +335,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         Page.Prospects -> Prospects(lg, open)
         Page.Legends -> Legends(lg, open)
         Page.Families -> FamilyList(lg, v, open)
-        Page.Meta -> {
+        is Page.Meta -> {
             androidx.compose.runtime.LaunchedEffect(v.season?.number) { lg.loadRecords() }
             MetaReportView(lg.records)
         }
@@ -327,5 +344,31 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Facts -> FactsPage(lg, v, page)
         Page.Chronicle -> ChroniclePage(lg, v)
         is Page.Matches -> MatchesPage(c, v, page)
+        // Not reachable from any link yet: each stage that fills one in adds its entry points with it.
+        is Page.Coach, is Page.ClubRanking, is Page.Press, Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> StubPage()
     }
 }
+
+/**
+ * Where the screenshot harness collects the blocks [shotSection] names: the name, where the block
+ * starts and where it ends, in dp from the picture's top. Null on the phone, where nobody asks.
+ */
+internal val LocalShotSections = staticCompositionLocalOf<((String, Float, Float) -> Unit)?> { null }
+
+/**
+ * Names a block of a page for the screenshot harness's height and first-screen checks: once laid
+ * out, where it starts and ends goes to [LocalShotSections]. Nothing changes on the phone.
+ */
+@Composable
+internal fun Modifier.shotSection(name: String): Modifier {
+    val record = LocalShotSections.current ?: return this
+    val density = LocalDensity.current.density
+    // Where it is laid out, not clipped by the screen: a block scrolled out of view says where it starts.
+    return onGloballyPositioned { c ->
+        val top = c.positionInRoot().y
+        record(name, top / density, (top + c.size.height) / density)
+    }
+}
+
+/** The league screen's body (the tab or the page below the bars): first-screen checks measure from its top. */
+internal const val BODY_SECTION = "body"
