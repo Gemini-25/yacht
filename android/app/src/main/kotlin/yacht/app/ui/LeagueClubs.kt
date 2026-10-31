@@ -184,7 +184,7 @@ private fun LegacyClubsTab(lg: LeagueController, v: ClubsView?, format: MatchFor
         item {
             Column(Modifier.padding(top = 6.dp)) {
                 LinkLine(if (all) "클럽 전체 (우승 순) 접기" else "클럽 전체 (우승 순)", "${v.clubs.size}개 클럽의 우승과 자금") { all = !all }
-                LinkLine("이적·드래프트", "시즌이 끝나면 상금으로 열리는 이적 시장과 드래프트") { nav.open(Page.Market) }
+                LinkLine("이적·드래프트", "시즌이 끝나면 상금으로 열리는 이적 시장과 드래프트") { nav.open(Page.Market()) }
             }
         }
         if (all) {
@@ -383,7 +383,7 @@ private fun NationalClubsTab(lg: LeagueController, v: LeagueView, season: Season
         item {
             Column(Modifier.padding(top = 6.dp)) {
                 LinkLine(if (all) "클럽 전체 (우승 순) 접기" else "클럽 전체 (우승 순)", t?.let { "${it.all.size}개 클럽의 우승과 자금" }) { all = !all }
-                LinkLine("이적·드래프트", "해외 이적, 귀국, 국내 이적과 드래프트") { nav.open(Page.Market) }
+                LinkLine("이적·드래프트", "해외 이적, 귀국, 국내 이적과 드래프트") { nav.open(Page.Market()) }
                 if (v.comps.any { it.first == Comp.CLUB_CUP }) LinkLine("🏟 ${Comp.CLUB_CUP.label}", "나라마다 우승 클럽이 겨루는 단체전") { nav.open(Page.Competition(Comp.CLUB_CUP)) }
             }
         }

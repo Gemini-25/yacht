@@ -1,0 +1,38 @@
+# The club world's gate (league phase 2): recorded on the engine before the club world, checked with 10% of room.
+# RunCheck size: new leagues under the app's default rules, from the seed 20261030, at FULL, 3 seasons each.
+# files n: every file of the league folder after season n's close and its saves, in bytes (the hand-made AIs' table caches, *.bin, not counted).
+# total n: their sum; projected: the total after the last season plus 30 seasons of its growth of archive.txt, honours.txt, matchlogs.bin, clubs.txt, world.txt
+# (the season reviews, which stop growing at their cap, to the cap once; ladder.txt is not projected).
+# reviews n: the bytes and the number of the season reviews archive.txt keeps after season n.
+# cpu n: the CPU seconds of the whole process in season n, from its start to the stop right after its close (the first from its first match on).
+# ref: the CPU seconds of a fixed workload on as many threads (the machine's speed: the median of before, between the seasons and after).
+league 200
+files 1 archive.txt=10550 clubs.txt=3799 config.txt=445 federation.txt=468 highlights.txt=10148 honours.txt=1114 lab.txt=11 ladder.txt=113379 matchlogs.bin=153 nations.txt=19 news.txt=53066 prefs.txt=4 roster.txt=55745 season.txt=12962 stats.txt=57081
+files 2 archive.txt=16921 clubs.txt=4091 config.txt=445 federation.txt=878 highlights.txt=10496 honours.txt=2370 lab.txt=11 ladder.txt=143851 matchlogs.bin=263 nations.txt=19 news.txt=51550 prefs.txt=4 roster.txt=56532 season.txt=14337 stats.txt=63134
+files 3 archive.txt=23524 clubs.txt=4598 config.txt=445 federation.txt=1237 highlights.txt=10309 honours.txt=5382 lab.txt=11 ladder.txt=165388 matchlogs.bin=378 nations.txt=5876 news.txt=52992 prefs.txt=4 roster.txt=57594 season.txt=12979 stats.txt=63529
+total 1 318944
+total 2 364902
+total 3 404246
+projected 609236
+cpu 1 74.82
+cpu 2 47.72
+cpu 3 41.06
+ref 3.35
+reviews 1 2520 1
+reviews 2 5755 2
+reviews 3 9159 3
+league 1000
+files 1 archive.txt=41898 clubs.txt=19456 config.txt=446 federation.txt=1131 highlights.txt=10556 honours.txt=3091 lab.txt=11 ladder.txt=529290 matchlogs.bin=12532 nations.txt=19 news.txt=53041 prefs.txt=4 roster.txt=279062 season.txt=61195 stats.txt=269986
+files 2 archive.txt=61175 clubs.txt=22780 config.txt=446 federation.txt=1927 highlights.txt=10508 honours.txt=6351 lab.txt=11 ladder.txt=659493 matchlogs.bin=13103 nations.txt=19 news.txt=51517 prefs.txt=4 roster.txt=283439 season.txt=62315 stats.txt=281793
+files 3 archive.txt=80471 clubs.txt=24051 config.txt=446 federation.txt=2711 highlights.txt=10594 honours.txt=11425 lab.txt=11 ladder.txt=754205 matchlogs.bin=13674 nations.txt=6119 news.txt=52014 prefs.txt=4 roster.txt=289887 season.txt=61402 stats.txt=284789
+total 1 1281718
+total 2 1454881
+total 3 1591803
+projected 2270715
+cpu 1 131.04
+cpu 2 130.59
+cpu 3 125.73
+ref 3.22
+reviews 1 3010 1
+reviews 2 7102 2
+reviews 3 11052 3

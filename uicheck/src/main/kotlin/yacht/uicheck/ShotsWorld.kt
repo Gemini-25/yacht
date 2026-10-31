@@ -336,7 +336,7 @@ internal object ShotsWorld : LeagueShots {
         waitFor("league page") { lg.worldPages.league(league) != null }
         shot(c, out, "lg56_league", heightDp = 1500)
         nav.go(LeagueTab.TABLES)
-        nav.open(Page.Market)
+        nav.open(Page.Market())
         lg.worldPages.loadMarket()
         waitFor("market") { lg.worldPages.market != null }
         shot(c, out, "lg74_market", heightDp = 1300)

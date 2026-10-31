@@ -2,7 +2,13 @@ package yacht.uicheck
 
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.createFontFamilyResolver
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,6 +29,8 @@ import yacht.app.core.LeagueTab
 import yacht.app.core.Screen
 import yacht.app.core.ThinkTime
 import yacht.app.ui.AppRoot
+import yacht.app.ui.BODY_SECTION
+import yacht.app.ui.LocalShotSections
 import yacht.app.ui.YachtTheme
 import yacht.engine.Category
 import yacht.engine.RuleSet
@@ -267,7 +276,39 @@ private fun run(args: Array<String>) {
     val s = c.state!!
     println("verify: ${c.verify.games} games, diff ${c.verify.diff}, plan ${c.verify.avgPlanMs} ms; last game ${s.me.total}:${s.opp.total}")
     leagueShots(c) { it.last(c, out) }
+    storyPhase(c, out)
     c.shutdown()
+}
+
+/**
+ * The story phase (UX 15.1), after every other: the story world ([StoryWorld]) restored into the
+ * controller as a backup is, its home and a club page shot (lg00s, lg00t: the real screen on a
+ * played world, the restore's own check), then each file's [LeagueShots.story]. It replaces the
+ * league for good (the run ends after it).
+ */
+private fun storyPhase(c: AppController, out: File) {
+    val t0 = System.currentTimeMillis()
+    val files = StoryWorld.files()
+    val built = System.currentTimeMillis()
+    StoryWorld.restore(c, files)
+    val lg = c.league
+    val season = StoryWorld.seasonOf(files)
+    firstScreenCheck(c, out, "lg00s_story_home", emptyList(), heightDp = 1600)
+    // The club of the shown league's best-ranked player: a national club's page as the league shows it.
+    val top = lg.view?.rows?.filter { it.rank != null && !it.isMe && it.club != null && it.league == lg.view?.season?.league }?.minByOrNull { it.rank!! }
+        ?: error("story world: no ranked player with a club in season $season")
+    val club = yacht.app.core.Page.Club(top.club!!)
+    lg.nav.open(club)
+    lg.worldPages.loadClub(club.id)
+    waitFor("story club page") { lg.worldPages.club(club) != null }
+    shot(c, out, "lg00t_story_club", heightDp = 1500)
+    lg.nav.go(LeagueTab.HOME)
+    val shot = System.currentTimeMillis()
+    leagueShots(c) { it.story(c, out) }
+    println(
+        "story phase: season $season, world built in ${(built - t0) / 1000.0} s, restored with lg00s and lg00t in ${(shot - built) / 1000.0} s, " +
+            "the files' story shots in ${(System.currentTimeMillis() - shot) / 1000.0} s",
+    )
 }
 
 private fun waitPlan(c: AppController) =
@@ -313,6 +354,13 @@ internal interface LeagueShots {
 
     /** After every other shot: a pass of its own that may replace the league (a legacy league, say). */
     fun last(c: AppController, out: File) {}
+
+    /**
+     * After [last]: the story world ([StoryWorld]) restored, the league stopped at its season in
+     * play. A function that restores a [StoryWorld.variant] restores [StoryWorld.files] again
+     * before it returns, so the next file finds the played world.
+     */
+    fun story(c: AppController, out: File) {}
 }
 
 /** The league's shot files, in the order each point of the run calls them. */
@@ -327,10 +375,13 @@ private fun leagueShots(c: AppController, phase: (LeagueShots) -> Unit) {
     }
 }
 
-/** Renders [content] alone (a card of the league screens) like [shot]. */
+/** Renders [content] alone (a card of the league screens) like [shot]; [inspect] reads the picture's blocks ([Blocks]). */
 @OptIn(ExperimentalComposeUiApi::class)
-internal fun shotOf(out: File, name: String, heightDp: Int, dark: Boolean = false, widthDp: Int = WIDTH_DP, content: @Composable () -> Unit) {
-    render(out, name, widthDp, heightDp, settleMs = 0, what = name) {
+internal fun shotOf(
+    out: File, name: String, heightDp: Int, dark: Boolean = false, widthDp: Int = WIDTH_DP, inspect: ((Blocks) -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    render(out, name, widthDp, heightDp, settleMs = 0, what = name, inspect = inspect) {
         YachtTheme(dark = dark) {
             Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                 Box(Modifier.padding(12.dp)) { content() }
@@ -339,11 +390,64 @@ internal fun shotOf(out: File, name: String, heightDp: Int, dark: Boolean = fals
     }
 }
 
-/** [settleMs]: real time for a screen that loads its data off the main thread before the picture. */
-internal fun shot(c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850, settleMs: Long = 0, widthDp: Int = WIDTH_DP) {
+/** [settleMs]: real time for a screen that loads its data off the main thread before the picture; [inspect] reads its blocks ([Blocks]). */
+internal fun shot(
+    c: AppController, out: File, name: String, dark: Boolean = false, heightDp: Int = 850, settleMs: Long = 0, widthDp: Int = WIDTH_DP,
+    inspect: ((Blocks) -> Unit)? = null,
+) {
     Thread.sleep(200)
-    render(out, name, widthDp, heightDp, settleMs, "$name, screen=${c.screen}") { YachtTheme(dark = dark) { AppRoot(c) } }
+    render(out, name, widthDp, heightDp, settleMs, "$name, screen=${c.screen}", inspect) { YachtTheme(dark = dark) { AppRoot(c) } }
 }
+
+/**
+ * Where the blocks named with `Modifier.shotSection` are in a rendered picture ([tagged], by name:
+ * top..bottom in dp from the picture's top; the league screen's body is [BODY_SECTION]).
+ */
+internal class Blocks(val tagged: Map<String, ClosedFloatingPointRange<Float>>)
+
+/**
+ * The first screen (UX 15.2): the real screen at 392 × [heightDp] dp shot as [name], and each of
+ * [blocks] (`Modifier.shotSection` names) must start within [FIRST_SCREEN_DP] of the league
+ * screen's body (below the page bar), where a phone shows it without scrolling. Logs where each starts.
+ */
+internal fun firstScreenCheck(c: AppController, out: File, name: String, blocks: List<String>, heightDp: Int = 850, dark: Boolean = false) {
+    var found: Blocks? = null
+    shot(c, out, name, dark = dark, heightDp = heightDp, settleMs = 300, inspect = { found = it })
+    val b = found ?: error("$name: not rendered")
+    val body = b.tagged[BODY_SECTION]?.start ?: error("$name: no league screen body in the picture")
+    val late = ArrayList<String>()
+    for (block in blocks) {
+        // A block a lazy list never laid out is further down than the screen reaches.
+        val span = b.tagged[block]
+        if (span == null) {
+            late += "$block (not laid out)"
+            continue
+        }
+        val top = span.start - body
+        println("first screen ($name): $block starts at ${top.toInt()} dp")
+        if (top > FIRST_SCREEN_DP) late += "$block at ${top.toInt()} dp"
+    }
+    check(late.isEmpty()) { "$name: below the first screen (${FIRST_SCREEN_DP.toInt()} dp): ${late.joinToString()}" }
+}
+
+/** How far down the league screen's body a first-screen block may start (UX 15.2: of an 850 dp screen, above the bottom bar). */
+internal const val FIRST_SCREEN_DP = 650f
+
+/**
+ * The lines [text] takes in [style] across [widthDp] at [fontScale] (the harness's text measurer:
+ * the fonts and the 2 px/dp density every shot is drawn with).
+ */
+internal fun lineCount(text: String, style: TextStyle, widthDp: Float, fontScale: Float = 1f): Int {
+    val density = Density(DENSITY, fontScale)
+    val measurer = TextMeasurer(fonts, density, LayoutDirection.Ltr)
+    return measurer.measure(text, style, constraints = Constraints(maxWidth = (widthDp * DENSITY).toInt())).lineCount
+}
+
+/** The fonts every picture and [lineCount] lay their text out with. */
+private val fonts by lazy { createFontFamilyResolver() }
+
+/** Pixels per dp of every picture. */
+private const val DENSITY = 2f
 
 /** The phone width every shot is rendered at, unless a narrower one is asked for (360 dp). */
 private const val WIDTH_DP = 392
@@ -365,12 +469,15 @@ private fun raced(e: Throwable): Boolean =
  * Renders a shot; one that hits the composition race ([raced]) is dropped (its scene closed) and
  * shot again after 100 ms, up to [RENDER_TRIES] times in all, each retry logged.
  */
-private fun render(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
+private fun render(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, inspect: ((Blocks) -> Unit)? = null, content: @Composable () -> Unit) =
+    raceSafe(what) { renderOnce(out, name, widthDp, heightDp, settleMs, what, inspect, content) }
+
+/** [block] (a scene's composition), tried again after the composition race ([raced]) as [render] is. */
+private fun <T> raceSafe(what: String, block: () -> T): T {
     var attempt = 1
     while (true) {
         try {
-            renderOnce(out, name, widthDp, heightDp, settleMs, what, content)
-            return
+            return block()
         } catch (e: Throwable) {
             if (attempt >= RENDER_TRIES || !raced(e)) throw e
             println("retrying $what after a composition race (try $attempt of $RENDER_TRIES): ${e.javaClass.simpleName}: ${e.message}")
@@ -380,10 +487,38 @@ private fun render(out: File, name: String, widthDp: Int, heightDp: Int, settleM
     }
 }
 
+/**
+ * The height in dp of [content] laid out alone at [widthDp] (as [shotOf] draws it, inside its
+ * margins: [widthDp] is the picture's width), up to [maxHeightDp]; no picture is written.
+ */
 @OptIn(ExperimentalComposeUiApi::class)
-private fun renderOnce(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
-    val density = 2f
-    val scene = ImageComposeScene(width = (widthDp * density).toInt(), height = (heightDp * density).toInt(), density = Density(density), content = content)
+internal fun heightOf(widthDp: Int, maxHeightDp: Int, content: @Composable () -> Unit): Float = raceSafe("a measure") {
+    var height = 0f
+    val scene = ImageComposeScene(width = (widthDp * DENSITY).toInt(), height = (maxHeightDp * DENSITY).toInt(), density = Density(DENSITY)) {
+        YachtTheme(dark = false) {
+            Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.padding(12.dp)) { Box(Modifier.onSizeChanged { height = it.height / DENSITY }) { content() } }
+            }
+        }
+    }
+    try {
+        scene.render(0)
+        scene.render(2_000_000_000L)
+    } finally {
+        scene.close()
+    }
+    height
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+private fun renderOnce(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, inspect: ((Blocks) -> Unit)?, content: @Composable () -> Unit) {
+    val density = DENSITY
+    // The named blocks as laid out (the last layout's place of each).
+    val blocks = java.util.concurrent.ConcurrentHashMap<String, ClosedFloatingPointRange<Float>>()
+    val record: (String, Float, Float) -> Unit = { n, top, bottom -> blocks[n] = top..bottom }
+    val scene = ImageComposeScene(width = (widthDp * density).toInt(), height = (heightDp * density).toInt(), density = Density(density)) {
+        CompositionLocalProvider(LocalShotSections provides record) { content() }
+    }
     // Encoded before the scene closes (its image is the scene's); a failed try leaves no file.
     val (png, jpeg) = try {
         scene.render(0)
@@ -393,6 +528,8 @@ private fun renderOnce(out: File, name: String, widthDp: Int, heightDp: Int, set
             Thread.sleep(100)
         }
         val image = scene.render(2_000_000_000L)
+        // The blocks of the picture as drawn.
+        inspect?.invoke(Blocks(blocks.toMap()))
         image.encodeToData(EncodedImageFormat.PNG)!!.bytes to image.encodeToData(EncodedImageFormat.JPEG, 72)!!.bytes
     } finally {
         scene.close()

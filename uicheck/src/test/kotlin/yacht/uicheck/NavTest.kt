@@ -4,12 +4,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import yacht.app.core.ClubRankKind
+import yacht.app.core.ClubTab
+import yacht.app.core.InfoTopic
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueNav
 import yacht.app.core.LeagueTab
+import yacht.app.core.MarketTab
+import yacht.app.core.MetaTab
 import yacht.app.core.Page
+import yacht.app.core.PageChips
 import yacht.app.core.PlayerTab
+import yacht.app.core.ShareScope
 import yacht.app.core.Sheet
+import yacht.app.core.pageOf
 import yacht.engine.league.Comp
 import yacht.engine.league.LeagueConfig
 import java.nio.file.Files
@@ -161,5 +169,202 @@ class NavTest {
         val nav = LeagueNav()
         assertSame(nav.chipState(LeagueTab.MATCHES), nav.chipState(LeagueTab.MATCHES))
         assertTrue(nav.chipState(LeagueTab.MATCHES) !== nav.chipState(LeagueTab.RECORDS))
+        // A page's chip row keeps its own, apart from the tabs'.
+        assertSame(nav.chipState(PageChips.MARKET), nav.chipState(PageChips.MARKET))
+        assertTrue(nav.chipState(PageChips.MARKET) !== nav.chipState(PageChips.META))
+    }
+
+    // ---- league phase 2: the new pages, the same-key rule, the encyclopedia trail, links ---------------
+
+    /** One page of every kind the phase adds or changes, with its state at the defaults. */
+    private val newPages = listOf(
+        Page.Club("c05"), Page.Market(), Page.Meta(), Page.Coach("k12"), Page.ClubRanking(), Page.Press(), Page.Events, Page.Event(3),
+        Page.WcStory(3), Page.Encyclopedia("p:g001"), Page.Search,
+    )
+
+    @Test
+    fun theNewPagesLoadByKeysOfTheirOwn() {
+        val keys = newPages.map { it.loadKey }
+        assertEquals(keys.size, keys.toSet().size, keys.toString())
+        // A coach is "co:", not the competitions' "k:"; a club and its encyclopedia page differ.
+        assertTrue(Page.Coach("k12").loadKey.startsWith("co:"))
+        assertTrue(Page.Competition(Comp.CUP).loadKey.startsWith("k:"))
+        assertTrue(Page.Club("c05").loadKey != Page.Encyclopedia("c:c05").loadKey)
+        // Rankings of the world and of a league are two lists; one arc, one World Cup, one entry each.
+        assertTrue(Page.ClubRanking(scope = "KR").loadKey != Page.ClubRanking().loadKey)
+        assertTrue(Page.Event(3).loadKey != Page.Event(4).loadKey)
+        assertTrue(Page.WcStory(3).loadKey != Page.WcStory(7).loadKey)
+    }
+
+    @Test
+    fun tabsSteppersAndScopesShareTheirPagesKey() {
+        assertEquals(Page.Club("c05").loadKey, Page.Club("c05", ClubTab.HISTORY).loadKey)
+        assertEquals(Page.Market().loadKey, Page.Market(MarketTab.LIVE, replay = 4).loadKey)
+        assertEquals(Page.Meta().loadKey, Page.Meta(MetaTab.BOXES, ShareScope.ALL).loadKey)
+        assertEquals(Page.Press().loadKey, Page.Press("JP", reveal = 2).loadKey)
+        assertEquals(Page.ClubRanking().loadKey, Page.ClubRanking(ClubRankKind.HEALTH).loadKey)
+        assertEquals(Page.WcStory(3).loadKey, Page.WcStory(3, revealed = 13, round = 2, playing = true).loadKey)
+    }
+
+    @Test
+    fun theRewrittenCallSitesOpenWhatTheObjectsDid() {
+        // Market and Meta became data classes: `Page.Market()` and `Page.Meta()` are the pages the 9
+        // call sites opened as objects, loaded and cached under the same keys.
+        assertEquals("market", Page.Market().loadKey)
+        assertEquals("meta", Page.Meta().loadKey)
+        assertEquals(Page.Market(), Page.Market(null, -1))
+        assertEquals(Page.Meta(), Page.Meta(MetaTab.ERAS, ShareScope.ELITE))
+        val nav = LeagueNav()
+        nav.open(Page.Market())
+        nav.open(Page.Market())
+        assertEquals(listOf<Page>(Page.Market()), nav.pages.toList())
+    }
+
+    @Test
+    fun aLinkToThePageOnTopReplacesIt() {
+        val nav = LeagueNav()
+        nav.open(Page.Player("a"))
+        nav.open(Page.Club("c05", ClubTab.HISTORY))
+        // 역사's link to the club's own page: the same page, not a copy on top.
+        nav.open(Page.Club("c05"))
+        assertEquals(listOf(Page.Player("a"), Page.Club("c05")), nav.pages.toList())
+        nav.open(Page.Club("c06"))
+        assertEquals(3, nav.pages.size)
+        nav.open(Page.Market())
+        nav.open(Page.Market(MarketTab.RECORDS))
+        nav.open(Page.Press())
+        nav.open(Page.Press("JP"))
+        nav.open(Page.Meta())
+        nav.open(Page.Meta(MetaTab.BOXES))
+        assertEquals(listOf(Page.Player("a"), Page.Club("c05"), Page.Club("c06"), Page.Market(MarketTab.RECORDS), Page.Press("JP"), Page.Meta(MetaTab.BOXES)), nav.pages.toList())
+        // Only the top page: a page with the key further down is opened on top again.
+        nav.open(Page.Club("c05"))
+        assertEquals(7, nav.pages.size)
+    }
+
+    @Test
+    fun aReadingChainTakesOneStackSlotAndBacksOutToWhereItStarted() {
+        val nav = LeagueNav()
+        nav.open(Page.Player("g001"))
+        // From an entity page the encyclopedia opens on top; links inside it replace it.
+        nav.read("p:g001")
+        nav.read("c:c05")
+        nav.read("k:k12")
+        assertEquals(2, nav.pages.size)
+        assertEquals(Page.Encyclopedia("k:k12", listOf("p:g001", "c:c05")), nav.page)
+        // The page shown again: nothing changes.
+        nav.read("k:k12")
+        assertEquals(Page.Encyclopedia("k:k12", listOf("p:g001", "c:c05")), nav.page)
+        // Back (the system's, then the bar's ←) walks the trail, then leaves the encyclopedia.
+        assertTrue(nav.back())
+        assertEquals(Page.Encyclopedia("c:c05", listOf("p:g001")), nav.page)
+        nav.leave(nav.page!!)
+        assertEquals(Page.Encyclopedia("p:g001"), nav.page)
+        nav.leave(nav.page!!)
+        assertEquals(listOf<Page>(Page.Player("g001")), nav.pages.toList())
+        // The trail keeps the last 20 refs: still one slot.
+        nav.read("p:a0")
+        for (i in 1..30) nav.read("p:a$i")
+        assertEquals(2, nav.pages.size)
+        val top = nav.page as Page.Encyclopedia
+        assertEquals("p:a30", top.ref)
+        assertEquals(LeagueNav.TRAIL, top.trail.size)
+        assertEquals((10..29).map { "p:a$it" }, top.trail)
+        // Eight pages under a long chain: the page the reader came from is never dropped.
+        nav.go(LeagueTab.HOME)
+        for (i in 1..7) nav.open(Page.Player("p$i"))
+        nav.read("p:x0")
+        for (i in 1..12) nav.read("p:x$i")
+        assertEquals(LeagueNav.MAX_PAGES, nav.pages.size)
+        assertEquals(Page.Player("p1"), nav.pages.first())
+    }
+
+    @Test
+    fun theBarsBackArrowClosesAPageWithoutATrail() {
+        val nav = LeagueNav()
+        nav.open(Page.Player("a"))
+        nav.open(Page.Club("c05"))
+        // Not an encyclopedia page: ← closes it, as before.
+        nav.leave(nav.page!!)
+        assertEquals(listOf<Page>(Page.Player("a")), nav.pages.toList())
+        // An encyclopedia page read from a link, no trail behind it: ← closes it too.
+        nav.read("p:a")
+        nav.leave(nav.page!!)
+        assertEquals(listOf<Page>(Page.Player("a")), nav.pages.toList())
+        // A page that is no longer on top (a ← drawn before the page changed) closes only itself.
+        nav.read("p:a")
+        nav.read("c:c05")
+        nav.leave(Page.Player("a"))
+        assertEquals(listOf<Page>(Page.Encyclopedia("c:c05", listOf("p:a"))), nav.pages.toList())
+    }
+
+    @Test
+    fun theInfoSheetClosesBeforeTheTrail() {
+        val nav = LeagueNav()
+        nav.read("l:KR")
+        nav.read("n:KR")
+        nav.info = InfoTopic.ERAS
+        nav.sheet = Sheet.INFO
+        assertTrue(nav.back())
+        assertEquals(Sheet.NONE, nav.sheet)
+        assertEquals(Page.Encyclopedia("n:KR", listOf("l:KR")), nav.page)
+        assertTrue(nav.back())
+        assertEquals(Page.Encyclopedia("l:KR"), nav.page)
+        assertTrue(nav.back())
+        assertNull(nav.page)
+    }
+
+    @Test
+    fun thePressPageNeverChangesTheShownLeague() {
+        var told = 0
+        val nav = LeagueNav { told++ }
+        nav.selectLeague("KR")
+        nav.open(Page.Press("JP"))
+        nav.replaceTop(Page.Press("ES"))
+        nav.open(Page.ClubRanking(scope = "ES"))
+        nav.replaceTop(Page.ClubRanking(ClubRankKind.FANS, scope = "JP"))
+        nav.searchQuery = "김"
+        assertEquals("KR", nav.league)
+        assertEquals(1, told)
+    }
+
+    @Test
+    fun aLinkNamesItsPage() {
+        assertEquals(Page.Player("g001"), pageOf("p:g001"))
+        assertEquals(Page.Club("c05"), pageOf("c:c05"))
+        // A gone or reused club's id with its founding year: its encyclopedia page.
+        assertEquals(Page.Encyclopedia("c:c05@2031"), pageOf("c:c05@2031"))
+        assertEquals(Page.Coach("k12"), pageOf("k:k12"))
+        assertEquals(Page.League("KR"), pageOf("l:KR"))
+        assertEquals(Page.Nation("KR"), pageOf("n:KR"))
+        // A competition by its code, its name or an honour's base; one the season lacks: its encyclopedia page.
+        assertEquals(Page.Competition(Comp.CHAMPIONS), pageOf("x:${Comp.CHAMPIONS.code}"))
+        assertEquals(Page.Competition(Comp.CHAMPIONS), pageOf("x:CL"))
+        assertEquals(Page.Competition(Comp.CONT_CHAMPIONS), pageOf("x:CCL.ASIA"))
+        assertEquals(Page.Competition(Comp.WORLD_CUP), pageOf("x:WORLD_CUP"))
+        assertEquals(Page.Encyclopedia("x:CL"), pageOf("x:CL") { it != Comp.CHAMPIONS })
+        assertEquals(Page.Event(4), pageOf("ev:4"))
+        assertEquals(Page.WcStory(3), pageOf("wc:3"))
+        assertEquals(Page.Market(), pageOf("mk"))
+        assertEquals(Page.Market(MarketTab.COACHES), pageOf("mk:COACHES"))
+        assertEquals(Page.Press(), pageOf("pr"))
+        assertEquals(Page.Press("JP"), pageOf("pr:JP"))
+        assertEquals(Page.Meta(), pageOf("meta"))
+        assertEquals(Page.Meta(MetaTab.BOXES), pageOf("meta:boxes"))
+        assertEquals(Page.ClubRanking(), pageOf("cr"))
+        assertEquals(Page.ClubRanking(ClubRankKind.HEALTH), pageOf("cr:HEALTH"))
+        // A match ref keeps its own colons.
+        assertEquals(Page.Match("7:L:120:1"), pageOf("m:7:L:120:1"))
+        assertEquals(Page.Encyclopedia("k:k12"), pageOf("enc:k:k12"))
+        assertEquals(Page.Encyclopedia("c:c05@2031"), pageOf("enc:c:c05@2031"))
+        assertEquals(Page.Encyclopedia("x:CCL.ASIA"), pageOf("enc:x:CCL.ASIA"))
+        // Junk: nothing (an encyclopedia link names an entity by its prefix; a gone club, its founding year).
+        val junks = listOf(
+            "", "p", "p:", "zz:1", "ev:x", "wc:", "mk:NOPE", "meta:x", "cr:BEST", "x:", "x:ZZ", "x:Z", "m:", "enc:", "pr:", "hello",
+            "enc:g001", "enc:q:1", "enc:p:", "c:c05@", "c:@2031", "c:c05@20x1",
+        )
+        for (junk in junks) {
+            assertNull(pageOf(junk), junk)
+        }
     }
 }
