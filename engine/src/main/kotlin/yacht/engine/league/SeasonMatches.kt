@@ -109,7 +109,8 @@ object SeasonMatches {
     fun ofPlayer(plan: SeasonPlan, key: String, index: IntArray? = null): List<SeasonMatch> {
         val out = ArrayList<SeasonMatch>()
         val ids = index ?: leagueIds(plan, setOf(key)).getValue(key)
-        for (id in ids) league(plan, id)?.let { out += it }
+        // An index of another season (kept too long by a cache) names other players' fixtures: skipped.
+        for (id in ids) league(plan, id)?.takeIf { it.fixture.a == key || it.fixture.b == key }?.let { out += it }
         for (c in plan.comps + plan.post) {
             val own = when (c) {
                 is MatchSource -> c.seasonMatchesOf(key)

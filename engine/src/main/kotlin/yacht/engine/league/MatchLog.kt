@@ -391,7 +391,10 @@ class MatchLogBook {
         return merged.classes != 0
     }
 
-    /** The record of [ref]'s board (board -1 reads board 0) in the block of its season; null when none is kept. */
+    /**
+     * The record of [ref]'s board (board -1 reads board 0) in the blocks of its season (a past
+     * season's block and archive entry together); null when none is kept.
+     */
     operator fun get(ref: MatchRef): MatchLog? {
         val k = key(ref)
         val cur = current

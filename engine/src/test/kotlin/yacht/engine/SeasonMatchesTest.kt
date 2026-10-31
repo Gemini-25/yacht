@@ -182,6 +182,9 @@ class SeasonMatchesTest {
         for (k in busiest) {
             val own = SeasonMatches.ofPlayer(plan, k)
             assertEquals(own, SeasonMatches.ofPlayer(plan, k, index.getValue(k)))
+            // Someone else's index (a cache kept too long): only [k]'s own fixtures in it.
+            val other = index.getValue(busiest.first { it != k })
+            assertEquals(own.filter { it.ref.comp != Comp.LEAGUE || it.ref.id in other }, SeasonMatches.ofPlayer(plan, k, other))
             assertEquals(plan.league.fixturesOf(k), own.count { it.ref.comp == Comp.LEAGUE })
             assertEquals(all.count { k in it.fixture.players }, own.size, k)
             assertTrue(own.all { k in it.fixture.players })
