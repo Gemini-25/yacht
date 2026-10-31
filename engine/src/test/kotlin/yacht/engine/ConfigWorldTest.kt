@@ -83,6 +83,14 @@ class ConfigWorldTest {
         assertEquals(c, assertNotNull(c.copy(ffp = 0).with("ffp", "1")))
         assertFalse(assertNotNull(c.with("worldEvents", "0")).worldEvents)
         assertNull(c.with("clubWorld", "2"))
+        // The full form names every key, so two rule sets compared line by line show a rule moved back to its default.
+        fun lines(x: LeagueConfig) = x.encode(full = true).lines().drop(1).filter { it.isNotBlank() }.associate { it.substringBefore(' ') to it.substringAfter(' ') }
+        val strict = c.copy(ffp = 2)
+        assertEquals(mapOf("ffp" to "1"), lines(c).filter { (k, v) -> lines(strict)[k] != v })
+        assertNull(c.encode().lines().firstOrNull { it.startsWith("ffp ") }, "the saved form leaves it out")
+        assertEquals(c, LeagueConfig.decode(c.encode(full = true)))
+        assertEquals(strict, LeagueConfig.decode(strict.encode(full = true)))
+        assertEquals(c.encode() + "clubWorld 1\nworldEvents 1\nffp 1\nsolidarity 5\nstyleCap 15\n", c.encode(full = true))
     }
 
     @Test
