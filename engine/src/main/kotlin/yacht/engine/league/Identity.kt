@@ -359,8 +359,11 @@ object Profiles {
      * One season older: [age] is the age in the season that just ended, [played] the share of a
      * full season's games it played (0..1: experience for 예측력 and 승부 감각). Young players
      * grow toward their ceilings, peak players drift, veterans decline (faster each season).
+     * [speed] multiplies only the growth term `(cap − x) × growthRate(age)` before the peak (the
+     * clubs' and coaches' nudge, design ENG 1b.11): the random draws, the ceilings and the decline
+     * are the same whatever it is, and 1.0 gives exactly the growth of before.
      */
-    fun grow(abl: Abilities, potential: Int, key: String, age: Int, played: Double, rng: Random): Abilities {
+    fun grow(abl: Abilities, potential: Int, key: String, age: Int, played: Double, rng: Random, speed: Double = 1.0): Abilities {
         val xs = abl.toList().toMutableList()
         val off = peakOffset(key)
         for (i in 0 until 4) {
@@ -369,7 +372,7 @@ object Profiles {
             val peak = PEAK[i] + off
             val decline = DECLINE_FROM[i] + off
             var d = when {
-                age < peak -> (cap - x).coerceAtLeast(0) * growthRate(age) + rng.nextGaussian() * 1.5
+                age < peak -> (cap - x).coerceAtLeast(0) * growthRate(age) * speed + rng.nextGaussian() * 1.5
                 age < decline -> 0.05 * (cap - x).coerceAtLeast(0) + rng.nextGaussian() * 1.0
                 else -> -DECLINE[i] * (1 + 0.35 * (age - decline)) * (0.6 + 0.8 * rng.nextDouble())
             }

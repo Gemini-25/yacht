@@ -55,27 +55,58 @@ object ClubTable {
      * The club table of league [leagueId] in [season], best first, with [clubs]' members as they
      * are and [honours] (during the season those of competitions already finished; at the close
      * all of them). Empty for a league the season does not have.
+     *
+     * With [through] (a week, design ENG 3.4) the members' league points are those of the
+     * fixtures through that week only ([Season.pointsThrough]); null: the live table. [splits] are
+     * the season's winter moves (`ws`): a member who moved scores its points up to the move for its
+     * old club and the rest (and its honours) for its new one, and both may count it among their
+     * best [COUNTED]. [deductions] take a percentage off a club's points (법정관리, 재정 규정; never the
+     * members' league points). With the defaults the table is today's.
      */
-    fun of(season: Season, clubs: ClubBook, leagueId: String, honours: List<Honour>): List<ClubStanding> {
+    fun of(
+        season: Season,
+        clubs: ClubBook,
+        leagueId: String,
+        honours: List<Honour>,
+        through: Int? = null,
+        splits: List<WinterMove> = emptyList(),
+        deductions: Map<String, Int> = emptyMap(),
+    ): List<ClubStanding> {
         val lg = season.leagues.byId(leagueId) ?: return emptyList()
         val bonus = HashMap<String, Int>()
         for (h in honours) bonusOf(h.kind).takeIf { it != 0 }?.let { bonus.merge(h.key, it, Int::plus) }
+        val cut = through?.let { season.pointsThrough(it - 1) }
+        // A member's league points: the live standing's, or those through the week; null when it has none.
+        fun pointsOf(k: String): Int? = if (cut == null) season.standings[k]?.points else cut[k]?.get(Season.THROUGH_POINTS)
+        val moved = HashMap<String, WinterMove>()
+        val left = HashMap<String, MutableList<WinterMove>>()
+        for (m in splits) if (m.season == season.number && moved.putIfAbsent(m.key, m) == null) left.getOrPut(m.from) { ArrayList() } += m
         val nations = LinkedHashSet<String>()
         for (d in lg.divisions) for (k in season.divisions[d]) clubs.clubOf(k)?.let { clubs.nationOf(it) }?.let { nations += it }
         val out = ArrayList<Pair<ClubStanding, Double>>()
         for (nation in nations) for (c in clubs.clubsOf(nation)) {
             var topTier = 0
-            val scores = c.squad.map { k ->
-                val st = season.standings[k]
+            val all = ArrayList<Score>(c.squad.size)
+            fun add(k: String, p: Int?, honour: Int) {
                 val d = season.divisionOf(k)?.takeIf { it in lg.divisions }
                 val tier = d?.let { season.leagues.tier(it) }
-                if (tier == 0) topTier += st?.points ?: 0
-                Score(k, if (st == null || tier == null) 0.0 else st.points * weight(tier), bonus[k] ?: 0)
-            }.sortedWith(compareByDescending<Score> { it.total }.thenBy { it.key })
+                if (tier == 0) topTier += p ?: 0
+                all += Score(k, if (p == null || tier == null) 0.0 else p * weight(tier), honour)
+            }
+            // The members now (one who came in the winter: its points since the move), then those
+            // who left it in the winter (their points up to the move, no honours).
+            for (k in c.squad) {
+                val split = moved[k]?.takeIf { it.to == c.id }
+                add(k, pointsOf(k)?.let { if (split == null) it else it - minOf(it, split.points) }, bonus[k] ?: 0)
+            }
+            for (m in left[c.id].orEmpty()) if (m.key !in c.squad) add(m.key, pointsOf(m.key)?.let { minOf(it, m.points) }, 0)
+            val scores = all.sortedWith(compareByDescending<Score> { it.total }.thenBy { it.key })
             val counted = scores.take(COUNTED)
             val league = counted.sumOf { it.league }
             val extra = counted.sumOf { it.bonus }.toDouble()
-            out += ClubStanding(c.id, leagueId, round(league + extra), round(league), extra, counted.map { it.key }, c.squad.size, topTier) to (counted.firstOrNull()?.total ?: 0.0)
+            val cutBy = deductions[c.id] ?: 0
+            val total = if (cutBy > 0) (league + extra) * (100 - cutBy) / 100.0 else league + extra
+            out += ClubStanding(c.id, leagueId, round(total), round(league), extra, counted.map { it.key }, c.squad.size, topTier) to (counted.firstOrNull()?.total ?: 0.0)
         }
         return out.sortedWith(
             compareByDescending<Pair<ClubStanding, Double>> { it.first.points }.thenByDescending { it.first.topTierPoints }
@@ -83,9 +114,16 @@ object ClubTable {
         ).map { it.first }
     }
 
-    /** Every league's club table of [season], in league order. */
-    fun all(season: Season, clubs: ClubBook, honours: List<Honour>): Map<String, List<ClubStanding>> =
-        season.leagues.list.associate { it.id to of(season, clubs, it.id, honours) }
+    /** Every league's club table of [season], in league order ([of]'s cut, splits and deductions for each). */
+    fun all(
+        season: Season,
+        clubs: ClubBook,
+        honours: List<Honour>,
+        through: Int? = null,
+        splits: List<WinterMove> = emptyList(),
+        deductions: Map<String, Int> = emptyMap(),
+    ): Map<String, List<ClubStanding>> =
+        season.leagues.list.associate { it.id to of(season, clubs, it.id, honours, through, splits, deductions) }
 
     /** A member's tier-weighted league points and honour points. */
     private class Score(val key: String, val league: Double, val bonus: Int) {

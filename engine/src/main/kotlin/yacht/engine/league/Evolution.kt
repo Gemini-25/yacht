@@ -57,7 +57,8 @@ object Evolution {
      * [TRIES] times), the rest to rookies. [fashion] is a style that comes into fashion (a
      * world champion's: newcomers take it up more often, fading over the seasons). A pupil is
      * `e<season>_<n>`, a rookie the next g-key; all debut in season + 1. Deterministic from [seed]
-     * and the inputs.
+     * and the inputs. [speed] is each player's growth speed ([Profiles.grow]; 1.0 for every player
+     * gives the growth of before).
      */
     fun run(
         book: PlayerBook,
@@ -73,6 +74,7 @@ object Evolution {
         accept: (CustomAiSpec) -> Boolean = { true },
         fashion: String? = null,
         aging: Boolean = true,
+        speed: (String) -> Double = { 1.0 },
     ): EvolutionResult {
         if (season <= book.evolvedSeason) return replay(book, season)
         book.fashion(fashion)
@@ -125,7 +127,7 @@ object Evolution {
                 val id = p.identity ?: continue
                 val age = id.age(season, p.born)
                 val r = Random(DiceStream.mix(seed, GROW_SALT, season.toLong(), p.key.hashCode().toLong()))
-                val abl = Profiles.grow(id.abilities, id.potential, p.key, age, played(p.key), r)
+                val abl = Profiles.grow(id.abilities, id.potential, p.key, age, played(p.key), r, speed(p.key))
                 var gene = p.spec.play
                 if (gene != null && gene.primary in MISREAD && age <= 30 && r.nextDouble() < LEARN) {
                     learned += LeagueEvent("learned_rule", season, listOf(p.key), listOf(gene.primary))
@@ -419,8 +421,12 @@ object Evolution {
      */
     val SQUAD_KINDS = setOf("FSQ", "NSQ", "POTW")
 
-    /** Promotions, relegations and playoff stays are moves, not honours; neither are call-ups. */
-    fun isHonour(kind: String): Boolean = !kind.startsWith("UP") && !kind.startsWith("DOWN") && !kind.startsWith("STAY") && kind !in SQUAD_KINDS
+    /**
+     * Promotions, relegations and playoff stays are moves, not honours; neither are call-ups, nor
+     * the press's 올해의 영입 ([PressAwards.SIGNING]: a good transfer makes nobody a legend).
+     */
+    fun isHonour(kind: String): Boolean =
+        !kind.startsWith("UP") && !kind.startsWith("DOWN") && !kind.startsWith("STAY") && kind !in SQUAD_KINDS && kind != PressAwards.SIGNING
 
     /** A space-free summary of [honours]: kind:count in the order first won, moves left out ("L0:2,CUP:1"; "-" for none). */
     fun summary(honours: List<Honour>): String {

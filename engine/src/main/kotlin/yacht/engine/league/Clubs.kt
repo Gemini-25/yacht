@@ -21,7 +21,9 @@ data class Emblem(val shape: Int, val colour1: Int, val colour2: Int, val initia
  * section 2.2) [squad] holds the club's few AIs and [honours] its club league titles; in a book of
  * national leagues (`clubs 2`, [ClubBook.AFFILIATION]) every member of the league is in one club
  * of its [nation], [squad] holds them all, and [honours] counts its league's club-table titles
- * ([ClubTable]). No AI is in two clubs; [budget] is its money for the transfer window.
+ * ([ClubTable]). No AI is in two clubs; [budget] is its money for the transfer window. In a book
+ * with a club world ([ClubBook.world]) its signed [balance] is the club's money and [budget] is
+ * `max(0, balance)`; without one both are the old budget.
  */
 data class Club(
     val id: String,
@@ -37,6 +39,8 @@ data class Club(
     val nation: String = "",
     /** The first season it played; 0 when unknown (a club from the club league's book). */
     val founded: Int = 0,
+    /** Its money, signed (a club world's balance, [ClubLife.balance]); the [budget] without a club world. */
+    val balance: Int = budget,
 )
 
 /**
@@ -52,6 +56,8 @@ data class GoneClub(
     /** The first season it played (0: unknown). */
     val founded: Int,
     val dissolved: Int,
+    /** Why: 'F' for money (법정관리 without a rescue, design ENG 1.4), '-' by the club count. Saved only when not '-'. */
+    val reason: Char = '-',
 )
 
 /** What a [ClubMove] was, as the club card groups it ([ClubMoveType.kind]); [label] is shown on the card. */
@@ -165,6 +171,20 @@ class ClubInput(
     val ranking: LeagueRanking = LeagueRanking.EMPTY,
     /** Whether a league's title counted as major in a season ([HonourBook.majorTitles]). */
     val major: (season: Int, league: String) -> Boolean = { _, _ -> true },
+    /** The season's money multipliers λ and ω (design ENG 1.1). */
+    val economy: LeagueEconomy = LeagueEconomy.NEUTRAL,
+    /** What the world events do this season (ENG 6.7). */
+    val arcs: ArcEffects = ArcEffects.NONE,
+    /** The ratings the closing season was drawn with (the board's expectations, the market's tick); [rating] when not given. */
+    val drawn: (String) -> Double = rating,
+    /** What the coach market reads about the players (ENG 2.4). */
+    val coachInput: CoachInput = CoachInput(),
+    /** Each member's style family (null without genes). */
+    val families: (String) -> StyleFamily? = { null },
+    /** Test-only knobs, never saved (the calibration's off-runs, ENG 1b.10): the coaches' step, the market's stories, the winter checkpoint. */
+    val coaches: Boolean = true,
+    val market: Boolean = true,
+    val winter: Boolean = true,
 )
 
 /**
@@ -211,6 +231,16 @@ object ClubNames {
 
     /** Accent colours: white, cream, gold, silver. */
     private val ACCENT = intArrayOf(0xFFFFFFFF.toInt(), 0xFFFFF8E1.toInt(), 0xFFFFC107.toInt(), 0xFFCFD8DC.toInt())
+
+    /** The names of [PRIMARY] and [ACCENT], in their order. */
+    private val PRIMARY_NAMES = listOf("빨강", "파랑", "초록", "보라", "주황", "청록", "자주", "갈색", "남색", "회색", "검정", "올리브")
+    private val ACCENT_NAMES = listOf("흰색", "크림색", "금색", "은색")
+
+    /** A badge's team colours in words, main then accent ("파랑·금색"); a colour of no name is left out. */
+    fun colours(emblem: Emblem): String = listOfNotNull(
+        PRIMARY.indexOf(emblem.colour1).takeIf { it >= 0 }?.let { PRIMARY_NAMES[it] },
+        ACCENT.indexOf(emblem.colour2).takeIf { it >= 0 }?.let { ACCENT_NAMES[it] },
+    ).joinToString("·")
 
     private const val SALT = 0xC1B5L
 
@@ -302,7 +332,7 @@ class ClubBook private constructor(
         var honours: Int,
         val founded: Int = 0,
     ) {
-        fun snapshot() = Club(id, identity.name, identity.city, identity.mascot, identity.emblem, squad.toList(), budget, honours, nation, founded)
+        fun snapshot(budget: Int, balance: Int) = Club(id, identity.name, identity.city, identity.mascot, identity.emblem, squad.toList(), budget, honours, nation, founded, balance)
     }
 
     var cities: List<String> = cities
@@ -358,7 +388,7 @@ class ClubBook private constructor(
     }
 
     /** Every club, by id. */
-    val clubs: List<Club> get() = entries.map { it.snapshot() }
+    val clubs: List<Club> get() = entries.map { snapshot(it) }
 
     /** Dissolved clubs whose ids are still theirs, by id. */
     val gone: List<GoneClub> get() = goneList.toList()
@@ -373,7 +403,7 @@ class ClubBook private constructor(
      */
     val history: List<ClubMove> get() = moves.toList()
 
-    fun club(id: String): Club? = entry(id)?.snapshot()
+    fun club(id: String): Club? = entry(id)?.let { snapshot(it) }
 
     /** A dissolved club, by id. */
     fun gone(id: String): GoneClub? = goneList.firstOrNull { it.id == id }
@@ -391,7 +421,7 @@ class ClubBook private constructor(
     fun playNation(key: String): String? = memberOf[key]?.let { nationOf(it) }
 
     /** The clubs of [nation], by id. */
-    fun clubsOf(nation: String): List<Club> = entries.filter { it.nation == nation }.map { it.snapshot() }
+    fun clubsOf(nation: String): List<Club> = entries.filter { it.nation == nation }.map { snapshot(it) }
 
     /** Club [club]'s members now (empty for a club that is gone). */
     override fun members(club: String): List<String> = entry(club)?.squad?.toList().orEmpty()
@@ -409,6 +439,153 @@ class ClubBook private constructor(
     fun history(id: String): List<ClubMove> = moves.filter { it.from == id || it.to == id }
 
     private fun entry(id: String): Entry? = byId[id]
+
+    /** Club [e] as it is: with a club world, its money is its state's balance (the `club` line writes `max(0, balance)`). */
+    private fun snapshot(e: Entry): Club {
+        val st = world?.clubs?.get(e.id) ?: return e.snapshot(e.budget, e.budget)
+        return e.snapshot(maxOf(0, st.balance), st.balance)
+    }
+
+    /** The budget field of club [e]'s line: `max(0, balance)` with a club world. */
+    private fun budgetOf(e: Entry): Int = world?.clubs?.get(e.id)?.let { maxOf(0, it.balance) } ?: e.budget
+
+    // ---- the club world (design ENG 1b) -----------------------------------------------------------
+
+    /**
+     * The club world (coaches, money, stories, history; design ENG 1b): null until the book is
+     * migrated (its file has no `cw` line), and then everything behaves as before it existed.
+     */
+    var world: ClubWorld? = null
+        private set
+
+    /** Club [id]'s life in the club world, also of a dissolved club whose state is kept; null without one. */
+    fun life(id: String): ClubLife? {
+        val w = world ?: return null
+        val st = w.clubs[id] ?: return null
+        val emblem = entry(id)?.identity?.emblem ?: gone(id)?.emblem
+        val h = w.history
+        return ClubLife(
+            id, st.foundedYear, st.nickname, emblem?.let { ClubNames.colours(it) }.orEmpty(),
+            st.balance, w.economy.owners[id] ?: Owner.NONE, w.economy.sponsors[id], w.economy.stadiums[id] ?: Stadium.NONE, st.training, st.academy,
+            st.fans, st.mood, st.pressure, st.coach, st.captain,
+            st.trouble, st.admin, st.deduction,
+            w.economy.accounts[id], w.economy.years[id].orEmpty(), h.rivalsOf(id),
+            h.legends[id].orEmpty(), h.retired[id].orEmpty(), h.records[id].orEmpty(),
+        )
+    }
+
+    /** Member [key]'s contract at its club; null without a club world or terms. */
+    fun terms(key: String): Terms? = world?.terms?.get(key)
+
+    /** Club [club]'s rivals (at most 2), strongest kind first. */
+    fun rivals(club: String): List<Rival> = world?.history?.rivalsOf(club).orEmpty()
+
+    fun isRival(a: String, b: String): Boolean = rivals(a).any { it.club == b }
+
+    /** The all-time series of rival clubs [a] and [b] (either order). */
+    fun derby(a: String, b: String): DerbyRecord? = world?.history?.derby(a, b)
+
+    fun coach(id: String): Coach? = world?.coaches?.coach(id)
+
+    /** Club [club]'s coach (its `cl` line names it), null for none. */
+    fun coachOf(club: String): Coach? = world?.let { w -> w.clubs[club]?.coach?.let { w.coaches.coach(it) } }
+
+    /** Every kept spell at club [club] with its coach's id, newest first. */
+    fun tenuresAt(club: String): List<Pair<String, Tenure>> = world?.coaches?.tenuresAt(club).orEmpty()
+
+    /** Every active coach (with a club or free), by id. */
+    val coaches: List<Coach> get() = world?.coaches?.all.orEmpty()
+
+    /** The free pool, by id. */
+    val freeCoaches: List<Coach> get() = world?.coaches?.free.orEmpty()
+
+    val retiredCoaches: List<RetiredCoach> get() = world?.coaches?.retired.orEmpty()
+
+    /** The transfer stories of [season], by id. */
+    fun stories(season: Int): List<MarketStory> = world?.market?.stories(season).orEmpty()
+
+    /** The winter moves of [season] (`ws`). */
+    fun winterMoves(season: Int): List<WinterMove> = world?.winter?.of(season).orEmpty()
+
+    /** The notable transfers kept (`tx`), oldest first. */
+    val notable: List<NotableMove> get() = world?.market?.moves.orEmpty()
+
+    /** The world record fee. */
+    val worldRecord: FeeRecord? get() = world?.worldRecord
+
+    /** Each close's top 10 of the club rankings (`rk`), oldest first. */
+    val rankLines: List<RankLine> get() = world?.economy?.ranks?.values?.toList().orEmpty()
+
+    /**
+     * The winter checkpoint of [plan]'s season after week [week] closed (design ENG 3.3,
+     * [ClubCheckpoint.run]): nothing for a book without a club world, a club league's book or with
+     * [LeagueConfig.clubWorld] off. Transactional: on an exception the book goes back to what it was
+     * and no news is told, so the next attempt runs whole.
+     */
+    fun checkpoint(plan: SeasonPlan, input: ClubInput, week: Int): List<LeagueEvent> {
+        if (world == null || format != AFFILIATION || !input.config.clubWorld) return emptyList()
+        val saved = encode()
+        return try {
+            ClubCheckpoint.run(this, plan, input, week)
+        } catch (e: Exception) {
+            restore(saved)
+            emptyList()
+        }
+    }
+
+    /** Bumps [version]: every change of the club world the screens show calls it (coach changes included). */
+    internal fun touch() = changed()
+
+    /** The club world, started empty when the book has none (its migration and founding). */
+    internal fun startWorld(): ClubWorld = world ?: ClubWorld(this).also {
+        world = it
+        changed()
+    }
+
+    /** Member [key] moved to club [to] (null: out of every club), no move logged; false (nothing changed) for an unknown club. */
+    internal fun place(key: String, to: String?): Boolean {
+        val dest = to?.let { entry(it) ?: return false }
+        memberOf[key]?.let { entry(it) }?.squad?.remove(key)
+        memberOf.remove(key)
+        dest?.let {
+            it.squad += key
+            memberOf[key] = it.id
+        }
+        changed()
+        return true
+    }
+
+    /** Logs a move a club-world step made. */
+    internal fun logMove(m: ClubMove) = log(m)
+
+    /**
+     * The book as [saved] holds it ([encode] of this book): the rollback of the club off-season and
+     * the checkpoint (design ENG 1b.10).
+     */
+    internal fun restore(saved: String) {
+        val b = decode(saved)
+        require(b.seed == seed) { "another book" }
+        cities = b.cities
+        format = b.format
+        entries.clear()
+        entries += b.entries
+        byId.clear()
+        byId.putAll(b.byId)
+        memberOf.clear()
+        memberOf.putAll(b.memberOf)
+        moves.clear()
+        moves.addAll(b.moves)
+        goneList.clear()
+        goneList += b.goneList
+        placeLines.clear()
+        placeLines.putAll(b.placeLines)
+        next = b.next
+        digest = b.digest
+        season = b.season
+        lastSeed = b.lastSeed
+        world = b.world?.also { it.book = this }
+        changed()
+    }
 
     private fun add(e: Entry) {
         entries += e
@@ -1166,7 +1343,8 @@ class ClubBook private constructor(
      * cities, the last season's plan seed), one line per club and per history move. A national
      * book's (`clubs 2`): the meta line (seed, last season, plan seed, next id number), one line
      * per club (with its nation, founding season and members) and per dissolved club, the newest
-     * seasons' club-table places (`cs`), the last off-season's digest (`od`) and the moves.
+     * seasons' club-table places (`cs`), the last off-season's digest (`od`) and the moves, then
+     * the club world's lines from its `cw` marker on ([ClubWorld.PARTS]; none before the migration).
      */
     fun encode(): String = if (format == AFFILIATION) encodeNational() else buildString {
         append("$HEADER\n")
@@ -1187,11 +1365,13 @@ class ClubBook private constructor(
             val id = e.identity
             val em = id.emblem
             append("club ${e.id} ${e.nation} ${esc(id.city)} ${esc(id.mascot)} ${esc(id.name)} ${em.shape} ${hex(em.colour1)} ${hex(em.colour2)} ")
-            append("${esc(em.initial.toString())} ${e.budget} ${e.honours} ${e.founded} ${e.squad.joinToString(",").ifEmpty { "-" }}\n")
+            append("${esc(em.initial.toString())} ${budgetOf(e)} ${e.honours} ${e.founded} ${e.squad.joinToString(",").ifEmpty { "-" }}\n")
         }
         for (g in goneList) {
             val em = g.emblem
-            append("gone ${g.id} ${g.nation} ${esc(g.name)} ${em.shape} ${hex(em.colour1)} ${hex(em.colour2)} ${esc(em.initial.toString())} ${g.honours} ${g.founded} ${g.dissolved}\n")
+            append("gone ${g.id} ${g.nation} ${esc(g.name)} ${em.shape} ${hex(em.colour1)} ${hex(em.colour2)} ${esc(em.initial.toString())} ${g.honours} ${g.founded} ${g.dissolved}")
+            if (g.reason != '-') append(' ').append(g.reason)
+            append('\n')
         }
         for ((n, lines) in placeLines) {
             if (lines.isEmpty()) continue
@@ -1205,6 +1385,8 @@ class ClubBook private constructor(
             append("${keys(d.drafted)} ${keys(d.bought)} ${named(d.abroadNamed)} ${named(d.homeNamed)} ${if (d.reform) 1 else 0}\n")
         }
         for (m in moves) append("move ${m.season} ${m.type.code} ${m.ai} ${m.from ?: "-"} ${m.to ?: "-"} ${m.amount}\n")
+        // The club world after today's lines (older versions skip them): from its `cw` marker on.
+        world?.let { LineParts.encode(ClubWorld.PARTS, it, this) }
     }
 
     companion object {
@@ -1429,7 +1611,7 @@ class ClubBook private constructor(
                         "gone" -> {
                             require(f.size >= 11)
                             if (book.gone(f[1]) != null) return@runCatching
-                            book.goneList += GoneClub(f[1], f[2], unesc(f[3]), emblemOf(f, 4), maxOf(0, f[8].toInt()), f[9].toInt(), f[10].toInt())
+                            book.goneList += GoneClub(f[1], f[2], unesc(f[3]), emblemOf(f, 4), maxOf(0, f[8].toInt()), f[9].toInt(), f[10].toInt(), f.getOrNull(11)?.singleOrNull() ?: '-')
                         }
                         "cs" -> book.placeLines[f[1].toInt()] = f[2].split(';').map { part ->
                             val p = part.split(':')
@@ -1457,6 +1639,8 @@ class ClubBook private constructor(
             book.sortEntries()
             book.reindex()
             book.trim()
+            // The club world, when the book is migrated (a `cw` line; none: the migration comes at load, ENG 8.2).
+            if (lines.any { it.trim().startsWith("cw ") }) book.world = ClubWorld(book).also { LineParts.decode(ClubWorld.PARTS, it, lines) }
             return book
         }
 

@@ -26,6 +26,12 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      */
     var federation = Federation()
 
+    /**
+     * The world's own story (league/world.txt): the meta and its eras, the media, the world events
+     * and the encyclopedia's history (design ENG 8.1). Empty until the steps that fill it are wired.
+     */
+    var world = WorldBook()
+
     /** Season and career statistics, records, milestones and the league meta. */
     var stats = StatsBook()
 
@@ -849,14 +855,17 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
      * guard makes that a replay). The honours and archive go before the stats, the stats before
      * the roster: once the roster has moved on (this season's retirees gone from the ladder), the
      * stats say the season ended and its awards, lines and review are kept as they were. The
-     * clubs come after the roster they were drafted from, the 요트협회 after the clubs. No season
-     * or clubs: empty files, so an older one is not read.
+     * world book comes after the roster and before the clubs (design ENG 8.1: a kill that leaves
+     * it unwritten leaves the clubs and the 요트협회 pre-close too). The clubs come after the roster
+     * they were drafted from, the 요트협회 after the clubs. No season or clubs: empty files, so an
+     * older one is not read.
      */
     fun encodeFiles(): Map<String, String> = buildMap {
         put(HONOURS, honours.encode())
         put(ARCHIVE, archive.encode())
         put(STATS, stats.encode())
         put(ROSTER, players.encode())
+        put(WORLD, world.encode())
         put(CLUBS, clubs?.encode() ?: "")
         put(FEDERATION, federation.encode())
         put(HIGHLIGHTS, highlights.encode())
@@ -901,12 +910,13 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
         const val NEWS = NewsBook.FILE
         const val LAB = LabBook.FILE
         const val NATIONS = NationBook.FILE
+        const val WORLD = WorldBook.FILE
 
         /** What the results of a player who aged still weigh in the ratings after a season. */
         const val RATING_FADE = 0.5
 
         /** Files [encodeFiles] writes. */
-        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, FEDERATION, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS)
+        val FILES = listOf(LADDER, SEASON, HONOURS, ROSTER, CLUBS, FEDERATION, STATS, ARCHIVE, HIGHLIGHTS, NEWS, LAB, NATIONS, WORLD)
 
         /** Readers of every competition in season.txt. */
         val CODECS: Map<Comp, CompetitionCodec> = Competitions.codecs + (Comp.CLUB to ClubLeague.codec) + (Comp.LEGEND to LegendMatch.codec)
@@ -947,6 +957,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             w.honours = files[HONOURS]?.let { t -> readOrNull { HonourBook.decode(t) } } ?: HonourBook()
             if (w.plan == null && seasonText != null) w.honours.add(HonourBook.legacy(seasonText))
             w.players = files[ROSTER]?.let { t -> readOrNull { PlayerBook.decode(t, reserved) } } ?: PlayerBook(reserved)
+            w.world = files[WORLD]?.let { t -> readOrNull { WorldBook.decode(t) } } ?: WorldBook()
             w.clubs = files[CLUBS]?.let { t -> readOrNull { ClubBook.decode(t) } }
             w.federation = files[FEDERATION]?.let { t -> readOrNull { Federation.decode(t) } } ?: Federation()
             w.stats = files[STATS]?.let { t -> readOrNull { StatsBook.decode(t) } } ?: StatsBook()
@@ -971,6 +982,8 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
                     w.stats.startSeason(p.number, keys.associateWith { ladder.rating(it) }, keys.filter { w.players[it]?.born == p.number })
                 }
                 w.rank(p)
+                // A world book an older build left behind while it played on: its arcs and votes go.
+                w.world.dropStale(p.number)
                 // A desk of another season (or none): it starts this season's weeks afresh.
                 if (w.desk.season != p.number) w.desk.begin(p)
             }

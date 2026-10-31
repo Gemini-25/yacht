@@ -464,6 +464,36 @@ class StatsBook(
     private var metaGames = 0
     private var metaScore = 0L
 
+    /**
+     * What each kept close measured of the style families (`fm`, design ENG 4.2) and the press
+     * votes' tallies (`pv`, ENG 5.4), by season. Written by the close under the [ended] guard (the
+     * same close never twice), so a close replayed after a kill finds them here.
+     */
+    private val familyLines = java.util.TreeMap<Int, FamilyStats>()
+    private val voteLines = java.util.TreeMap<Int, List<PressTally>>()
+
+    /** The style families' numbers of every kept close, by season. */
+    val families: Map<Int, FamilyStats> get() = familyLines
+
+    fun families(season: Int): FamilyStats? = familyLines[season]
+
+    /** The press votes' tallies of every kept close, by season (each award's in the order kept). */
+    val pressVotes: Map<Int, List<PressTally>> get() = voteLines
+
+    fun pressVotes(season: Int): List<PressTally> = voteLines[season].orEmpty()
+
+    /** Keeps [fs] in place of its season's, and the newest [keep] seasons. */
+    internal fun putFamilies(fs: FamilyStats, keep: Int) {
+        familyLines[fs.season] = fs
+        while (familyLines.size > keep.coerceAtLeast(1)) familyLines.pollFirstEntry()
+    }
+
+    /** Keeps [tallies] as [season]'s press votes in place of any before, and the newest [keep] seasons. */
+    internal fun putPressVotes(season: Int, tallies: List<PressTally>, keep: Int) {
+        voteLines[season] = tallies.toList()
+        while (voteLines.size > keep.coerceAtLeast(1)) voteLines.pollFirstEntry()
+    }
+
     /** The meta of the last finished season and of the one before. */
     var meta: MetaReport? = null
         private set
@@ -1179,6 +1209,9 @@ class StatsBook(
         previousMeta?.encode(this)
         meta?.encode(this)
         for (e in milestoneList.reversed()) append("ms ${e.encode()}\n")
+        // What the closes measured of the style families and the press votes (older versions skip them).
+        for (fs in familyLines.values) append(fs.encode())
+        for (ts in voteLines.values) for (t in ts) append(t.encode())
     }
 
     private fun encodeScale(s: RatingScale) = "${s.version} ${Field.num(s.mean, 3)} ${Field.num(s.sd, 3)} ${Field.num(s.center, 3)}"
@@ -1376,6 +1409,8 @@ class StatsBook(
                         "meta" -> metas += MetaReport.decode(f)
                         "mt" -> shares += f[1].toInt() to TraitShare(Field.unesc(f[2]), Field.unesc(f[3]), Field.dbl(f[4]), Field.dbl(f[5]), Field.dbl(f[6]))
                         "ms" -> LeagueEvent.decode(line.substringAfter(' '))?.let { book.milestoneList.addFirst(it) }
+                        "fm" -> FamilyStats.decode(f)?.let { book.familyLines[it.season] = it }
+                        "pv" -> PressTally.decode(f)?.let { t -> book.voteLines[t.season] = book.voteLines[t.season].orEmpty() + t }
                     }
                 }
             }

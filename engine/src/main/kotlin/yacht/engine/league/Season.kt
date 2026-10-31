@@ -299,6 +299,49 @@ class Season private constructor(
         divisions[division].map { standings.getValue(it) }
             .sortedWith(compareByDescending<Standing> { it.points }.thenByDescending { it.diff }.thenByDescending { it.scored })
 
+    /**
+     * Every member's league numbers counted from the stored results of the fixtures of matchday
+     * [maxMatchday] and before only (design ENG 3.4): key → `[points, played, wins, draws, losses,
+     * sweeps]` ([THROUGH_POINTS] ...), every member of the season listed (zeros before its first).
+     * "Through week w" is `maxMatchday = w − 1` (weeks are matchdays + 1). Fixtures of later
+     * matchdays played early ([next] hands out the next matchday's before a week is complete) never
+     * count, so the numbers for a week are the same whatever has been played since. O(fixtures); a
+     * played fixture whose games were not saved (a file of before) is not counted.
+     */
+    fun pointsThrough(maxMatchday: Int): Map<String, IntArray> {
+        val out = HashMap<String, IntArray>(standings.size * 2)
+        for (k in standings.keys) out[k] = IntArray(THROUGH_FIELDS)
+        for (f in fixtures) {
+            if (f.matchday > maxMatchday) continue
+            val games = results[f.id] ?: continue
+            val a = out.getOrPut(f.a) { IntArray(THROUGH_FIELDS) }
+            val b = out.getOrPut(f.b) { IntArray(THROUGH_FIELDS) }
+            a[THROUGH_PLAYED]++
+            b[THROUGH_PLAYED]++
+            when (TieRule.match(games, format)) {
+                1 -> credit(a, b, bonus && TieRule.sweptByA(games))
+                -1 -> credit(b, a, bonus && TieRule.sweptByB(games))
+                else -> {
+                    a[THROUGH_DRAWS]++
+                    b[THROUGH_DRAWS]++
+                    a[THROUGH_POINTS]++
+                    b[THROUGH_POINTS]++
+                }
+            }
+        }
+        return out
+    }
+
+    private fun credit(winner: IntArray, loser: IntArray, swept: Boolean) {
+        winner[THROUGH_WINS]++
+        loser[THROUGH_LOSSES]++
+        winner[THROUGH_POINTS] += 3
+        if (swept) {
+            winner[THROUGH_POINTS]++
+            winner[THROUGH_SWEEPS]++
+        }
+    }
+
     /** The same division ranked by 운 보정 승점 (two-game totals on the same dice). */
     fun aggregateTable(division: Int): List<Standing> =
         divisions[division].map { standings.getValue(it) }
@@ -443,6 +486,15 @@ class Season private constructor(
     }
 
     companion object {
+        /** The fields of a [pointsThrough] row. */
+        const val THROUGH_POINTS = 0
+        const val THROUGH_PLAYED = 1
+        const val THROUGH_WINS = 2
+        const val THROUGH_DRAWS = 3
+        const val THROUGH_LOSSES = 4
+        const val THROUGH_SWEEPS = 5
+        const val THROUGH_FIELDS = 6
+
         const val HEADER = "season 4"
 
         /** A season of national leagues: their `league` lines, and the aligned schedule they imply. */

@@ -75,14 +75,33 @@ class Archive {
     val reviewSeasons: List<Int> get() = reviews.descendingKeySet().toList()
 
     /**
+     * Each kept review's club-world and media lines ([SeasonStories], design ENG 8.1), by season:
+     * kept beside the review (its block's `big med mkt coa era` sub-lines), not in it, so a
+     * [SeasonReview] is the same value it was. Set by [amendReview]; a review put again starts
+     * without them.
+     */
+    private val storyMap = java.util.TreeMap<Int, SeasonStories>()
+
+    /** [season]'s stories, while its review is kept; null before they are written. */
+    fun stories(season: Int): SeasonStories? = storyMap[season]?.takeIf { reviews.containsKey(season) }
+
+    /**
      * Adds to [season]'s review what is known only after the close: the league ranking's moves
      * ([ranking]), the 요트협회's decisions ([federation]) and the transfers abroad ([transfers]);
      * a null leaves that part as it is. Each part replaces what the review had, so amending again
      * with the same values (a replay after a kill) changes nothing. False without that review.
+     * [stories]: the season's club-world and media lines ([SeasonStories]), in place of any it had.
      */
-    fun amendReview(season: Int, ranking: List<Pair<String, Int>>? = null, federation: List<String>? = null, transfers: Int? = null): Boolean {
+    fun amendReview(
+        season: Int,
+        ranking: List<Pair<String, Int>>? = null,
+        federation: List<String>? = null,
+        transfers: Int? = null,
+        stories: SeasonStories? = null,
+    ): Boolean {
         val r = reviews[season] ?: return false
         reviews[season] = r.copy(ranking = ranking ?: r.ranking, federation = federation ?: r.federation, transfers = transfers ?: r.transfers)
+        stories?.let { storyMap[season] = it }
         return true
     }
 
@@ -163,9 +182,11 @@ class Archive {
      */
     internal fun putReview(r: SeasonReview, members: Int = SMALL_LEAGUE) {
         reviews[r.season] = r
+        storyMap.remove(r.season)
         if (r.season == reviews.lastKey()) reviewSeen = false
         val keep = if (members < SMALL_LEAGUE) SMALL_REVIEWS else REVIEWS
         while (reviews.size > keep) reviews.pollFirstEntry()
+        storyMap.keys.retainAll(reviews.keys)
     }
 
     // ---- saving --------------------------------------------------------------------------------
@@ -193,9 +214,16 @@ class Archive {
         for (d in dynastyList) append("dyn ${Field.esc(d.key)} ${d.kind} ${d.title} ${d.count} ${d.from} ${d.to}\n")
         for (e in hof) append("hof ${Field.esc(e.key)} ${Field.esc(e.name)} ${e.season} ${e.reason} ${e.titles} ${e.games} ${Field.num(e.winRate, 3)}\n")
         // The newest review as "rv" (what older versions read), the others as "rw" blocks.
+        // Each block's stories after its own lines (older versions skip those sub-lines).
         val newest = reviews.lastEntry()?.value
-        for (r in reviews.values) if (r !== newest) r.encode(this, true, "rw")
-        newest?.encode(this, reviewSeen)
+        for (r in reviews.values) if (r !== newest) {
+            r.encode(this, true, "rw")
+            storyMap[r.season]?.encode(this, "rw")
+        }
+        newest?.let {
+            it.encode(this, reviewSeen)
+            storyMap[it.season]?.encode(this, "rv")
+        }
     }
 
     companion object {
@@ -370,18 +398,103 @@ class Archive {
                 }
             }
             for ((k, entries) in places) a.lineMap[k]?.let { placeLines(it, entries) }
-            for (lines in older) SeasonReview.decode(lines)?.let { (r, _) -> a.reviews[r.season] = r }
+            for (lines in older) SeasonReview.decode(lines)?.let { (r, _) ->
+                a.reviews[r.season] = r
+                SeasonStories.of(lines)?.let { a.storyMap[r.season] = it }
+            }
             // The "rv" block is the newest (an older season's "rw" block of the same season gives way to it).
             SeasonReview.decode(review)?.let { (r, seen) ->
                 a.reviews.keys.removeAll { it >= r.season }
                 a.reviews[r.season] = r
+                a.storyMap.remove(r.season)
+                SeasonStories.of(review)?.let { a.storyMap[r.season] = it }
                 a.reviewSeen = seen
             }
             while (a.reviews.size > REVIEWS) a.reviews.pollFirstEntry()
+            a.storyMap.keys.retainAll(a.reviews.keys)
             while (a.summaryMap.size > MAX_SEASONS) a.summaryMap.pollFirstEntry()
             while (a.hof.size > MAX_HALL_OF_FAME) a.hof.removeAt(0)
             while (a.dynastyList.size > MAX_DYNASTIES) a.dynastyList.removeAt(0)
             return a
+        }
+    }
+}
+
+/**
+ * The season's big story (`big`, design ENG 8.1): what it was ([kind]: an arc's outcome, an era's
+ * change, the World Cup host, the record fee, 골든 다이스; the order the review prefers them in) with
+ * its ids ([keys]: players, clubs, nations, coaches) and values ([args]).
+ */
+data class BigStory(val kind: String, val keys: List<String> = emptyList(), val args: List<String> = emptyList())
+
+/** The review's media line (`med`): the favourites who won of [leagues] leagues, the mean Spearman ρ × 100, and 골든 다이스's top 3. */
+data class ReviewMedia(val hits: Int, val leagues: Int, val rho: Int, val goldenDice: List<PressVoteRow>)
+
+/** The review's market line (`mkt`): the season's record fee (null for none) and the deals of its windows. */
+data class ReviewMarket(val record: FeeRecord?, val deals: Int)
+
+/** The review's coaches' line (`coa`): the season's sackings, the coach of the year and its club. */
+data class ReviewCoaches(val sackings: Int, val coachOfYear: String?, val club: String?)
+
+/**
+ * The review's era line (`era`): the era of the season ([family] null: 춘추전국 시대), the number
+ * of its family's eras so far ([nth]: 2 for "두 번째 …"), and [change] 'B' when it began at this
+ * close, 'E' when one ended, '-' otherwise.
+ */
+data class ReviewEra(val family: StyleFamily?, val nth: Int, val change: Char)
+
+/**
+ * A season review's club-world and media lines (design ENG 8.1, archive.txt's review sub-lines
+ * `big med mkt coa era` in the review's block; older versions skip them): the big stories, the
+ * predictions and the press vote, the market, the coaches and the era. Filled after the close
+ * ([Archive.amendReview]) and read with [Archive.stories].
+ */
+data class SeasonStories(
+    val big: List<BigStory> = emptyList(),
+    val media: ReviewMedia? = null,
+    val market: ReviewMarket? = null,
+    val coaches: ReviewCoaches? = null,
+    val era: ReviewEra? = null,
+) {
+    val isEmpty: Boolean get() = big.isEmpty() && media == null && market == null && coaches == null && era == null
+
+    /** The sub-lines of a review block tagged [tag] ("rv" or "rw"). */
+    internal fun encode(out: StringBuilder, tag: String) {
+        for (b in big) {
+            out.append("$tag big ${Field.esc(b.kind)} ${LineParts.list(b.keys) { Field.esc(it) }} ")
+            out.append(if (b.args.isEmpty()) "-" else b.args.joinToString("|") { Field.esc(it) }).append('\n')
+        }
+        media?.let { m -> out.append("$tag med ${m.hits} ${m.leagues} ${m.rho} ${LineParts.list(m.goldenDice) { "${Field.esc(it.key)}:${it.points}:${it.firsts}" }}\n") }
+        market?.let { m ->
+            val r = m.record
+            out.append("$tag mkt ${r?.let { Field.esc(it.key) } ?: "-"} ${LineParts.opt(r?.from)} ${LineParts.opt(r?.to)} ${r?.fee ?: 0} ${r?.season ?: 0} ${m.deals}\n")
+        }
+        coaches?.let { c -> out.append("$tag coa ${c.sackings} ${LineParts.opt(c.coachOfYear)} ${LineParts.opt(c.club)}\n") }
+        era?.let { e -> out.append("$tag era ${e.family?.code ?: '-'} ${e.nth} ${e.change}\n") }
+    }
+
+    /** These stories with review sub-line [f] (split on spaces, the tag first) read in; unchanged for a sub-line of another kind. */
+    internal fun read(f: List<String>): SeasonStories = when (f[1]) {
+        "big" -> copy(big = big + BigStory(Field.unesc(f[2]), LineParts.items(f[3]).map { Field.unesc(it) }, if (f[4] == "-") emptyList() else f[4].split('|').map { Field.unesc(it) }))
+        "med" -> copy(media = ReviewMedia(f[2].toInt(), f[3].toInt(), f[4].toInt(), LineParts.items(f[5]).map { e -> e.split(':').let { PressVoteRow(Field.unesc(it[0]), it[1].toInt(), it[2].toInt()) } }))
+        "mkt" -> copy(market = ReviewMarket(f[2].takeIf { it != "-" }?.let { FeeRecord(Field.unesc(it), Field.opt(f[3]), Field.opt(f[4]), f[5].toInt(), f[6].toInt()) }, f[7].toInt()))
+        "coa" -> copy(coaches = ReviewCoaches(f[2].toInt(), Field.opt(f[3]), Field.opt(f[4])))
+        "era" -> copy(era = ReviewEra(f[2].single().takeIf { it != '-' }?.let { StyleFamily.ofCode(it) ?: error("family $it") }, f[3].toInt(), f[4].single()))
+        else -> this
+    }
+
+    companion object {
+        /** The review sub-lines these stories own. */
+        val SUBS = setOf("big", "med", "mkt", "coa", "era")
+
+        /** The stories of a review block's [lines] (the tag first); null without any. A sub-line that cannot be read is skipped. */
+        internal fun of(lines: List<String>): SeasonStories? {
+            var s = SeasonStories()
+            for (l in lines) {
+                val f = l.split(' ')
+                if (f.getOrNull(1) in SUBS) runCatching { s = s.read(f) }
+            }
+            return s.takeIf { !it.isEmpty }
         }
     }
 }

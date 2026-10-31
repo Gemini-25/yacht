@@ -121,6 +121,19 @@ data class LeagueConfig(
     val clubCup: Boolean = true,
     /** 요트협회: each off-season it proposes changes to the competition rules. */
     val federation: Boolean = true,
+    /**
+     * The club world (클럽 이야기: money, coaches, transfer stories, club history; design ENG 1b):
+     * off, it freezes as it is and the clubs' off-season runs as before it existed.
+     */
+    val clubWorld: Boolean = true,
+    /** Rare world events (돌발 세계 사건, ENG 6): off, none starts (those under way finish). */
+    val worldEvents: Boolean = true,
+    /** 재정 규정 (a 요트협회 lever, ENG 1.5): 0 off, 1 soft, 2 strict. */
+    val ffp: Int = 1,
+    /** 연대 기금 (a lever, ENG 1.2): the share of the 8 best-ranked leagues' TV money shared with the others, percent in steps of 5. */
+    val solidarity: Int = 5,
+    /** 신인 스타일 상한 (a lever, ENG 4.3): a family's cap among a season's newcomers, in tenths of its neutral share (13, 15 or 17). */
+    val styleCap: Int = 15,
 ) {
     init {
         require(divisions in 1..6) { "divisions $divisions" }
@@ -137,6 +150,10 @@ data class LeagueConfig(
         require(transfers in 0..10)
         require(clDirect in 0..12)
         require(clubSize in 5..12)
+        require(ffp in 0..2) { "ffp $ffp" }
+        require(solidarity in 0..20 && solidarity % 5 == 0) { "solidarity $solidarity" }
+        // Literals, not STYLE_CAPS: nothing of the companion is read while it builds its own configs.
+        require(styleCap == 13 || styleCap == 15 || styleCap == 17) { "styleCap $styleCap" }
     }
 
     /**
@@ -146,7 +163,16 @@ data class LeagueConfig(
      */
     val sweepPoints: Boolean get() = matchFormat.sweepBonus && sweepBonus
 
-    fun encode(): String = buildString {
+    /**
+     * The saved rules. The club world's keys (`clubWorld` … `styleCap`, design ENG 8.1) are written
+     * only where they differ from their defaults: a key that is missing reads as its default, so
+     * config.txt and every season's own copy of the rules (season.txt's `cfg` lines) stay as they
+     * were for a league that keeps them.
+     */
+    fun encode(): String = encode(full = false)
+
+    /** [encode], with every key written when [full] ([valueOf] and [with] read the rules from it). */
+    private fun encode(full: Boolean): String = buildString {
         append("config $VERSION\n")
         append("divisions $divisions\n")
         append("double ${flag(doubleRoundRobin)}\n")
@@ -185,11 +211,17 @@ data class LeagueConfig(
         append("clubSize $clubSize\n")
         append("clubCup ${flag(clubCup)}\n")
         append("federation ${flag(federation)}\n")
+        // The defaults as literals: the constructor's (no instance is built inside the codec).
+        if (full || !clubWorld) append("clubWorld ${flag(clubWorld)}\n")
+        if (full || !worldEvents) append("worldEvents ${flag(worldEvents)}\n")
+        if (full || ffp != 1) append("ffp $ffp\n")
+        if (full || solidarity != 5) append("solidarity $solidarity\n")
+        if (full || styleCap != 15) append("styleCap $styleCap\n")
     }
 
-    /** The saved value of rule [key], as [encode] writes it ("20" for "divisionSize"); null for no such rule. */
+    /** The saved value of rule [key], as [encode] writes it ("20" for "divisionSize", also a key left out at its default); null for no such rule. */
     fun valueOf(key: String): String? =
-        encode().lines().drop(1).firstNotNullOfOrNull { l -> l.split(' ').takeIf { it.size == 2 && it[0] == key }?.get(1) }
+        encode(full = true).lines().drop(1).firstNotNullOfOrNull { l -> l.split(' ').takeIf { it.size == 2 && it[0] == key }?.get(1) }
 
     /**
      * These rules with [key] set to [value] as [encode] writes it ("divisionSize", "22"); null
@@ -197,7 +229,7 @@ data class LeagueConfig(
      * number), which [decode] would quietly skip.
      */
     fun with(key: String, value: String): LeagueConfig? {
-        val lines = encode().lines().mapIndexed { i, l -> if (i > 0 && l.substringBefore(' ') == key) "$key $value" else l }
+        val lines = encode(full = true).lines().mapIndexed { i, l -> if (i > 0 && l.substringBefore(' ') == key) "$key $value" else l }
         return decode(lines.joinToString("\n")).takeIf { it.valueOf(key) == value }
     }
 
@@ -211,6 +243,9 @@ data class LeagueConfig(
         /** Smallest and largest groups of the pyramid. */
         const val MIN_GROUP = 30
         const val MAX_GROUP = 80
+
+        /** [styleCap]'s values: 엄격 1.3배, 기본 1.5배, 느슨 1.7배. */
+        val STYLE_CAPS: List<Int> = listOf(13, 15, 17)
 
         /**
          * Version of [encode]'s rules: 2 brought 판 승점제 and the series and double-elimination
@@ -285,6 +320,11 @@ data class LeagueConfig(
                         "clubSize" -> c.copy(clubSize = v.toInt())
                         "clubCup" -> c.copy(clubCup = v == "1")
                         "federation" -> c.copy(federation = v == "1")
+                        "clubWorld" -> c.copy(clubWorld = v == "1")
+                        "worldEvents" -> c.copy(worldEvents = v == "1")
+                        "ffp" -> c.copy(ffp = v.toInt())
+                        "solidarity" -> c.copy(solidarity = v.toInt())
+                        "styleCap" -> c.copy(styleCap = v.toInt())
                         else -> c
                     }
                 }.getOrDefault(c)
@@ -334,6 +374,7 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
         LeagueConfig.DEFAULT.copy(
             doubleRoundRobin = false, matchFormat = MatchFormat.SINGLE, titlePlayoff = false, promotionPlayoff = false, longKnockouts = false,
             seriesKnockouts = false, doubleElimination = false, nationCup = false, clubCup = false, familyCup = false, federation = false,
+            worldEvents = false,
         ),
     ),
     CHAOS(
@@ -343,6 +384,6 @@ enum class LeaguePreset(val label: String, val desc: String, val config: LeagueC
     ELITE(
         "강자만", "가장 강한 선수 48명만 국제 연합 리그 하나(1부·2부·3부)에서 뛰어요.",
         // The same players season after season: rookies would never get the rating to be picked.
-        LeagueConfig.DEFAULT.copy(onlyTop = 48, familyCup = false, nationCup = false, aging = false, guests = false),
+        LeagueConfig.DEFAULT.copy(onlyTop = 48, familyCup = false, nationCup = false, aging = false, guests = false, worldEvents = false),
     ),
 }

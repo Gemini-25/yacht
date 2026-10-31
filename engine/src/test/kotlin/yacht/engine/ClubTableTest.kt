@@ -51,6 +51,28 @@ class ClubTableTest {
     }
 
     @Test
+    fun theNewParametersAtTheirDefaultsGiveTodaysTable() {
+        // The worked example again, through the overload of the cut, the winter splits and the deductions.
+        val s = season(
+            listOf("KR" to listOf(listOf("A", "B", "x1", "x2"), listOf("C", "D", "E", "F", "G", "x3"))),
+            mapOf("A" to 60, "B" to 45, "C" to 70, "D" to 50, "E" to 40, "F" to 30, "G" to 20, "x1" to 90, "x2" to 10, "x3" to 5),
+        )
+        val clubs = book(Triple("c01", "KR", listOf("A", "B", "C", "D", "E", "F", "G")), Triple("c02", "KR", listOf("x1", "x2", "x3")))
+        val honours = listOf(Honour(1, "L0.KR", "A"), Honour(1, "L1.KR", "C"), Honour(1, "REG.KR", "x1"))
+        val today = ClubTable.of(s, clubs, "KR", honours)
+        assertEquals(today, ClubTable.of(s, clubs, "KR", honours, through = null, splits = emptyList(), deductions = emptyMap()))
+        assertEquals(listOf(247.0, 108.0), today.map { it.points })
+        assertEquals(ClubTable.all(s, clubs, honours), ClubTable.all(s, clubs, honours, null, emptyList(), emptyMap()))
+        // A 10% deduction (법정관리): 247.0 → 222.3, the members' points untouched; c02 is not affected.
+        val cut = ClubTable.of(s, clubs, "KR", honours, deductions = mapOf("c01" to 10, "c09" to 50))
+        assertEquals(listOf(222.3, 108.0), cut.map { it.points })
+        assertEquals(today.map { it.leaguePart to it.bonus }, cut.map { it.leaguePart to it.bonus })
+        assertEquals(60, s.standings.getValue("A").points)
+        // A deduction big enough reorders the table.
+        assertEquals(listOf("c02", "c01"), ClubTable.of(s, clubs, "KR", honours, deductions = mapOf("c01" to 60)).map { it.club })
+    }
+
+    @Test
     fun tierWeightsAndHonourPoints() {
         assertEquals(listOf(1.0, 0.6, 0.4, 0.3, 0.25, 0.2, 0.2, 0.2), (0..7).map { ClubTable.weight(it) })
         val kinds = mapOf(

@@ -303,7 +303,7 @@ class LeagueWorldTest {
         assertEquals(LeagueWorld.FILES.toSet(), files.keys)
         assertEquals(
             listOf(
-                LeagueWorld.HONOURS, LeagueWorld.ARCHIVE, LeagueWorld.STATS, LeagueWorld.ROSTER, LeagueWorld.CLUBS, LeagueWorld.FEDERATION,
+                LeagueWorld.HONOURS, LeagueWorld.ARCHIVE, LeagueWorld.STATS, LeagueWorld.ROSTER, LeagueWorld.WORLD, LeagueWorld.CLUBS, LeagueWorld.FEDERATION,
                 LeagueWorld.HIGHLIGHTS, LeagueWorld.NEWS, LeagueWorld.LAB, LeagueWorld.NATIONS, LeagueWorld.LADDER, LeagueWorld.SEASON,
             ),
             files.keys.toList(),
@@ -321,6 +321,9 @@ class LeagueWorldTest {
         // An older backup has no federation.txt: an empty 요트협회.
         val old = LeagueWorld.decode(files - LeagueWorld.FEDERATION, w.ladder.keys, emptyList())
         assertEquals(yacht.engine.league.Federation().encode(), old.federation.encode())
+        // Nor world.txt: an empty world book, written as one (the header and its guards).
+        assertEquals("world 1\nguards 0 0 0 0\n", files.getValue(LeagueWorld.WORLD))
+        assertEquals(files.getValue(LeagueWorld.WORLD), LeagueWorld.decode(files - LeagueWorld.WORLD, w.ladder.keys, emptyList()).encodeFiles().getValue(LeagueWorld.WORLD))
     }
 
     @Test
