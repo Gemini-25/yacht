@@ -926,7 +926,7 @@ and its committee change the rules for 10 each (seeds 7 and 13). Per season:
 | runaway leader | 14-46%, mean 29% | 18-39% | the same with or without a playoff |
 | 2-0 among decided | 95.8-96.8% | the same | a decided match that is no 2-0 needs a drawn game |
 | rounds R | 42 | 42 | |
-| 요트컵 upsets from the 8강 | 0-6 of 22, none in 13 of 30 | 0-1 of 22 with short series | rating gaps of 100 are rare among the last 8 |
+| 요트컵 upsets from the 8강 | 0-6 of 22, none in 13 of 30 | 0-1 of 22 with short series after the first season (C: 6, 1, 0, 0, 0, 1) | rating gaps of 100 are rare among the last 8 |
 | clEdge | −0.54 to +0.38 | −0.51 to +0.65 | about 50-60 CL matches a side: SD about 0.3 |
 
 The floors are set so that each statistic that tells seasons apart passes its floor in about a
@@ -934,10 +934,10 @@ third of the seasons under the rules it argues against, and its threshold only i
 
 | Kind | Floor → threshold | Past the floor |
 |---|---|---|
-| SWAP_DOWN | 38% → 50% | 1 of 20 at autoSwap 2 (D); 2 of 7 (B) and 4 of 5 (C) at autoSwap 3 |
+| SWAP_DOWN | 38% → 50% | 1 of 20 at autoSwap 2 (D); 2 of 7 (B) and 2 of 5 (C) at autoSwap 3 |
 | SWAP_UP | 20% → 12% | 4 of 9 (A), 1 of 9 (D) |
 | TITLE_PO_OFF | 78% → 90% (22 of 28 leagues) | 2 of 10 (A), 2 of 6 (B), 0 of 10 (D) |
-| TITLE_PO_ON | 33% → 50% (10 of 28) | the statistic 3 of 10 (A) and 3 of 10 (D) with a playoff; 0 of 4 without (B) |
+| TITLE_PO_ON | 33% → 50% (10 of 28) | the statistic 3 of 10 (A) and 3 of 10 (D) with a playoff; 0 of 4 (B) and 1 of 6 (C) without |
 | SWEEP_OFF / SWEEP_ON | 99% → 100% / 52% → 45% | never: out of reach under 판 승점제 |
 | SIZE_DOWN / SIZE_UP | 46 → 48 / 36 → 34 weeks | never at D = 20 (the dead band 37-45 by design) |
 | LONG_KO_ON | 9% → 25% (2 of 22) | rare with short series |
@@ -1046,11 +1046,12 @@ was run again at 3000, and at 1000 for a same-day comparison.
 - **The 200-player projection** (the folder after season 3 plus 30 times season 3's growth of
   archive.txt, honours.txt and matchlogs.bin) is above the gate's +3% margin. The growth it
   extrapolates is not a steady one: archive.txt grows 6.5-6.7 KB a season while its kept reviews
-  fill up (3 below 500 members, about 2 KB each), then 3-4 KB like the baseline's 3.2 KB. Played
-  for 6 seasons (RunCheck with `SIZE_SEASONS` 6, a local change), archive.txt grows +6.5, +6.7,
-  +3.9, +3.6, +2.9 KB; the folder is 451 KB after season 6 and the projection from season 6 is
-  579 KB (−13% against the baseline's 666 KB); the CPU 88, 62, 59, 50, 49, 47 s a season (ref
-  4.11 s).
+  fill up (3 below 500 members, about 2 KB each; 945de5e kept one), then 3-4 KB like the
+  baseline's 3.2 KB. Played for 6 seasons (RunCheck with `SIZE_SEASONS` 6, a local change, on both
+  engines): archive.txt grows +6.5, +6.7, +3.9, +3.6, +2.9 KB (945de5e +4.3, +3.1, +3.0, +3.7,
+  +3.2 KB); after season 6 the folder is 451 KB against 546 KB (−17%) and the projection from
+  season 6 579 KB against 691 KB (−16%); the CPU 88, 62, 59, 50, 49, 47 s a season (ref 4.11 s;
+  945de5e 83, 64, 59, 56, 63, 56 s, ref 3.93 s).
 
 **Stress** (`stress/`: the app's controllers on a plain JVM under a 512 MB heap, a person's ranked
 games, watching, the league's pages, their AIs, backups and going to the background at random
