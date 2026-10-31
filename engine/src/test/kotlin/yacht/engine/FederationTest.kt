@@ -50,9 +50,10 @@ class FederationTest {
         decided: Int = 0, sweeps: Int = 0, rounds: Int = 40, projected: Int = 0, legacy: Int = 0,
         koTies: Int = 0, koUpsets: Int = 0, champPoints: Int = 0, champMatches: Int = 0, cclPoints: Int = 0, cclMatches: Int = 0,
         levers: List<String> = levers(config), up: List<String> = emptyList(), national: Boolean = true,
+        bonusRanked: Int = 0, bonusMoved: Int = 0, spread: Double? = null,
     ) = FederationStats(
         season, national, promoted, bounced, champPpm, playoffLeagues, leaderLost, leagues, runaway, decided, sweeps, rounds, projected, legacy,
-        koTies, koUpsets, champPoints, champMatches, cclPoints, cclMatches, levers, up,
+        koTies, koUpsets, champPoints, champMatches, cclPoints, cclMatches, levers, up, bonusRanked, bonusMoved, spread,
     )
 
     /**
@@ -93,20 +94,23 @@ class FederationTest {
                 listOf(config to stats(leagues = 100, runaway = 50), noPo to stats(leagues = 3, runaway = 3)),
             ),
             Case(
-                ProposalKind.SWEEP_OFF, config, "0", { stats(decided = 100, sweeps = it) }, 99, 100, 98,
+                ProposalKind.SWEEP_OFF, config, "0", { stats(bonusRanked = 100, bonusMoved = it) }, 29, 26, 30,
                 listOf(
-                    noSweep to stats(decided = 100, sweeps = 100), config.copy(matchFormat = MatchFormat.MIRRORED) to stats(decided = 100, sweeps = 100),
-                    config to stats(decided = 29, sweeps = 29),
+                    noSweep to stats(bonusRanked = 100, bonusMoved = 26), config.copy(matchFormat = MatchFormat.MIRRORED) to stats(bonusRanked = 100, bonusMoved = 26),
+                    config to stats(bonusRanked = 99, bonusMoved = 0),
                 ),
             ),
             Case(
-                ProposalKind.SWEEP_ON, noSweep, "1", { stats(decided = 100, sweeps = it) }, 52, 45, 53,
-                listOf(config to stats(decided = 100, sweeps = 45), noSweep.copy(matchFormat = MatchFormat.SINGLE) to stats(decided = 100, sweeps = 0)),
+                ProposalKind.SWEEP_ON, noSweep, "1", { stats(bonusRanked = 100, bonusMoved = it) }, 33, 36, 32,
+                listOf(config to stats(bonusRanked = 100, bonusMoved = 36), noSweep.copy(matchFormat = MatchFormat.SINGLE) to stats(bonusRanked = 100, bonusMoved = 36)),
             ),
-            Case(ProposalKind.SIZE_DOWN, config, "18", { stats(rounds = it) }, 46, 48, 45, listOf(config.copy(divisionSize = 16) to stats(rounds = 48))),
             Case(
-                ProposalKind.SIZE_UP, config, "22", { stats(rounds = it, projected = 100, legacy = 100) }, 36, 34, 37,
-                listOf(config.copy(divisionSize = 24) to stats(rounds = 34, projected = 100, legacy = 100), config to stats(rounds = 34, projected = 101, legacy = 100)),
+                ProposalKind.SIZE_DOWN, config, "18", { stats(spread = it / 100.0) }, 115, 120, 114,
+                listOf(config.copy(divisionSize = 16) to stats(spread = 1.20), config to stats(spread = null)),
+            ),
+            Case(
+                ProposalKind.SIZE_UP, config, "22", { stats(spread = it / 100.0, projected = 100, legacy = 100) }, 110, 106, 111,
+                listOf(config.copy(divisionSize = 24) to stats(spread = 1.06, projected = 100, legacy = 100), config to stats(spread = 1.06, projected = 101, legacy = 100)),
             ),
             Case(
                 ProposalKind.LONG_KO_ON, shortKo, "1", { stats(koTies = 100, koUpsets = it) }, 9, 25, 8,
@@ -151,8 +155,8 @@ class FederationTest {
             for ((i, off) in c.off.withIndex()) assertEquals(emptyList(), Federation.candidates(off.second, off.first).filter { it.kind == c.kind }, "${c.kind} guard $i")
         }
         // Far past the threshold the pressure stops at 3.
-        assertEquals(3.0, Federation.candidates(stats(rounds = 60), config).single().pressure)
-        assertEquals(0.65, Federation.pressure(ProposalKind.SIZE_DOWN, 47.0), 1e-9)
+        assertEquals(3.0, Federation.candidates(stats(spread = 2.0), config).single().pressure)
+        assertEquals(0.65, Federation.pressure(ProposalKind.SIZE_DOWN, 1.175), 1e-9)
         // A neutral season proposes nothing.
         assertEquals(emptyList(), Federation.candidates(stats(), config))
     }
@@ -162,36 +166,38 @@ class FederationTest {
      * players, league seed 5, real games, the federation off so the rules stay), as its CSV has
      * them: promoted, bounced, champPpm, leaderLost (of 28), runaway (of 28), decided, sweeps,
      * 요트컵 upsets (of 22 ties), the league champions' and the 대륙 챔피언스 finalists' 챔피언스
-     * 리그 points and matches.
+     * 리그 points and matches; then (the same seasons played again) the members of the 1000 whose
+     * final place the 2-0 bonus moved, and the divisions' spread.
      */
     private val realSeasons: List<FederationStats> = listOf(
-        listOf(0, 0, 0.797, 19, 7, 7954, 7680, 2, 0, 0, 0, 0),
-        listOf(67, 13, 0.906, 22, 9, 7639, 7352, 0, 43, 45, 89, 61),
-        listOf(64, 19, 0.951, 17, 7, 7781, 7512, 5, 55, 49, 81, 65),
-        listOf(66, 17, 0.893, 18, 13, 7767, 7475, 1, 69, 56, 65, 51),
-        listOf(67, 10, 0.919, 19, 12, 7749, 7500, 0, 72, 55, 64, 54),
-        listOf(63, 13, 0.813, 20, 8, 7655, 7372, 0, 74, 55, 65, 59),
-        listOf(71, 14, 0.928, 23, 4, 7719, 7394, 1, 59, 53, 79, 56),
-        listOf(71, 14, 0.900, 20, 8, 7584, 7319, 1, 57, 51, 71, 57),
-        listOf(68, 15, 0.919, 19, 9, 7635, 7361, 1, 89, 62, 55, 52),
-        listOf(67, 15, 0.977, 17, 12, 7807, 7508, 0, 62, 51, 76, 58),
+        listOf(0, 0, 0.797, 19, 7, 7954, 7680, 2, 0, 0, 0, 0, 286, 1.184),
+        listOf(67, 13, 0.906, 22, 9, 7639, 7352, 0, 43, 45, 89, 61, 287, 1.135),
+        listOf(64, 19, 0.951, 17, 7, 7781, 7512, 5, 55, 49, 81, 65, 309, 1.157),
+        listOf(66, 17, 0.893, 18, 13, 7767, 7475, 1, 69, 56, 65, 51, 345, 1.129),
+        listOf(67, 10, 0.919, 19, 12, 7749, 7500, 0, 72, 55, 64, 54, 316, 1.144),
+        listOf(63, 13, 0.813, 20, 8, 7655, 7372, 0, 74, 55, 65, 59, 296, 1.075),
+        listOf(71, 14, 0.928, 23, 4, 7719, 7394, 1, 59, 53, 79, 56, 334, 1.083),
+        listOf(71, 14, 0.900, 20, 8, 7584, 7319, 1, 57, 51, 71, 57, 275, 1.122),
+        listOf(68, 15, 0.919, 19, 9, 7635, 7361, 1, 89, 62, 55, 52, 305, 1.085),
+        listOf(67, 15, 0.977, 17, 12, 7807, 7508, 0, 62, 51, 76, 58, 298, 1.142),
     ).mapIndexed { i, r ->
         fun n(j: Int) = (r[j] as Number).toInt()
         stats(
             season = i + 1, promoted = n(0), bounced = n(1), champPpm = (r[2] as Number).toDouble(), playoffLeagues = 28, leaderLost = n(3),
             leagues = 28, runaway = n(4), decided = n(5), sweeps = n(6), rounds = 42, projected = 17000, legacy = 24500, koTies = 22, koUpsets = n(7),
             champPoints = n(8), champMatches = n(9), cclPoints = n(10), cclMatches = n(11),
+            bonusRanked = 1000, bonusMoved = n(12), spread = (r[13] as Number).toDouble(),
         )
     }
 
     @Test
     fun theFloorsAreTheOnesCalibratedOnRealSeasons() {
-        // ENG 6.4's table as S20 calibrated it (docs/LEAGUE_SPEC.md 11.4).
+        // ENG 6.4's table as S20 calibrated it, the bonus and size kinds on their new statistics (docs/LEAGUE_SPEC.md 11.4).
         val pinned = mapOf(
             ProposalKind.SWAP_DOWN to (0.38 to 0.50), ProposalKind.SWAP_UP to (0.20 to 0.12),
             ProposalKind.TITLE_PO_OFF to (0.78 to 0.90), ProposalKind.TITLE_PO_ON to (0.33 to 0.50),
-            ProposalKind.SWEEP_OFF to (0.99 to 1.00), ProposalKind.SWEEP_ON to (0.52 to 0.45),
-            ProposalKind.SIZE_DOWN to (46.0 to 48.0), ProposalKind.SIZE_UP to (36.0 to 34.0),
+            ProposalKind.SWEEP_OFF to (0.29 to 0.26), ProposalKind.SWEEP_ON to (0.33 to 0.36),
+            ProposalKind.SIZE_DOWN to (1.15 to 1.20), ProposalKind.SIZE_UP to (1.10 to 1.06),
             ProposalKind.LONG_KO_ON to (0.09 to 0.25), ProposalKind.LONG_KO_OFF to (0.0 to -0.10),
             ProposalKind.CL_DIRECT_UP to (0.30 to 0.65), ProposalKind.CL_DIRECT_DOWN to (-0.30 to -0.65),
         )
@@ -200,32 +206,34 @@ class FederationTest {
         val passed = realSeasons.map { s -> Federation.candidates(s, config).map { it.kind } }
         assertEquals(
             listOf(
-                emptyList(),
-                listOf(ProposalKind.SWAP_UP, ProposalKind.TITLE_PO_OFF, ProposalKind.LONG_KO_OFF, ProposalKind.CL_DIRECT_DOWN),
-                emptyList(),
+                listOf(ProposalKind.SWEEP_OFF, ProposalKind.SIZE_DOWN),
+                listOf(ProposalKind.SWAP_UP, ProposalKind.TITLE_PO_OFF, ProposalKind.SWEEP_OFF, ProposalKind.LONG_KO_OFF, ProposalKind.CL_DIRECT_DOWN),
+                listOf(ProposalKind.SIZE_DOWN),
                 emptyList(),
                 listOf(ProposalKind.SWAP_UP, ProposalKind.LONG_KO_OFF),
-                listOf(ProposalKind.LONG_KO_OFF),
-                listOf(ProposalKind.SWAP_UP, ProposalKind.TITLE_PO_OFF),
-                listOf(ProposalKind.SWAP_UP),
-                listOf(ProposalKind.CL_DIRECT_UP),
+                listOf(ProposalKind.SIZE_UP, ProposalKind.LONG_KO_OFF),
+                listOf(ProposalKind.SWAP_UP, ProposalKind.TITLE_PO_OFF, ProposalKind.SIZE_UP),
+                listOf(ProposalKind.SWAP_UP, ProposalKind.SWEEP_OFF),
+                listOf(ProposalKind.SIZE_UP, ProposalKind.CL_DIRECT_UP),
                 listOf(ProposalKind.LONG_KO_OFF),
             ),
             passed,
         )
-        // No kind (nor lever) in more than half the seasons; the sweep share (96-97% of decided
-        // matches are 2-0 under 판 승점제) and the rounds (42) never.
+        // No kind (nor lever) in more than half the seasons; the bonus and the division size are live
+        // (the share of decided matches won 2-0 is not: 96-97% under 판 승점제, the rounds always 42).
         for (k in ProposalKind.entries) assertTrue(passed.count { k in it } * 2 <= passed.size, "$k past its floor in ${passed.count { k in it }} seasons")
         for (l in Lever.entries) assertTrue(passed.count { p -> p.any { it.lever == l } } * 2 <= passed.size, "$l")
-        assertTrue(passed.none { p -> p.any { it.lever == Lever.SWEEP || it.lever == Lever.DIVISION_SIZE } })
+        assertTrue(passed.count { p -> p.any { it.lever == Lever.SWEEP } } >= 2 && passed.count { p -> p.any { it.lever == Lever.DIVISION_SIZE } } >= 2)
         assertTrue(realSeasons.all { it.sweepShare in 0.95..0.98 })
-        // Each season's assembly as it would go with the rules left as they are: one or two proposals as a rule, a quiet season none.
+        // Each season's assembly as it would go with the rules left as they are: two as a rule, 검토
+        // 안건 filling up; one where no other lever leans its way (seasons 3 and 4).
         val f = Federation()
-        val tabled = realSeasons.map { s -> f.assemble(s.season, s, config, false).also { f.resolve(s.season + 1, SEED, committee) }.size }
-        assertEquals(listOf(0, 2, 0, 0, 2, 1, 2, 1, 1, 1), tabled)
-        // A typical season's proposal presses below 1 (the committee passes few of them); the strongest here, 10 of 67 promoted players back down, 0.74.
+        val assemblies = realSeasons.map { s -> f.assemble(s.season, s, config, false).also { f.resolve(s.season + 1, SEED, committee) } }
+        assertEquals(listOf(2, 2, 1, 1, 2, 2, 2, 2, 2, 2), assemblies.map { it.size })
+        assertEquals(listOf(0, 0, 0, 1, 0, 0, 0, 0, 0, 1), assemblies.map { a -> a.count { it.review } })
+        // A typical season's proposal presses below 1 (the committee passes few of them); the strongest here, the divisions' spread of season 1, 0.78.
         val pressures = realSeasons.flatMap { Federation.candidates(it, config) }.map { it.pressure }
-        assertEquals(0.74, pressures.max())
+        assertEquals(0.78, pressures.max())
     }
 
     @Test
@@ -240,7 +248,14 @@ class FederationTest {
         assertEquals("챔피언스 리그 직행 7개 리그 → 6개", cl.title)
         assertTrue("경기당 승점을 0.75점 더 땄어요" in cl.evidence, cl.evidence)
         assertEquals(listOf("-0.75", "0.00", "0.75"), cl.args)
-        assertEquals("부 인원 20명 → 18명", Federation.candidates(stats(rounds = 47), config).single().title)
+        val size = Federation.candidates(stats(spread = 1.183), config).single()
+        assertEquals("부 인원 20명 → 18명", size.title)
+        assertEquals("부마다 1위와 꼴찌의 경기당 승점 차가 평균 1.18점이나 됐어요. 부를 줄여 실력이 비슷한 선수끼리 겨루게 해요.", size.evidence)
+        val bonus = Federation.candidates(stats(bonusRanked = 1000, bonusMoved = 268), config).single()
+        assertEquals("2:0 완승 보너스 없애기", bonus.title)
+        assertEquals("리그 순위표 1000명 가운데 2:0 완승 보너스로 순위가 바뀐 선수는 268명(27%)뿐이었어요. 보너스를 없애 승점 계산을 단순하게 해요.", bonus.evidence)
+        val on = Federation.candidates(stats(bonusRanked = 1000, bonusMoved = 352), config.copy(sweepBonus = false)).single()
+        assertEquals("2:0 완승 보너스가 있었다면 리그 순위표 1000명 가운데 352명(35%)의 순위가 바뀌었을 거예요. 완승에 승점 1을 더 줘서 확실한 승리를 가려요.", on.evidence)
         // No case to count: said so, not "0%뿐".
         val calm = Federation.candidates(stats(koTies = 22, koUpsets = 0), config).single()
         assertEquals("요트컵 8강부터 22경기 동안 이변이 한 번도 없었어요. 시리즈를 줄여 시즌을 가볍게 해요.", calm.evidence)
@@ -255,7 +270,7 @@ class FederationTest {
     @Test
     fun anAssemblyTablesTwoAndAThirdOnlyWhenItPressesHard() {
         // SWAP_DOWN 1.0; SWEEP_OFF and SIZE_DOWN 0.65 (kind order breaks the tie); LONG_KO_OFF 0.3.
-        val strong = stats(promoted = 100, bounced = 50, rounds = 47, decided = 1000, sweeps = 995, koTies = 25, koUpsets = 0)
+        val strong = stats(promoted = 100, bounced = 50, spread = 1.175, bonusRanked = 1000, bonusMoved = 275, koTies = 25, koUpsets = 0)
         assertEquals(4, Federation.candidates(strong, config).size)
         val f = Federation()
         val got = f.assemble(5, strong, config, structureFreeOnly = false)
@@ -266,7 +281,7 @@ class FederationTest {
         assertEquals(got, f.pending())
         assertEquals(5, f.assembled)
         // A third below 0.6 is not tabled (SWEEP_OFF at 0.58).
-        val weaker = stats(promoted = 100, bounced = 50, rounds = 47, decided = 1000, sweeps = 994, koTies = 25, koUpsets = 0)
+        val weaker = stats(promoted = 100, bounced = 50, spread = 1.175, bonusRanked = 1000, bonusMoved = 278, koTies = 25, koUpsets = 0)
         assertEquals(listOf(ProposalKind.SWAP_DOWN, ProposalKind.SIZE_DOWN), Federation().assemble(5, weaker, config, false).map { it.kind })
         // One candidate at the floor is tabled; none leaves the rules as they are.
         assertEquals(listOf(0.3), Federation().assemble(5, stats(koTies = 25, koUpsets = 0), config, false).map { it.pressure })
@@ -274,6 +289,37 @@ class FederationTest {
         // Idempotent: a replayed open gets the stored proposals and statistics, whatever it brings.
         assertEquals(got, f.assemble(5, stats(), config, false))
         assertEquals(strong.encode(), f.stats(5)!!.encode())
+    }
+
+    @Test
+    fun anAssemblyOfFewerThanTwoFillsUpWithReviewProposals() {
+        // SWAP_DOWN past its floor (1.0); SIZE_DOWN short of its floor but leaning its way (spread
+        // 1.14: 0.16); SWEEP_OFF short and leaning less (30%: 0.07); SIZE_UP leaning the other way.
+        val s = stats(promoted = 100, bounced = 50, spread = 1.14, bonusRanked = 100, bonusMoved = 30)
+        assertEquals(listOf(ProposalKind.SWAP_DOWN), Federation.candidates(s, config).map { it.kind })
+        val floorFree = Federation.candidates(s, config, floorFree = true)
+        assertEquals(listOf(ProposalKind.SWAP_DOWN, ProposalKind.SWEEP_OFF, ProposalKind.SIZE_DOWN), floorFree.map { it.kind })
+        assertEquals(listOf(1.0, 0.07, 0.16), floorFree.map { it.pressure })
+        val got = Federation().assemble(5, s, config, false)
+        assertEquals(listOf(ProposalKind.SWAP_DOWN, ProposalKind.SIZE_DOWN), got.map { it.kind })
+        assertEquals(listOf(false, true), got.map { it.review })
+        assertEquals(
+            "급한 안건은 아니지만 한번 검토해 보자고 올렸어요. 부마다 1위와 꼴찌의 경기당 승점 차가 평균 1.14점이었어요. 부를 줄여 실력이 비슷한 선수끼리 겨루게 해요.",
+            got[1].evidence,
+        )
+        // Two past their floors: no review.
+        val two = s.copy(bonusMoved = 26)
+        assertEquals(listOf(ProposalKind.SWAP_DOWN, ProposalKind.SWEEP_OFF), Federation().assemble(5, two, config, false).map { it.kind })
+        // Only reviews: the two that lean most; nothing leaning: nothing tabled.
+        val mild = stats(spread = 1.14, bonusRanked = 100, bonusMoved = 30)
+        assertEquals(listOf(ProposalKind.SIZE_DOWN, ProposalKind.SWEEP_OFF), Federation().assemble(5, mild, config, false).map { it.kind })
+        assertEquals(emptyList(), Federation().assemble(5, stats(), config, false))
+        // A review reads back as one (its pressure is below the floor's, so a seat votes yes at
+        // less than 0.25 + 0.35 x 0.3: the committee seldom passes it).
+        val f = Federation()
+        f.assemble(5, mild, config, false)
+        val back = Federation.decode(f.encode())
+        assertTrue(back.of(5).all { it.review && it.pressure < Federation.FLOOR_PRESSURE })
     }
 
     @Test
@@ -286,6 +332,7 @@ class FederationTest {
                 decided = 200, sweeps = 80 + rng.nextInt(80), rounds = 30 + rng.nextInt(22), projected = rng.nextInt(200), legacy = 100,
                 koTies = rng.nextInt(30), koUpsets = rng.nextInt(10), champPoints = rng.nextInt(60), champMatches = 12 + rng.nextInt(20),
                 cclPoints = rng.nextInt(60), cclMatches = 12 + rng.nextInt(20),
+                bonusRanked = 1000, bonusMoved = 200 + rng.nextInt(200), spread = if (rng.nextBoolean()) 0.95 + 0.4 * rng.nextDouble() else null,
             )
             val cfg = config.copy(
                 autoSwap = rng.nextInt(6), titlePlayoff = rng.nextBoolean(), sweepBonus = rng.nextBoolean(), divisionSize = 16 + rng.nextInt(9),
@@ -295,25 +342,28 @@ class FederationTest {
             assertTrue(got.size <= Federation.MOST)
             assertEquals(got.size, got.map { it.lever }.toSet().size, "one per lever: $got")
             assertEquals(got.sortedWith(compareByDescending<Proposal> { it.pressure }.thenBy { it.kind.ordinal }), got)
-            assertTrue(got.all { it.pressure >= 0.3 } && got.drop(2).all { it.pressure >= Federation.THIRD })
+            // Past their floors first (a third only when it presses hard); 검토 안건 only to fill up to two, leaning their way.
+            val (firm, review) = got.partition { !it.review }
+            assertTrue(firm.all { it.pressure >= 0.3 } && got.drop(2).all { it.pressure >= Federation.THIRD })
+            assertTrue(review.isEmpty() || (firm.size + review.size <= Federation.TABLED && review.all { it.pressure > 0 && it.pressure < 0.3 }), "$got")
             for (p in got) assertEquals(p.to, assertNotNull(cfg.with(p.lever.key, p.to)).valueOf(p.lever.key))
         }
         // A change the rules cannot take is never tabled: divisionSize 23 + 2.
         val odd = config.copy(divisionSize = 23)
-        val s = stats(rounds = 34, projected = 1, legacy = 1, levers = levers(odd))
+        val s = stats(spread = 1.06, projected = 1, legacy = 1, levers = levers(odd))
         assertEquals("25", Federation.candidates(s, odd).single().to)
         assertEquals(emptyList(), Federation().assemble(5, s, odd, false))
         // A lever with a proposal still pending gets no second one.
         val f = Federation()
         f.assemble(4, stats(season = 4, promoted = 100, bounced = 50), config, false)
-        val next = f.assemble(5, stats(promoted = 100, bounced = 50, decided = 100, sweeps = 100), config, false)
+        val next = f.assemble(5, stats(promoted = 100, bounced = 50, bonusRanked = 100, bonusMoved = 20), config, false)
         assertEquals(listOf(ProposalKind.SWEEP_OFF), next.map { it.kind })
     }
 
     @Test
     fun noProposalOnALeverChangedInTheLastTwoSeasons() {
         // SWAP_DOWN and SWEEP_OFF both press; only the lever's history differs.
-        fun pressing(season: Int, lv: List<String>) = stats(season, promoted = 100, bounced = 50, decided = 100, sweeps = 100, levers = lv)
+        fun pressing(season: Int, lv: List<String>) = stats(season, promoted = 100, bounced = 50, bonusRanked = 100, bonusMoved = 26, levers = lv)
         val two = levers(config)
         val three = levers(config.copy(autoSwap = 3))
         val one = levers(config.copy(autoSwap = 1))
@@ -337,7 +387,7 @@ class FederationTest {
 
     @Test
     fun theFirstAssemblyHasOnlyTheStructureFreeKinds() {
-        val s = stats(promoted = 100, bounced = 50, rounds = 48, decided = 100, sweeps = 100, koTies = 20, koUpsets = 0)
+        val s = stats(promoted = 100, bounced = 50, spread = 1.20, bonusRanked = 100, bonusMoved = 26, koTies = 20, koUpsets = 0)
         val all = Federation().assemble(5, s, config, structureFreeOnly = false).map { it.kind }
         assertEquals(listOf(ProposalKind.SWAP_DOWN, ProposalKind.SWEEP_OFF, ProposalKind.SIZE_DOWN), all)
         val first = Federation().assemble(5, s, config, structureFreeOnly = true)
@@ -364,7 +414,7 @@ class FederationTest {
         // Legacy rules to come (before national leagues are offered): the federation never proposes on them.
         val legacy = LeagueConfig()
         val g = Federation()
-        val pressing = stats(promoted = 100, bounced = 50, decided = 100, sweeps = 100, koTies = 20, koUpsets = 0, levers = levers(legacy))
+        val pressing = stats(promoted = 100, bounced = 50, bonusRanked = 100, bonusMoved = 20, koTies = 20, koUpsets = 0, levers = levers(legacy))
         assertEquals(3, Federation.candidates(pressing, legacy).size)
         assertEquals(emptyList(), g.assemble(5, pressing, legacy, false))
         assertEquals(5, g.assembled)
@@ -398,7 +448,7 @@ class FederationTest {
 
     /** P(5) of three proposals (SWAP_DOWN 1.0, SWEEP_OFF 0.65, SIZE_DOWN 0.65), pending. */
     private fun threePending(): Federation = Federation().also {
-        it.assemble(5, stats(promoted = 100, bounced = 50, rounds = 47, decided = 1000, sweeps = 995), config, false)
+        it.assemble(5, stats(promoted = 100, bounced = 50, spread = 1.175, bonusRanked = 1000, bonusMoved = 275), config, false)
     }
 
     @Test
@@ -452,7 +502,7 @@ class FederationTest {
         assertTrue(off.of(5).all { it.result == Proposal.VOID && it.by == Proposal.NONE })
         // A close that never came (P(4) still pending at the close of 6): void; P(5) decided.
         val late = Federation()
-        late.assemble(4, stats(season = 4, decided = 100, sweeps = 100), config, false)
+        late.assemble(4, stats(season = 4, bonusRanked = 100, bonusMoved = 20), config, false)
         late.assemble(5, stats(promoted = 100, bounced = 50), config, false)
         late.choose(5, 1, true)
         assertEquals(listOf(ProposalKind.SWAP_DOWN), late.resolve(6, SEED, committee).map { it.kind })
@@ -723,8 +773,17 @@ class FederationTest {
         assertEquals(tally(ccl), s.cclPoints to s.cclMatches)
         assertTrue(s.champMatches >= 42 && s.cclMatches >= 36)
         assertEquals(levers(config), s.levers)
-        // Round trip of the fs line; and nothing the assembly needs is missing.
+        // The 2-0 bonus's effect on the final tables, and the divisions' spread (3/1/0 per match).
+        val rows = season.divisions.map { d -> d.mapNotNull { season.standings[it] }.filter { it.played > 0 } }
+        assertEquals(rows.filter { it.size >= FederationStats.PLAYOFF }.sumOf { it.size }, s.bonusRanked)
+        assertTrue(s.bonusMoved in 0..s.bonusRanked)
+        val gaps = rows.filter { it.size >= FederationStats.SPREAD_MIN }.map { r -> r.map { (3.0 * it.wins + it.draws) / it.played }.let { it.max() - it.min() } }
+        assertEquals(Math.round(gaps.average() * 1000) / 1000.0, s.spread)
+        // Round trip of the fs line (and a line from before these fields: none); nothing the assembly needs is missing.
         assertEquals(s.encode(), FederationStats.decode(6, s.encode())!!.encode())
+        val old = FederationStats.decode(6, s.encode().substringBefore(",bonusMoved="))!!
+        assertEquals(Triple(0, 0, null), Triple(old.bonusRanked, old.bonusMoved, old.spread))
+        assertEquals(s.copy(up = emptyList(), bonusRanked = 0, bonusMoved = 0, spread = null), old)
         val f = Federation.decode(fed.encode())
         f.assemble(6, s, config, false)
         assertEquals(f.encode(), Federation.decode(f.encode()).encode())
@@ -755,6 +814,8 @@ class FederationTest {
         val honours = Offseason.honours(plan, Offseason.moves(plan))
         val s = FederationStats.of(plan, honours, Federation(), LeagueConfig.DEFAULT)
         assertFalse(s.national)
+        // No national divisions: no spread.
+        assertNull(s.spread)
         assertEquals(Odds.sweepRate(plan.league, 0.0), s.sweepShare, 1e-12)
         assertTrue(s.decided > 0 && s.koTies >= Federation.MIN_TIES)
         // No national champions, so no 챔피언스 리그 comparison; nobody was promoted the season before (no up line).

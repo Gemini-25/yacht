@@ -405,14 +405,14 @@ internal object ShotsWorld : LeagueShots {
         val keys = lg.view?.rows?.filter { it.rank != null && !it.isMe && it.origin != yacht.engine.league.Origin.BASE }?.sortedBy { it.rank }?.map { it.key }.orEmpty()
         fun p(number: Int, kind: ProposalKind, from: String, to: String, args: List<String>, season: Int = 3) = Proposal(season, number, kind, from, to, 0.8, args)
         val pending = listOf(
-            p(1, ProposalKind.SWEEP_OFF, "1", "0", listOf("8412", "6138", "73")).copy(choice = Proposal.YES),
+            p(1, ProposalKind.SWEEP_OFF, "1", "0", listOf("1000", "268", "27")).copy(choice = Proposal.YES),
             p(2, ProposalKind.SWAP_DOWN, "2", "1", listOf("56", "31", "55", "0.12")),
             p(3, ProposalKind.CL_DIRECT_UP, "7", "8", listOf("0.41", "1.83", "1.42")),
         )
         val decided = listOf(
             p(1, ProposalKind.LONG_KO_OFF, "1", "0", listOf("21", "1", "5"), 2).copy(result = Proposal.YES, by = Proposal.USER),
             p(2, ProposalKind.TITLE_PO_OFF, "1", "0", listOf("12", "7", "58"), 2).copy(result = Proposal.NO, by = Proposal.COMMITTEE, yes = 3, no = 6),
-            p(1, ProposalKind.SIZE_DOWN, "20", "18", listOf("46", "42", "49"), 1).copy(result = Proposal.VOID, by = Proposal.COMMITTEE, yes = 6, no = 3),
+            p(1, ProposalKind.SIZE_DOWN, "20", "18", listOf("1.21", "42", "17000", "24500"), 1).copy(result = Proposal.VOID, by = Proposal.COMMITTEE, yes = 6, no = 3),
         )
         val awards = listOf("MVP", "ROOKIE", "MIP", "SCORER", "YACHT", "LMVP.KR", "LMVP.JP").zip(keys.ifEmpty { listOf("?") }.let { k -> List(7) { k[it % k.size] } })
             .map { (kind, key) -> kind to lg.name(key) }

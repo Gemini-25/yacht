@@ -24,16 +24,14 @@ enum class Lever(val key: String, val label: String) {
  * What a proposal (안건) changes, one direction of one [lever] each. A kind is tabled when its
  * statistic x ([FederationStats]) is past its [floor]: its pressure is 0.3 there and 1.0 at its
  * [threshold] ([Federation.pressure]; a kind whose threshold is below its floor fires as x falls).
+ * Short of its floor but leaning its way (pressure above 0) it can still be a 검토 안건, tabled
+ * when the assembly has fewer than [Federation.TABLED] ([Federation.assemble]).
  * [structureFree] kinds read statistics a legacy season has too, so they are the only ones of the
  * first assembly, at the move to national leagues.
  *
  * The floors are calibrated on real seasons (FederationCalibration, docs/LEAGUE_SPEC.md 11.4):
- * under the default rules each live statistic passes its floor in about a third of the seasons,
- * so an assembly tables one or two proposals as a rule and a quiet season none, and it reaches
- * its threshold only in an unusual season. Two statistics never get there on purpose: under
- * 판 승점제 almost every decided league match is a 2-0 (96-97%: any other decided match needs a
- * drawn game), so the sweep share cannot tell one season from another; and the rounds stay 38-42
- * at the default division size, inside the SIZE kinds' dead band.
+ * under the default rules each statistic passes its floor in about a third of the seasons or
+ * fewer, and reaches its threshold only in an unusual season.
  */
 enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Double, val structureFree: Boolean = false) {
     /** Many promoted players go straight back down (elevator: about 23% with autoSwap 2, 36% with 3): autoSwap - 1. */
@@ -48,17 +46,17 @@ enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Doub
     /** Without a playoff the leader often runs away with the title (runaway, about 30%): on. */
     TITLE_PO_ON(Lever.TITLE_PO, 0.33, 0.50),
 
-    /** Most decided matches are 2-0 sweeps anyway (sweep): the bonus off. Out of reach under 판 승점제 (see above). */
-    SWEEP_OFF(Lever.SWEEP, 0.99, 1.00, true),
+    /** The 2-0 bonus changed few places in the final tables (bonusShare): the bonus off. */
+    SWEEP_OFF(Lever.SWEEP, 0.29, 0.26, true),
 
-    /** Few are: the bonus on. */
-    SWEEP_ON(Lever.SWEEP, 0.52, 0.45, true),
+    /** Without it, the bonus would have changed many places: the bonus on. */
+    SWEEP_ON(Lever.SWEEP, 0.33, 0.36, true),
 
-    /** The league stage takes many weeks (rounds R): divisionSize - 2. */
-    SIZE_DOWN(Lever.DIVISION_SIZE, 46.0, 48.0),
+    /** The divisions are wide: their first and last far apart in points per match (spread): divisionSize - 2. */
+    SIZE_DOWN(Lever.DIVISION_SIZE, 1.15, 1.20),
 
-    /** It takes few, and bigger divisions would cost no more than the old pyramid: divisionSize + 2. */
-    SIZE_UP(Lever.DIVISION_SIZE, 36.0, 34.0),
+    /** They are close, and bigger divisions would cost no more than the old pyramid: divisionSize + 2. */
+    SIZE_UP(Lever.DIVISION_SIZE, 1.10, 1.06),
 
     /**
      * The 요트컵's last 8 on are often won by the much lower rated side (koUpsets): long knockouts
@@ -128,28 +126,42 @@ data class Proposal(
             ProposalKind.CL_DIRECT_UP, ProposalKind.CL_DIRECT_DOWN -> "챔피언스 리그 직행 ${from}개 리그 → ${to}개"
         }
 
-    /** The 근거: what the season showed, with its real numbers, and what the change is for. */
+    /** A 검토 안건: tabled short of its floor, to fill the assembly ([Federation.assemble]); its evidence says so. */
+    val review: Boolean get() = pressure < Federation.FLOOR_PRESSURE
+
+    /** The 근거: what the season showed, with its real numbers, and what the change is for (a [review] one says it is no urgent matter). */
     val evidence: String
         get() {
             fun a(i: Int) = args.getOrNull(i) ?: "?"
-            return when (kind) {
+            val text = when (kind) {
                 ProposalKind.SWAP_DOWN -> "1부로 올라온 ${a(0)}명 가운데 ${a(1)}명(${a(2)}%)이 한 시즌 만에 다시 내려갔어요. 승강 인원을 줄여 1부를 안정시켜요."
                 ProposalKind.SWAP_UP -> (if (a(3) == "0.00") "2부 우승자들의 경기당 승점이 1부 중간 순위와 같았고, " else "2부 우승자들의 경기당 승점이 1부 중간 순위보다 ${a(3)}점 높았고, ") +
-                    (if (a(1) == "0") "1부로 올라온 선수는 한 명도 다시 내려가지 않았어요." else "1부로 올라온 선수 가운데 ${a(2)}%만 다시 내려갔어요.") +
+                    when {
+                        a(1) == "0" -> "1부로 올라온 선수는 한 명도 다시 내려가지 않았어요."
+                        review -> "1부로 올라온 선수 가운데 ${a(2)}%가 다시 내려갔어요."
+                        else -> "1부로 올라온 선수 가운데 ${a(2)}%만 다시 내려갔어요."
+                    } +
                     " 실력 있는 선수가 더 빨리 올라오게 해요."
                 ProposalKind.TITLE_PO_OFF -> "${a(0)}개 리그 가운데 ${a(1)}곳에서 정규 리그 1위가 플레이오프에서 우승을 놓쳤어요. 시즌 내내 1위를 지킨 선수가 우승하게 해요."
                 ProposalKind.TITLE_PO_ON -> "${a(0)}개 리그 가운데 ${a(1)}곳에서 1위가 2위를 승점 8점 이상 앞서 일찍 우승을 굳혔어요. 마지막까지 긴장감을 주려고 상위 4명 플레이오프를 열어요."
-                ProposalKind.SWEEP_OFF -> "결판난 리그 경기의 ${a(2)}%가 2:0 완승이라 보너스가 순위를 거의 바꾸지 못했어요. 보너스를 없애 승점 계산을 단순하게 해요."
-                ProposalKind.SWEEP_ON -> "결판난 리그 경기 가운데 2:0 완승이 ${a(2)}%뿐이에요. 완승에 승점 1을 더 줘서 확실한 승리를 가려요."
-                ProposalKind.SIZE_DOWN -> "리그 경기만 ${a(0)}주나 걸려요. 부를 줄여 시즌을 짧게 해요."
-                ProposalKind.SIZE_UP -> "리그 경기가 ${a(0)}주면 끝나요. 부를 키워 더 많은 상대와 겨루게 해요."
+                ProposalKind.SWEEP_OFF -> when {
+                    a(1) == "0" -> "리그 순위표 ${a(0)}명 가운데 2:0 완승 보너스로 순위가 바뀐 선수는 한 명도 없었어요."
+                    review -> "리그 순위표 ${a(0)}명 가운데 2:0 완승 보너스로 순위가 바뀐 선수는 ${a(1)}명(${a(2)}%)이었어요."
+                    else -> "리그 순위표 ${a(0)}명 가운데 2:0 완승 보너스로 순위가 바뀐 선수는 ${a(1)}명(${a(2)}%)뿐이었어요."
+                } + " 보너스를 없애 승점 계산을 단순하게 해요."
+                ProposalKind.SWEEP_ON -> "2:0 완승 보너스가 있었다면 리그 순위표 ${a(0)}명 가운데 ${a(1)}명(${a(2)}%)의 순위가 바뀌었을 거예요. 완승에 승점 1을 더 줘서 확실한 승리를 가려요."
+                ProposalKind.SIZE_DOWN -> "부마다 1위와 꼴찌의 경기당 승점 차가 평균 ${a(0)}점${if (review) "이었어요" else "이나 됐어요"}. 부를 줄여 실력이 비슷한 선수끼리 겨루게 해요."
+                ProposalKind.SIZE_UP -> "부마다 1위와 꼴찌의 경기당 승점 차가 평균 ${a(0)}점${if (review) "이었어요" else "뿐이었어요"}. 부를 키워 더 많은 상대와 겨루게 해요."
                 ProposalKind.LONG_KO_ON -> "요트컵 8강부터 ${a(0)}경기 가운데 ${a(1)}경기(${a(2)}%)에서 레이팅이 100점 이상 낮은 쪽이 이겼어요. 시리즈를 늘려 실력이 드러나게 해요."
-                ProposalKind.LONG_KO_OFF ->
-                    (if (a(1) == "0") "요트컵 8강부터 ${a(0)}경기 동안 이변이 한 번도 없었어요." else "요트컵 8강부터 ${a(0)}경기 가운데 이변은 ${a(1)}경기(${a(2)}%)뿐이에요.") +
-                        " 시리즈를 줄여 시즌을 가볍게 해요."
+                ProposalKind.LONG_KO_OFF -> when {
+                    a(1) == "0" -> "요트컵 8강부터 ${a(0)}경기 동안 이변이 한 번도 없었어요."
+                    review -> "요트컵 8강부터 ${a(0)}경기 가운데 이변은 ${a(1)}경기(${a(2)}%)였어요."
+                    else -> "요트컵 8강부터 ${a(0)}경기 가운데 이변은 ${a(1)}경기(${a(2)}%)뿐이에요."
+                } + " 시리즈를 줄여 시즌을 가볍게 해요."
                 ProposalKind.CL_DIRECT_UP -> "랭킹 상위 리그 우승자들이 대륙 챔피언스를 거쳐 온 선수들보다 챔피언스 리그에서 경기당 승점을 ${unsigned(a(0))}점 더 땄어요. 직행 리그를 늘려요."
                 ProposalKind.CL_DIRECT_DOWN -> "대륙 챔피언스를 거쳐 온 선수들이 직행한 리그 우승자들보다 챔피언스 리그에서 경기당 승점을 ${unsigned(a(0))}점 더 땄어요. 직행 리그를 줄여 다른 리그 선수에게도 자리를 나눠요."
             }
+            return if (review) "급한 안건은 아니지만 한번 검토해 보자고 올렸어요. $text" else text
         }
 
     companion object {
@@ -228,6 +240,19 @@ data class FederationStats(
      * national 1부s are formed, nobody is promoted into them.
      */
     val up: List<String> = emptyList(),
+    /**
+     * Members of the season's division tables (two-game formats, divisions of [PLAYOFF] or more who
+     * played), and those whose final place differs between the table with the 2-0 bonus and the
+     * one without it, whether the season gave the bonus or not (0 and 0 in a file from before).
+     */
+    val bonusRanked: Int = 0,
+    val bonusMoved: Int = 0,
+    /**
+     * Over the national leagues' divisions of [SPREAD_MIN] or more who played: the points per
+     * match (3 a win, 1 a draw, no bonus) of the first minus the last's, averaged (3 decimals);
+     * null without such a division (or in a file from before).
+     */
+    val spread: Double? = null,
 ) {
     /** Share of [promoted] that went straight back down. */
     val elevator: Double get() = share(bounced, promoted)
@@ -235,6 +260,9 @@ data class FederationStats(
     val runawayShare: Double get() = share(runaway, leagues)
     val sweepShare: Double get() = share(sweeps, decided)
     val upsetShare: Double get() = share(koUpsets, koTies)
+
+    /** Share of the ranked members whose place the 2-0 bonus changes ([bonusMoved] of [bonusRanked]). */
+    val bonusShare: Double get() = share(bonusMoved, bonusRanked)
 
     /** League champions' 챔피언스 리그 points per match minus the 대륙 챔피언스 finalists'. */
     val clEdge: Double get() = ppm(champPoints, champMatches) - ppm(cclPoints, cclMatches)
@@ -244,7 +272,8 @@ data class FederationStats(
         "national=${if (national) 1 else 0}", "elevator=$bounced/$promoted", "champPpm=${champPpm?.let { fmt3(it) } ?: "-"}",
         "leaderLost=$leaderLost/$playoffLeagues", "runaway=$runaway/$leagues", "sweep=$sweeps/$decided", "rounds=$rounds",
         "projected=$projected", "legacy=$legacy", "koUpsets=$koUpsets/$koTies", "clChamp=$champPoints/$champMatches",
-        "clCcl=$cclPoints/$cclMatches", "lv=${levers.joinToString("/")}",
+        "clCcl=$cclPoints/$cclMatches", "lv=${levers.joinToString("/")}", "bonusMoved=$bonusMoved/$bonusRanked",
+        "spread=${spread?.let { fmt3(it) } ?: "-"}",
     ).joinToString(",")
 
     companion object {
@@ -256,6 +285,9 @@ data class FederationStats(
 
         /** Members of a 1부 a title playoff needs. */
         const val PLAYOFF = 4
+
+        /** Members a division needs for its [spread]. */
+        const val SPREAD_MIN = 6
 
         private fun share(k: Int, n: Int) = if (n <= 0) 0.0 else k.toDouble() / n
         internal fun ppm(points: Int, matches: Int) = if (matches <= 0) 0.0 else points.toDouble() / matches
@@ -321,11 +353,61 @@ data class FederationStats(
             }
             val (koTies, koUpsets) = cupUpsets(plan)
             val cl = clPoints(plan, honours)
+            val (ranked, moved) = bonusMoves(league)
             return FederationStats(
                 n, leagues.national, lastUp.size, lastUp.count { it in down }, edges.takeIf { it.isNotEmpty() }?.let { round3(it.average()) },
                 playoffs, lost, withTop, runaway, decided, sweeps, league.matchdays, projected(plan, config), legacy(league.divisions.sumOf { it.size }),
                 koTies, koUpsets, cl[0], cl[1], cl[2], cl[3], Lever.entries.map { plan.config.valueOf(it.key) ?: "-" }, up,
+                ranked, moved, spread(league),
             )
+        }
+
+        /**
+         * [league]'s ranked members and those whose final place differs with the 2-0 bonus and
+         * without it (each 2-0 a member won is worth 1 point more in the one and nothing in the
+         * other; the table's own order otherwise: points, score difference, score); 0 and 0 when
+         * its format has no bonus to give.
+         */
+        private fun bonusMoves(league: Season): Pair<Int, Int> {
+            if (!league.format.sweepBonus) return 0 to 0
+            val twoNil = HashMap<String, Int>()
+            for (id in 0 until league.fixturesTotal) {
+                val g = league.result(id) ?: continue
+                val r = TieRule.match(g, league.format)
+                if (r == 0) continue
+                val f = league.fixture(id)
+                if (if (r > 0) TieRule.sweptByA(g) else TieRule.sweptByB(g)) twoNil.merge(if (r > 0) f.a else f.b, 1, Int::plus)
+            }
+            var ranked = 0
+            var moved = 0
+            for (d in league.divisions.indices) {
+                val rows = league.divisions[d].mapNotNull { league.standings[it] }.filter { it.played > 0 }
+                if (rows.size < PLAYOFF) continue
+                // Points without the bonus, whether the season gave it or not.
+                fun base(s: Standing) = s.points - if (league.bonus) s.sweeps else 0
+                fun order(bonus: Boolean) = rows.indices.sortedWith(
+                    compareByDescending<Int> { base(rows[it]) + if (bonus) twoNil[rows[it].key] ?: 0 else 0 }
+                        .thenByDescending { rows[it].diff }.thenByDescending { rows[it].scored }.thenBy { it },
+                )
+                val with = order(true)
+                val without = order(false)
+                ranked += rows.size
+                moved += with.indices.count { with[it] != without[it] }
+            }
+            return ranked to moved
+        }
+
+        /** [league]'s national divisions' first-minus-last points per match (3/1/0), averaged; null without one of [SPREAD_MIN]. */
+        private fun spread(league: Season): Double? {
+            if (!league.leagues.national) return null
+            val gaps = ArrayList<Double>()
+            for (d in league.divisions.indices) {
+                if (!league.leagues.of(d).national) continue
+                val ppm = league.divisions[d].mapNotNull { league.standings[it] }.filter { it.played > 0 }.map { (3.0 * it.wins + it.draws) / it.played }
+                if (ppm.size < SPREAD_MIN) continue
+                gaps += ppm.max() - ppm.min()
+            }
+            return gaps.takeIf { it.isNotEmpty() }?.let { round3(it.average()) }
         }
 
         /** National league fixtures of [plan]'s league sizes at [config]'s divisionSize + 2 (its round robin). */
@@ -428,9 +510,12 @@ data class FederationStats(
             val (kp, km) = pair("clCcl")
             val levers = f.getValue("lv").split('/')
             require(levers.size == Lever.entries.size)
+            // Fields a file from before has not: none.
+            val (moved, ranked) = f["bonusMoved"]?.let { pair("bonusMoved") } ?: (0 to 0)
             FederationStats(
                 season, f["national"] == "1", promoted, bounced, f.getValue("champPpm").takeIf { it != "-" }?.toDouble(),
                 playoffs, lost, leagues, runaway, decided, sweeps, int("rounds"), int("projected"), int("legacy"), ties, upsets, cp, cm, kp, km, levers,
+                bonusRanked = ranked, bonusMoved = moved, spread = f["spread"]?.takeIf { it != "-" }?.toDouble(),
             )
         }.getOrNull()
     }
@@ -441,8 +526,9 @@ data class FederationStats(
  * [CoefficientStore]: `coef` lines of the newest [Coefficients.KEEP] seasons), the best-ranked
  * leagues of every national season (`top` lines, [isMajor]), and once a season holds its 정기 총회:
  * - **assemble** (at the open of season n + 1, against the rules season n + 1 really uses): from
- *   season n's [FederationStats] it tables 2 proposals, a third when it presses hard, at most one
- *   per [Lever] and none on a lever changed lately (P(n));
+ *   season n's [FederationStats] it tables 2 proposals (검토 안건 filling up when fewer pass their
+ *   floors), a third when it presses hard, at most one per [Lever] and none on a lever changed
+ *   lately (P(n));
  * - during season n + 1 the user can vote on them ([choose]);
  * - **resolve** (at the close of season n + 1): the user's choice decides, the rest go to the
  *   선수 위원회's seeded vote ([committee]); adopted changes apply from season n + 2 ([applyTo]).
@@ -540,8 +626,11 @@ class Federation : CoefficientStore {
      *    by the federation or by hand), or whose change [config] cannot take;
      * 3. one per lever (the higher pressure);
      * 4. by pressure, then kind order: the first [TABLED], and the next when its pressure is at
-     *    least [THIRD].
-     * Returns P(season) (empty: the rules stay as they are). Idempotent: once [assembled] ≥
+     *    least [THIRD];
+     * 5. fewer than [TABLED]: the rest from the kinds short of their floors that still lean their
+     *    way (검토 안건, [Proposal.review]: pressure above 0, so the committee rarely passes them),
+     *    under the same rules 2 and 3 and on levers not tabled yet, by pressure.
+     * Returns P(season) (empty only when no lever is open or leans anywhere: the rules stay as they are). Idempotent: once [assembled] ≥
      * [season], or P(season) is stored (a file whose `meta` line was lost), it returns the stored
      * proposals.
      */
@@ -558,11 +647,15 @@ class Federation : CoefficientStore {
                 val values = listOfNotNull(config.valueOf(l.key), stats.levers.getOrNull(l.ordinal), previous?.getOrNull(l.ordinal))
                 return values.distinct().size > 1
             }
-            val picked = candidates(stats, config, structureFreeOnly)
-                .filter { it.lever !in busy && !changed(it.lever) && config.with(it.lever.key, it.to) != null }
-                .groupBy { it.lever }.values.map { same -> same.minWith(ORDER) }
-                .sortedWith(ORDER)
-            val tabled = picked.take(TABLED) + picked.drop(TABLED).take(1).filter { it.pressure >= THIRD }
+            fun open(p: Proposal) = p.lever !in busy && !changed(p.lever) && config.with(p.lever.key, p.to) != null
+            fun onePerLever(ps: List<Proposal>) = ps.groupBy { it.lever }.values.map { same -> same.minWith(ORDER) }.sortedWith(ORDER)
+            val picked = onePerLever(candidates(stats, config, structureFreeOnly).filter(::open))
+            var tabled = picked.take(TABLED) + picked.drop(TABLED).take(1).filter { it.pressure >= THIRD }
+            if (tabled.size < TABLED) {
+                val have = tabled.map { it.lever }.toSet()
+                val review = onePerLever(candidates(stats, config, structureFreeOnly, floorFree = true).filter { it.review && it.lever !in have && open(it) })
+                tabled = tabled + review.take(TABLED - tabled.size)
+            }
             for ((i, p) in tabled.withIndex()) list += p.copy(season = season, number = i + 1)
             trim()
         }
@@ -640,6 +733,9 @@ class Federation : CoefficientStore {
     companion object {
         const val HEADER = "federation 1"
 
+        /** Pressure at a kind's floor: a proposal below it is a 검토 안건 ([Proposal.review]). */
+        const val FLOOR_PRESSURE = 0.3
+
         /** Proposals tabled at an assembly, and the most (the last only when it presses hard). */
         const val TABLED = 2
         const val MOST = 3
@@ -668,6 +764,9 @@ class Federation : CoefficientStore {
         const val MIN_CL_MATCHES = 12
         const val MIN_DECIDED = 30
 
+        /** Members of the division tables the bonus statistic asks for ([FederationStats.bonusRanked]). */
+        const val MIN_RANKED = 100
+
         /** Pressure of a kind at statistic [x]: 0.3 at its floor, 1.0 at its threshold, at most 3; below 0.3 short of the floor. */
         fun pressure(kind: ProposalKind, x: Double): Double =
             minOf(3.0, 0.3 + 0.7 * (x - kind.floor) / (kind.threshold - kind.floor))
@@ -684,9 +783,10 @@ class Federation : CoefficientStore {
          * statistic in [stats] is past its floor, as a proposal of number 0 with its pressure (2
          * decimals) and evidence; only [ProposalKind.structureFree] ones with [structureFreeOnly]
          * and for a legacy season's [stats] (its elevator, tables and fixtures are no national
-         * leagues'). No lever or recent-change rule here ([Federation.assemble] applies those).
+         * leagues'). With [floorFree], also the kinds short of their floors whose pressure is still
+         * above 0 (검토 안건). No lever or recent-change rule here ([Federation.assemble] applies those).
          */
-        fun candidates(stats: FederationStats, config: LeagueConfig, structureFreeOnly: Boolean = false): List<Proposal> {
+        fun candidates(stats: FederationStats, config: LeagueConfig, structureFreeOnly: Boolean = false, floorFree: Boolean = false): List<Proposal> {
             val out = ArrayList<Proposal>()
             fun pct(k: Int, n: Int) = if (n <= 0) "0" else (100.0 * k / n).roundToInt().toString()
             fun num2(x: Double) = String.format(Locale.ROOT, "%.2f", x)
@@ -707,17 +807,17 @@ class Federation : CoefficientStore {
                     } else null
                     ProposalKind.SWEEP_OFF, ProposalKind.SWEEP_ON -> {
                         val on = kind == ProposalKind.SWEEP_OFF
-                        // Only where the format has the bonus to give or take (판 승점제), and the season showed enough matches.
-                        if (config.sweepBonus == on && config.matchFormat.sweepBonus && stats.decided >= MIN_DECIDED) {
-                            Triple(stats.sweepShare, if (on) "0" else "1", listOf("${stats.decided}", "${stats.sweeps}", pct(stats.sweeps, stats.decided)))
+                        // Only where the format has the bonus to give or take (판 승점제), and the season ranked enough members.
+                        if (config.sweepBonus == on && config.matchFormat.sweepBonus && stats.bonusRanked >= MIN_RANKED) {
+                            Triple(stats.bonusShare, if (on) "0" else "1", listOf("${stats.bonusRanked}", "${stats.bonusMoved}", pct(stats.bonusMoved, stats.bonusRanked)))
                         } else null
                     }
-                    ProposalKind.SIZE_DOWN -> if (config.divisionSize > 16 && stats.rounds > 0) {
-                        Triple(stats.rounds.toDouble(), "${config.divisionSize - 2}", listOf("${stats.rounds}", "${stats.projected}", "${stats.legacy}"))
-                    } else null
-                    ProposalKind.SIZE_UP -> if (config.divisionSize < 24 && stats.rounds > 0 && stats.projected <= stats.legacy) {
-                        Triple(stats.rounds.toDouble(), "${config.divisionSize + 2}", listOf("${stats.rounds}", "${stats.projected}", "${stats.legacy}"))
-                    } else null
+                    ProposalKind.SIZE_DOWN -> stats.spread?.takeIf { config.divisionSize > 16 }?.let { x ->
+                        Triple(x, "${config.divisionSize - 2}", listOf(num2(x), "${stats.rounds}", "${stats.projected}", "${stats.legacy}"))
+                    }
+                    ProposalKind.SIZE_UP -> stats.spread?.takeIf { config.divisionSize < 24 && stats.projected <= stats.legacy }?.let { x ->
+                        Triple(x, "${config.divisionSize + 2}", listOf(num2(x), "${stats.rounds}", "${stats.projected}", "${stats.legacy}"))
+                    }
                     ProposalKind.LONG_KO_ON, ProposalKind.LONG_KO_OFF -> {
                         val on = kind == ProposalKind.LONG_KO_ON
                         if (config.longKnockouts != on && stats.koTies >= MIN_TIES) {
@@ -736,10 +836,12 @@ class Federation : CoefficientStore {
                     }
                 }
                 val (x, to, args) = c ?: continue
-                // Past the floor: on the threshold's side of it (or on it).
-                if ((x - kind.floor) * (kind.threshold - kind.floor) < 0) continue
+                // Past the floor: on the threshold's side of it (or on it); else, floor-free, leaning its way.
+                val past = (x - kind.floor) * (kind.threshold - kind.floor) >= 0
                 val p = Math.round(pressure(kind, x) * 100) / 100.0
-                out += Proposal(stats.season, 0, kind, from, to, p, args)
+                if (!past && !(floorFree && p > 0)) continue
+                // Short of the floor it stays a 검토 안건, below the floor's pressure however it rounds.
+                out += Proposal(stats.season, 0, kind, from, to, if (past) maxOf(p, FLOOR_PRESSURE) else minOf(p, FLOOR_PRESSURE - 0.01), args)
             }
             return out
         }

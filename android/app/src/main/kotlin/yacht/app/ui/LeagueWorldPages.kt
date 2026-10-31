@@ -355,7 +355,7 @@ internal fun FederationSection(f: FederationView, onChoose: (ProposalView, Boole
         }
         Heading("시즌 ${f.nextClose} 총회 안건" + if (f.pending.isNotEmpty()) " · 투표 중" else "")
         if (f.pending.isEmpty()) {
-            Small("지금 투표 중인 안건이 없어요. 시즌이 끝나면 총회가 지난 시즌 통계를 보고 바꿀 만한 규칙이 있을 때 안건을 올려요(보통 한두 개, 없는 시즌도 있어요).")
+            Small("지금 투표 중인 안건이 없어요. 시즌이 끝나면 총회가 지난 시즌 통계를 보고 안건을 두세 개 올려요. 급하지 않은 안건은 검토 안건으로 올라와요.")
         }
         for (p in f.pending) ProposalCard(p, onChoose)
         if (f.pending.isNotEmpty()) {

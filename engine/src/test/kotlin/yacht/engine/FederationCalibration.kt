@@ -27,9 +27,9 @@ import kotlin.test.assertTrue
  * [yacht.engine.league.LeagueWorld], the committee's adopted changes applied at every rollover as
  * the app applies them. Each season prints its statistics, every kind's pressure (also short of
  * its floor), the proposals tabled after it and the decisions on the ones before; the end checks
- * what the floors were calibrated for (docs/LEAGUE_SPEC.md 11.4): at least [ONE_SHARE] of the
- * assemblies table a proposal, none more than [Federation.MOST], no lever proposed in more than
- * half the seasons and no kind in every one. `FEDERATION_OFF=1` keeps the rules as they are (the
+ * what the floors were calibrated for (docs/LEAGUE_SPEC.md 11.4): at least [TWO_SHARE] of the
+ * assemblies table two proposals or more (검토 안건 included), none more than [Federation.MOST];
+ * past their floors, no lever in more than half the seasons and no kind in every one. `FEDERATION_OFF=1` keeps the rules as they are (the
  * statistics of the rules alone, the calibration's input); `FEDERATION_RULES` starts from other
  * rules ("longKnockouts=0,autoSwap=3", as config.txt writes them); `FEDERATION_SEED` picks the
  * league; `FEDERATION_OUT` names a file for the statistics as CSV.
@@ -89,7 +89,10 @@ class FederationCalibration {
                 run.rollover()
                 val f = run.w.federation
                 val stats = f.stats(n) ?: error("no statistics of season $n")
-                val row = Row(n, stats, Federation.candidates(stats, run.rules), f.of(n), f.of(n - 1), (System.currentTimeMillis() - t0) / 1000)
+                val row = Row(
+                    n, stats, Federation.candidates(stats, run.rules), f.of(n), f.of(n - 1), (System.currentTimeMillis() - t0) / 1000,
+                    Federation.candidates(stats, run.rules, floorFree = true).filter { it.review },
+                )
                 rows += row
                 println(row.text())
                 csv?.appendText(row.csv() + "\n")
@@ -103,15 +106,18 @@ class FederationCalibration {
     /** Season [season]'s statistics, the [candidates] past their floors, P(season) [tabled] at the next open and P(season - 1) [decided] at its close. */
     private class Row(
         val season: Int, val stats: FederationStats, val candidates: List<Proposal>, val tabled: List<Proposal>, val decided: List<Proposal>, val seconds: Long,
+        val reviews: List<Proposal> = emptyList(),
     ) {
         fun text(): String = buildString {
             val s = stats
             append("season $season (${seconds}s) lv=${s.levers.joinToString("/")}\n")
             append("  elevator ${s.bounced}/${s.promoted} = ${pct(s.elevator)}, champPpm ${s.champPpm ?: "-"}, leaderLost ${s.leaderLost}/${s.playoffLeagues} = ${pct(s.leaderLostShare)}, ")
-            append("runaway ${s.runaway}/${s.leagues} = ${pct(s.runawayShare)}, sweep ${s.sweeps}/${s.decided} = ${pct(s.sweepShare)}, rounds ${s.rounds} (proj ${s.projected} / legacy ${s.legacy}), ")
+            append("runaway ${s.runaway}/${s.leagues} = ${pct(s.runawayShare)}, sweep ${s.sweeps}/${s.decided} = ${pct(s.sweepShare)}, bonusMoved ${s.bonusMoved}/${s.bonusRanked} = ${pct(s.bonusShare)}, ")
+            append("spread ${s.spread ?: "-"}, rounds ${s.rounds} (proj ${s.projected} / legacy ${s.legacy}), ")
             append("koUpsets ${s.koUpsets}/${s.koTies} = ${pct(s.upsetShare)}, clEdge ${f2(s.clEdge)} (${s.champPoints}/${s.champMatches} vs ${s.cclPoints}/${s.cclMatches})\n")
             append("  pressure " + ProposalKind.entries.joinToString(" ") { k -> "${k.name}=${f2(Federation.pressure(k, x(k, s)))}" } + "\n")
             append("  candidates " + candidates.joinToString(" ") { "${it.kind.name}:${f2(it.pressure)}" }.ifEmpty { "-" } + "\n")
+            append("  review " + reviews.joinToString(" ") { "${it.kind.name}:${f2(it.pressure)}" }.ifEmpty { "-" } + "\n")
             append("  tabled " + tabled.joinToString(" ") { "${it.kind.name}:${f2(it.pressure)}" }.ifEmpty { "-" } + "\n")
             append("  decided " + decided.joinToString(" ") { "${it.kind.name}:${it.result}${it.by}${it.yes}/${it.no}" }.ifEmpty { "-" })
         }
@@ -121,13 +127,14 @@ class FederationCalibration {
             return listOf(
                 season, s.levers.joinToString("/"), s.promoted, s.bounced, s.champPpm ?: "", s.playoffLeagues, s.leaderLost, s.leagues, s.runaway,
                 s.decided, s.sweeps, s.rounds, s.projected, s.legacy, s.koTies, s.koUpsets, s.champPoints, s.champMatches, s.cclPoints, s.cclMatches,
+                s.bonusRanked, s.bonusMoved, s.spread ?: "",
                 candidates.joinToString(" ") { it.kind.name }, tabled.joinToString(" ") { it.kind.name }, decided.joinToString(" ") { "${it.kind.name}:${it.result}" },
             ).joinToString(",")
         }
 
         companion object {
             const val HEADER = "season,levers,promoted,bounced,champPpm,playoffLeagues,leaderLost,leagues,runaway,decided,sweeps,rounds,projected,legacy," +
-                "koTies,koUpsets,champPoints,champMatches,cclPoints,cclMatches,candidates,tabled,decisions"
+                "koTies,koUpsets,champPoints,champMatches,cclPoints,cclMatches,bonusRanked,bonusMoved,spread,candidates,tabled,decisions"
         }
     }
 
@@ -139,33 +146,34 @@ class FederationCalibration {
         }
         for (l in Lever.entries) println("  lever ${l.key}: proposed in ${rows.count { r -> r.tabled.any { it.lever == l } }} seasons")
         val sizes = rows.map { it.tabled.size }
-        println("  tabled per assembly: $sizes; adopted ${rows.sumOf { r -> r.decided.count { it.result == Proposal.YES } }} of ${rows.sumOf { it.decided.size }} decided")
+        val firm = rows.map { r -> r.tabled.filter { !it.review } }
+        println("  tabled per assembly: $sizes (past their floors ${firm.map { it.size }}); adopted ${rows.sumOf { r -> r.decided.count { it.result == Proposal.YES } }} of ${rows.sumOf { it.decided.size }} decided")
         println("  2 or more tabled in ${sizes.count { it >= Federation.TABLED }} of $n, none in ${sizes.count { it == 0 }}")
         if (!on || n < 4) return
-        // What the floors were calibrated for (docs/LEAGUE_SPEC.md 11.4): most assemblies table
-        // something, none more than 3, no lever in more than half the seasons, no kind in every one.
-        assertTrue(sizes.count { it >= 1 } >= ONE_SHARE * n, "1 or more tabled in at least ${(ONE_SHARE * 100).toInt()}% of the assemblies: $sizes")
+        // What the floors were calibrated for (docs/LEAGUE_SPEC.md 11.4): every assembly tables 2-3
+        // (검토 안건 fill it up), none more than 3; past their floors, no lever in more than half the
+        // seasons and no kind in every one.
+        assertTrue(sizes.count { it >= Federation.TABLED } >= TWO_SHARE * n, "2 or more tabled in at least ${(TWO_SHARE * 100).toInt()}% of the assemblies: $sizes")
         assertTrue(sizes.all { it <= Federation.MOST })
-        for (l in Lever.entries) assertTrue(rows.count { r -> r.tabled.any { it.lever == l } } * 2 <= n, "lever ${l.key} proposed in more than half the seasons")
-        for (k in ProposalKind.entries) assertTrue(rows.count { r -> r.tabled.any { it.kind == k } } < n, "${k.name} tabled every season")
+        for (l in Lever.entries) assertTrue(firm.count { t -> t.any { it.lever == l } } * 2 <= n, "lever ${l.key} past its floor in more than half the seasons")
+        for (k in ProposalKind.entries) assertTrue(firm.count { t -> t.any { it.kind == k } } < n, "${k.name} past its floor every season")
     }
 
     companion object {
         /**
-         * Assemblies that should table at least one proposal (about two in three did in the
-         * calibration runs, quiet seasons none). ENG 6.4 asked for 2 in 80%; with four
-         * statistics that tell seasons apart and none of them past its floor in more than half
-         * the seasons, two or more come in about two in five (docs/LEAGUE_SPEC.md 11.4).
+         * Assemblies that should table two or more (ENG 6.4: 2 in 80%): the proposals past their
+         * floors, filled up with 검토 안건 (an assembly whose levers are all busy or changed lately
+         * can still table fewer).
          */
-        const val ONE_SHARE = 0.5
+        const val TWO_SHARE = 0.8
 
         /** The statistic of [kind] in [s] (as [Federation.candidates] reads it). */
         fun x(kind: ProposalKind, s: FederationStats): Double = when (kind) {
             ProposalKind.SWAP_DOWN, ProposalKind.SWAP_UP -> s.elevator
             ProposalKind.TITLE_PO_OFF -> s.leaderLostShare
             ProposalKind.TITLE_PO_ON -> s.runawayShare
-            ProposalKind.SWEEP_OFF, ProposalKind.SWEEP_ON -> s.sweepShare
-            ProposalKind.SIZE_DOWN, ProposalKind.SIZE_UP -> s.rounds.toDouble()
+            ProposalKind.SWEEP_OFF, ProposalKind.SWEEP_ON -> s.bonusShare
+            ProposalKind.SIZE_DOWN, ProposalKind.SIZE_UP -> s.spread ?: Double.NaN
             ProposalKind.LONG_KO_ON, ProposalKind.LONG_KO_OFF -> s.upsetShare
             ProposalKind.CL_DIRECT_UP, ProposalKind.CL_DIRECT_DOWN -> s.clEdge
         }

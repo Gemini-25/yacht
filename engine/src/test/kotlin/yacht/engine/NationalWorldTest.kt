@@ -194,13 +194,17 @@ class NationalWorldTest {
 
     @Test
     fun aLegacyLeagueMigratesAndPlaysTwoNationalSeasons() {
-        val run = WorldRun(legacy)
+        // Without the 2-0 bonus, before the migration and after it: in these made-up seasons it would
+        // have moved more than half the places of the tables, so the migration's assembly tables SWEEP_ON.
+        val oldRules = legacy.copy(sweepBonus = false)
+        val noBonus = national.copy(sweepBonus = false)
+        val run = WorldRun(oldRules)
         run.w.openFirstSeason(11L)
         assertEquals(ClubBook.CLUB_LEAGUE, run.w.clubs!!.format)
         run.play()
         // The migration: the legacy season closes under its rules, the next opens national.
         val before = run.beforeClose()
-        val (close1, open1) = run.rollover(national)
+        val (close1, open1) = run.rollover(noBonus)
         val after = run.w.encodeFiles()
         assertTrue(close1.ruleChanges.isEmpty() && close1.ranking.rows.isEmpty())
         val p2 = run.w.plan!!
@@ -222,13 +226,13 @@ class NationalWorldTest {
         // The first assembly: structure-free kinds only, voted on in season 2.
         assertTrue(run.w.federation.of(1).all { it.kind.structureFree })
         assertTrue(run.w.federation.assembled == 1 && run.w.federation.resolved == 1)
-        replaysTheSame(run, before, after, legacy, national, "migration", close1.ranking)
+        replaysTheSame(run, before, after, oldRules, noBonus, "migration", close1.ranking)
 
         // National season 2: the CCL and the world stage, then the first national close.
         run.play()
         val played2 = run.w.plan!!.ranking
         val before2 = run.beforeClose()
-        val (close2, open2) = run.rollover(national)
+        val (close2, open2) = run.rollover(noBonus)
         climbsFrom(played2, close2.ranking)
         val after2 = run.w.encodeFiles()
         assertTrue(close2.ranking.rows.isNotEmpty())
@@ -245,21 +249,22 @@ class NationalWorldTest {
         assertTrue(abroad.isNotEmpty(), "no transfer abroad")
         for (k in abroad) assertEquals(0, run.w.plan!!.league.tierOf(k), "$k moved abroad plays in the 1부")
         assertTrue(open2.any { it.kind == "transfer_abroad" }, open2.map { it.kind }.toString())
-        // The migration's proposals (every decided match a 2:0 here: SWEEP_OFF presses) were adopted and apply from season 3.
+        // The migration's proposals (SWEEP_ON among them) were adopted and apply from season 3.
         assertTrue(run.w.federation.of(1).isNotEmpty(), "no proposals at the migration")
+        assertTrue(run.w.federation.of(1).any { it.kind == yacht.engine.league.ProposalKind.SWEEP_ON }, run.w.federation.of(1).toString())
         for (x in run.w.federation.of(1).filter { it.adopted }) assertEquals(x.to, run.rules.valueOf(x.lever.key), x.toString())
         // Their levers changed: the second assembly does not table them again.
         assertTrue(run.w.federation.of(2).none { x -> run.w.federation.of(1).any { it.adopted && it.lever == x.lever } })
         // Season lines carry the club and the league.
         val lines = run.w.archive.lines(run.w.plan!!.league.divisions[0].first()).filter { it.season == 2 }
         assertTrue(lines.all { it.league.isNotEmpty() && it.club != null }, lines.toString())
-        replaysTheSame(run, before2, after2, national, national, "season 2", close2.ranking)
+        replaysTheSame(run, before2, after2, noBonus, noBonus, "season 2", close2.ranking)
 
         // National season 3: the club cup is due (an even season after a national one is 4; 3 has none).
         run.play()
         val played3 = run.w.plan!!.ranking
         run.beforeClose()
-        val (close3, _) = run.rollover(national)
+        val (close3, _) = run.rollover(noBonus)
         climbsFrom(played3, close3.ranking)
         assertTrue(run.w.federation.coefficientSeasons == listOf(2, 3))
         assertTrue(run.w.federation.of(2).none { it.pending })
