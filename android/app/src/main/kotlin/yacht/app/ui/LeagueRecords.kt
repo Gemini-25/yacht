@@ -111,9 +111,14 @@ private fun RecordsRoom(lg: LeagueController, r: RoomView?, onOpen: (String) -> 
                 Card(Modifier.fillMaxWidth().clickable { onOpen(b.record.holder) }, colors = CardDefaults.cardColors(containerColor = cs.tertiaryContainer)) {
                     Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                         Text("${b.record.kind.label} · ${b.record.kind.withUnit(b.record.value)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        // A count its own holder raised says where it stood; another holder's is the record beaten.
+                        // A count its own holder raised says where it stood before the season (a running record's break keeps that);
+                        // a game or season record its holder beat again is its own; another holder's is the record beaten.
                         val before = b.previous?.let { p ->
-                            if (p.holder == b.record.holder) " · 시즌 전 ${p.kind.withUnit(p.value)}에서 늘렸어요" else " · 종전 ${p.kind.withUnit(p.value)} (${lg.name(p.holder)})"
+                            when {
+                                p.holder != b.record.holder -> " · 종전 ${p.kind.withUnit(p.value)} (${lg.name(p.holder)})"
+                                p.kind.running -> " · 시즌 전 ${p.kind.withUnit(p.value)}에서 늘렸어요"
+                                else -> " · 자기 기록 ${p.kind.withUnit(p.value)} 경신"
+                            }
                         } ?: " · 첫 기록"
                         Text(lg.name(b.record.holder) + before, style = MaterialTheme.typography.labelSmall, color = cs.onTertiaryContainer)
                     }
