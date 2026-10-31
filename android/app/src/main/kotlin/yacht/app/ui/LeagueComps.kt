@@ -2,7 +2,6 @@ package yacht.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,21 +12,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,10 +34,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.ClockView
+import yacht.app.core.CompetitionPage
+import yacht.app.core.CompetitionStage
 import yacht.app.core.LeagueController
-import yacht.app.core.LeagueTab
+import yacht.app.core.LeagueView
 import yacht.app.core.Page
-import yacht.app.core.TablesView
+import yacht.app.core.Sheet
+import yacht.app.core.competitionStages
+import yacht.app.core.roundInPlay
 import yacht.engine.league.BracketRound
 import yacht.engine.league.BracketSide
 import yacht.engine.league.Comp
@@ -50,15 +51,15 @@ import yacht.engine.league.Confed
 import yacht.engine.league.Nations
 import yacht.engine.league.Competitions
 import yacht.engine.league.GroupTable
-import yacht.engine.league.Knockout
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.TieView
 import yacht.engine.league.WeekStage
 
-/** 대회: this season's cups, champions league, super cup, all-star game, family cup and playoffs. */
+/** 순위 › 대회: a card per competition of the season (the post-season last); a card opens its page. */
 @Composable
-fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clock: ClockView?, format: MatchFormat? = null, onOpen: (String) -> Unit) {
-    val cs = MaterialTheme.colorScheme
+fun CompsTab(lg: LeagueController, v: LeagueView) {
+    val comps = v.comps
+    val clock = v.clock
     if (comps.isEmpty()) {
         CenterText(
             "이번 시즌에는 열린 대회가 없어요.\n리그가 시작되면 요트컵·챔피언스 리그·올스타전이 열리고, 시즌 2부터 슈퍼컵, " +
@@ -66,75 +67,158 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
         )
         return
     }
-    // The competition whose page is open (the first without one).
-    val focus = (lg.nav.pages.lastOrNull { it is Page.Competition } as? Page.Competition)?.comp
-    val shown = comps.firstOrNull { it.first == focus } ?: comps.first()
-    // Each competition's stages on the calendar, in order.
-    val stages = remember(clock?.weeks) { clock?.weeks.orEmpty().flatMap { it.stages }.filter { it.comp != Comp.LEAGUE }.groupBy { it.comp }.mapValues { (_, l) -> l.sortedBy { it.stage } } }
-    val mine = stages[shown.first].orEmpty()
+    val stages = remember(clock?.weeks) { stagesByComp(clock) }
+    val favs = lg.favourites
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(comps, key = { "comp-${it.first.code}" }) { (c, view) ->
+            val mine = remember(view, favs) { keysOf(view).any { followed(it, favs) } }
+            CompCard(c, view.title, cardStatus(c, stages[c].orEmpty(), clock), mine) { lg.nav.open(Page.Competition(c)) }
+        }
+        item {
+            Text(
+                "카드를 누르면 대진표와 조별 순위가 열려요. ★는 응원하는 선수가 나가는 대회예요.",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** Each competition's stages on the calendar, in order. */
+private fun stagesByComp(clock: ClockView?): Map<Comp, List<WeekStage>> =
+    clock?.weeks.orEmpty().flatMap { it.stages }.filter { it.comp != Comp.LEAGUE }.groupBy { it.comp }.mapValues { (_, l) -> l.sortedBy { it.stage } }
+
+/** Everyone in a competition: the sides of its ties, its group tables and its squads. */
+private fun keysOf(view: CompetitionView): Set<String> {
+    val out = HashSet<String>()
+    fun bracket(b: CompetitionView.Bracket?) = b?.rounds?.forEach { r -> r.ties.forEach { t -> t.a?.let(out::add); t.b?.let(out::add) } }
+    fun groups(g: CompetitionView.Groups) {
+        g.groups.forEach { t -> t.rows.forEach { out += it.key } }
+        bracket(g.knockout)
+        g.squads.values.forEach(out::addAll)
+    }
+    when (view) {
+        is CompetitionView.Bracket -> bracket(view)
+        is CompetitionView.Groups -> groups(view)
+        is CompetitionView.Sections -> view.parts.forEach(::groups)
+        else -> {}
+    }
+    view.squads.values.forEach(out::addAll)
+    return out
+}
+
+/** A card's line: the stage in play and its matches, when it opens, or that it is over. */
+private fun cardStatus(comp: Comp, stages: List<WeekStage>, c: ClockView?): String {
+    if (c == null || stages.isEmpty()) return "일정이 정해지면 열려요"
+    val cur = stages.firstOrNull { !it.done } ?: return "모든 경기가 끝났어요"
+    val live = c.live.entries.filter { it.key.first == comp }.sumOf { it.value }
+    // The super cup and the all-star game are one match: their stage is their name.
+    val stage = if (cur.label == comp.label) null else shortStage(cur.label)
+    val now = when {
+        live > 0 -> "${live}경기 진행 중"
+        cur.week > c.week && cur.played == 0 -> "${weekName(cur.week, c.leagueWeeks)}에 열려요"
+        !cur.set || cur.total == 0 -> "앞 단계가 끝나면 대진이 정해져요"
+        else -> "${cur.total}경기 중 ${cur.played}경기 끝났어요"
+    }
+    return (if (live > 0 || (cur.week <= c.week && cur.set && cur.total > 0)) "지금 " else "") + listOfNotNull(stage, now).joinToString(" · ")
+}
+
+@Composable
+private fun CompCard(comp: Comp, title: String, status: String, followed: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(compIcon(comp), fontSize = 22.sp, modifier = Modifier.width(36.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(status, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (followed) Text("★", color = cs.secondary, modifier = Modifier.padding(horizontal = 6.dp))
+            Text("›", style = MaterialTheme.typography.titleMedium, color = cs.onSurfaceVariant)
+        }
+    }
+}
+
+/** [Page.Competition]: loads the page of its competition at its stage, then draws it. */
+@Composable
+internal fun CompetitionScreen(lg: LeagueController, v: LeagueView, page: Page.Competition, onOpen: (String) -> Unit) {
+    val view = v.comps.firstOrNull { it.first == page.comp }?.second
+    if (view == null) {
+        CenterText("이번 시즌에는 열리지 않는 대회예요.")
+        return
+    }
+    // Again whenever the competition moved on (a new view) or another stage was picked.
+    LaunchedEffect(view, page.stage) { lg.worldPages.loadCompetition(page.comp, page.stage) }
+    val loaded = lg.worldPages.competitions[page.loadKey]
+    if (loaded == null) {
+        CenterText("대회를 불러오는 중…")
+        return
+    }
     // The same two functions for every snapshot (they read the newest squads), so rows whose
     // tie did not change skip recomposing.
-    val squads by rememberUpdatedState(shown.second.squads)
+    val squads by rememberUpdatedState(loaded.view.squads)
     val openAi by rememberUpdatedState(onOpen)
     val label: (String) -> String = remember(lg) { { k -> if (squads.containsKey(k)) Competitions.teamLabel(k) else lg.name(k) } }
     // A team (all-star side, family) has no page of its own: its squad is listed below.
     val open: (String) -> Unit = remember { { k -> if (!squads.containsKey(k)) openAi(k) } }
-    // The continental cups: one tournament shown at a time.
-    var part by remember(shown.first) { mutableStateOf(0) }
-    val notes = when (val v = shown.second) {
-        is CompetitionView.Groups -> v.notes
-        is CompetitionView.Sections -> v.notes
-        else -> null
-    }
+    CompetitionBody(loaded, label, lg::name, open, v.clock, v.season?.format) { lg.nav.sheet = Sheet.STAGE }
+}
+
+/**
+ * A competition's page from its loaded [page]: "단계: … ▾" ([onStage], the stage sheet), where it
+ * stands on the calendar, then the stage shown (groups or one bracket round), the national cups'
+ * notes and the squads. [label] names a side, [name] a player.
+ */
+@Composable
+internal fun CompetitionBody(
+    page: CompetitionPage,
+    label: (String) -> String,
+    name: (String) -> String,
+    onOpen: (String) -> Unit,
+    clock: ClockView?,
+    format: MatchFormat?,
+    onStage: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val view = page.view
+    val st = remember(view) { competitionStages(view) }.getOrNull(page.stage)
+    val mine = remember(clock?.weeks, page.comp) { stagesByComp(clock)[page.comp].orEmpty() }
     val leagueWeeks = clock?.leagueWeeks ?: Int.MAX_VALUE
     // The promotion playoffs are one tie per boundary: no champion to crown.
-    val podium = shown.first != Comp.PROMOTION_PLAYOFF
+    val podium = page.comp != Comp.PROMOTION_PLAYOFF
+    val notes = when (view) {
+        is CompetitionView.Groups -> view.notes
+        is CompetitionView.Sections -> view.notes
+        else -> null
+    }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for ((c, v) in comps) {
-                    val status = clock?.let { compStatus(stages[c].orEmpty(), it) }
-                    FilterChip(
-                        selected = c == shown.first,
-                        onClick = {
-                            lg.nav.go(LeagueTab.TABLES)
-                            lg.nav.tables = TablesView.COMPS
-                            lg.nav.open(Page.Competition(c))
-                        },
-                        label = { Text(compIcon(c) + " " + v.title + (status?.let { " · $it" } ?: ""), fontSize = 12.sp) },
-                    )
-                }
+        if (page.stages.size > 1) item { FilterLine("단계: ${page.stages.getOrElse(page.stage) { "–" }}", onStage) }
+        if (clock != null && mine.isNotEmpty()) item { StageStrip(mine, clock) }
+        // A national cup's host, absentees and races, whatever stage is shown.
+        notes?.let { n -> item { NotesCard(n, label, name, onOpen) } }
+        // One part of the competition: its group tables, or one round of its bracket.
+        fun LazyListScope.part(g: CompetitionView.Groups) {
+            val round = st?.round ?: -1
+            val k = g.knockout
+            if (round < 0 || k == null) {
+                items(g.groups, key = { "g-${it.label}" }) { t -> GroupCard(t, label, onOpen) }
+                if (g.groups.isEmpty() && k != null) item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), podium = podium, format = format) }
+            } else {
+                item { BracketCard(k, label, onOpen, roundWeeks(page.comp, mine, k.rounds, leagueWeeks), round, podium, format) }
             }
         }
-        if (clock != null && mine.isNotEmpty()) item { StageStrip(mine, clock) }
-        when (val v = shown.second) {
-            is CompetitionView.Bracket -> item { BracketCard(v, label, open, roundWeeks(shown.first, mine, v.rounds, leagueWeeks), podium = podium, format = format) }
-            is CompetitionView.Groups -> {
-                notes?.let { n -> item { NotesCard(n, label, lg::name, open) } }
-                items(v.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, open) }
-                v.knockout?.let { k -> item { BracketCard(k, label, open, roundWeeks(shown.first, mine, k.rounds, leagueWeeks), podium = podium, format = format) } }
-            }
-            is CompetitionView.Sections -> {
-                val sel = part.coerceIn(0, maxOf(0, v.parts.size - 1))
-                item {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for ((i, p) in v.parts.withIndex()) {
-                            FilterChip(selected = i == sel, onClick = { part = i }, label = { Text(sectionIcon(p.title) + " " + p.title, fontSize = 12.sp) })
-                        }
-                    }
-                }
-                notes?.let { n -> item { NotesCard(n, label, lg::name, open) } }
-                v.parts.getOrNull(sel)?.let { p ->
-                    items(p.groups, key = { "g-${it.label}" }) { g -> GroupCard(g, label, open) }
-                    p.knockout?.let { k -> item { BracketCard(k, label, open, roundWeeks(shown.first, mine, k.rounds, leagueWeeks), podium = podium, format = format) } }
-                }
+        when (view) {
+            is CompetitionView.Bracket -> item { BracketCard(view, label, onOpen, roundWeeks(page.comp, mine, view.rounds, leagueWeeks), st?.round, podium, format) }
+            is CompetitionView.Groups -> part(view)
+            is CompetitionView.Sections -> view.parts.getOrNull(st?.part ?: 0)?.let { p ->
+                item { Text(sectionIcon(p.title) + " " + p.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall) }
+                part(p)
             }
             // A kind of view this screen does not draw yet.
             else -> {}
         }
-        val squads = when (val v = shown.second) {
-            is CompetitionView.Sections -> v.parts.getOrNull(part.coerceIn(0, maxOf(0, v.parts.size - 1)))?.squads ?: v.squads
-            else -> shown.second.squads
+        val squads = when (view) {
+            is CompetitionView.Sections -> view.parts.getOrNull(st?.part ?: 0)?.squads ?: view.squads
+            else -> view.squads
         }
         val captains = notes?.captains.orEmpty()
         if (squads.isNotEmpty()) {
@@ -144,7 +228,7 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(Competitions.teamLabel(team), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            members.mapIndexed { i, k -> "${i + 1}. ${lg.name(k)}" + if (captains[team] == k) " ⓒ" else "" }.joinToString("  "),
+                            members.mapIndexed { i, k -> "${i + 1}. ${name(k)}" + if (captains[team] == k) " ⓒ" else "" }.joinToString("  "),
                             style = MaterialTheme.typography.labelSmall,
                             color = cs.onSurfaceVariant,
                         )
@@ -155,15 +239,46 @@ fun CompsTab(lg: LeagueController, comps: List<Pair<Comp, CompetitionView>>, clo
     }
 }
 
-/** A chip's state: the stage in play ("64강", "4강 · 패자 1R"), the week of the next one ("13주"), or "끝". */
-private fun compStatus(stages: List<WeekStage>, c: ClockView): String? {
-    if (stages.isEmpty()) return null
-    val cur = stages.firstOrNull { !it.done } ?: return "끝"
-    return when {
-        cur.week > c.week -> if (cur.week > c.leagueWeeks) "PO ${cur.week - c.leagueWeeks}주" else "${cur.week}주"
-        cur.label == cur.comp.label -> "진행 중"
-        else -> shortStage(cur.label)
+/** The stage sheet of the competition page on top: every stage in one list, with how far it is and its week. */
+@Composable
+internal fun StageSheet(lg: LeagueController) {
+    val nav = lg.nav
+    val page = nav.page as? Page.Competition ?: return
+    val loaded = lg.worldPages.competitions[page.loadKey] ?: return
+    val clock = lg.view?.clock
+    val stages = remember(loaded.view) { competitionStages(loaded.view) }
+    val mine = remember(clock?.weeks, page.comp) { stagesByComp(clock)[page.comp].orEmpty() }
+    LeagueSheet("단계 고르기", { nav.sheet = Sheet.NONE }) {
+        for ((i, s) in stages.withIndex()) {
+            SheetChoice(s.label, stageNote(page.comp, loaded.view, s, mine, clock), i == loaded.stage) {
+                nav.replaceTop(page.copy(stage = i))
+                nav.sheet = Sheet.NONE
+            }
+        }
     }
+}
+
+/** A stage's line in the stage sheet: played, in play or to come, and the week of a bracket round. */
+private fun stageNote(comp: Comp, view: CompetitionView, s: CompetitionStage, calendar: List<WeekStage>, clock: ClockView?): String {
+    val g = when (view) {
+        is CompetitionView.Groups -> view
+        is CompetitionView.Sections -> view.parts.getOrNull(s.part)
+        else -> null
+    }
+    val rounds = if (view is CompetitionView.Bracket) view.rounds else g?.knockout?.rounds.orEmpty()
+    if (s.round < 0) {
+        val drawn = rounds.any { r -> r.ties.any { it.a != null || it.b != null } }
+        return if (drawn) "✓ 끝났어요" else "조별 리그 진행 중"
+    }
+    val r = rounds.getOrNull(s.round) ?: return ""
+    val week = roundWeeks(comp, calendar, rounds, clock?.leagueWeeks ?: Int.MAX_VALUE).getOrNull(s.round)
+    val state = when {
+        r.ties.all { it.a == null && it.b == null } -> "대진 미정"
+        r.ties.all { it.winner != null || it.bye } -> "✓ 끝났어요"
+        r.ties.any { it.played } -> "● 진행 중"
+        else -> "곧 열려요"
+    }
+    return listOfNotNull(state, week).joinToString(" · ")
 }
 
 /**
@@ -287,10 +402,10 @@ private fun flagOf(code: String): String = Nations.of(code)?.flag ?: ""
 private fun points(x: Double): String = if (x == Math.floor(x)) x.toInt().toString() else String.format(java.util.Locale.ROOT, "%.1f", x)
 
 /**
- * A bracket, one round at a time (a 256-team cup has 128 ties in its first round). With double
- * elimination the 승자조 / 패자조 / 최종 결승 chips pick a side first, opening on [start] (else
- * the side in play). [weeks] go with [CompetitionView.Bracket.rounds]; [podium] off for brackets
- * that crown nobody (the promotion playoffs' one tie per boundary).
+ * One round of a bracket ([round], an index of [CompetitionView.Bracket.rounds]; null: the round
+ * in play), picked on the competition page's stage sheet (a 256-team cup has 128 ties in its first
+ * round). [weeks] go with the rounds; [podium] off for brackets that crown nobody (the promotion
+ * playoffs' one tie per boundary).
  */
 @Composable
 internal fun BracketCard(
@@ -298,7 +413,7 @@ internal fun BracketCard(
     label: (String) -> String,
     onOpen: (String) -> Unit,
     weeks: List<String> = emptyList(),
-    start: BracketSide? = null,
+    round: Int? = null,
     podium: Boolean = true,
     /** The season's match rule (a leg is one game under [MatchFormat.SINGLE]); null: two. */
     format: MatchFormat? = null,
@@ -306,49 +421,14 @@ internal fun BracketCard(
     val cs = MaterialTheme.colorScheme
     val rounds = b.rounds
     val double = rounds.any { it.side != BracketSide.WINNERS }
-    // The round being played (the earliest stage with an unplayed known tie), else the last played.
-    val current = currentRound(rounds, rounds.indices.toList()) ?: 0
-    var side by remember(b.title) { mutableStateOf(start) }
-    val sides = rounds.map { it.side }.distinct()
-    val shownSide = side?.takeIf { it in sides } ?: rounds.getOrNull(current)?.side ?: BracketSide.WINNERS
-    val mine = rounds.indices.filter { rounds[it].side == shownSide }
-    var round by remember(b.title, shownSide) { mutableStateOf(-1) }
-    val r = round.takeIf { it in mine }
-        ?: current.takeIf { it in mine }
-        ?: currentRound(rounds, mine)
-        ?: 0
+    val r = round?.takeIf { it in rounds.indices } ?: roundInPlay(rounds) ?: 0
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(b.title, fontWeight = FontWeight.Bold)
             if (rounds.isEmpty()) {
                 Text("대진이 아직 정해지지 않았어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             } else {
-                if (double) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        for (s in sides) {
-                            val idx = rounds.indices.filter { rounds[it].side == s }
-                            val done = idx.all { i -> rounds[i].ties.all { it.winner != null || it.bye } }
-                            val now = when {
-                                done -> " · 끝"
-                                s == BracketSide.GRAND -> ""
-                                else -> currentRound(rounds, idx)?.let { " · " + roundShort(rounds[it].label) } ?: ""
-                            }
-                            FilterChip(
-                                selected = s == shownSide, onClick = { side = s },
-                                label = { Text(sideName(s) + now, fontSize = 11.sp, fontWeight = if (s == shownSide) FontWeight.Bold else FontWeight.Normal) },
-                            )
-                        }
-                    }
-                }
-                // The grand final is one round: no round chips.
-                if (shownSide != BracketSide.GRAND) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        for (i in mine) {
-                            val wk = weeks.getOrNull(i)?.let { " · $it" } ?: ""
-                            FilterChip(selected = i == r, onClick = { side = shownSide; round = i }, label = { Text(roundShort(rounds[i].label) + wk, fontSize = 11.sp) })
-                        }
-                    }
-                }
+                Text(rounds[r].label + (weeks.getOrNull(r)?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = cs.primary)
                 roundCaption(rounds[r], final = r == rounds.lastIndex, podium = podium, format = format)?.let {
                     Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 }
@@ -359,30 +439,6 @@ internal fun BracketCard(
         }
     }
 }
-
-/** A tie both of whose sides are known, still to play. */
-private fun ready(t: TieView): Boolean = !t.played && t.winner == null && t.a != null && t.b != null
-
-/**
- * The round in play among [idx] (indices of [rounds]): the earliest stage with a ready tie, else
- * the latest with a played one, else the first; null for none.
- */
-private fun currentRound(rounds: List<BracketRound>, idx: List<Int>): Int? {
-    if (idx.isEmpty()) return null
-    val order = compareBy<Int>({ rounds[it].stage }, { it })
-    return idx.filter { i -> rounds[i].ties.any(::ready) }.minWithOrNull(order)
-        ?: idx.filter { i -> rounds[i].ties.any { it.played } }.maxWithOrNull(order)
-        ?: idx.first()
-}
-
-private fun sideName(s: BracketSide): String = when (s) {
-    BracketSide.WINNERS -> "승자조"
-    BracketSide.LOSERS -> "패자조"
-    BracketSide.GRAND -> Knockout.GRAND_LABEL
-}
-
-/** A round's name inside its side: "승자조 16강" → "16강", "패자조 2R" → "2R". */
-private fun roundShort(label: String): String = label.removePrefix("승자조 ").removePrefix("패자조 ")
 
 /**
  * How [round] is played, from its own ties (an old season keeps its rules): a series' length, a
@@ -406,7 +462,7 @@ private fun roundCaption(round: BracketRound, final: Boolean, podium: Boolean, f
     }
     if (round.side == BracketSide.LOSERS) parts += "지면 탈락"
     if (grand) parts += (if (firstTo > 0) "승자조 우승과 패자조 우승이 한 시리즈로 겨뤄요" else "승자조 우승과 패자조 우승이 맞붙어요") + " · 어드밴티지 없음"
-    return if (parts.isEmpty()) null else (listOf(round.label) + parts).joinToString(" · ")
+    return if (parts.isEmpty()) null else parts.joinToString(" · ")
 }
 
 /** 우승 and 준우승 from the last round (the grand final with double elimination); 3위 from the losers' final. */
@@ -484,8 +540,8 @@ private fun TieLine(
         Column(Modifier.padding(horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 when {
-                    played && firstTo > 0 -> "${score(scoreA)}-${score(scoreB)}"
-                    played -> "${score(scoreA)} : ${score(scoreB)}"
+                    played && firstTo > 0 -> "${halfText(scoreA)}-${halfText(scoreB)}"
+                    played -> "${halfText(scoreA)} : ${halfText(scoreB)}"
                     a == null || b == null -> "미정"
                     firstTo > 0 -> "${firstTo}선승"
                     legs > 1 -> "${legs}경기"
@@ -538,8 +594,6 @@ private fun Side(key: String?, winner: String?, mark: SideMark, label: (String) 
         mark.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1) }
     }
 }
-
-private fun score(x: Double): String = if (x == Math.floor(x)) "%.0f".format(x) else "%.1f".format(x)
 
 /** A group table; with [GroupTable.bonus] (판 승점제) its 2-0 sweeps, which earned a point each, get a column. */
 @Composable

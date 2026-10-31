@@ -4,14 +4,15 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -22,35 +23,48 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import yacht.app.core.LeagueController
+import yacht.app.core.RulesPart
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.LeaguePreset
 import yacht.engine.league.MatchFormat
 
-/** 규칙·프리셋: the league's rules, applied from the next season. */
+/**
+ * [Page.Rules] (규칙 설정): the league's rules and presets, applied from the next season, opened at
+ * [part] (the league's or the competitions' section); 저장 keeps the changes, both buttons close
+ * the page ([onDone]).
+ */
 @Composable
-fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
+fun RulesPage(lg: LeagueController, part: RulesPart, onDone: () -> Unit) {
     var cfg by remember { mutableStateOf(lg.config) }
     val cs = MaterialTheme.colorScheme
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = { lg.changeConfig(cfg); onDismiss() }, enabled = cfg != lg.config) { Text("저장") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
-        title = { Text("리그 규칙", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val scroll = rememberScrollState()
+    // Where each section starts in the scrolled column, for opening at [part].
+    val starts = remember { mutableStateMapOf<RulesPart, Int>() }
+    LaunchedEffect(part) {
+        // Once the layout has placed the section asked for, the column scrolls to it.
+        if (part != RulesPart.TOP) snapshotFlow { starts[part] }.filterNotNull().first().let { scroll.scrollTo(it) }
+    }
+    fun Modifier.start(p: RulesPart) = onGloballyPositioned { starts[p] = it.positionInParent().y.toInt() }
+    Column(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).verticalScroll(scroll).padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("바꾼 규칙은 다음 시즌부터 적용돼요. 지금 시즌은 그대로 끝까지 가요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                 // The season in play keeps the rules it began with: say so when they read otherwise.
                 val season = lg.view?.season
@@ -76,7 +90,7 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                     }
                 }
                 HorizontalDivider()
-                Text("리그", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Text("리그", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.start(RulesPart.LEAGUE))
                 Text(structureLine(cfg), style = MaterialTheme.typography.labelMedium, color = cs.secondary)
                 Toggle("지역 리그 피라미드 (선수가 많을 때)", cfg.pyramid) { cfg = cfg.copy(pyramid = it) }
                 Text(
@@ -130,10 +144,10 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                 Toggle("실수하는 선수만", cfg.onlyFlawed) { cfg = cfg.copy(onlyFlawed = it) }
                 Stepper("레이팅 상위만", cfg.onlyTop, 0..200, { if (it == 0) "모두" else "${it}명" }, step = 8) { cfg = cfg.copy(onlyTop = it) }
                 HorizontalDivider()
-                Text("대회", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Text("대회", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.start(RulesPart.CUPS))
                 Text(
                     "시즌은 주 단위로 흘러가요. 리그 한 라운드가 한 주예요. 요트컵과 챔피언스 리그는 시즌이 시작될 때 정해진 주에 하나씩 열리고, " +
-                        "클럽 리그는 몇 주마다 한 라운드씩 치러요. 리그가 끝나면 포스트시즌에 플레이오프를 치르고 시즌을 마감해요. 일정은 ‘일정’ 탭에서 볼 수 있어요.",
+                        "클럽 리그는 몇 주마다 한 라운드씩 치러요. 리그가 끝나면 포스트시즌에 플레이오프를 치르고 시즌을 마감해요. 일정은 경기 › 이번 주에서 볼 수 있어요.",
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
                 Toggle("요트컵", cfg.cup) { cfg = cfg.copy(cup = it) }
@@ -150,15 +164,19 @@ fun LeagueRulesDialog(lg: LeagueController, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
                 Toggle("계열 대항전 (3시즌마다 · 기본 AI가 출전할 때만)", cfg.familyCup) { cfg = cfg.copy(familyCup = it) }
-                Toggle("클럽 리그", cfg.clubs > 0) { cfg = cfg.copy(clubs = if (it) 16 else 0) }
+                Box(Modifier.start(RulesPart.CLUBS)) { Toggle("클럽 리그", cfg.clubs > 0) { cfg = cfg.copy(clubs = if (it) 16 else 0) } }
                 if (cfg.clubs > 0) {
                     Stepper("클럽 수", cfg.clubs, 4..24, { "${it}개" }, step = 2) { cfg = cfg.copy(clubs = it) }
                     Stepper("클럽당 선수", cfg.squad, 5..8, { "${it}명" }) { cfg = cfg.copy(squad = it) }
                 }
                 OutlinedButton(onClick = { cfg = LeagueConfig() }, modifier = Modifier.fillMaxWidth()) { Text("기본값으로") }
             }
-        },
-    )
+        HorizontalDivider()
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = onDone) { Text("취소") }
+            TextButton(onClick = { lg.changeConfig(cfg); onDone() }, enabled = cfg != lg.config) { Text("저장") }
+        }
+    }
 }
 
 /** The match rule chips, the default first. */

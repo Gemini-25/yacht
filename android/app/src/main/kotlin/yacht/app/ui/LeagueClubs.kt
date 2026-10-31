@@ -3,13 +3,13 @@ package yacht.app.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,14 +20,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.ClubsView
 import yacht.app.core.LeagueController
+import yacht.app.core.Page
 import yacht.engine.league.Club
 import yacht.engine.league.ClubMove
 import yacht.engine.league.ClubMoveKind
@@ -104,66 +102,62 @@ private fun star(w: Float, h: Float): Path = Path().apply {
     close()
 }
 
-private enum class ClubsMode(val label: String) {
-    TABLE("클럽 순위"),
-    CLUBS("클럽"),
-    MARKET("이적·드래프트"),
-}
-
 /**
- * 클럽: the club league table, every club's card, and the transfer window and draft news.
- * [format] is the season's match rule (how a board is decided), null when not known.
+ * 순위 › 클럽: this season's club league table (a row opens [Page.Club]), every club by its titles
+ * (folded), and "이적·드래프트 ›" ([Page.Market]). [format] is the season's match rule (how a
+ * board is decided), null when not known.
  */
 @Composable
-fun ClubsTab(lg: LeagueController, v: ClubsView?, format: MatchFormat? = null, onOpen: (String) -> Unit) {
+fun ClubsTab(lg: LeagueController, v: ClubsView?, format: MatchFormat? = null) {
     if (v == null || v.clubs.isEmpty()) {
         CenterText("클럽 리그는 시즌이 시작될 때 만들어져요. 클럽마다 AI 여섯 명이 모여 다섯 보드 단체전을 치르고, 시즌이 끝나면 상금으로 이적 시장과 드래프트를 열어요. (규칙에서 클럽 수를 바꾸거나 끌 수 있어요)")
         return
     }
-    var mode by remember { mutableStateOf(ClubsMode.TABLE) }
-    var open by remember { mutableStateOf<String?>(null) }
+    val nav = lg.nav
+    var all by remember { mutableStateOf(false) }
     val byId = v.clubs.associateBy { it.id }
     val cs = MaterialTheme.colorScheme
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (m in ClubsMode.entries) FilterChip(selected = mode == m, onClick = { mode = m }, label = { Text(m.label, fontSize = 12.sp) })
+        item { Text("클럽 순위", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium) }
+        if (v.table.isEmpty()) {
+            item { Text("이번 시즌에는 클럽 리그가 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+        } else {
+            item {
+                val played = v.matches.count { it.result != null }
+                // Each board is a match under the season's rule; level boards go to the totals unless 판 승점제.
+                val board = when (format) {
+                    MatchFormat.SINGLE -> "보드마다 한 판"
+                    MatchFormat.BEST_OF_3 -> "보드마다 같은 주사위 두 판 (비기면 세 번째 판)"
+                    MatchFormat.GAMES -> "보드마다 같은 주사위 두 판 (판 승점: 1승 1패면 그 보드는 무승부)"
+                    else -> "보드마다 같은 주사위 두 판"
+                }
+                val level = if (format?.totals == true) ", 이긴 보드 수가 같으면 합계 점수로" else ""
+                Text("단체전: $board, 이긴 보드가 많은 클럽이 승리$level (승 3·무 1). $played/${v.matches.size}경기", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
             }
-        }
-        when (mode) {
-            ClubsMode.TABLE -> {
-                if (v.table.isEmpty()) item { Text("이번 시즌에는 클럽 리그가 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
-                else {
-                    item {
-                        val played = v.matches.count { it.result != null }
-                        // Each board is a match under the season's rule; level boards go to the totals unless 판 승점제.
-                        val board = when (format) {
-                            MatchFormat.SINGLE -> "보드마다 한 판"
-                            MatchFormat.BEST_OF_3 -> "보드마다 같은 주사위 두 판 (비기면 세 번째 판)"
-                            MatchFormat.GAMES -> "보드마다 같은 주사위 두 판 (판 승점: 1승 1패면 그 보드는 무승부)"
-                            else -> "보드마다 같은 주사위 두 판"
-                        }
-                        val level = if (format?.totals == true) ", 이긴 보드 수가 같으면 합계 점수로" else ""
-                        Text("단체전: $board, 이긴 보드가 많은 클럽이 승리$level (승 3·무 1). $played/${v.matches.size}경기", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
-                    }
-                    itemsIndexed(v.table, key = { _, r -> "ct-${r.club}" }) { i, r ->
-                        val club = byId[r.club]
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable { open = r.club }.padding(horizontal = 6.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("${i + 1}", Modifier.width(22.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                            club?.let { ClubEmblem(it.emblem, 22.dp) }
-                            Text(" " + (club?.name ?: r.club), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(56.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
-                            Text("%+d".format(r.boardDiff), Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
-                            Text("${r.points}", Modifier.width(32.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
-                        }
-                    }
+            itemsIndexed(v.table, key = { _, r -> "ct-${r.club}" }) { i, r ->
+                val club = byId[r.club]
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable { nav.open(Page.Club(r.club)) }.padding(horizontal = 6.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${i + 1}", Modifier.width(22.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                    club?.let { ClubEmblem(it.emblem, 22.dp) }
+                    Text(" " + (club?.name ?: r.club), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${r.wins}-${r.draws}-${r.losses}", Modifier.width(56.dp), style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.End)
+                    Text("%+d".format(r.boardDiff), Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
+                    Text("${r.points}", Modifier.width(32.dp), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End)
                 }
             }
-            ClubsMode.CLUBS -> items(v.clubs.sortedByDescending { it.honours * 1000 + it.budget }, key = { "cc-${it.id}" }) { c ->
-                Card(Modifier.fillMaxWidth().clickable { open = c.id }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        }
+        item {
+            Column(Modifier.padding(top = 6.dp)) {
+                LinkLine(if (all) "클럽 전체 (우승 순) 접기" else "클럽 전체 (우승 순)", "${v.clubs.size}개 클럽의 우승과 자금") { all = !all }
+                LinkLine("이적·드래프트", "시즌이 끝나면 상금으로 열리는 이적 시장과 드래프트") { nav.open(Page.Market) }
+            }
+        }
+        if (all) {
+            items(v.clubs.sortedByDescending { it.honours * 1000 + it.budget }, key = { "cc-${it.id}" }) { c ->
+                Card(Modifier.fillMaxWidth().clickable { nav.open(Page.Club(c.id)) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         ClubEmblem(c.emblem, 34.dp)
                         Spacer(Modifier.width(10.dp))
@@ -178,13 +172,22 @@ fun ClubsTab(lg: LeagueController, v: ClubsView?, format: MatchFormat? = null, o
                     }
                 }
             }
-            ClubsMode.MARKET -> {
-                if (v.moves.isEmpty()) item { Text("시즌이 끝나면 상금을 받고 이적 시장과 드래프트가 열려요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
-                items(v.moves, key = { m -> "mv-${m.season}-${m.kind}-${m.ai}-${m.from}-${m.to}" }) { m -> MoveLine(lg, m, byId) }
-            }
         }
     }
-    open?.let { id -> byId[id]?.let { ClubDialog(lg, it, v, onOpen) { open = null } } }
+}
+
+/** [Page.Market]: the transfer window's and the draft's moves, newest first. */
+@Composable
+internal fun MarketBody(lg: LeagueController, v: ClubsView?) {
+    val moves = v?.moves.orEmpty()
+    if (moves.isEmpty()) {
+        CenterText("시즌이 끝나면 상금을 받고 이적 시장과 드래프트가 열려요.")
+        return
+    }
+    val byId = v?.clubs.orEmpty().associateBy { it.id }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items(moves, key = { m -> "mv-${m.season}-${m.kind}-${m.ai}-${m.from}-${m.to}" }) { m -> MoveLine(lg, m, byId) }
+    }
 }
 
 @Composable
@@ -204,69 +207,68 @@ private fun MoveLine(lg: LeagueController, m: ClubMove, byId: Map<String, Club>)
     }
 }
 
+/** [Page.Club]: a club's badge and standing, its players (this season's lineup first), recent club matches and moves. */
 @Composable
-private fun ClubDialog(lg: LeagueController, c: Club, v: ClubsView, onOpen: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun ClubPageBody(lg: LeagueController, v: ClubsView?, id: String, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val c = v?.clubs?.firstOrNull { it.id == id }
+    if (v == null || c == null) {
+        CenterText("이 클럽은 이제 리그에 없어요.")
+        return
+    }
     val row = v.table.indexOfFirst { it.club == c.id }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ClubEmblem(c.emblem, 40.dp)
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(c.name, fontWeight = FontWeight.Bold)
-                    Text(
-                        listOfNotNull(
-                            if (row >= 0) "이번 시즌 ${row + 1}위" else null,
-                            "자금 ${c.budget}",
-                            if (c.honours > 0) "우승 ${c.honours}회" else null,
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = cs.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                // This season's lineup as it plays (fixed at the season's start), then the bench;
-                // without a club league this season, the squad by rating.
-                val lineup = v.lineups[c.id].orEmpty().filter { it in c.squad }
-                val ratings = lg.view?.rows.orEmpty().associate { it.key to (it.rating ?: Int.MIN_VALUE) }
-                val bench = c.squad.filter { it !in lineup }.sortedByDescending { ratings[it] ?: Int.MIN_VALUE }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ClubEmblem(c.emblem, 48.dp)
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(c.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (lineup.isNotEmpty()) "선수 (이번 시즌 출전 순서: 1~${lineup.size}번 보드, 나머지는 후보)" else "선수 (레이팅 순)",
-                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge,
+                    listOfNotNull(
+                        if (row >= 0) "이번 시즌 ${row + 1}위" else null,
+                        "자금 ${c.budget}",
+                        if (c.honours > 0) "우승 ${c.honours}회" else null,
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
                 )
-                for ((i, k) in (lineup + bench).withIndex()) {
-                    Text(
-                        "${i + 1}. ${lg.name(k)}" + if (lineup.isNotEmpty() && i >= lineup.size) " (후보)" else "",
-                        style = MaterialTheme.typography.bodySmall, modifier = Modifier.clickable { onDismiss(); onOpen(k) },
-                    )
-                }
-                val games = v.matches.filter { (it.a == c.id || it.b == c.id) && it.result != null }.takeLast(6)
-                if (games.isNotEmpty()) {
-                    HorizontalDivider()
-                    Text("최근 경기", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                    for (g in games) {
-                        val r = g.result!!
-                        val home = g.a == c.id
-                        val other = v.clubs.firstOrNull { it.id == if (home) g.b else g.a }?.name ?: "?"
-                        val (w, l) = if (home) r.won to r.lost else r.lost to r.won
-                        val res = (if (home) r.winner else -r.winner).let { if (it > 0) "승" else if (it < 0) "패" else "무" }
-                        Text("$res  $other  보드 $w:$l", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                val moves = v.moves.filter { it.from == c.id || it.to == c.id }.take(10)
-                if (moves.isNotEmpty()) {
-                    HorizontalDivider()
-                    Text("이적·드래프트", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                    val byId = v.clubs.associateBy { it.id }
-                    for (m in moves) MoveLine(lg, m, byId)
-                }
             }
-        },
-    )
+        }
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        // This season's lineup as it plays (fixed at the season's start), then the bench;
+        // without a club league this season, the squad by rating.
+        val lineup = v.lineups[c.id].orEmpty().filter { it in c.squad }
+        val ratings = lg.view?.rows.orEmpty().associate { it.key to (it.rating ?: Int.MIN_VALUE) }
+        val bench = c.squad.filter { it !in lineup }.sortedByDescending { ratings[it] ?: Int.MIN_VALUE }
+        Text(
+            if (lineup.isNotEmpty()) "선수 (이번 시즌 출전 순서: 1~${lineup.size}번 보드, 나머지는 후보)" else "선수 (레이팅 순)",
+            fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge,
+        )
+        for ((i, k) in (lineup + bench).withIndex()) {
+            Text(
+                "${i + 1}. ${lg.name(k)}" + if (lineup.isNotEmpty() && i >= lineup.size) " (후보)" else "",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().clickable { onOpen(k) }.padding(vertical = 3.dp),
+            )
+        }
+        val games = v.matches.filter { (it.a == c.id || it.b == c.id) && it.result != null }.takeLast(6)
+        if (games.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("최근 경기", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            for (g in games) {
+                val r = g.result!!
+                val home = g.a == c.id
+                val other = v.clubs.firstOrNull { it.id == if (home) g.b else g.a }?.name ?: "?"
+                val (w, l) = if (home) r.won to r.lost else r.lost to r.won
+                val res = (if (home) r.winner else -r.winner).let { if (it > 0) "승" else if (it < 0) "패" else "무" }
+                Text("$res  $other  보드 $w:$l", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        val moves = v.moves.filter { it.from == c.id || it.to == c.id }.take(10)
+        if (moves.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("이적·드래프트", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            val byId = v.clubs.associateBy { it.id }
+            for (m in moves) MoveLine(lg, m, byId)
+        }
+    }
 }

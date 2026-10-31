@@ -3,7 +3,6 @@ package yacht.app.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,24 +13,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -64,16 +62,16 @@ fun compShort(c: Comp): String = when (c) {
 
 /**
  * "🏆 요트컵 64강", "📋 리그 12라운드", "🥇 슈퍼컵" ([short]: 챔스, 클럽, ..., and a double
- * elimination stage as "4강 · 패자 1R" through [shortStage]).
+ * elimination stage as "4강 · 패자 1R" through [shortStage]; without the icon unless [icon]).
  */
-fun stageName(comp: Comp, label: String, short: Boolean = false): String {
+fun stageName(comp: Comp, label: String, short: Boolean = false, icon: Boolean = true): String {
     val name = if (short) compShort(comp) else comp.label
     // The super cup and the all-star game are one match: their label is their name.
     val rest = if (label == comp.label || label.isBlank() || (comp == Comp.PROMOTION_PLAYOFF && label == "승강전")) "" else " " + if (short) shortStage(label) else label
-    return compIcon(comp) + " " + name + rest
+    return (if (icon) compIcon(comp) + " " else "") + name + rest
 }
 
-fun stageName(s: WeekStage, short: Boolean = false): String = stageName(s.comp, s.label, short)
+fun stageName(s: WeekStage, short: Boolean = false, icon: Boolean = true): String = stageName(s.comp, s.label, short, icon)
 
 /** "12주차", "포스트시즌 1주차", "개막 전", "시즌 마감"; [leagueWeeks] null when not known (another season). */
 fun weekName(w: Int, leagueWeeks: Int?): String = when {
@@ -104,30 +102,7 @@ fun clockTitle(c: ClockView): String = when {
     else -> weekName(c.week, c.leagueWeeks)
 }
 
-/** One line on what this week holds besides the league, or what comes next. */
-fun clockLine(c: ClockView): String {
-    if (c.over) return "시상식과 승강, 이적 시장이 이어지고 다음 시즌이 열려요"
-    val now = c.row(c.week)?.stages.orEmpty().filter { it.comp != Comp.LEAGUE }
-    if (now.isNotEmpty()) return "이번 주: " + now.joinToString(" · ") { stageName(it, short = true) }
-    val next = c.upcoming(c.week + 1).firstOrNull()
-    return if (next == null) "이번 주는 리그 경기만 있어요" else "이번 주는 리그 경기만 · 다음은 ${stageName(next, short = true)} (${weekName(next.week, c.leagueWeeks)})"
-}
-
-// ---- the clock in the control card ----------------------------------------------------------------
-
-/** The season's clock under the league's controls: the week, what is on, and a bar of the weeks. */
-@Composable
-fun ClockLine(c: ClockView, onOpen: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("📅 시즌 ${c.season} · ${clockTitle(c)}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text("일정 ›", style = MaterialTheme.typography.labelMedium, color = cs.primary)
-        }
-        Text(clockLine(c), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        WeekBar(c, Modifier.fillMaxWidth().height(9.dp))
-    }
-}
+// ---- the week bar under the control bar ---------------------------------------------------------
 
 /** The weeks as a bar: played weeks filled, the week in play marked, finals as dots above. */
 @Composable
@@ -156,53 +131,34 @@ fun WeekBar(c: ClockView, modifier: Modifier) {
     }
 }
 
-// ---- the 일정 tab ----------------------------------------------------------------------------------
-
-/** The 일정 tab's views: the week, or the whole season (the weeks sheet). */
-private enum class ScheduleMode(val label: String) { WEEK("이번 주"), SEASON("시즌 전체") }
+// ---- 경기 › 이번 주 --------------------------------------------------------------------------------
 
 /**
- * 일정: the week in play (or one picked) with every stage and how far it is, the weeks behind
- * and ahead, and the whole season week by week. Tapping a stage opens its table or bracket.
+ * 경기 › 이번 주: the week in play (or the one picked, `nav.week`) with every stage and how far it
+ * is, late stages, the week's news, next week and the big games ahead. The week's title opens the
+ * season's weeks ([Sheet.WEEKS]); a stage opens its table ([onLeague]) or its page ([onComp]).
  */
 @Composable
-fun ScheduleTab(lg: LeagueController, v: LeagueView, onLeague: () -> Unit, onComp: (Comp) -> Unit) {
+fun WeekTab(lg: LeagueController, v: LeagueView, onLeague: (WeekStage) -> Unit, onComp: (Comp) -> Unit, onNews: () -> Unit) {
     val c = v.clock
     if (c == null) {
         CenterText("리그를 시작하면 시즌 일정이 짜여요.\n리그 한 라운드가 한 주예요. 요트컵·챔피언스 리그 같은 대회는 정해진 주에 하나씩 열리고, 리그가 끝나면 포스트시즌에 플레이오프를 치러요.")
         return
     }
-    val nav = lg.nav
-    val mode = if (nav.sheet == Sheet.WEEKS) ScheduleMode.SEASON else ScheduleMode.WEEK
-    val open: (WeekStage) -> Unit = { s -> if (s.comp == Comp.LEAGUE) onLeague() else onComp(s.comp) }
-    Column {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in ScheduleMode.entries) {
-                FilterChip(selected = mode == m, onClick = { nav.sheet = if (m == ScheduleMode.SEASON) Sheet.WEEKS else Sheet.NONE }, label = { Text(m.label, fontSize = 12.sp) })
-            }
-        }
-        when (mode) {
-            ScheduleMode.WEEK -> WeekView(lg, v, c, open)
-            ScheduleMode.SEASON -> SeasonWeeks(c) { w ->
-                nav.week = w
-                nav.sheet = Sheet.NONE
-            }
-        }
-    }
-}
-
-@Composable
-private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (WeekStage) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val nav = lg.nav
+    val open: (WeekStage) -> Unit = { s -> if (s.comp == Comp.LEAGUE) onLeague(s) else onComp(s.comp) }
     val w = (nav.week ?: c.week).coerceIn(1, maxOf(1, c.lastWeek))
     val row = c.row(w)
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { nav.week = (w - 1).coerceAtLeast(1) }, enabled = w > 1) { Text("◀ 지난 주") }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(weekName(w, c.leagueWeeks), fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = { nav.week = (w - 1).coerceAtLeast(1) }, enabled = w > 1) { Text("◀") }
+                Column(
+                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { nav.sheet = Sheet.WEEKS }.padding(vertical = 2.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(weekName(w, c.leagueWeeks) + " ▾", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
                     Text(
                         when {
                             c.over -> "끝났어요"
@@ -215,7 +171,7 @@ private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (W
                         color = if (w == c.week && !c.over) cs.tertiary else cs.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { nav.week = (w + 1).coerceAtMost(c.lastWeek) }, enabled = w < c.lastWeek) { Text("다음 주 ▶") }
+                TextButton(onClick = { nav.week = (w + 1).coerceAtMost(c.lastWeek) }, enabled = w < c.lastWeek) { Text("▶") }
             }
         }
         if (nav.week != null && w != c.week && !c.over) {
@@ -226,7 +182,7 @@ private fun WeekView(lg: LeagueController, v: LeagueView, c: ClockView, open: (W
             val late = c.late
             if (late.isNotEmpty()) item { LateCard(c, late, open) }
         }
-        item { WeekNews(v.news, c, w) }
+        item { WeekNews(v.news, c, w, onNews) }
         if (w == c.week && !c.over) c.row(w + 1)?.let { next -> item { NextWeek(c, next) } }
         item { BigGames(c) }
         item {
@@ -319,12 +275,15 @@ private fun LateCard(c: ClockView, late: List<WeekStage>, open: (WeekStage) -> U
 
 /** The week's top news. */
 @Composable
-private fun WeekNews(news: List<Article>, c: ClockView, w: Int) {
+private fun WeekNews(news: List<Article>, c: ClockView, w: Int, onNews: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val top = remember(news, c.season, w) { news.filter { it.season == c.season && it.week == w }.sortedByDescending { it.importance }.take(3) }
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("📰 이 주의 소식", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+            Row(Modifier.fillMaxWidth().clickable(onClick = onNews), verticalAlignment = Alignment.CenterVertically) {
+                Text("📰 이 주의 소식", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text("뉴스 전체 ›", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+            }
             if (top.isEmpty()) {
                 Text(
                     when {
@@ -389,13 +348,17 @@ private fun BigGames(c: ClockView) {
     }
 }
 
-/** The whole season, a row a week; a tap opens that week. */
+/** The whole season, a row a week, in a sheet opened on the week in play; a tap shows that week in 경기 › 이번 주. */
 @Composable
-private fun SeasonWeeks(c: ClockView, onWeek: (Int) -> Unit) {
+internal fun WeeksSheet(lg: LeagueController, c: ClockView) {
     val cs = MaterialTheme.colorScheme
-    val state = rememberLazyListState(initialFirstVisibleItemIndex = (c.week - 3).coerceIn(0, maxOf(0, c.weeks.size - 1)))
-    LazyColumn(state = state, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(c.weeks, key = { "w-${it.week}" }) { r -> Column {
+    val nav = lg.nav
+    val scroll = rememberScrollState()
+    val density = LocalDensity.current
+    // Opened a few weeks above the week in play (a row and its gap take about 40 dp).
+    LaunchedEffect(c.season) { scroll.scrollTo(with(density) { (40.dp * (c.week - 3).coerceAtLeast(0)).roundToPx() }) }
+    LeagueSheet("시즌 ${c.season} 일정", { nav.sheet = Sheet.NONE }, scroll) {
+        for (r in c.weeks) {
             if (r.week == c.leagueWeeks + 1) {
                 Text("포스트시즌", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = cs.secondary, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp))
             }
@@ -404,7 +367,10 @@ private fun SeasonWeeks(c: ClockView, onWeek: (Int) -> Unit) {
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
                     .background(if (now) cs.secondaryContainer.copy(alpha = 0.6f) else cs.surface)
-                    .clickable { onWeek(r.week) }
+                    .clickable {
+                        nav.week = r.week
+                        nav.sheet = Sheet.NONE
+                    }
                     .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -436,17 +402,13 @@ private fun SeasonWeeks(c: ClockView, onWeek: (Int) -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        } }
-        item {
-            Column {
-                HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                Text(
-                    "시즌 마감 · 🏅 시상식 · 승강 · 이적 시장 · 다음 시즌 대진 추첨",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 10.dp),
-                )
-            }
         }
+        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+        Text(
+            "시즌 마감 · 🏅 시상식 · 승강 · 이적 시장 · 다음 시즌 대진 추첨",
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp),
+        )
     }
 }

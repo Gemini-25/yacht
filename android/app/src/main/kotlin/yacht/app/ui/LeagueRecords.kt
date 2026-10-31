@@ -1,11 +1,12 @@
 package yacht.app.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -15,7 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,10 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import yacht.app.core.LeagueController
-import yacht.app.core.LeagueNav
-import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
 import yacht.app.core.Page
 import yacht.app.core.ProfileView
@@ -220,68 +217,73 @@ private fun Genealogy(p: ProfileView) {
     }
 }
 
-/** 기록's chips: a sub-view of the tab ([view]) or a page over it ([page]). */
-private enum class RecordsMode(val label: String, val view: RecordsView? = null, val page: Page? = null) {
-    ROOM("기록실", view = RecordsView.ROOM),
-    NATIONS("국가 랭킹", page = Page.Nations),
-    PROSPECTS("유망주", page = Page.Prospects),
-    HALL("명예의 전당", view = RecordsView.HALL),
-    ARCHIVE("시즌 아카이브", view = RecordsView.SEASONS),
-    META("메타 리포트", page = Page.Meta),
-    LEGENDS("레전드 보관소", page = Page.Legends),
-    FAMILIES("계열별", page = Page.Families);
-
-    companion object {
-        /** The chip [nav] shows: its page's, else its sub-view's (리더 is the records room here). */
-        fun of(nav: LeagueNav): RecordsMode {
-            val pages = entries.mapNotNull { it.page }
-            val page = nav.pages.lastOrNull { it in pages }
-            return entries.firstOrNull { page != null && it.page == page } ?: entries.firstOrNull { it.view == nav.records } ?: ROOM
-        }
-    }
-}
-
-/** Shows chip [m] of 기록 (from the tab's root). */
-private fun LeagueNav.showRecords(m: RecordsMode) {
-    go(LeagueTab.RECORDS)
-    m.view?.let { records = it }
-    m.page?.let { open(it) }
-}
-
-/** The modes that show the records room's data. */
-private val RECORDS_MODES = setOf(RecordsMode.ROOM, RecordsMode.HALL, RecordsMode.ARCHIVE, RecordsMode.META)
-
-/** 기록: the hall of fame by season, the legends and retired players, and the families. */
+/**
+ * 기록 (its chip row is the shell's): 리더 (for now this season's MVP race), 기록실 (the league's
+ * records and milestones), 전당 (champions, the hall of fame, dynasties), 결산 (the seasons) and
+ * 더 보기 (the pages of the rest).
+ */
 @Composable
 fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
-    val mode = RecordsMode.of(lg.nav)
-    LaunchedEffect(mode) { if (mode in RECORDS_MODES) lg.loadRecords() }
-    Column {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in RecordsMode.entries) FilterChip(selected = mode == m, onClick = { lg.nav.showRecords(m) }, label = { Text(m.label, fontSize = 12.sp) })
-        }
-        val r = lg.records
-        when (mode) {
-            RecordsMode.ROOM -> RecordsRoom(lg, r, onOpen)
-            RecordsMode.ARCHIVE -> SeasonArchive(lg, r)
-            RecordsMode.META -> MetaReportView(r)
-            RecordsMode.HALL -> HallOfFame(v.season?.history.orEmpty(), r?.hallOfFame.orEmpty(), onOpen)
-            RecordsMode.LEGENDS -> Legends(lg, onOpen)
-            RecordsMode.NATIONS -> NationRanking(lg)
-            RecordsMode.PROSPECTS -> Prospects(lg, onOpen)
-            RecordsMode.FAMILIES -> FamilyList(lg, v, onOpen)
+    val view = lg.nav.records
+    LaunchedEffect(view, v.season?.number) { if (view != RecordsView.MORE) lg.loadRecords() }
+    val r = lg.records
+    when (view) {
+        RecordsView.LEADERS -> MvpRace(lg, r, onOpen)
+        RecordsView.ROOM -> RecordsRoom(lg, r, onOpen)
+        RecordsView.HALL -> HallOfFame(lg, v.season?.history.orEmpty(), r, onOpen)
+        RecordsView.SEASONS -> SeasonArchive(lg, r)
+        RecordsView.MORE -> MoreList(lg, v)
+    }
+}
+
+/** 기록 › 리더: this season's best average match rating (the MVP race). */
+@Composable
+private fun MvpRace(lg: LeagueController, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
+    if (r == null) {
+        CenterText("기록을 불러오는 중…")
+        return
+    }
+    if (r.mvpRace.isEmpty()) {
+        CenterText("이번 시즌 경기가 쌓이면 평점이 높은 선수부터 MVP 레이스가 보여요.")
+        return
+    }
+    // Bars from a little under the lowest shown, so small gaps are visible.
+    val lo = r.mvpRace.minOf { it.second.avgRating } - 0.1
+    val hi = r.mvpRace.maxOf { it.second.avgRating }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item { Text("⭐ MVP 레이스 · 이번 시즌 평균 평점", fontWeight = FontWeight.Bold) }
+        item { Text("경기마다 매긴 평점의 평균이에요. 시즌이 끝나면 1위가 MVP를 받아요.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        items(r.mvpRace, key = { "mvp-${it.first}" }) { (k, st) ->
+            Box(Modifier.clickable { onOpen(k) }) { BarRow(lg.name(k), st.avgRating - lo, hi - lo, "%.2f".format(st.avgRating)) }
         }
     }
 }
 
+/** 기록 › 더 보기: the pages that are not a chip of their own. */
 @Composable
-private fun HallOfFame(history: List<SeasonHistoryItem>, members: List<yacht.engine.league.HallOfFameEntry>, onOpen: (String) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    if (history.isEmpty()) {
-        CenterText("시즌이 끝나면 우승팀과 수상자가 여기에 쌓여요.")
-        return
+private fun MoreList(lg: LeagueController, v: LeagueView) {
+    val nav = lg.nav
+    // 선수 비교 starts from the best-ranked followed player, else the best-ranked one.
+    val first = v.rows.filter { it.rank != null && !it.isMe }.sortedBy { it.rank }.let { rows -> rows.firstOrNull { it.key in lg.favourites } ?: rows.firstOrNull() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        LinkLine("🌱 유망주", "22세 이하 선수를 잠재력 순으로") { nav.open(Page.Prospects) }
+        LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { nav.open(Page.Legends) }
+        LinkLine("🧬 계열별", "AI 계열마다 선수와 계열 대 계열 전적") { nav.open(Page.Families) }
+        LinkLine("📊 메타 리포트", "칸마다 리그 평균 점수와 0점 비율, 상위권의 성향") { nav.open(Page.Meta) }
+        if (first != null) LinkLine("⚖ 선수 비교", "두 선수의 기록과 능력치를 나란히") { nav.open(Page.Compare(first.key)) }
+        LinkLine("⚗ AI 연구소", "두 AI를 수천 번 붙여서 누가 얼마나 강한지 재요") { nav.open(Page.Lab) }
     }
+}
+
+/** 기록 › 전당: the hall of fame, dynasties, the champions season by season, and the legends' page. */
+@Composable
+private fun HallOfFame(lg: LeagueController, history: List<SeasonHistoryItem>, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val members = r?.hallOfFame.orEmpty()
+    val dynasties = r?.dynasties.orEmpty()
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item { LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { lg.nav.open(Page.Legends) } }
+        if (history.isEmpty()) item { Text("시즌이 끝나면 우승팀과 수상자가 여기에 쌓여요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp)) }
         if (members.isNotEmpty()) {
             item { Text("🏛 헌액 (우승 3회, MVP 2회, 또는 5,000판 승률 55%)", fontWeight = FontWeight.Bold) }
             items(members.reversed(), key = { "hof-${it.key}" }) { m ->
@@ -297,8 +299,24 @@ private fun HallOfFame(history: List<SeasonHistoryItem>, members: List<yacht.eng
                     )
                 }
             }
-            item { Text("시즌별", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
         }
+        if (dynasties.isNotEmpty()) {
+            item { Text("👑 왕조·트레블", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+            items(dynasties.reversed().take(30), key = { "dy-${it.key}-${it.kind}-${it.title}-${it.from}" }) { d ->
+                Text(
+                    "${lg.name(d.key)} · " + when (d.kind) {
+                        "RUN" -> "${honourLabel(d.title)} ${d.count}연패 (시즌 ${d.from}–${d.to})"
+                        "DOUBLE" -> "더블 (리그·요트컵, 시즌 ${d.to})"
+                        "TREBLE" -> "트레블 (리그·요트컵·챔스, 시즌 ${d.to})"
+                        "UNBEATEN" -> "${honourLabel(d.title).removeSuffix(" 우승")} 무패 시즌 (시즌 ${d.to})"
+                        else -> d.kind
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.clickable { onOpen(d.key) },
+                )
+            }
+        }
+        if (history.isNotEmpty()) item { Text("시즌별", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
         item {
             val titles = history.mapNotNull { it.champions.firstOrNull() }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(5)
             if (titles.isNotEmpty()) {
@@ -331,8 +349,9 @@ private fun HallOfFame(history: List<SeasonHistoryItem>, members: List<yacht.eng
     }
 }
 
+/** [Page.Legends]: retired players and legends. */
 @Composable
-private fun Legends(lg: LeagueController, onOpen: (String) -> Unit) {
+internal fun Legends(lg: LeagueController, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     LaunchedEffect(Unit) { lg.loadPastPlayers() }
     val past = lg.pastPlayers
@@ -374,6 +393,7 @@ fun PastProfileDialog(lg: LeagueController, key: String, onOpen: (String) -> Uni
 }
 
 
+/** 기록 › 기록실: the league's records by section, and the latest milestones. */
 @Composable
 private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsRoomView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -392,31 +412,6 @@ private fun RecordsRoom(lg: LeagueController, r: yacht.app.core.RecordsRoomView?
                 Text(g.label, style = MaterialTheme.typography.labelLarge, color = cs.primary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
             }
             items(list, key = { "rec-${it.kind}" }) { rec -> RecordCard(lg, rec, onOpen) }
-        }
-        if (r.mvpRace.isNotEmpty()) {
-            item { Text("⭐ 이번 시즌 평점 순위 (MVP 레이스)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
-            // Bars from a little under the lowest shown, so small gaps are visible.
-            val lo = r.mvpRace.minOf { it.second.avgRating } - 0.1
-            val hi = r.mvpRace.maxOf { it.second.avgRating }
-            items(r.mvpRace, key = { "mvp-${it.first}" }) { (k, st) ->
-                BarRow(lg.name(k), st.avgRating - lo, hi - lo, "%.2f".format(st.avgRating))
-            }
-        }
-        if (r.dynasties.isNotEmpty()) {
-            item { Text("👑 왕조·트레블", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
-            items(r.dynasties.reversed().take(30), key = { "dy-${it.key}-${it.kind}-${it.title}-${it.from}" }) { d ->
-                Text(
-                    "${lg.name(d.key)} · " + when (d.kind) {
-                        "RUN" -> "${honourLabel(d.title)} ${d.count}연패 (시즌 ${d.from}–${d.to})"
-                        "DOUBLE" -> "더블 (리그·요트컵, 시즌 ${d.to})"
-                        "TREBLE" -> "트레블 (리그·요트컵·챔스, 시즌 ${d.to})"
-                        "UNBEATEN" -> "${honourLabel(d.title).removeSuffix(" 우승")} 무패 시즌 (시즌 ${d.to})"
-                        else -> d.kind
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.clickable { onOpen(d.key) },
-                )
-            }
         }
         if (r.milestones.isNotEmpty()) {
             item { Text("🎯 마일스톤", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
@@ -444,6 +439,7 @@ private fun RecordCard(lg: LeagueController, rec: LeagueRecord, onOpen: (String)
     }
 }
 
+/** 기록 › 결산: every finished season, newest first, with the average score season by season. */
 @Composable
 private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomView?) {
     val cs = MaterialTheme.colorScheme
@@ -452,6 +448,18 @@ private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomVie
         return
     }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // Oldest first on the chart (the list below is newest first).
+        val seasons = r.summaries.sortedBy { it.season }
+        if (seasons.size >= 2) {
+            item {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("시즌별 평균 점수", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        LineChart(seasons.map { it.avgScore }, labels = "시즌 ${seasons.first().season}" to "시즌 ${seasons.last().season}")
+                    }
+                }
+            }
+        }
         items(r.summaries, key = { "sum-${it.season}" }) { s ->
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -468,8 +476,9 @@ private fun SeasonArchive(lg: LeagueController, r: yacht.app.core.RecordsRoomVie
     }
 }
 
+/** [Page.Meta]: the boxes' league averages and the top players' tendencies, from the records room [r]. */
 @Composable
-private fun MetaReportView(r: yacht.app.core.RecordsRoomView?) {
+internal fun MetaReportView(r: yacht.app.core.RecordsRoomView?) {
     val cs = MaterialTheme.colorScheme
     val m = r?.meta
     if (m == null || m.cards == 0) {
@@ -525,8 +534,9 @@ private fun FamilyMember(key: String, rank: Int?, name: String, tier: String?, t
     }
 }
 
+/** [Page.Families]: every family's players, and the family against family matrix. */
 @Composable
-private fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
+internal fun FamilyList(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val groups = Family.entries.map { f -> f to v.rows.filter { it.family == f } }
