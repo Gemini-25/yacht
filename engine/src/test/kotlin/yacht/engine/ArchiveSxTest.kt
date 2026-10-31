@@ -125,6 +125,19 @@ class ArchiveSxTest {
     }
 
     @Test
+    fun aLeagueRunningPastSeason1295KeepsItsEntriesInOrder() {
+        // Seasons 1290-1300: KR, then JP from 1297 (an entry of 3 season digits); older files' 5-digit entries still read.
+        val a = Archive()
+        for (n in 1290..1300) a.addLine("p", line(n, if (n < 1297) "KR" else "JP", "c04"))
+        val text = a.encode()
+        assertEquals(listOf("sx p zu104 101204"), text.lines().filter { it.startsWith("sx ") })
+        val back = Archive.decode(text)
+        assertEquals((1290..1300).map { if (it < 1297) "KR" else "JP" }, back.lines("p").map { it.league })
+        assertEquals(a.lines("p"), back.lines("p"))
+        assertEquals(text, back.encode())
+    }
+
+    @Test
     fun aLegacyArchiveHasNoSxLines() {
         val a = Archive()
         a.addLine("p", line(1))

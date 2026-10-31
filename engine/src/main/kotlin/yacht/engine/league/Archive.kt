@@ -215,8 +215,10 @@ class Archive {
         // A season line's league and club go into the key's one `sx` line: an entry of PLACE_WIDTH
         // base-36 digits (season 2, league 1 [LeagueIds.code], club number 2, 00 = none) wherever
         // they differ from the line before (before the first: the old single league, no club). A
-        // line takes the newest entry of its season or before. About 1.5 entries a career.
+        // line takes the newest entry of its season or before. About 1.5 entries a career. From
+        // season 1296 (a league left running for days) an entry's season takes 3 digits.
         private const val PLACE_WIDTH = 5
+        private const val SHORT_SEASONS = 36 * 36
 
         /** The highest club number an `sx` entry holds (c1 ... c1295). */
         const val MAX_CLUB = 36 * 36 - 1
@@ -240,7 +242,7 @@ class Archive {
                 val cc = clubCode(l.club)
                 if (lc == league && cc == club) continue
                 out.append(' ')
-                put(out, l.season, 2)
+                put(out, l.season, if (l.season < SHORT_SEASONS) 2 else 3)
                 put(out, lc, 1)
                 put(out, cc, 2)
                 league = lc
@@ -251,8 +253,9 @@ class Archive {
         /** [list]'s lines (oldest first) with the league and club of [entries] (an `sx` line's fields); bad entries are left out. */
         private fun placeLines(list: MutableList<SeasonLine>, entries: List<String>) {
             val places = entries.mapNotNull { e ->
-                if (e.length != PLACE_WIDTH) return@mapNotNull null
-                runCatching { Triple(e.substring(0, 2).toInt(36), LeagueIds.ofCode(e.substring(2, 3).toInt(36)), clubOf(e.substring(3, 5).toInt(36))) }.getOrNull()
+                if (e.length != PLACE_WIDTH && e.length != PLACE_WIDTH + 1) return@mapNotNull null
+                val w = e.length - 3
+                runCatching { Triple(e.substring(0, w).toInt(36), LeagueIds.ofCode(e.substring(w, w + 1).toInt(36)), clubOf(e.substring(w + 1).toInt(36))) }.getOrNull()
             }.sortedBy { it.first }
             if (places.isEmpty()) return
             var at = -1
