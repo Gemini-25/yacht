@@ -42,21 +42,23 @@ data class SeasonSummary(
 /**
  * The league's history (league/archive.txt, docs/LEAGUE_SPEC.md section 3): season summaries
  * of the newest [MAX_SEASONS] seasons, every AI's season lines over the newest [LINE_SEASONS],
- * dynasties, the hall of fame, the highlights the media module keeps per season, and the newest
- * season review until it has been shown. The lines' leagues and clubs are kept on their own
- * (`sx`, only where they change), so a version from before national leagues reads the file as
- * it always did, every season line included. Not thread-safe: callers synchronise.
+ * dynasties, the hall of fame, and the season reviews of the newest [REVIEWS] seasons (the
+ * newest one marked until it has been shown). The lines' leagues and clubs are kept on their own
+ * (`sx`, only where they change), and the reviews before the newest in `rw` blocks, so a version
+ * from before national leagues reads the file as it always did, every season line and the
+ * newest review included. A season's best games are no longer kept here (`hl` lines: those of
+ * generated players never fit): the review names them ([SeasonReview.best]) and the match log
+ * archive keeps their games. Not thread-safe: callers synchronise.
  */
 class Archive {
     private val summaryMap = java.util.TreeMap<Int, SeasonSummary>()
     private val lineMap = HashMap<String, ArrayList<SeasonLine>>()
     private val dynastyList = ArrayList<Dynasty>()
     private val hof = ArrayList<HallOfFameEntry>()
-    private val highlightMap = java.util.TreeMap<Int, List<String>>()
+    private val reviews = java.util.TreeMap<Int, SeasonReview>()
 
     /** The newest season review (시즌 결산). */
-    var review: SeasonReview? = null
-        private set
+    val review: SeasonReview? get() = reviews.lastEntry()?.value
     private var reviewSeen = false
 
     /** The review while it has not been shown yet ([reviewShown] once it has). */
@@ -64,6 +66,24 @@ class Archive {
 
     fun reviewShown() {
         reviewSeen = true
+    }
+
+    /** The review of [season], while it is kept. */
+    fun review(season: Int): SeasonReview? = reviews[season]
+
+    /** The seasons whose reviews are kept, newest first. */
+    val reviewSeasons: List<Int> get() = reviews.descendingKeySet().toList()
+
+    /**
+     * Adds to [season]'s review what is known only after the close: the league ranking's moves
+     * ([ranking]), the 요트협회's decisions ([federation]) and the transfers abroad ([transfers]);
+     * a null leaves that part as it is. Each part replaces what the review had, so amending again
+     * with the same values (a replay after a kill) changes nothing. False without that review.
+     */
+    fun amendReview(season: Int, ranking: List<Pair<String, Int>>? = null, federation: List<String>? = null, transfers: Int? = null): Boolean {
+        val r = reviews[season] ?: return false
+        reviews[season] = r.copy(ranking = ranking ?: r.ranking, federation = federation ?: r.federation, transfers = transfers ?: r.transfers)
+        return true
     }
 
     fun summary(season: Int): SeasonSummary? = summaryMap[season]
@@ -85,18 +105,15 @@ class Archive {
     fun inHallOfFame(key: String): Boolean = hof.any { it.key == key }
 
     /**
-     * Keeps the media module's highlight lines of [season] (opaque to the archive, at most
-     * [MAX_HIGHLIGHTS], each up to [MAX_HIGHLIGHT_BYTES] bytes in UTF-8; longer ones are left
-     * out), replacing what the season had. The newest [HIGHLIGHT_SEASONS] seasons keep theirs.
+     * Kept for its callers; keeps nothing. A season's best games are named by its review
+     * ([SeasonReview.best]) and kept by the match log archive.
      */
-    fun putHighlights(season: Int, lines: List<String>) {
-        val keep = lines.map { it.replace('\n', ' ').replace('\r', ' ') }
-            .filter { it.isNotBlank() && it.encodeToByteArray().size <= MAX_HIGHLIGHT_BYTES }.take(MAX_HIGHLIGHTS)
-        if (keep.isEmpty()) highlightMap.remove(season) else highlightMap[season] = keep
-        while (highlightMap.size > HIGHLIGHT_SEASONS) highlightMap.pollFirstEntry()
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun putHighlights(season: Int, lines: List<String>) {}
 
-    fun highlights(season: Int): List<String> = highlightMap[season].orEmpty()
+    /** Nothing: the archive no longer keeps highlight lines (see [putHighlights]). */
+    @Suppress("UNUSED_PARAMETER")
+    fun highlights(season: Int): List<String> = emptyList()
 
     internal fun putSummary(s: SeasonSummary) {
         summaryMap[s.season] = s
@@ -151,9 +168,15 @@ class Archive {
         return true
     }
 
-    internal fun putReview(r: SeasonReview) {
-        review = r
-        reviewSeen = false
+    /**
+     * Keeps [r] (replacing its season's), the newest [REVIEWS] (fewer, [SMALL_REVIEWS], in a
+     * league of fewer than [SMALL_LEAGUE] [members]); the newest is not shown yet.
+     */
+    internal fun putReview(r: SeasonReview, members: Int = SMALL_LEAGUE) {
+        reviews[r.season] = r
+        if (r.season == reviews.lastKey()) reviewSeen = false
+        val keep = if (members < SMALL_LEAGUE) SMALL_REVIEWS else REVIEWS
+        while (reviews.size > keep) reviews.pollFirstEntry()
     }
 
     // ---- saving --------------------------------------------------------------------------------
@@ -180,8 +203,10 @@ class Archive {
         }
         for (d in dynastyList) append("dyn ${Field.esc(d.key)} ${d.kind} ${d.title} ${d.count} ${d.from} ${d.to}\n")
         for (e in hof) append("hof ${Field.esc(e.key)} ${Field.esc(e.name)} ${e.season} ${e.reason} ${e.titles} ${e.games} ${Field.num(e.winRate, 3)}\n")
-        for ((season, lines) in highlightMap) for (l in lines) append("hl $season $l\n")
-        review?.encode(this, reviewSeen)
+        // The newest review as "rv" (what older versions read), the others as "rw" blocks.
+        val newest = reviews.lastEntry()?.value
+        for (r in reviews.values) if (r !== newest) r.encode(this, true, "rw")
+        newest?.encode(this, reviewSeen)
     }
 
     companion object {
@@ -191,12 +216,11 @@ class Archive {
         const val LINE_SEASONS = 30
         const val MAX_DYNASTIES = 200
         const val MAX_HALL_OF_FAME = 200
-        const val MAX_HIGHLIGHTS = 3
-        /** A team match's line carries both lineups: about 190-270 bytes. */
-        const val MAX_HIGHLIGHT_BYTES = 360
 
-        /** Seasons whose best games are kept (older ones' AIs have mostly retired: no replay). */
-        const val HIGHLIGHT_SEASONS = 30
+        /** Season reviews kept (about 1.5 KB each at 1000 players), and in a league of fewer than [SMALL_LEAGUE] members. */
+        const val REVIEWS = 6
+        const val SMALL_REVIEWS = 3
+        const val SMALL_LEAGUE = 500
 
         // A season line packs into WIDTH base-36 digits: division 1, place 2, W/D/L 2 each, the
         // rating 2 ((rating + RATING_OFFSET) / 2: -798..1790 in 2-point steps, the league spans
@@ -325,6 +349,8 @@ class Archive {
             val lines = if (text.endsWith('\n')) all else all.dropLast(1)
             val a = Archive()
             val review = ArrayList<String>()
+            // The older reviews: each "rw head" line starts one.
+            val older = ArrayList<ArrayList<String>>()
             val places = HashMap<String, List<String>>()
             for (line in lines) {
                 runCatching {
@@ -346,23 +372,24 @@ class Archive {
                         "sx" -> places[Field.unesc(f[1])] = f.drop(2)
                         "dyn" -> a.dynastyList += Dynasty(Field.unesc(f[1]), f[2], f[3], f[4].toInt(), f[5].toInt(), f[6].toInt())
                         "hof" -> a.hof += HallOfFameEntry(Field.unesc(f[1]), Field.unesc(f[2]), f[3].toInt(), f[4], f[5].toInt(), f[6].toInt(), Field.dbl(f[7]))
-                        "hl" -> {
-                            val season = f[1].toInt()
-                            val l = line.substringAfter(' ').substringAfter(' ')
-                            val have = a.highlightMap[season].orEmpty()
-                            if (l.isNotBlank() && have.size < MAX_HIGHLIGHTS) a.highlightMap[season] = have + l
-                        }
                         "rv" -> review += line
+                        "rw" -> {
+                            if (f[1] == "head") older += ArrayList<String>()
+                            older.lastOrNull()?.add(line)
+                        }
                     }
                 }
             }
             for ((k, entries) in places) a.lineMap[k]?.let { placeLines(it, entries) }
+            for (lines in older) SeasonReview.decode(lines)?.let { (r, _) -> a.reviews[r.season] = r }
+            // The "rv" block is the newest (an older season's "rw" block of the same season gives way to it).
             SeasonReview.decode(review)?.let { (r, seen) ->
-                a.review = r
+                a.reviews.keys.removeAll { it >= r.season }
+                a.reviews[r.season] = r
                 a.reviewSeen = seen
             }
+            while (a.reviews.size > REVIEWS) a.reviews.pollFirstEntry()
             while (a.summaryMap.size > MAX_SEASONS) a.summaryMap.pollFirstEntry()
-            while (a.highlightMap.size > MAX_SEASONS) a.highlightMap.pollFirstEntry()
             while (a.hof.size > MAX_HALL_OF_FAME) a.hof.removeAt(0)
             while (a.dynastyList.size > MAX_DYNASTIES) a.dynastyList.removeAt(0)
             return a

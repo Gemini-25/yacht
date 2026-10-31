@@ -14,6 +14,7 @@ import yacht.engine.league.Fixture
 import yacht.engine.league.GameFacts
 import yacht.engine.league.GameScore
 import yacht.engine.league.HallOfFameEntry
+import yacht.engine.league.HighlightBook
 import yacht.engine.league.Honour
 import yacht.engine.league.HonourBook
 import yacht.engine.league.JobKind
@@ -23,10 +24,14 @@ import yacht.engine.league.LeagueEvent
 import yacht.engine.league.LeagueRecord
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.MetaReport
+import yacht.engine.league.Nations
 import yacht.engine.league.Offseason
 import yacht.engine.league.RatingMove
+import yacht.engine.league.RatingScale
 import yacht.engine.league.RecordBreak
 import yacht.engine.league.RecordKind
+import yacht.engine.league.ReviewGame
+import yacht.engine.league.ReviewLeader
 import yacht.engine.league.Season
 import yacht.engine.league.SeasonEnd
 import yacht.engine.league.SeasonLine
@@ -118,11 +123,16 @@ class StatsTest {
         assertEquals(1 to 1, a.derbyWins to b.derbyLosses)
         assertEquals(0.5, a.cost, 1e-9)
         assertEquals(listOf(-1, 1, 1), listOf(a.streak, a.bestStreak, b.streak))
-        // Records: B's comeback from 10% beats A's from 15%.
-        assertEquals("b" to 10.0, book.records[RecordKind.COMEBACK]!!.let { it.holder to it.value })
+        // Records: the P(win) comeback and the match's Yachts are retired (never offered); no winner
+        // trailed after a full turn here (the facts' running totals are zero until the end).
+        assertNull(book.records[RecordKind.COMEBACK])
+        assertNull(book.records[RecordKind.YACHTS_MATCH])
+        assertNull(book.records[RecordKind.COMEBACK_POINTS])
         assertEquals(260.0, book.records[RecordKind.BEST_GAME]!!.value)
         assertEquals(128.0, book.records[RecordKind.MARGIN]!!.value)
-        assertEquals(2.0, book.records[RecordKind.YACHTS_MATCH]!!.value)
+        // A's Yacht in both games: a run of two going on.
+        assertEquals("a" to 2.0, book.records[RecordKind.YACHT_RUN]!!.let { it.holder to it.value })
+        assertEquals(2 to 1, book.yachtRun("a") to book.yachtRun("b"))
         // The league meta has the four cards.
         val meta = book.liveMeta()
         assertEquals(4, meta.cards)
@@ -427,8 +437,10 @@ class StatsTest {
         val l = lines.first()
         assertEquals(listOf(0, 1, 9, 0, 0, 27), listOf(l.division, l.position, l.wins, l.draws, l.losses, l.points))
         assertEquals(1599.0, l.rating, 1.0)
-        // Every win is worth 6.885 as the first player and 7.865 as the second.
-        assertEquals(7.375, l.avgRating, 0.006)
+        // 평점 2.0 on the fallback scale (too few games for the league's own): a match won 220-180
+        // and 215-185 is worth 6.255 + 6.52 (first in game 1) or 6.675 + 6.1 (second in it).
+        assertEquals(RatingScale.FALLBACK, lg.book.ratingScale)
+        assertEquals(6.3875, l.avgRating, 0.006)
         assertEquals(listOf(2, 3), lg.archive.lines("rookie").map { it.season })
         assertEquals(1, lg.archive.lines("rookie").first().division)
         assertEquals(3, lg.book.career("ai1")!!.seasons)
@@ -443,13 +455,17 @@ class StatsTest {
         val review = assertNotNull(s3.review)
         assertEquals(review, lg.archive.pendingReview)
         assertTrue(review.sentences.first().startsWith("3시즌 1부 우승은 선수1이에요."), review.sentences.first())
-        assertTrue(review.sentences.any { it.startsWith("MVP는 평균 평점 7.38의 선수1이에요") }, review.sentences.toString())
+        assertTrue(review.sentences.any { it.startsWith("MVP는 평균 평점 6.39의 선수1이에요") }, review.sentences.toString())
         assertTrue(review.sentences.any { it == "1부 상위 5위 중 5자리를 기대점수형 계열이 차지했어요." }, review.sentences.toString())
         // A record broken: its value in brackets after the record's name, not after the verb.
         val said = s2.review!!.sentences
         assertTrue("선수9가 한 시즌 최다 승점 기록(승점 40)을 새로 썼어요." in said, said.toString())
-        // 최다 승점, 최다 우승 and 최다 MVP (ai1's second).
-        assertTrue("이번 시즌 깨진 리그 기록은 모두 3개예요." in said, said.toString())
+        // 최다 승점 and 최다 완승 (a new division: every win a 2-0), 최다 우승 and 최다 MVP (ai1's second).
+        assertTrue("이번 시즌 깨진 리그 기록은 모두 4개예요." in said, said.toString())
+        assertEquals(
+            setOf(RecordKind.SEASON_POINTS, RecordKind.SEASON_SWEEPS, RecordKind.TITLES, RecordKind.MVPS),
+            s2.review!!.records.map { it.record.kind }.toSet(),
+        )
         assertEquals(RatingMove("ai15", 1665.0, 1705.0), review.risers.single())
         assertTrue(review.meta.any { it.label == "리그 평균 점수" && it.delta == 0.0 })
         println(review.sentences.joinToString("\n"))
@@ -563,15 +579,14 @@ class StatsTest {
     }
 
     @Test
-    fun highlightsAreKeptPerSeasonWithinBounds() {
+    fun theArchiveKeepsNoHighlightLines() {
+        // A season's best games are the review's (ids) and the log archive's: "hl" lines go, old ones too.
         val a = Archive()
-        a.putHighlights(4, listOf("a b c", "x".repeat(Archive.MAX_HIGHLIGHT_BYTES + 1), "d e", "f", "g"))
-        assertEquals(listOf("a b c", "d e", "f"), a.highlights(4))
-        assertEquals(a.highlights(4), Archive.decode(a.encode()).highlights(4))
-        for (n in 5..110) a.putHighlights(n, listOf("h $n"))
+        a.putHighlights(4, listOf("a b c", "d e"))
         assertTrue(a.highlights(4).isEmpty())
-        assertEquals(listOf("h 110"), a.highlights(110))
-        assertEquals(Archive.HIGHLIGHT_SEASONS, (1..110).count { a.highlights(it).isNotEmpty() })
+        val old = Archive.decode("archive 1\nhl 4 a b c\nhl 4 d e\n")
+        assertTrue(old.highlights(4).isEmpty())
+        assertTrue(old.encode().lines().none { it.startsWith("hl ") })
     }
 
     @Test
@@ -651,20 +666,25 @@ class StatsTest {
                 RecordBreak(LeagueRecord(kind, key(), 300.0 + it, n), LeagueRecord(kind, key(), 299.0, n - 1))
             }
             archive.putSummary(SeasonSummary(n, honours, keys[0], 231.4, broken, 21000, 201.3))
-            // Highlight lines as long as the archive takes them.
-            archive.putHighlights(n, List(3) { "E $it ${rng.nextLong()} 1 287:281 comeback,clutch 9.3 ${(0 until 24).joinToString(",") { "${rng.nextInt(101)}" }}".padEnd(Archive.MAX_HIGHLIGHT_BYTES, 'x') })
             // Every AI has a line in each of the newest 30 seasons.
             if (n > 70) for (k in keys) archive.addLine(k, SeasonLine(n, rng.nextInt(4), 1 + rng.nextInt(100), rng.nextInt(60), rng.nextInt(10), rng.nextInt(60), 1200.0 + rng.nextInt(400), 5 + rng.nextDouble() * 3))
         }
         repeat(Archive.MAX_HALL_OF_FAME) { archive.induct(HallOfFameEntry(keys[it], "명예의 전당 선수 $it", it / 3 + 1, "TITLES", 3, 6000, 0.61)) }
         repeat(Archive.MAX_DYNASTIES) { archive.putDynasty(Dynasty(keys[it % 400], Awards.RUN, "L0", 2 + it % 5, it / 3, it / 3 + 2)) }
         val sentences = List(9) { "이번 시즌을 정리하는 문장 $it: 선수 이름과 숫자가 들어간 꽤 긴 한국어 문장이에요." }
-        archive.putReview(
-            SeasonReview(
-                100, List(12) { Honour(100, "L$it", key()) }, List(5) { Honour(100, "MVP", key()) }, List(3) { RatingMove(key(), 1400.0, 1450.0) },
-                List(3) { RatingMove(key(), 1450.0, 1400.0) }, archive.summary(100)!!.records, emptyList(), sentences,
-            ),
-        )
+        // The kept reviews, every part as large as it gets (28 leagues in the ranking's moves).
+        for (n in 95..100) {
+            archive.putReview(
+                SeasonReview(
+                    n, List(12) { Honour(n, "L$it", key()) }, List(5) { Honour(n, "MVP", key()) }, List(3) { RatingMove(key(), 1400.0, 1450.0) },
+                    List(3) { RatingMove(key(), 1450.0, 1400.0) }, archive.summary(n)!!.records, emptyList(), sentences,
+                    SeasonReview.REVIEW_STATS.flatMap { s -> List(SeasonReview.LEADERS) { ReviewLeader(s, key(), 241.3456) } },
+                    List(8) { "숫자 $it" to "12,345판" }, List(3) { "$n:C:${1000 + it}:0:1" },
+                    ReviewGame(key(), key(), 9.875, "$n:L:12345:0:1"), ReviewGame(key(), key(), 412.0, "$n:C:777:0"),
+                    Nations.ALL.take(28).map { it.code to -12 }, List(3) { "‘자동 승강 인원 2명 → 1명’ 가결 (찬성 7, 반대 2)" }, 14,
+                ),
+            )
+        }
         val statsText = book.encode()
         val archiveText = archive.encode()
         for (text in listOf(statsText, archiveText)) {
@@ -743,10 +763,11 @@ class StatsTest {
         // Cut to "...1000": not a 1000-game milestone.
         assertTrue(StatsBook.decode(text.dropLast(2)).milestones.isEmpty())
         val a = Archive()
-        a.putHighlights(3, listOf("E 1 2 287:281 comeback"))
+        a.putReview(SeasonReview(3, emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), transfers = 17))
         val arch = a.encode()
-        assertEquals(listOf("E 1 2 287:281 comeback"), Archive.decode(arch).highlights(3))
-        assertTrue(Archive.decode(arch.dropLast(4)).highlights(3).isEmpty())
+        assertEquals(17, Archive.decode(arch).review(3)?.transfers)
+        // Cut to "...xfer 1": not 1 transfer.
+        assertNull(Archive.decode(arch.dropLast(2)).review(3)?.transfers)
         // The header alone, cut or not, is an empty file of its kind.
         assertTrue(StatsBook.decode("stats 1").keys.isEmpty())
     }
@@ -826,18 +847,27 @@ class StatsTest {
     }
 
     @Test
-    fun theYachtRecordIsPerMatchNotPerTwoLeggedTie() {
+    fun theYachtRunCountsOfficialGamesInARow() {
+        // 한 경기 최다 요트 is retired (2 of 2 games within a season): the run of games with a Yacht replaces it.
         val book = StatsBook()
         val ctx = StatsContext(1, { 1500.0 })
         val y = GameScore(250, 200, aYacht = true)
-        // A two-legged tie with A's Yacht in all four games: two in each match.
+        // A two-legged tie with A's Yacht in all four games.
         val tie = Fixture(Comp.CHAMPIONS, 1, "a", "b", 0L, kind = JobKind.TIE, legs = 2)
         book.record(JobResult(tie, listOf(BoardResult("a", "b", List(4) { y }, emptyList())), 1, 0), ctx)
-        assertEquals(2.0, book.records[RecordKind.YACHTS_MATCH]!!.value)
-        // A best-of-three match is one match, its decider included.
-        val bo3 = listOf(y, GameScore(200, 250, aYacht = true), y)
-        book.record(JobResult(Fixture(Comp.LEAGUE, 2, "c", "d", 0L), listOf(BoardResult("c", "d", bo3, emptyList(), deciders = 1)), 1, 0), ctx)
-        assertEquals("c" to 3.0, book.records[RecordKind.YACHTS_MATCH]!!.let { it.holder to it.value })
+        assertEquals("a" to 4.0, book.records[RecordKind.YACHT_RUN]!!.let { it.holder to it.value })
+        assertNull(book.records[RecordKind.YACHTS_MATCH])
+        // A friendly neither extends nor ends it; a game without a Yacht ends it.
+        book.record(JobResult(tie.copy(comp = Comp.FRIENDLY), listOf(BoardResult("a", "b", List(2) { y }, emptyList())), 1, 0), ctx)
+        assertEquals(4, book.yachtRun("a"))
+        book.record(JobResult(Fixture(Comp.LEAGUE, 2, "a", "c", 0L), listOf(BoardResult("a", "c", listOf(GameScore(200, 190)), emptyList())), 1, 0), ctx)
+        assertEquals(0, book.yachtRun("a"))
+        assertEquals(4.0, book.records[RecordKind.YACHT_RUN]!!.value)
+        // The run going on is saved with the career line.
+        book.record(JobResult(Fixture(Comp.LEAGUE, 3, "c", "d", 0L), listOf(BoardResult("c", "d", listOf(y, y, y), emptyList(), deciders = 1)), 1, 0), ctx)
+        assertEquals(3, book.yachtRun("c"))
+        assertEquals(3, StatsBook.decode(book.encode()).yachtRun("c"))
+        assertEquals(book.encode(), StatsBook.decode(book.encode()).encode())
     }
 
     @Test
@@ -862,11 +892,17 @@ class StatsTest {
 
     @Test
     fun aLegacyLeagueClosesAsBefore() {
-        // Hashes taken from the code before national leagues reached the records (this test on it).
+        // Hashes first taken from the code before national leagues reached the records (this test
+        // on it), then again with 평점 2.0 and records v2 (S15), whose changes to these closes are
+        // only those: other MVPs where the new match rating ranks differently, the records the
+        // stage adds (경기당 승점, 완승, 평점 2.0, 연속 요트) and retires (승리 확률 역전승, 한 경기
+        // 요트), the holders' history, the review's new parts and the stats file's rating lines.
+        // Honours, titles, the hall of fame, dynasties and every job are as before, and so is every
+        // season line but its average 평점.
         val pyramid = PlayedLeague(600, LeagueConfig(), 11L).apply { play(3) }
-        assertEquals("a212e9d226257ac62f71853229fec00d932d24a6ed221f5b7ce5aa80ad2d49e6", pyramid.sha(pyramid.closes.toString()))
+        assertEquals("c69373415f90df425d16c009ddf3a94dc28d18bd8b57fb59fa77602fde8d5e99", pyramid.sha(pyramid.closes.toString()))
         val linear = PlayedLeague(60, LeagueConfig(divisions = 3, matchFormat = MatchFormat.MIRRORED, doubleElimination = false, longKnockouts = false), 12L).apply { play(3) }
-        assertEquals("fdd8a717bbcc00c5547298544cfb7a88395bcf60d3a34a9f0f28c2864b50c717", linear.sha(linear.closes.toString()))
+        assertEquals("4cd152eb64dbbbe7d68572f376b84e9a1ea972d5afde369fa870c3e71287b0f8", linear.sha(linear.closes.toString()))
     }
 }
 
@@ -902,6 +938,9 @@ internal class PlayedLeague(players: Int, val config: LeagueConfig, val seed: Lo
     /** What the close is told: each player's club, and which league titles are major. */
     var club: (String) -> String? = { null }
     var major: (season: Int, league: String) -> Boolean = { _, _ -> true }
+
+    /** Offered every game when set (the review names the season's best). */
+    var highlights: HighlightBook? = null
 
     val plans = ArrayList<SeasonPlan>()
     val ends = ArrayList<SeasonEnd>()
@@ -985,6 +1024,7 @@ internal class PlayedLeague(players: Int, val config: LeagueConfig, val seed: Lo
                 onJob(plan, f)
                 val r = play(f)
                 for (e in book.record(r, StatsContext(plan.number, ::rating, { k -> "도시${index(k) % 7}" }))) line("rec ${e.encode()}")
+                highlights?.offer(r, plan.number, ::rating)
                 plan.record(r)
                 line("job ${f.comp.code} ${f.id} ${f.label} ${Drama.isFinal(f)} ${Drama.titleRace(plan.league, f)}")
                 if (!halfDone && plan.league.fixturesPlayed >= half) {
@@ -1001,7 +1041,7 @@ internal class PlayedLeague(players: Int, val config: LeagueConfig, val seed: Lo
             val h = Offseason.honours(plan, moves, gone)
             val end = book.endSeason(
                 plan, h, honours, archive, ::rating, ::family, { k -> "선수${index(k)}" }, traits = { k -> mapOf("버릇" to "${index(k) % 3}") }, gone = gone,
-                club = club, major = major,
+                club = club, major = major, highlights = highlights,
             )
             ends += end
             seasonHonours += h

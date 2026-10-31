@@ -373,7 +373,7 @@ class LeagueWorld(var ladder: Ladder, var config: LeagueConfig = LeagueConfig())
             // after a kill) has none, rather than a made-up starting one that would win awards.
             stats.endSeason(
                 p, h, honours, archive, { k -> ladder.rating(k) }, family, name, null, ::traits, gone,
-                club = { k -> book?.clubOf(k) }, major = federation::isMajor,
+                club = { k -> book?.clubOf(k) }, major = federation::isMajor, highlights = highlights,
             )
         }.getOrNull()
         // 이 주의 선수 of every week, kept with the season's honours.

@@ -362,12 +362,13 @@ class HighlightReplay(val highlight: Highlight, val game: SingleGame) {
 
 /**
  * The highlights (docs/LEAGUE_SPEC.md section 4): the [SEASON_TOP] most dramatic games of the
- * current season and the [ALL_TIME] most dramatic ever; [archiveLines] hands the best
- * [ARCHIVED] of a season to the stats archive. Saved as league/highlights.txt. Not thread-safe:
- * callers synchronise.
+ * current season and the [ALL_TIME] most dramatic ever; [best] (and [archiveLines], the same
+ * games as lines) are a season's best [ARCHIVED]: the season review names them
+ * ([SeasonReview.best]) and the match log archive keeps their games. Saved as
+ * league/highlights.txt. Not thread-safe: callers synchronise.
  *
- * Per season: [offer] every finished season job (with facts); at the rollover take
- * [archiveLines] of the closing season, then [startSeason] with the next number.
+ * Per season: [offer] every finished season job (with facts); at the rollover the closing
+ * season's [best] go to its review and the log archive, then [startSeason] with the next number.
  */
 class HighlightBook {
     /** The season [thisSeason] belongs to (0 before the first offer). */
@@ -446,7 +447,7 @@ class HighlightBook {
         return out
     }
 
-    /** Starts season [n]: this season's list is put aside for [archiveLines] and emptied. */
+    /** Starts season [n]: this season's best are put aside ([best] of the season before) and the list emptied. */
     fun startSeason(n: Int) {
         if (n == season) return
         if (current.isNotEmpty()) {
@@ -458,15 +459,15 @@ class HighlightBook {
         season = n
     }
 
-    /** The best [ARCHIVED] games of [season] (this one or the one before) as archive lines ("hl ..."). */
-    fun archiveLines(season: Int): List<String> {
-        val src = when (season) {
-            this.season -> current
-            previousSeason -> previous
-            else -> emptyList()
-        }
-        return src.take(ARCHIVED).map { "$ARCHIVE_TAG ${it.encode()}" }
+    /** The best [ARCHIVED] games of [season] (this one or the one before), best first; none for another season. */
+    fun best(season: Int): List<Highlight> = when (season) {
+        this.season -> current.take(ARCHIVED)
+        previousSeason -> previous.take(ARCHIVED)
+        else -> emptyList()
     }
+
+    /** [best] of [season] as lines ("hl ...", [decodeArchive] reads them back). */
+    fun archiveLines(season: Int): List<String> = best(season).map { "$ARCHIVE_TAG ${it.encode()}" }
 
     fun encode(): String = buildString {
         append(HEADER).append('\n')

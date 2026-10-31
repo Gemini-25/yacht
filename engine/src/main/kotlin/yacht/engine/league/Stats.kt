@@ -348,6 +348,10 @@ internal class SideGame(
     val maxP: Double,
     val rating: Double,
     val decider: Boolean,
+    /** The most it trailed by after a full turn ([GameFacts.deficit]; -1 unknown). */
+    val deficit: Int = -1,
+    /** Its rating's parts besides the score ([GameFacts.parts]; NaN unknown), for the next season's [RatingScale]. */
+    val parts: Double = Double.NaN,
 )
 
 /**
@@ -466,8 +470,49 @@ class StatsBook(
     var previousMeta: MetaReport? = null
         private set
 
+    // 평점 2.0 (GameFacts.rating): the season's scale (null: measured from the season's own games
+    // as they come, a league's first season), the next season's once this one has closed, and
+    // this season's official games with facts: their scores and the other parts of their ratings
+    // (in 1/200 steps, exact).
+    private var scale: RatingScale? = null
+    private var nextScale: RatingScale? = null
+    private var scaleGames = 0L
+    private var scaleSum = 0L
+    private var scaleSquares = 0L
+    private var scaleParts = 0L
+
+    /** Each AI's official games in a row with a Yacht (연속 요트 경기). */
+    private val yachtRuns = HashMap<String, Int>()
+
+    // The season's best-rated official game (by its rating before the bounds, so the best of
+    // several 10.0s), its biggest upset and its upsets of UPSET_COUNT or more (시즌 결산).
+    private var topGame: ReviewGame? = null
+    private var topRaw = Double.NEGATIVE_INFINITY
+    private var topUpset: ReviewGame? = null
+    private var upsets = 0
+
+    /**
+     * What this season's match ratings are measured against ([GameFacts.ratings]): the season
+     * before's league ([RatingScale]); in a league's first season its own official games so far
+     * (once there are [SCALE_GAMES], before that [RatingScale.FALLBACK]); [RatingScale.V1] for a
+     * season that began before 평점 2.0.
+     */
+    val ratingScale: RatingScale get() = scale ?: measured() ?: RatingScale.FALLBACK
+
+    /** The scale of this season's official games so far; null before [SCALE_GAMES]. Rounded as stats.txt keeps it. */
+    private fun measured(): RatingScale? {
+        if (scaleGames < SCALE_GAMES) return null
+        val mean = scaleSum.toDouble() / scaleGames
+        val sd = sqrt(maxOf(0.0, scaleSquares.toDouble() / scaleGames - mean * mean))
+        fun r(x: Double) = Math.round(x * 1000) / 1000.0
+        return RatingScale(r(mean), r(sd.takeIf { it >= 1 } ?: RatingScale.FALLBACK.sd), r(scaleParts.toDouble() / AiStats.RATING_UNITS / scaleGames))
+    }
+
     fun season(key: String): AiStats? = seasonStats[key]
     fun career(key: String): AiStats? = careerStats[key]
+
+    /** [key]'s official games in a row with a Yacht, going on now. */
+    fun yachtRun(key: String): Int = yachtRuns[key] ?: 0
 
     /** Titles [key] has won here over its career (also those older than the honours book keeps). */
     fun titles(key: String): Int = titleCounts[key] ?: 0
@@ -508,6 +553,12 @@ class StatsBook(
      */
     fun startSeason(number: Int, ratings: Map<String, Double>, rookies: Collection<String>? = null) {
         if (number != season) {
+            // The scale the closed season left (else its own games', else the one it had).
+            val was = scale
+            scale = nextScale ?: measured() ?: was?.takeIf { it.version >= 2 }
+            nextScale = null
+            // The first season on 평점 2.0: career averages start again on the new scale.
+            if (was != null && was.version < 2) resetCareerRatings()
             season = number
             startRatings.clear()
             rookieKeys.clear()
@@ -548,6 +599,15 @@ class StatsBook(
         rookieKeys.retainAll(keep)
         titleCounts.keys.retainAll(keep)
         mvpCounts.keys.retainAll(keep)
+        yachtRuns.keys.retainAll(keep)
+    }
+
+    /** Career match ratings from before 평점 2.0 are left behind (a new scale's averages start from nothing). */
+    private fun resetCareerRatings() {
+        for (c in careerStats.values) {
+            c.ratingSum = 0.0
+            c.ratingCount = 0
+        }
     }
 
     /**
@@ -563,7 +623,9 @@ class StatsBook(
         val jobGames = r.boards.sumOf { it.games.size }
         // Half of each game's time per side, as the app's cost meter does.
         val ms = if (jobGames == 0 || r.nanos <= 0) Double.NaN else r.nanos / 1e6 / jobGames / 2
-        for (b in r.boards) {
+        // One scale for the whole job (a first season's moves with every game).
+        val scale = ratingScale
+        for ((bi, b) in r.boards.withIndex()) {
             if (b.games.isEmpty()) continue
             val result = if (f.kind != JobKind.TEAM && r.boards.size == 1) r.winner else TieRule.match(b.games, r.format)
             val ra = ctx.rating(b.a)
@@ -573,7 +635,7 @@ class StatsBook(
             val nd = b.games.size - b.deciders
             var agg = 0
             for (i in 0 until nd) agg += b.games[i].a - b.games[i].b
-            val (sideA, sideB) = sides(b, pairs = f.kind == JobKind.TIE && f.firstTo > 0)
+            val (sideA, sideB) = sides(b, pairs = f.kind == JobKind.TIE && f.firstTo > 0, scale = scale)
             val sa = if (official) seasonStats.getOrPut(b.a) { AiStats() } else null
             val sb = if (official) seasonStats.getOrPut(b.b) { AiStats() } else null
             val ca = careerStats.getOrPut(b.a) { AiStats() }
@@ -593,6 +655,9 @@ class StatsBook(
                     meta(gb)
                     gameRecords(b.a, b.b, ga, ctx.season, f.comp, events, pair = true)
                     gameRecords(b.b, b.a, gb, ctx.season, f.comp, events, pair = false)
+                    // The season's best-rated game (the first to reach a rating keeps it).
+                    if (topRated(ga, scale)) topGame = ReviewGame(b.a, b.b, ga.rating, MatchRef(ctx.season, f.comp, f.id, bi, i).encode())
+                    if (topRated(gb, scale)) topGame = ReviewGame(b.b, b.a, gb.rating, MatchRef(ctx.season, f.comp, f.id, bi, i).encode())
                 }
                 // The run and the career counts are over every rated game (as the ladder and the
                 // milestones), but held only by players of official games: not the 기준 경기's
@@ -600,19 +665,23 @@ class StatsBook(
                 if (official) {
                     streakRecord(b.a, ca, ga, ctx.season, f.comp, events)
                     streakRecord(b.b, cb, gb, ctx.season, f.comp, events)
+                    yachtRunRecord(b.a, ga, ctx.season, f.comp, events)
+                    yachtRunRecord(b.b, gb, ctx.season, f.comp, events)
                     careerRecords(b.a, ca, ctx.season, events)
                     careerRecords(b.b, cb, ctx.season, events)
                 }
             }
             if (official) {
                 // Ratings before the match: the best ever (once the rating has settled) and the
-                // biggest gap a winner overcame.
+                // biggest gap a winner overcame (the season's too, and its upsets).
                 peakRecord(b.a, ra, ca, ctx.season, f.comp, events)
                 peakRecord(b.b, rb, cb, ctx.season, f.comp, events)
                 if (!ra.isNaN() && !rb.isNaN() && result != 0) {
                     val (w, l, gap) = if (result > 0) Triple(b.a, b.b, rb - ra) else Triple(b.b, b.a, ra - rb)
                     val g = gap.roundToInt().toDouble()
                     if (g > 0 && records.beats(RecordKind.UPSET, g)) offer(LeagueRecord(RecordKind.UPSET, w, g, ctx.season, l, f.comp), events)
+                    if (g >= UPSET_COUNT) upsets++
+                    if (g > 0 && g > (topUpset?.value ?: 0.0)) topUpset = ReviewGame(w, l, g, MatchRef(ctx.season, f.comp, f.id, bi).encode())
                 }
             }
             val giantA = !ra.isNaN() && !rb.isNaN() && rb - ra >= AiStats.GIANT
@@ -622,39 +691,40 @@ class StatsBook(
                 stats.addMatch(if (mine) result else -result, if (mine) agg else -agg, if (mine) giantA else giantB, derby)
                 stats.addCost(ms)
             }
-            if (official) {
-                // One match (경기) at a time: each leg of a knockout tie, without its single
-                // deciders; a match (best of three included) or a board whole.
-                val played = if (f.kind == JobKind.TIE) nd else b.games.size
-                // A series: each pair of games on the same dice is a match (the last may be one game).
-                val series = f.kind == JobKind.TIE && f.firstTo > 0
-                val legs = if (series) (played + 1) / 2 else if (f.kind == JobKind.TIE && f.legs > 1 && played % f.legs == 0) f.legs else 1
-                val per = if (series) 2 else played / legs
-                if (per > 0) {
-                    for (leg in 0 until legs) {
-                        var ya = 0
-                        var yb = 0
-                        for (i in leg * per until minOf(played, (leg + 1) * per)) {
-                            if (b.games[i].aYacht) ya++
-                            if (b.games[i].bYacht) yb++
-                        }
-                        yachtRecord(b.a, b.b, ya, ctx.season, f.comp, events)
-                        yachtRecord(b.b, b.a, yb, ctx.season, f.comp, events)
-                    }
-                }
-            }
         }
         return events
     }
 
-    private fun yachtRecord(key: String, opp: String, yachts: Int, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
-        val y = yachts.toDouble()
-        if (records.beats(RecordKind.YACHTS_MATCH, y)) offer(LeagueRecord(RecordKind.YACHTS_MATCH, key, y, season, opp, comp), out)
+    /** True when [g] is rated above the season's best-rated game so far (then it is: [topRaw] moves to it). */
+    private fun topRated(g: SideGame, scale: RatingScale): Boolean {
+        if (g.rating.isNaN()) return false
+        val raw = if (scale.version < 2 || g.parts.isNaN()) g.rating else GameFacts.raw(g.own, g.parts, scale)
+        if (raw <= topRaw) return false
+        topRaw = raw
+        return true
+    }
+
+    /** An official game: [key]'s run of games with a Yacht goes on or ends (연속 요트 경기). */
+    private fun yachtRunRecord(key: String, g: SideGame, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
+        if (!g.yacht) {
+            yachtRuns.remove(key)
+            return
+        }
+        val run = (yachtRuns[key] ?: 0) + 1
+        yachtRuns[key] = run
+        if (records.beats(RecordKind.YACHT_RUN, run.toDouble())) offer(LeagueRecord(RecordKind.YACHT_RUN, key, run.toDouble(), season, null, comp), out)
     }
 
     private fun meta(g: SideGame) {
         metaGames++
         metaScore += g.own
+        // The next season's rating scale: the games whose ratings were measured.
+        if (!g.parts.isNaN()) {
+            scaleGames++
+            scaleSum += g.own
+            scaleSquares += g.own.toLong() * g.own
+            scaleParts += Math.round(g.parts * AiStats.RATING_UNITS)
+        }
         val card = g.card ?: return
         metaCards++
         for (c in Category.ALL) {
@@ -664,12 +734,21 @@ class StatsBook(
         }
     }
 
+    /** The season's meta, rating scale data and review trackers start again. */
     private fun resetMeta() {
         metaCards = 0
         metaSums.fill(0)
         metaZeros.fill(0)
         metaGames = 0
         metaScore = 0
+        scaleGames = 0
+        scaleSum = 0
+        scaleSquares = 0
+        scaleParts = 0
+        topGame = null
+        topRaw = Double.NEGATIVE_INFINITY
+        topUpset = null
+        upsets = 0
     }
 
     private fun boxMeta(n: Int, traits: List<TraitShare> = emptyList()) = MetaReport(
@@ -702,10 +781,9 @@ class StatsBook(
         if (records.beats(RecordKind.LOW_WIN, g.own.toDouble())) offer(LeagueRecord(RecordKind.LOW_WIN, key, g.own.toDouble(), season, opp, comp), out)
         val margin = (g.own - g.opp).toDouble()
         if (records.beats(RecordKind.MARGIN, margin)) offer(LeagueRecord(RecordKind.MARGIN, key, margin, season, opp, comp), out)
-        if (!g.minP.isNaN()) {
-            val p = (g.minP * 100).roundToInt().toDouble()
-            if (records.beats(RecordKind.COMEBACK, p)) offer(LeagueRecord(RecordKind.COMEBACK, key, p, season, opp, comp), out)
-        }
+        // The most points a winner came back from (the P(win) record saturated at 0%: retired).
+        val behind = g.deficit.toDouble()
+        if (g.deficit > 0 && records.beats(RecordKind.COMEBACK_POINTS, behind)) offer(LeagueRecord(RecordKind.COMEBACK_POINTS, key, behind, season, opp, comp), out)
     }
 
     private fun streakRecord(key: String, c: AiStats, g: SideGame, season: Int, comp: Comp, out: MutableList<LeagueEvent>) {
@@ -794,6 +872,10 @@ class StatsBook(
      * and its MVP among them ([Awards.mvp]); its hall of fame counts major titles
      * ([HonourBook.majorTitles] by [major]: season, league id), its season lines carry their
      * league and [club].
+     *
+     * The review also keeps the boards' leaders ([SeasonReview.REVIEW_STATS]), the season in
+     * numbers, its best games ([highlights]' [HighlightBook.best]), its best-rated game and its
+     * biggest upset; the season's rating scale for the next one ([ratingScale]) is measured here.
      */
     fun endSeason(
         plan: SeasonPlan,
@@ -811,6 +893,8 @@ class StatsBook(
         club: (String) -> String? = { null },
         /** Whether league [league]'s title of season [season] is a major one (one of the best-ranked leagues then). */
         major: (season: Int, league: String) -> Boolean = { _, _ -> true },
+        /** The season's highlights: the review names its best games. */
+        highlights: HighlightBook? = null,
     ): SeasonEnd {
         val n = plan.number
         if (n <= ended) {
@@ -818,7 +902,7 @@ class StatsBook(
             // season; the league MVPs are only in the book).
             val book = honours.of(n).filter { Awards.isAward(it.kind) }
             val saved = archive.summary(n)?.honours?.filter { it.kind in Awards.KINDS }?.let { it + book.filter { h -> h.kind !in Awards.KINDS } } ?: book
-            return SeasonEnd(n, saved, emptyList(), emptyList(), emptyList(), archive.review?.takeIf { it.season == n })
+            return SeasonEnd(n, saved, emptyList(), emptyList(), emptyList(), archive.review(n))
         }
         val league = plan.league
         val national = league.leagues.national
@@ -866,13 +950,25 @@ class StatsBook(
         // Records of the season (its best only, so one break per kind): points, match rating, titles.
         val warm = n > 1
         // Level: the higher division's (tables in order), then the first key.
-        league.divisions.indices.flatMap { league.table(it) }.filter { it.played > 0 }.maxByOrNull { it.points }?.let { s ->
+        val tables = league.divisions.indices.flatMap { league.table(it) }.filter { it.played > 0 }
+        tables.maxByOrNull { it.points }?.let { s ->
             offer(LeagueRecord(RecordKind.SEASON_POINTS, s.key, s.points.toDouble(), n, null, Comp.LEAGUE), events, warm)
         }
-        seasonStats.entries.filter { it.value.matches >= Awards.RATING_MATCHES && !it.value.avgRating.isNaN() }
-            .maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.avgRating }.thenByDescending { it.key })?.let { (k, st) ->
-                offer(LeagueRecord(RecordKind.SEASON_RATING, k, Math.round(st.avgRating * 100) / 100.0, n), events, warm)
+        // Points per match of those who played enough of their own fixtures (seasons differ in length), and sweeps.
+        tables.filter { it.key !in gone && it.played >= Awards.MVP_SHARE * league.fixturesOf(it.key) }
+            .maxByOrNull { Math.round(100.0 * it.points / it.played) }?.let { s ->
+                offer(LeagueRecord(RecordKind.SEASON_PPM, s.key, Math.round(100.0 * s.points / s.played) / 100.0, n, null, Comp.LEAGUE), events, warm)
             }
+        if (league.bonus) tables.filter { it.key !in gone }.maxByOrNull { it.sweeps }?.let { s ->
+            offer(LeagueRecord(RecordKind.SEASON_SWEEPS, s.key, s.sweeps.toDouble(), n, null, Comp.LEAGUE), events, warm)
+        }
+        // The match rating's record is of 평점 2.0 (a season begun on the first rating sets none).
+        if (ratingScale.version >= 2) {
+            seasonStats.entries.filter { it.value.matches >= Awards.RATING_MATCHES && !it.value.avgRating.isNaN() }
+                .maxWithOrNull(compareBy<Map.Entry<String, AiStats>> { it.value.avgRating }.thenByDescending { it.key })?.let { (k, st) ->
+                    offer(LeagueRecord(RecordKind.SEASON_RATING2, k, Math.round(st.avgRating * 100) / 100.0, n), events, warm)
+                }
+        }
         // A season's best average score, match win rate and Yachts (over enough matches), and the
         // biggest rating gain since the season began.
         // Enough matches: 20, or three quarters of a short season's rounds.
@@ -967,10 +1063,23 @@ class StatsBook(
                 broken, metaGames / 2, report.avgScore,
             ),
         )
+        // The boards' leaders (a board led by nothing, as 행운아 with no luck at all, has none), the
+        // season in numbers, its best games.
+        val ranked = keys.filter { it !in gone }
+        val leaders = SeasonReview.REVIEW_STATS.flatMap { stat ->
+            // At the precision archive.txt keeps (a review read back equals the one made).
+            Leaders.season(stat, league, { seasonStats[it] }, ranked).filter { it.value > 0 }.take(SeasonReview.LEADERS)
+                .map { ReviewLeader(stat, it.key, Math.round(it.value * 10_000) / 10_000.0) }
+        }
+        val best = highlights?.best(n).orEmpty().map { it.id }
         val review = SeasonReview.of(
             plan, won, keys, { startRating(it) }, rating, { seasonStats[it]?.avgRating ?: Double.NaN }, broken, report, before, family, name,
+            leaders, numbers(league, report), best, topGame, topUpset,
         )
-        archive.putReview(review)
+        archive.putReview(review, keys.size)
+
+        // The next season's match ratings are measured against this one's games.
+        nextScale = measured() ?: scale?.takeIf { it.version >= 2 }
 
         // The next season starts from nothing.
         seasonStats.clear()
@@ -978,6 +1087,35 @@ class StatsBook(
         resetMeta()
         ended = n
         return SeasonEnd(n, awards, events, inducted, dynasties, review)
+    }
+
+    /**
+     * The season in numbers (숫자로 본 시즌), label and value ready to show: official games, the
+     * average score, Yacht and upper-bonus rates per game, 300-point games, upsets (a winner rated
+     * [UPSET_COUNT] or more below), comeback wins, and the share of two-game league matches won 2-0.
+     */
+    private fun numbers(league: Season, report: MetaReport): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        if (metaGames == 0) return out
+        fun count(x: Int, unit: String) = String.format(Locale.ROOT, "%,d", x) + unit
+        fun share(x: Double) = "${(100 * x).roundToInt()}%"
+        val all = seasonStats.values
+        out += "경기 수" to count(metaGames / 2, "판")
+        if (!report.avgScore.isNaN()) out += "평균 점수" to String.format(Locale.ROOT, "%.1f점", report.avgScore)
+        out += "요트율" to share(all.sumOf { it.yachts }.toDouble() / metaGames)
+        out += "보너스율" to share(all.sumOf { it.bonuses }.toDouble() / metaGames)
+        out += "300점 경기" to count(all.sumOf { it.over300 }, "번")
+        out += "이변" to count(upsets, "번")
+        out += "역전승" to count(all.sumOf { it.comebacks }, "번")
+        var two = 0
+        var swept = 0
+        for (id in 0 until league.fixturesTotal) {
+            val games = league.result(id)?.takeIf { it.size == 2 } ?: continue
+            two++
+            if (games.all { it.a > it.b } || games.all { it.b > it.a }) swept++
+        }
+        if (two > 0) out += "2:0 완승 비율" to share(swept.toDouble() / two)
+        return out
     }
 
     private fun traitShares(keys: List<String>, rating: (String) -> Double, traits: (String) -> Map<String, String>?, last: MetaReport?): List<TraitShare> {
@@ -1004,29 +1142,49 @@ class StatsBook(
         // Rating sums are in 0.005 steps; files before this line kept them in 0.01 steps.
         append("units ${AiStats.RATING_UNITS}\n")
         append("book $season $ended $officialGames\n")
+        // 평점 2.0 near the top (a file cut further down still says it is on the new rating): the
+        // season's scale ("-": measured as the season goes), the next season's, this season's games.
+        append("rating ").append(scale?.let { encodeScale(it) } ?: "-").append('\n')
+        nextScale?.let { append("rnext ").append(encodeScale(it)).append('\n') }
+        append("racc $scaleGames $scaleSum $scaleSquares $scaleParts\n")
         for (k in (startRatings.keys + seasonStats.keys + rookieKeys).sorted()) {
             val s = seasonStats[k] ?: AiStats()
             append("s ${Field.esc(k)} ${Field.num(startRatings[k] ?: Double.NaN, 0)} ${if (k in rookieKeys) 1 else 0} ${s.encode()}\n")
         }
         for (k in careerStats.keys.sorted()) {
             append("c ${Field.esc(k)} ${careerStats.getValue(k).encode()}")
-            // Career titles and MVPs, only when there are any.
+            // Career titles and MVPs, then the Yacht run going on, only when there are any.
             val t = titleCounts[k] ?: 0
             val m = mvpCounts[k] ?: 0
-            if (t > 0 || m > 0) append(' ').append(t.toString(36)).append(' ').append(m.toString(36))
+            val y = yachtRuns[k] ?: 0
+            if (t > 0 || m > 0 || y > 0) append(' ').append(t.toString(36)).append(' ').append(m.toString(36))
+            if (y > 0) append(' ').append(y.toString(36))
             append('\n')
         }
-        for (r in records.all) append("rec ${r.encode()}\n")
+        records.encode(this)
         for ((k, n) in firstSeason) append("first ${k.name} $n\n")
         for (b in breaks.values) append("brk ${b.encode()}\n")
         append("box $metaGames $metaScore $metaCards ${metaSums.joinToString(",")} ${metaZeros.joinToString(",")}\n")
+        topGame?.let { append("top ${encodeGame(it)} ${Field.num(topRaw, 4)}\n") }
+        topUpset?.let { append("upset ${encodeGame(it)}\n") }
+        if (upsets > 0) append("upsets $upsets\n")
         previousMeta?.encode(this)
         meta?.encode(this)
         for (e in milestoneList.reversed()) append("ms ${e.encode()}\n")
     }
 
+    private fun encodeScale(s: RatingScale) = "${s.version} ${Field.num(s.mean, 3)} ${Field.num(s.sd, 3)} ${Field.num(s.center, 3)}"
+
+    private fun encodeGame(g: ReviewGame) = "${Field.esc(g.key)} ${Field.esc(g.other)} ${Field.num(g.value, 3)} ${Field.esc(g.ref)}"
+
     companion object {
         const val RECORD_WARMUP = 2000
+
+        /** Official side-games (a game counts once for each player) before a first season's own rating scale replaces [RatingScale.FALLBACK]. */
+        const val SCALE_GAMES = 1000L
+
+        /** A winner rated this much below the loser is an upset the season review counts (league-match news uses 150 too). */
+        const val UPSET_COUNT = 150.0
 
         /** Games before a player's rating counts for 역대 최고 레이팅 (a new one still moves a lot). */
         const val PEAK_GAMES = 60
@@ -1049,7 +1207,7 @@ class StatsBook(
          * totals, and for level games from the seat order [LeagueMatch] plays (mirrored games
          * alternate from A, single games all have A first, deciders alternate from A).
          */
-        internal fun sides(b: BoardResult, pairs: Boolean = false): Pair<List<SideGame>, List<SideGame>> {
+        internal fun sides(b: BoardResult, pairs: Boolean = false, scale: RatingScale = RatingScale.FALLBACK): Pair<List<SideGame>, List<SideGame>> {
             val first = seats(b, pairs)
             val nd = b.games.size - b.deciders
             val xs = ArrayList<SideGame>(b.games.size)
@@ -1068,10 +1226,19 @@ class StatsBook(
                     lo = minOf(lo, p.toInt())
                     hi = maxOf(hi, p.toInt())
                 }
-                val (r1, r2) = f.ratings
-                // The first player's P range; the second's is its mirror.
-                val firstGame = { own: Int, opp: Int, y: Boolean, bo: Boolean -> SideGame(own, opp, y, bo, f.first, lo / 100.0, hi / 100.0, r1, decider) }
-                val secondGame = { own: Int, opp: Int, y: Boolean, bo: Boolean -> SideGame(own, opp, y, bo, f.second, (100 - hi) / 100.0, (100 - lo) / 100.0, r2, decider) }
+                // The first player's P range; the second's is its mirror. Ratings (평점 2.0, or the
+                // first rating in a season begun on it) and their parts from the facts' own cards.
+                val (w1, w2) = f.wpa
+                val x = f.first.total
+                val y = f.second.total
+                val p1 = GameFacts.parts(x, y, w1, lo / 100.0, (f.first[Category.YACHT] ?: 0) > 0, f.first.bonus > 0)
+                val p2 = GameFacts.parts(y, x, w2, (100 - hi) / 100.0, (f.second[Category.YACHT] ?: 0) > 0, f.second.bonus > 0)
+                val r1 = if (scale.version < 2) GameFacts.rating(w1) else GameFacts.rating(x, p1, scale)
+                val r2 = if (scale.version < 2) GameFacts.rating(w2) else GameFacts.rating(y, p2, scale)
+                val d1 = f.deficit(true)
+                val d2 = f.deficit(false)
+                val firstGame = { own: Int, opp: Int, yc: Boolean, bo: Boolean -> SideGame(own, opp, yc, bo, f.first, lo / 100.0, hi / 100.0, r1, decider, d1, p1) }
+                val secondGame = { own: Int, opp: Int, yc: Boolean, bo: Boolean -> SideGame(own, opp, yc, bo, f.second, (100 - hi) / 100.0, (100 - lo) / 100.0, r2, decider, d2, p2) }
                 if (first[i]) {
                     xs += firstGame(g.a, g.b, g.aYacht, g.aBonus)
                     ys += secondGame(g.b, g.a, g.bYacht, g.bBonus)
@@ -1123,6 +1290,8 @@ class StatsBook(
                 lines.any { it.startsWith("book ") && (it.split(' ').getOrNull(2)?.toIntOrNull() ?: 0) > 0 }
             val metas = ArrayList<MetaReport>()
             val shares = ArrayList<Pair<Int, TraitShare>>()
+            // A file from before 평점 2.0 has no "rating" line.
+            var rated = false
             for (line in lines) {
                 runCatching {
                     val f = line.split(' ')
@@ -1151,11 +1320,36 @@ class StatsBook(
                             val st = AiStats.decode(f, 2).also { if (legacy) it.doubleRatingUnits() }
                             val t = f.getOrNull(2 + AiStats.FIELDS)?.toInt(36) ?: 0
                             val m = f.getOrNull(3 + AiStats.FIELDS)?.toInt(36) ?: 0
+                            val y = f.getOrNull(4 + AiStats.FIELDS)?.toIntOrNull(36) ?: 0
                             book.careerStats[k] = st
                             if (t > 0) book.titleCounts[k] = t
                             if (m > 0) book.mvpCounts[k] = m
+                            if (y > 0) book.yachtRuns[k] = y
                         }
                         "rec" -> LeagueRecord.decode(f, 1)?.let { book.records.put(it) }
+                        "hist" -> LeagueRecord.decode(f, 1)?.let { book.records.putHistory(it) }
+                        "rating" -> {
+                            book.scale = if (f[1] == "-") null else scaleOf(f)
+                            rated = true
+                        }
+                        "rnext" -> book.nextScale = scaleOf(f)
+                        "racc" -> {
+                            val n = f[1].toLong()
+                            val sum = f[2].toLong()
+                            val squares = f[3].toLong()
+                            val parts = f[4].toLong()
+                            book.scaleGames = n
+                            book.scaleSum = sum
+                            book.scaleSquares = squares
+                            book.scaleParts = parts
+                        }
+                        "top" -> {
+                            val g = gameOf(f)
+                            book.topRaw = f.getOrNull(5)?.toDoubleOrNull() ?: g.value
+                            book.topGame = g
+                        }
+                        "upset" -> book.topUpset = gameOf(f)
+                        "upsets" -> book.upsets = f[1].toInt()
                         "first" -> runCatching { book.firstSeason[RecordKind.valueOf(f[1])] = f[2].toInt() }
                         "brk" -> RecordBreak.decode(f, 1)?.let { book.breaks[it.record.kind] = it }
                         "box" -> {
@@ -1181,8 +1375,17 @@ class StatsBook(
             book.meta = reports.lastOrNull()
             book.previousMeta = reports.getOrNull(reports.size - 2)
             while (book.milestoneList.size > MAX_MILESTONES) book.milestoneList.removeLast()
+            if (!rated) {
+                // From before 평점 2.0: a season under way keeps the first rating to its end (its
+                // averages and MVP on one scale); otherwise the new scale starts now, careers too.
+                if (book.metaGames > 0) book.scale = RatingScale.V1 else book.resetCareerRatings()
+            }
             return book
         }
+
+        private fun scaleOf(f: List<String>) = RatingScale(f[2].toDouble(), f[3].toDouble(), f[4].toDouble(), f[1].toInt())
+
+        private fun gameOf(f: List<String>) = ReviewGame(Field.unesc(f[1]), Field.unesc(f[2]), f[3].toDouble(), Field.unesc(f[4]))
     }
 }
 

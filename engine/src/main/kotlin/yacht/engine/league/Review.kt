@@ -17,10 +17,26 @@ data class MetaChange(val label: String, val before: Double, val after: Double, 
     val delta: Double get() = after - before
 }
 
+/** A board's leader in a season review: [stat]'s [key] with its [value] ([Leaders.season]). */
+data class ReviewLeader(val stat: LeaderStat, val key: String, val value: Double)
+
 /**
- * The season review (시즌 결산), built when a season ends and shown once: champions and
- * awards, the biggest risers and fallers by rating, records broken, what changed in the league
- * meta, and a few summary sentences in Korean.
+ * A game or match a season review points at: [key] (the rated player; an upset's winner) against
+ * [other], [value] (the game's 평점; the rating gap the winner overcame) and where it was played
+ * ([ref], a [MatchRef] in its encoded form: a game's carries its board and game).
+ */
+data class ReviewGame(val key: String, val other: String, val value: Double, val ref: String)
+
+/**
+ * The season review (시즌 결산), built when a season ends: champions and awards, the biggest
+ * risers and fallers by rating, records broken, what changed in the league meta, a few summary
+ * sentences in Korean; the boards' leaders ([leaders], top 3 of each of [REVIEW_STATS]), the
+ * season in numbers ([numbers]: label and value, ready to show), its best games ([best]:
+ * [Highlight.id]s, the log archive keeps them), its best-rated game ([topRated]) and biggest
+ * upset ([upset]). [Archive.amendReview] adds what is known only after the close: the league
+ * ranking's moves ([ranking]: league id and places climbed, negative for a fall), the 요트협회's
+ * decisions ([federation], in Korean) and the transfers abroad ([transfers]; null before the
+ * club off-season). The archive keeps the newest [Archive.REVIEWS].
  */
 data class SeasonReview(
     val season: Int,
@@ -33,21 +49,57 @@ data class SeasonReview(
     val records: List<RecordBreak>,
     val meta: List<MetaChange>,
     val sentences: List<String>,
+    val leaders: List<ReviewLeader> = emptyList(),
+    val numbers: List<Pair<String, String>> = emptyList(),
+    val best: List<String> = emptyList(),
+    val topRated: ReviewGame? = null,
+    val upset: ReviewGame? = null,
+    val ranking: List<Pair<String, Int>> = emptyList(),
+    val federation: List<String> = emptyList(),
+    val transfers: Int? = null,
 ) {
-    /** "rv" lines for archive.txt. */
-    internal fun encode(out: StringBuilder, seen: Boolean) {
-        out.append("rv head $season ${if (seen) 1 else 0}\n")
-        for (h in champions + awards) out.append("rv h ${h.kind} ${Field.esc(h.key)}\n")
-        for ((tag, list) in listOf("up" to risers, "down" to fallers)) {
-            for (m in list) out.append("rv $tag ${Field.esc(m.key)} ${Field.num(m.from, 1)} ${Field.num(m.to, 1)}\n")
+    /** The top 3 of [stat] ([leaders] in board order). */
+    fun leadersOf(stat: LeaderStat): List<ReviewLeader> = leaders.filter { it.stat == stat }
+
+    /**
+     * Lines for archive.txt, each starting with [tag]: "rv" for the newest review (the block
+     * older versions read), "rw" for the older ones kept. Sub-lines an older version does not
+     * know are skipped there.
+     */
+    internal fun encode(out: StringBuilder, seen: Boolean, tag: String = "rv") {
+        out.append("$tag head $season ${if (seen) 1 else 0}\n")
+        for (h in champions + awards) out.append("$tag h ${h.kind} ${Field.esc(h.key)}\n")
+        for ((sub, list) in listOf("up" to risers, "down" to fallers)) {
+            for (m in list) out.append("$tag $sub ${Field.esc(m.key)} ${Field.num(m.from, 1)} ${Field.num(m.to, 1)}\n")
         }
-        for (b in records) out.append("rv rec ${b.encode()}\n")
-        for (m in meta) out.append("rv meta ${Field.esc(m.label)} ${Field.num(m.before, 4)} ${Field.num(m.after, 4)} ${if (m.percent) 1 else 0}\n")
-        for (s in sentences) out.append("rv say ${s.replace('\n', ' ')}\n")
+        for (b in records) out.append("$tag rec ${b.encode()}\n")
+        for (m in meta) out.append("$tag meta ${Field.esc(m.label)} ${Field.num(m.before, 4)} ${Field.num(m.after, 4)} ${if (m.percent) 1 else 0}\n")
+        for (s in sentences) out.append("$tag say ${s.replace('\n', ' ')}\n")
+        for (l in leaders) out.append("$tag lead ${l.stat.name} ${Field.esc(l.key)} ${Field.num(l.value, 4)}\n")
+        for ((label, value) in numbers) out.append("$tag num ${Field.esc(label)} ${Field.esc(value)}\n")
+        for (id in best) out.append("$tag best ${Field.esc(id)}\n")
+        topRated?.let { out.append("$tag top ${game(it)}\n") }
+        upset?.let { out.append("$tag upset ${game(it)}\n") }
+        for ((league, change) in ranking) out.append("$tag rank ${Field.esc(league)} $change\n")
+        for (s in federation) out.append("$tag fed ${Field.esc(s)}\n")
+        transfers?.let { out.append("$tag xfer $it\n") }
     }
 
+    private fun game(g: ReviewGame) = "${Field.esc(g.key)} ${Field.esc(g.other)} ${Field.num(g.value, 3)} ${Field.esc(g.ref)}"
+
     companion object {
-        /** Reads the "rv" lines back (each line split on spaces, "rv" first); null without a head line. Returns the review and whether it was shown. */
+        /** The boards whose top 3 a review keeps. */
+        val REVIEW_STATS = listOf(
+            LeaderStat.SCORER, LeaderStat.YACHTS, LeaderStat.BONUS, LeaderStat.SWEEPS, LeaderStat.MVP, LeaderStat.LUCK, LeaderStat.CLUTCH, LeaderStat.COMEBACK,
+        )
+
+        /** Leaders a review keeps per board. */
+        const val LEADERS = 3
+
+        /**
+         * Reads one review's lines back (each split on spaces, the tag first, "rv" or "rw");
+         * null without a head line. Returns the review and whether it was shown.
+         */
         internal fun decode(lines: List<String>): Pair<SeasonReview, Boolean>? {
             var season: Int? = null
             var seen = false
@@ -57,6 +109,15 @@ data class SeasonReview(
             val records = ArrayList<RecordBreak>()
             val meta = ArrayList<MetaChange>()
             val say = ArrayList<String>()
+            val leaders = ArrayList<ReviewLeader>()
+            val numbers = ArrayList<Pair<String, String>>()
+            val best = ArrayList<String>()
+            var top: ReviewGame? = null
+            var upset: ReviewGame? = null
+            val ranking = ArrayList<Pair<String, Int>>()
+            val federation = ArrayList<String>()
+            var transfers: Int? = null
+            fun game(f: List<String>) = ReviewGame(Field.unesc(f[2]), Field.unesc(f[3]), f[4].toDouble(), Field.unesc(f[5]))
             for (line in lines) {
                 runCatching {
                     val f = line.split(' ')
@@ -69,20 +130,32 @@ data class SeasonReview(
                         "up", "down" -> (if (f[1] == "up") up else down) += RatingMove(Field.unesc(f[2]), Field.dbl(f[3]), Field.dbl(f[4]))
                         "rec" -> RecordBreak.decode(f, 2)?.let { records += it }
                         "meta" -> meta += MetaChange(Field.unesc(f[2]), Field.dbl(f[3]), Field.dbl(f[4]), f[5] == "1")
-                        "say" -> say += line.substringAfter("rv say ")
+                        "say" -> say += line.substringAfter(" say ")
+                        "lead" -> leaders += ReviewLeader(LeaderStat.valueOf(f[2]), Field.unesc(f[3]), f[4].toDouble())
+                        "num" -> numbers += Field.unesc(f[2]) to Field.unesc(f[3])
+                        "best" -> best += Field.unesc(f[2])
+                        "top" -> top = game(f)
+                        "upset" -> upset = game(f)
+                        "rank" -> ranking += Field.unesc(f[2]) to f[3].toInt()
+                        "fed" -> federation += Field.unesc(f[2])
+                        "xfer" -> transfers = f[2].toInt()
                     }
                 }
             }
             val n = season ?: return null
             val hs = honours.map { it.copy(season = n) }
-            return SeasonReview(n, hs.filter { it.kind !in Awards.ANNOUNCED }, hs.filter { it.kind in Awards.ANNOUNCED }, up, down, records, meta, say) to seen
+            return SeasonReview(
+                n, hs.filter { it.kind !in Awards.ANNOUNCED }, hs.filter { it.kind in Awards.ANNOUNCED }, up, down, records, meta, say,
+                leaders, numbers, best, top, upset, ranking, federation, transfers,
+            ) to seen
         }
 
         /**
          * The review of [plan]'s season: [honours] are the season's titles and awards, [keys]
          * the league's AIs, [start] and [rating] their ratings at the start and at the end,
          * [avgRating] their season's average match rating; [meta] and [before] the league meta
-         * of this season and the one before.
+         * of this season and the one before; [leaders], [numbers], [best], [topRated] and
+         * [upset] as [SeasonReview] keeps them.
          */
         internal fun of(
             plan: SeasonPlan,
@@ -96,6 +169,11 @@ data class SeasonReview(
             before: MetaReport?,
             family: (String) -> Family?,
             name: (String) -> String,
+            leaders: List<ReviewLeader> = emptyList(),
+            numbers: List<Pair<String, String>> = emptyList(),
+            best: List<String> = emptyList(),
+            topRated: ReviewGame? = null,
+            upset: ReviewGame? = null,
         ): SeasonReview {
             val n = plan.number
             val champions = honours.filter { Awards.inSummary(it.kind) && it.kind !in Awards.ANNOUNCED }
@@ -166,7 +244,7 @@ data class SeasonReview(
             top.groupingBy { it }.eachCount().maxByOrNull { it.value }?.takeIf { it.value >= 3 }?.let { (fam, count) ->
                 say += "$where 상위 5위 중 ${count}자리를 ${fam.label} 계열이 차지했어요."
             }
-            return SeasonReview(n, champions, awards, risers, fallers, broken, changes, say)
+            return SeasonReview(n, champions, awards, risers, fallers, broken, changes, say, leaders, numbers, best, topRated, upset)
         }
 
         /** Leagues the headline names: the champions of the best-ranked. */

@@ -1,6 +1,7 @@
 package yacht.engine.league
 
 import yacht.engine.Board
+import yacht.engine.Category
 
 /**
  * One finished game in full, for the statistics: both final cards, the running totals and the
@@ -36,12 +37,43 @@ class GameFacts(
             return f to s
         }
 
-    /** Match ratings (평점, 3.0-10.0) of the first and the second player. */
-    val ratings: Pair<Double, Double>
-        get() {
-            val (f, s) = wpa
-            return rating(f) to rating(s)
+    /** Match ratings (평점 2.0, [rating]) of the first and the second player on the fallback scale ([RatingScale.FALLBACK]). */
+    val ratings: Pair<Double, Double> get() = ratings(RatingScale.FALLBACK)
+
+    /** Match ratings of the first and the second player on [scale] (the season's: [StatsBook.ratingScale]). */
+    fun ratings(scale: RatingScale): Pair<Double, Double> {
+        val (f, s) = wpa
+        if (scale.version < 2) return rating(f) to rating(s)
+        val x = first.total
+        val y = second.total
+        return rating(x, y, f, minP(true), first, scale) to rating(y, x, s, minP(false), second, scale)
+    }
+
+    /** The first player's (or the second's) lowest P(win) during the game. */
+    private fun minP(firstPlayer: Boolean): Double {
+        var lo = 100
+        var hi = 0
+        for (p in curve) {
+            lo = minOf(lo, p.toInt())
+            hi = maxOf(hi, p.toInt())
         }
+        return if (firstPlayer) lo / 100.0 else (100 - hi) / 100.0
+    }
+
+    /**
+     * The largest deficit the first player (or the second) came back from after a full turn:
+     * the most the opponent led by at half-turns 2t+1 (0 when it never trailed).
+     */
+    fun deficit(firstPlayer: Boolean): Int {
+        var d = 0
+        for (t in 0 until totals.size / 4) {
+            val h = 2 * t + 1
+            val x = totals[2 * h].toInt()
+            val y = totals[2 * h + 1].toInt()
+            d = maxOf(d, if (firstPlayer) y - x else x - y)
+        }
+        return d
+    }
 
     /** The winner's lowest P(win) during the game (a comeback when small); 0.5 for a draw. */
     val winnerMinP: Double
@@ -93,7 +125,52 @@ class GameFacts(
     fun encodeCurve(): String = curve.joinToString(",") { it.toString() }
 
     companion object {
+        /** The first match rating (평점 1.0, seasons before 평점 2.0): 6.5 + 3.5 x WPA in [3, 10]. */
         fun rating(wpa: Double): Double = (6.5 + 3.5 * wpa).coerceIn(3.0, 10.0)
+
+        /**
+         * 평점 2.0 of one side of a game: [RatingScale.BASE] + [Z] x its score against the league's
+         * ([RatingScale.mean], [RatingScale.sd]) + [WPA] x its win probability added + [RESULT]
+         * for a win (minus for a loss) + [YACHT], [BONUS] (upper bonus), [COMEBACK] (a win after
+         * its P(win) fell to [RatingScale.COMEBACK_P]) and [BIG] (300 points or more), less the
+         * league's mean of those parts ([RatingScale.center]), so a season's average stays at 6.0
+         * however the league plays. In [1, 10], in steps of 0.005 (the sums stay exact).
+         */
+        fun rating(own: Int, opp: Int, wpa: Double, minP: Double, card: Board, scale: RatingScale): Double =
+            rating(own, parts(own, opp, wpa, minP, (card[Category.YACHT] ?: 0) > 0, card.bonus > 0), scale)
+
+        /** [rating] of a side that scored [own], with the other [parts] of its rating. */
+        fun rating(own: Int, parts: Double, scale: RatingScale): Double = (Math.round(raw(own, parts, scale) * STEPS) / STEPS).coerceIn(1.0, 10.0)
+
+        /** [rating] before its steps and its bounds: tells two games at 10.0 apart. */
+        fun raw(own: Int, parts: Double, scale: RatingScale): Double =
+            RatingScale.BASE + Z * (own - scale.mean) / (scale.sd.takeIf { it > 0 } ?: RatingScale.FALLBACK.sd) + parts - scale.center
+
+        /** The parts of [rating] besides the score: what [RatingScale.center] averages over a season. */
+        fun parts(own: Int, opp: Int, wpa: Double, minP: Double, yacht: Boolean, bonus: Boolean): Double {
+            var x = WPA * wpa + when {
+                own > opp -> RESULT
+                own < opp -> -RESULT
+                else -> 0.0
+            }
+            if (yacht) x += YACHT
+            if (bonus) x += BONUS
+            if (own > opp && minP <= RatingScale.COMEBACK_P) x += COMEBACK
+            if (own >= Drama.BIG_SCORE) x += BIG
+            return x
+        }
+
+        // 평점 2.0's weights, tuned on three played seasons of 1000 players (S15 hand-off): a
+        // game's rating mostly between 2.3 and 9.9, eligible players' season averages from about
+        // 4.5 to 7.8 (1부 SD 0.45-0.55), the league's average 6.0.
+        const val Z = 1.4
+        const val WPA = 1.5
+        const val RESULT = 0.4
+        const val YACHT = 0.2
+        const val BONUS = 0.3
+        const val COMEBACK = 0.3
+        const val BIG = 0.3
+        private const val STEPS = 200.0
 
         /**
          * Builds the facts of a game from the boards after each half-turn ([boards]: first's and
@@ -111,5 +188,28 @@ class GameFacts(
             val last = boards.last()
             return GameFacts(last.first, last.second, totals, curve)
         }
+    }
+}
+
+/**
+ * What a season's match ratings (평점 2.0, [GameFacts.rating]) are measured against: the league's
+ * game scores ([mean], [sd]) and the mean of a rating's other parts ([center], [GameFacts.parts]),
+ * all over the official games of the season before (in a league's first season its own games so
+ * far, [StatsBook.ratingScale]). The same for every league of a season. [version] 1 is the first
+ * rating (평점 1.0, WPA only), kept for a season that began before 평점 2.0.
+ */
+data class RatingScale(val mean: Double, val sd: Double, val center: Double = 0.0, val version: Int = 2) {
+    companion object {
+        /** A season's average match rating. */
+        const val BASE = 6.0
+
+        /** A win whose own P(win) fell to this or below is a comeback (the statistics' [AiStats.COMEBACK_P] counts below it). */
+        const val COMEBACK_P = 0.2
+
+        /** Before the league's first games: about a league of the hand-made AIs. */
+        val FALLBACK = RatingScale(230.0, 45.0)
+
+        /** The first rating (평점 1.0), for a season that began with it. */
+        val V1 = RatingScale(230.0, 45.0, version = 1)
     }
 }
