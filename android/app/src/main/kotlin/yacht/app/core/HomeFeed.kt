@@ -38,12 +38,15 @@ import kotlin.math.roundToInt
 /**
  * The league's home dashboard (`lg.home`, UX design 2): [view] is built on request ([refresh])
  * off the main thread under the league's lock, never in the screen's snapshot. The controller
- * refreshes it when the 홈 tab appears, the week in play moves, a followed player's or club
- * member's result lands, a favourite changes or a banner is dismissed; there is no timer.
+ * refreshes it when the 홈 tab appears, the week in play moves, a favourite changes or a banner
+ * is dismissed, and shortly after a followed player's or club member's result lands
+ * ([refreshSoon]: the results of a second or so in one build); there is no timer.
  *
  * The followed players' and clubs' best members' league fixtures are found through an index of
  * their fixture ids, built for those keys only (one scan of the season's fixtures) and dropped
- * when the season changes, so a refresh costs a few of their fixtures, not the whole season.
+ * when the season changes, so the cards cost a few of their fixtures, not the whole season; the
+ * record chase (a pass over the league) is kept for the week. A build still takes 10-20 ms at
+ * 3000 players (measured on a desktop), hence no build per result.
  */
 class HomeFeed internal constructor(private val host: LeagueHost) {
     /** The home as last built; null before the first build (and for a league replaced since, until the next). */
