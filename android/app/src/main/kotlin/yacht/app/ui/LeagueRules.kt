@@ -54,6 +54,17 @@ import yacht.engine.league.MatchFormat
 @Composable
 fun RulesPage(lg: LeagueController, part: RulesPart, onDone: () -> Unit) {
     var cfg by remember { mutableStateOf(lg.config) }
+    // The saved rules the page started from. When they change while it is open (the 요트협회's
+    // changes adopted at a season's close, a restore), the page takes them in where it left a
+    // rule as it was, so 저장 never puts the old ones back.
+    var base by remember { mutableStateOf(lg.config) }
+    val saved = lg.config
+    LaunchedEffect(saved) {
+        if (saved != base) {
+            cfg = mergedRules(cfg, base, saved)
+            base = saved
+        }
+    }
     val cs = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
     // Where each section starts in the scrolled column, for opening at [part].
@@ -131,6 +142,18 @@ fun RulesPage(lg: LeagueController, part: RulesPart, onDone: () -> Unit) {
             TextButton(onClick = { lg.changeConfig(cfg); onDone() }, enabled = cfg != lg.config) { Text("저장") }
         }
     }
+}
+
+/**
+ * The rules page's [edited] rules with the changes the saved rules took since it opened ([base] to
+ * [saved]) on every rule the page left as it was; the page's own changes win.
+ */
+internal fun mergedRules(edited: LeagueConfig, base: LeagueConfig, saved: LeagueConfig): LeagueConfig {
+    fun lines(c: LeagueConfig) = c.encode().lines().drop(1).filter { it.isNotBlank() }.associate { it.substringBefore(' ') to it.substringAfter(' ', "") }
+    val from = lines(base)
+    val out = LinkedHashMap(lines(edited))
+    for ((k, v) in lines(saved)) if (from[k] != v && out[k] == from[k]) out[k] = v
+    return LeagueConfig.decode("config ${LeagueConfig.VERSION}\n" + out.entries.joinToString("") { "${it.key} ${it.value}\n" })
 }
 
 /** The single league's shape (a legacy config): the regional pyramid, its groups, the divisions. */

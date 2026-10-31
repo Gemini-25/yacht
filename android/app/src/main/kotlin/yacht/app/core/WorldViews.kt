@@ -123,12 +123,13 @@ class WorldPages internal constructor(private val host: LeagueHost) {
         host.scope.launch(Dispatchers.Default) {
             val (w, v) = synchronized(host.lock) {
                 val w = host.world() ?: return@launch
-                w to (read(w) ?: return@launch)
+                w to read(w)
             }
             host.scope.launch {
                 if (latest[kind] != n || w !== host.world()) return@launch
                 latest.remove(kind, n)
-                // Another league now (a reset, a restore): what was read from the old one goes.
+                // Another league now (a reset, a restore): what was read from the old one goes,
+                // also when the new one has nothing to show yet.
                 if (w !== source) {
                     source = w
                     clubTable = null
@@ -138,7 +139,7 @@ class WorldPages internal constructor(private val host: LeagueHost) {
                     federation = null
                     market = null
                 }
-                done(v)
+                v?.let(done)
             }
         }
     }
@@ -312,7 +313,8 @@ class WorldPages internal constructor(private val host: LeagueHost) {
     }
 
     private fun rankingOf(w: LeagueWorld): RankingView? {
-        val p = w.plan ?: return null
+        // No season yet (a new league before its start): none, as season 0.
+        val p = w.plan ?: return RankingView(0, emptyList(), byStrength = true, published = 0)
         if (!p.league.leagues.national) return RankingView(p.number, emptyList(), byStrength = false, published = 0)
         val live = Coefficients.season(p)
         val rows = p.ranking.rows.map { r ->
@@ -322,11 +324,12 @@ class WorldPages internal constructor(private val host: LeagueHost) {
         return RankingView(p.number, rows, byStrength = published == 0, published = published)
     }
 
-    private fun federationOf(w: LeagueWorld): FederationView? {
-        val p = w.plan ?: return null
+    private fun federationOf(w: LeagueWorld): FederationView {
+        // A new league before its first season: its first assembly comes after season 1.
+        val number = w.plan?.number ?: 1
         val f = w.federation
         // The last closed season's awards: the season's, then the league MVPs of its best-ranked leagues.
-        val closed = w.honours.seasons.lastOrNull { it < p.number } ?: 0
+        val closed = w.honours.seasons.lastOrNull { it < number } ?: 0
         val top = f.top(closed).orEmpty()
         val honours = w.honours.of(closed)
         val awards = AWARDS.mapNotNull { k -> honours.firstOrNull { it.kind == k } } +
@@ -336,7 +339,7 @@ class WorldPages internal constructor(private val host: LeagueHost) {
             f.pending().map(::proposalView),
             f.proposals.filter { !it.pending }.asReversed().map(::proposalView),
             awards.map { it.kind to host.shown(it.key) },
-            p.number,
+            number,
             closed,
         )
     }

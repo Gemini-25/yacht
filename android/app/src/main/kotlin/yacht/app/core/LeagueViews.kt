@@ -953,7 +953,7 @@ data class RankRow(val rank: LeagueRank, val label: String, val short: String, v
  * 순위 › 랭킹: the ranking national season [season] is played under (its places were drawn by it),
  * best first; [byStrength] while no national season has closed (the leagues go by the average
  * rating of their best 5); [published] the season whose close published it (0 when none has).
- * Empty [rows] in a legacy season.
+ * Empty [rows] in a legacy season, and with [season] 0 before a new league's first.
  */
 data class RankingView(val season: Int, val rows: List<RankRow>, val byStrength: Boolean, val published: Int)
 

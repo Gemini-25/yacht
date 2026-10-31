@@ -297,10 +297,16 @@ internal fun LeagueHeader(lg: LeagueController, season: SeasonView) {
 internal fun SeasonList(lg: LeagueController, season: SeasonView?, onOpen: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (season == null || season.divisions.isEmpty()) {
-        CenterText(
-            "▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.\n" +
-                matchRuleText(lg.config.matchFormat),
-        )
+        // The rules the first season will open with (national leagues for a new league).
+        val rules = lg.config
+        val how = if (rules.national) {
+            "▶ 리그를 시작하면 선수들이 나라별 국가 리그로 나뉘고 시즌 1이 열려요.\n리그마다 레이팅 순으로 부를 나누고, 같은 부끼리 " +
+                (if (rules.doubleRoundRobin) "홈·원정 두 번씩" else "한 번씩") + " 맞붙어 승점을 쌓아요. 시즌이 끝나면 위아래로 승강" +
+                (if (rules.promotionPlayoff) "하고 승강 플레이오프를 치러요.\n" else "해요.\n")
+        } else {
+            "▶ 리그를 시작하면 지금 순위대로 부가 나뉘고 시즌 1이 열려요.\n같은 부끼리 라운드마다 한 번씩 맞붙어 승점을 쌓고, 시즌이 끝나면 위아래로 승강하고 승강 플레이오프를 치러요.\n"
+        }
+        CenterText(how + matchRuleText(rules.matchFormat, rules.sweepPoints))
         return
     }
     val tiers = season.tiers.takeIf { it.size == season.divisions.size } ?: yacht.engine.league.Tiers.linear(season.divisions.size)

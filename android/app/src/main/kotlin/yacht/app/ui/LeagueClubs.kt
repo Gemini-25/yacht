@@ -121,7 +121,16 @@ private fun star(w: Float, h: Float): Path = Path().apply {
 @Composable
 fun ClubsTab(lg: LeagueController, v: LeagueView) {
     val season = v.season
-    if (v.clubs != null || season?.national != true) LegacyClubsTab(lg, v.clubs, season?.format) else NationalClubsTab(lg, v, season)
+    when {
+        season?.national == true && v.clubs == null -> NationalClubsTab(lg, v, season)
+        // No club league to show while the rules are national leagues': before the first season,
+        // or a season of the old single league without one (the clubs come with the next).
+        v.clubs == null && lg.config.national -> CenterText(
+            (if (season == null) "▶ 리그를 시작하면" else "이번 시즌에는 클럽 리그가 없어요. 다음 시즌부터") +
+                " 선수마다 자기가 뛰는 나라의 클럽에 들어가요. 클럽 순위는 클럽마다 성적이 좋은 선수 ${ClubTable.COUNTED}명의 리그 승점과 수상 점수로 매기고, 시즌이 끝나면 이적 시장이 열려요.",
+        )
+        else -> LegacyClubsTab(lg, v.clubs, season?.format)
+    }
 }
 
 /**
