@@ -969,7 +969,7 @@ class ClubBook private constructor(
      * Step 6: per nation, clubs founded (more members) or dissolved (fewer, or none left: the
      * fewest titles, then the lowest place); only when `round(n / clubSize)` moved, the clubs are
      * more than 2 members off the size, and the new count brings them closer to it, so the count
-     * does not churn (a nation of 11 keeps its second club; one of 10 folds it into one of 10).
+     * does not churn (at size 8 a nation of 11 keeps its second club; one of 10 folds it into one).
      */
     private fun resize(s: Int, alive: Set<String>, input: ClubInput, place: Map<String, Int>) {
         val sizes = nationSizes(alive, input)
