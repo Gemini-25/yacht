@@ -173,6 +173,9 @@ class FederationTest {
         assertEquals("요트컵 8강부터 22경기 동안 이변이 한 번도 없었어요. 시리즈를 줄여 시즌을 가볍게 해요.", calm.evidence)
         val stay = Federation.candidates(stats(promoted = 40, bounced = 0, champPpm = 0.584), config).single()
         assertEquals("2부 우승자들의 경기당 승점이 1부 중간 순위보다 0.58점 높았고, 1부로 올라온 선수는 한 명도 다시 내려가지 않았어요. 실력 있는 선수가 더 빨리 올라오게 해요.", stay.evidence)
+        // Level with the 1부's middle (the guard takes 0): not "0.00점 높았고".
+        val level = Federation.candidates(stats(promoted = 40, bounced = 4, champPpm = 0.004), config).single()
+        assertEquals("2부 우승자들의 경기당 승점이 1부 중간 순위와 같았고, 1부로 올라온 선수 가운데 10%만 다시 내려갔어요. 실력 있는 선수가 더 빨리 올라오게 해요.", level.evidence)
         assertEquals(7, down.appliesFrom)
     }
 
@@ -261,12 +264,16 @@ class FederationTest {
 
     @Test
     fun theFirstAssemblyHasOnlyTheStructureFreeKinds() {
-        val s = stats(promoted = 100, bounced = 50, rounds = 48, decided = 100, sweeps = 70, koTies = 20, koUpsets = 2, national = false)
+        val s = stats(promoted = 100, bounced = 50, rounds = 48, decided = 100, sweeps = 70, koTies = 20, koUpsets = 2)
         val all = Federation().assemble(5, s, config, structureFreeOnly = false).map { it.kind }
         assertEquals(listOf(ProposalKind.SWAP_DOWN, ProposalKind.SWEEP_OFF, ProposalKind.SIZE_DOWN), all)
         val first = Federation().assemble(5, s, config, structureFreeOnly = true)
         assertEquals(listOf(ProposalKind.SWEEP_OFF, ProposalKind.LONG_KO_OFF), first.map { it.kind })
         assertTrue(first.all { it.kind.structureFree })
+        // A legacy season's numbers never speak for the national rules, whatever the caller asks.
+        val legacy = s.copy(national = false)
+        assertEquals(listOf(ProposalKind.SWEEP_OFF, ProposalKind.LONG_KO_OFF), Federation().assemble(5, legacy, config, structureFreeOnly = false).map { it.kind })
+        assertTrue(Federation.candidates(legacy, config).all { it.kind.structureFree })
         assertEquals(setOf(ProposalKind.SWEEP_OFF, ProposalKind.SWEEP_ON, ProposalKind.LONG_KO_ON, ProposalKind.LONG_KO_OFF), ProposalKind.entries.filter { it.structureFree }.toSet())
     }
 
@@ -279,6 +286,17 @@ class FederationTest {
         assertEquals(listOf("a", "b"), f.promoted(5))
         assertNull(f.promoted(4))
         assertEquals(100, f.stats(5)!!.promoted)
+        // The season as the file keeps it: the promoted are the up line, not the fs line.
+        assertEquals(f.stats(5), Federation.decode(f.encode()).stats(5))
+        // Legacy rules to come (before national leagues are offered): the federation never proposes on them.
+        val legacy = LeagueConfig()
+        val g = Federation()
+        val pressing = stats(promoted = 100, bounced = 50, decided = 100, sweeps = 70, koTies = 20, koUpsets = 2, levers = levers(legacy))
+        assertEquals(3, Federation.candidates(pressing, legacy).size)
+        assertEquals(emptyList(), g.assemble(5, pressing, legacy, false))
+        assertEquals(5, g.assembled)
+        assertNotNull(g.stats(5))
+        assertEquals(emptyList(), Federation().assemble(5, pressing.copy(national = false), legacy, true))
     }
 
     @Test
@@ -471,6 +489,12 @@ class FederationTest {
         assertTrue("a%20b|c%7Cd" in more.encode())
         assertFailsWith<IllegalArgumentException> { Federation.decode("clubs 2\nmeta 1 1") }
         assertEquals(Federation().encode(), Federation.decode("federation 1\n").encode())
+        // A lost meta line: the open replayed on it finds P(6) stored and tables no second one.
+        val noMeta = Federation.decode(text.lines().filter { !it.startsWith("meta ") }.joinToString("\n"))
+        assertEquals(0, noMeta.assembled)
+        assertEquals(f.of(6), noMeta.assemble(6, stats(season = 6, promoted = 100, bounced = 50), config, false))
+        assertEquals(6, noMeta.assembled)
+        assertEquals(f.proposals, noMeta.proposals)
     }
 
     @Test
@@ -663,9 +687,14 @@ class FederationTest {
         assertEquals(0, s.promoted)
         assertEquals(1, s.playoffLeagues)
         assertEquals(levers(legacy), s.levers)
+        // Its top tier is no national 1부: those promoted into it are not kept for the next season's elevator.
+        assertTrue(Offseason.moves(plan).any { it.to == 0 && it.from > 0 })
+        assertEquals(emptyList(), s.up)
         // The migration's assembly reads only what such a season has.
-        val first = Federation().assemble(3, s, LeagueConfig.DEFAULT, structureFreeOnly = true)
+        val fed = Federation()
+        val first = fed.assemble(3, s, LeagueConfig.DEFAULT, structureFreeOnly = true)
         assertTrue(first.all { it.kind.structureFree })
+        assertEquals(emptyList(), fed.promoted(3))
     }
 
     private companion object {

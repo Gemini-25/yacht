@@ -119,7 +119,7 @@ data class Proposal(
             fun a(i: Int) = args.getOrNull(i) ?: "?"
             return when (kind) {
                 ProposalKind.SWAP_DOWN -> "1부로 올라온 ${a(0)}명 가운데 ${a(1)}명(${a(2)}%)이 한 시즌 만에 다시 내려갔어요. 승강 인원을 줄여 1부를 안정시켜요."
-                ProposalKind.SWAP_UP -> "2부 우승자들의 경기당 승점이 1부 중간 순위보다 ${a(3)}점 높았고, " +
+                ProposalKind.SWAP_UP -> (if (a(3) == "0.00") "2부 우승자들의 경기당 승점이 1부 중간 순위와 같았고, " else "2부 우승자들의 경기당 승점이 1부 중간 순위보다 ${a(3)}점 높았고, ") +
                     (if (a(1) == "0") "1부로 올라온 선수는 한 명도 다시 내려가지 않았어요." else "1부로 올라온 선수 가운데 ${a(2)}%만 다시 내려갔어요.") +
                     " 실력 있는 선수가 더 빨리 올라오게 해요."
                 ProposalKind.TITLE_PO_OFF -> "${a(0)}개 리그 가운데 ${a(1)}곳에서 정규 리그 1위가 플레이오프에서 우승을 놓쳤어요. 시즌 내내 1위를 지킨 선수가 우승하게 해요."
@@ -207,7 +207,11 @@ data class FederationStats(
     val cclMatches: Int,
     /** The [Lever] values the season was played with, in [Lever] order. */
     val levers: List<String>,
-    /** Members promoted into a 1부 at this season's end: the next season's [promoted] (kept as federation.txt's `up` line). */
+    /**
+     * Members promoted into a 1부 at this season's end: the next season's [promoted] (kept as
+     * federation.txt's `up` line, not in the `fs` line). None after a legacy season: the first
+     * national 1부s are formed, nobody is promoted into them.
+     */
     val up: List<String> = emptyList(),
 ) {
     /** Share of [promoted] that went straight back down. */
@@ -258,7 +262,8 @@ data class FederationStats(
             // The elevator: last season's promoted who played in a 1부, and those of them going down from it now.
             val down = moves.filter { it.from == 0 && it.to > 0 }.map { it.key }.toHashSet()
             val lastUp = federation.promoted(n - 1).orEmpty().filter { k -> league.divisionOf(k)?.let { leagues.tier(it) } == 0 }
-            val up = moves.filter { it.to == 0 && it.from > 0 }.map { it.key }.distinct()
+            // A legacy season's top tier is no national 1부: the next season's are formed, not promoted into.
+            val up = if (!leagues.national) emptyList() else moves.filter { it.to == 0 && it.from > 0 }.map { it.key }.distinct()
             // The 2부 champions' points per match over the 1부's median, per league with a 2부.
             val edges = ArrayList<Double>()
             for (lg in leagues.list) {
@@ -509,10 +514,12 @@ class Federation : CoefficientStore {
 
     /**
      * The assembly after season [season] (at the next season's open): records [stats] (an `fs`
-     * line, and its promoted players as the `up` line) and, with [LeagueConfig.federation] on,
-     * tables P(season) against [config], the rules of the season to come:
+     * line, and its promoted players as the `up` line) and, with [LeagueConfig.federation] on and
+     * national leagues to come ([LeagueConfig.national]: a legacy league's rules are never
+     * proposed on), tables P(season) against [config], the rules of the season to come:
      * 1. every kind whose guard holds and whose statistic is past its floor ([candidates]; only
-     *    the structure-free ones with [structureFreeOnly], the first assembly after a legacy season);
+     *    the structure-free ones with [structureFreeOnly] or after a legacy season, the first
+     *    assembly);
      * 2. none on a lever with a pending proposal, or whose value differs among the season to come
      *    ([config]), [season] and [season] - 1 (changed in either direction in the last 2 seasons,
      *    by the federation or by hand), or whose change [config] cannot take;
@@ -520,15 +527,16 @@ class Federation : CoefficientStore {
      * 4. by pressure, then kind order: the first [TABLED], and the next when its pressure is at
      *    least [THIRD].
      * Returns P(season) (empty: the rules stay as they are). Idempotent: once [assembled] ≥
-     * [season] it returns the stored proposals.
+     * [season], or P(season) is stored (a file whose `meta` line was lost), it returns the stored
+     * proposals.
      */
     fun assemble(season: Int, stats: FederationStats, config: LeagueConfig, structureFreeOnly: Boolean): List<Proposal> {
-        if (assembled >= season) return of(season)
+        if (assembled >= season || list.any { it.season == season }) return of(season).also { assembled = maxOf(assembled, season) }
         require(stats.season == season) { "statistics of season ${stats.season} for the assembly after $season" }
         putStats(stats)
         upSeason = season
         upKeys = stats.up
-        if (config.federation) {
+        if (config.federation && config.national) {
             val busy = pending().map { it.lever }.toSet()
             val previous = this.stats[season - 1]?.levers
             fun changed(l: Lever): Boolean {
@@ -548,7 +556,8 @@ class Federation : CoefficientStore {
     }
 
     private fun putStats(s: FederationStats) {
-        stats[s.season] = s
+        // As the `fs` line keeps it (the promoted are the `up` line), so a reload reads the same.
+        stats[s.season] = s.copy(up = emptyList())
         while (stats.size > STATS) stats.remove(stats.firstKey())
     }
 
@@ -653,15 +662,17 @@ class Federation : CoefficientStore {
         /**
          * Every kind whose guard holds under [config] (the rules of the season to come) and whose
          * statistic in [stats] is past its floor, as a proposal of number 0 with its pressure (2
-         * decimals) and evidence; only [ProposalKind.structureFree] ones with [structureFreeOnly].
-         * No lever or recent-change rule here ([Federation.assemble] applies those).
+         * decimals) and evidence; only [ProposalKind.structureFree] ones with [structureFreeOnly]
+         * and for a legacy season's [stats] (its elevator, tables and fixtures are no national
+         * leagues'). No lever or recent-change rule here ([Federation.assemble] applies those).
          */
         fun candidates(stats: FederationStats, config: LeagueConfig, structureFreeOnly: Boolean = false): List<Proposal> {
             val out = ArrayList<Proposal>()
             fun pct(k: Int, n: Int) = if (n <= 0) "0" else (100.0 * k / n).roundToInt().toString()
             fun num2(x: Double) = String.format(Locale.ROOT, "%.2f", x)
+            val freeOnly = structureFreeOnly || !stats.national
             for (kind in ProposalKind.entries) {
-                if (structureFreeOnly && !kind.structureFree) continue
+                if (freeOnly && !kind.structureFree) continue
                 val from = config.valueOf(kind.lever.key) ?: continue
                 val swapArgs = listOf(stats.promoted.toString(), stats.bounced.toString(), pct(stats.bounced, stats.promoted), stats.champPpm?.let(::num2) ?: "-")
                 val c: Triple<Double, String, List<String>>? = when (kind) {
