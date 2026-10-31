@@ -9,6 +9,7 @@ import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.MatchPreview
+import yacht.engine.league.MatchRef
 import yacht.engine.league.WinEstimate
 import java.io.File
 
@@ -76,4 +77,10 @@ internal interface LeagueHost {
     /** The watch screen's pace (ui.txt), and a new one to save. */
     fun watchPace(): WatchPace = WatchPace.NORMAL
     fun saveWatchPace(p: WatchPace) {}
+
+    /** The UI preferences (ui.txt: the banners dismissed). */
+    fun uiPrefs(): UiPrefs = UiPrefs()
+
+    /** True when [ref]'s match between [a] and [b] can be played again (▶, UX 3.3); under the lock. */
+    fun canReplay(ref: MatchRef, a: String, b: String): Boolean = false
 }

@@ -394,8 +394,6 @@ data class RecordsRoomView(
     /** This season so far, and the last finished one. */
     val meta: MetaReport?,
     val previousMeta: MetaReport?,
-    /** Best average match rating this season (the MVP race), with its matches. */
-    val mvpRace: List<Pair<String, AiStats>>,
 )
 
 /** A nation in the 국가 랭킹: its national team's record and its players' strength. */
@@ -629,35 +627,48 @@ data class LeagueInfo(
     val union: Boolean get() = id == yacht.engine.league.LeagueIds.WORLD || yacht.engine.league.LeagueIds.isRegion(id)
 }
 
-/** The home dashboard's one banner, the most pressing first. */
+/** The home dashboard's one banner, the most pressing first (UX 2: 0b > 0c > 0d > 0a). */
 sealed interface HomeBanner {
+    /** 0a: no match played yet. */
     data object Empty : HomeBanner
+
+    /** 0b: season [season] just closed: its titles ([lines]), until dismissed or two weeks into the next. */
     data class SeasonEnd(val season: Int, val lines: List<String>) : HomeBanner
+
+    /** 0c: the first national season ([season]), until dismissed. */
     data class Reform(val season: Int) : HomeBanner
 
-    /** [moves]: (name, "🇯🇵 일본 리그") of followed players. */
+    /** 0d: a legacy season with national rules next; [moves]: (name, "🇯🇵 일본 리그") of followed players. */
     data class Coming(val season: Int, val moves: List<Pair<String, String>>) : HomeBanner
 }
 
-/** The home's last lines; [cloneInvite] the games still needed before the clone joins. */
-data class HomeFooter(val members: Int, val matches: Long, val cloneInvite: Int?)
-
 enum class FollowKind { PLAYER, CLUB, NATION, LEAGUE }
 
-/** A followed player, club, nation or league on the home and the 응원 page. */
+/**
+ * A followed player, club, nation or league on the home (its first rows) and the 응원 page:
+ * [key] is the favourite ("p042", "club:c07", "nation:KR", "league:KR"), [target] what a tap
+ * opens (the player, club, nation code or league id), [line] the short line under the title
+ * ("한국 1부 3위"), [detail] the page's second line ("레이팅 1,612 (+8)"), [form] the last
+ * results ('W', 'D', 'L', oldest first), [note] what the card says when there is no match to show.
+ */
 data class FollowCard(
     val kind: FollowKind,
     val key: String,
+    val target: String,
     val title: String,
     val badge: ClubBadge?,
     val line: String,
+    val detail: String?,
     val last: FollowMatch?,
     val next: FollowMatch?,
     val form: String,
     val note: String?,
 )
 
-/** A followed side's last or next match; [result] +1 won, 0 drawn, -1 lost (null before it is played). */
+/**
+ * A followed side's last or next match; [result] +1 won, 0 drawn, -1 lost (null before it is
+ * played). An [opponent] of "" is a knockout tie not drawn yet ([where] and [week] its stage).
+ */
 data class FollowMatch(
     val ref: String,
     val week: Int,
@@ -1113,23 +1124,42 @@ data class RankRow(val rank: LeagueRank, val label: String, val short: String, v
  */
 data class RankingView(val season: Int, val rows: List<RankRow>, val byStrength: Boolean, val published: Int)
 
-/** The home's 국제 무대: the stages of the world competitions, the ranking's top and this season's race. */
+/**
+ * The home's 국제 무대: the stage each world competition is at ([stages]: 챔피언스 리그, 대륙 챔피언스),
+ * the league ranking's top 3 and this season's race ([live]: league id and its points per entry
+ * so far, best first, top 3).
+ */
 data class WorldSnippet(val stages: List<Pair<Comp, String>>, val ranking: List<RankRow>, val live: List<Pair<String, Double>>)
 
-/** The home dashboard, built on request (never in the snapshot). */
+/**
+ * The home dashboard (`lg.home.view`), built on request off the main thread (never in the
+ * snapshot): the banner, the followed entities (players by rating, then clubs, nations,
+ * leagues; the home shows the first [HomeView.FOLLOW_ROWS]), the international stage, the
+ * 요트협회's open proposals ([pendingProposals], of which the player voted on [voted]) and the
+ * nearest record chases. The league card, the results, the top news and next week come from the
+ * snapshot, the big matches from the broadcast channel.
+ */
 data class HomeView(
     val season: Int,
     val week: Int,
     val banner: HomeBanner?,
     val followed: List<FollowCard>,
+    /** Followed entities beyond [followed] (it holds at most [MAX_CARDS]). */
     val followedMore: Int,
-    val picks: List<BroadcastPick>,
-    val table: List<SeasonRow>,
     val world: WorldSnippet?,
     val pendingProposals: Int,
-    val news: List<Article>,
-    val footer: HomeFooter,
-)
+    val voted: Int,
+    val chase: List<ChaseLine>,
+) {
+    companion object {
+        /** Followed rows on the home; the rest are on the 응원 page. */
+        const val FOLLOW_ROWS = 3
+        const val MAX_CARDS = 12
+    }
+}
+
+/** The news page's articles (all the book keeps, newest first) and the refs of those whose match can be played again (▶). */
+data class NewsList(val articles: List<Article>, val replayable: Set<String>)
 
 /**
  * A league's page; [key] equals its page's load key. [top] its 1부's first 5, [clubs] its club
@@ -1195,6 +1225,9 @@ data class UiPrefs(val dismissed: Map<String, Int> = emptyMap(), val watchPace: 
 
     fun dismiss(banner: String, season: Int): UiPrefs = copy(dismissed = dismissed + (banner to season))
 
+    /** No banner dismissed (a new league's seasons start again at 1); the other preferences kept. */
+    fun undismissed(): UiPrefs = copy(dismissed = emptyMap())
+
     fun encode(): String = buildString {
         append("ui $VERSION\n")
         for ((banner, season) in dismissed.entries.sortedBy { it.key }) append("dismissed $banner $season\n")
@@ -1205,9 +1238,10 @@ data class UiPrefs(val dismissed: Map<String, Int> = emptyMap(), val watchPace: 
         const val VERSION = 1
         const val FILE = "ui.txt"
 
-        /** The banners: the first national season's, and the one telling of a reform to come. */
+        /** The banners: the first national season's, the one telling of a reform to come, and a season's end. */
         const val REFORM = "reform"
         const val COMING = "coming"
+        const val SEASON_END = "seasonend"
 
         /** [text] as written by [encode]; a missing or unreadable file, or a line that is not understood, gives the defaults. */
         fun decode(text: String?): UiPrefs {

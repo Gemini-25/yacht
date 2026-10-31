@@ -313,7 +313,8 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Compare -> ComparePage(lg, page, v.rows)
         is Page.Rules -> RulesPage(lg, page.part) { nav.close(page) }
         Page.Lab -> LabPage(lg)
-        Page.News -> NewsPage(lg, v)
+        Page.News -> NewsPage(c, v)
+        Page.Follows -> FollowsPage(c, v)
         Page.Prospects -> Prospects(lg, open)
         Page.Legends -> Legends(lg, open)
         Page.Families -> FamilyList(lg, v, open)
@@ -325,7 +326,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Review -> ReviewPageBody(c, v, page)
         is Page.Facts -> FactsPage(lg, v, page)
         Page.Chronicle -> ChroniclePage(lg, v)
-        // The followed players and match lists come later.
+        // The match lists come later.
         else -> CenterText("곧 볼 수 있어요.")
     }
 }

@@ -348,21 +348,57 @@ internal fun shot(c: AppController, out: File, name: String, dark: Boolean = fal
 /** The phone width every shot is rendered at, unless a narrower one is asked for (360 dp). */
 private const val WIDTH_DP = 392
 
-@OptIn(ExperimentalComposeUiApi::class)
+/** Tries of a shot that hits a composition race ([raced]). */
+private const val RENDER_TRIES = 3
+
+/**
+ * True for the desktop harness's composition race: the league's worker threads write snapshot
+ * state while the shot's scene composes on this thread (a NullPointerException out of
+ * `ScopeMap.remove` in `ImageComposeScene.<init>`, seen in CI). On a phone composition runs on
+ * the main thread only, so this is the harness's alone.
+ */
+private fun raced(e: Throwable): Boolean =
+    (e is NullPointerException || e is IllegalStateException || e is ConcurrentModificationException) &&
+        e.stackTrace.any { it.className.startsWith("androidx.compose.runtime") }
+
+/**
+ * Renders a shot; one that hits the composition race ([raced]) is dropped (its scene closed) and
+ * shot again after 100 ms, up to [RENDER_TRIES] times in all, each retry logged.
+ */
 private fun render(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
+    var attempt = 1
+    while (true) {
+        try {
+            renderOnce(out, name, widthDp, heightDp, settleMs, what, content)
+            return
+        } catch (e: Throwable) {
+            if (attempt >= RENDER_TRIES || !raced(e)) throw e
+            println("retrying $what after a composition race (try $attempt of $RENDER_TRIES): ${e.javaClass.simpleName}: ${e.message}")
+            attempt++
+            Thread.sleep(100)
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+private fun renderOnce(out: File, name: String, widthDp: Int, heightDp: Int, settleMs: Long, what: String, content: @Composable () -> Unit) {
     val density = 2f
     val scene = ImageComposeScene(width = (widthDp * density).toInt(), height = (heightDp * density).toInt(), density = Density(density), content = content)
-    scene.render(0)
-    if (settleMs > 0) {
-        Thread.sleep(settleMs)
-        scene.render(1_000_000_000L)
-        Thread.sleep(100)
+    // Encoded before the scene closes (its image is the scene's); a failed try leaves no file.
+    val (png, jpeg) = try {
+        scene.render(0)
+        if (settleMs > 0) {
+            Thread.sleep(settleMs)
+            scene.render(1_000_000_000L)
+            Thread.sleep(100)
+        }
+        val image = scene.render(2_000_000_000L)
+        image.encodeToData(EncodedImageFormat.PNG)!!.bytes to image.encodeToData(EncodedImageFormat.JPEG, 72)!!.bytes
+    } finally {
+        scene.close()
     }
-    val image = scene.render(2_000_000_000L)
-    File(out, "$name.png").writeBytes(image.encodeToData(EncodedImageFormat.PNG)!!.bytes)
-    val jpeg = image.encodeToData(EncodedImageFormat.JPEG, 72)!!.bytes
+    File(out, "$name.png").writeBytes(png)
     File(out, "$name.jpg").writeBytes(jpeg)
-    scene.close()
     if (System.getenv("PRINT_SHOTS") == "1") {
         val b64 = Base64.getEncoder().encodeToString(jpeg)
         println("SHOT-BEGIN $name ${b64.length}")

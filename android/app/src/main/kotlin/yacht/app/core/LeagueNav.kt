@@ -13,6 +13,9 @@ import yacht.engine.league.Origin
 /** The league screen's four tabs (the bottom bar), in order. */
 enum class LeagueTab(val label: String, val icon: String) { HOME("홈", "🏠"), MATCHES("경기", "🎲"), TABLES("순위", "📊"), RECORDS("기록", "📚") }
 
+/** The tab a link from outside the app opens (the league notification's [LeagueTab] name); null for anything else. */
+fun deepLinkTab(name: String?): LeagueTab? = LeagueTab.entries.firstOrNull { it.name == name }
+
 /** 경기's sub-views (its chip row). */
 enum class MatchesView(val label: String) { WEEK("이번 주"), RESULTS("결과"), BROADCAST("중계"), HIGHLIGHTS("하이라이트") }
 
