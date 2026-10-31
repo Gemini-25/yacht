@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import yacht.engine.league.ChaseLine
 import yacht.engine.league.ClubBook
@@ -29,7 +30,6 @@ import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.TieRule
-import yacht.engine.league.byTeams
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -85,6 +85,29 @@ class HomeFeed internal constructor(private val host: LeagueHost) {
             }
         }
     }
+
+    private val soon = AtomicBoolean(false)
+
+    /**
+     * A [refresh] for a followed result (the work loop, any thread): one at most every
+     * [RESULT_REFRESH_MS], the results meanwhile folded into it. A club's members play the same
+     * round, and a build at a league of thousands takes tens of ms under the lock the matches
+     * are recorded under: a build per result would slow the league.
+     */
+    fun refreshSoon() {
+        if (!soon.compareAndSet(false, true)) return
+        host.scope.launch(Dispatchers.Default) {
+            try {
+                delay(RESULT_REFRESH_MS)
+            } finally {
+                soon.set(false)
+            }
+            refresh()
+        }
+    }
+
+    /** Builds made so far (the tests count them). */
+    internal val buildCount: Long get() = builds.get()
 
     /** Forgets what was built from a league being replaced (a reset, a seed, a restore); the next [refresh] builds anew. Main thread. */
     fun clear() {
@@ -318,22 +341,22 @@ class HomeFeed internal constructor(private val host: LeagueHost) {
         return if (first) r else -r
     }
 
-    /** [m] as [key]'s card shows it: where, the opponent (a team match: its board's), the result and score, ▶, the chance before it. */
+    /**
+     * [m] as [key]'s card shows it: where, the opponent, the result and score, ▶, the chance
+     * before it. A team match (a club cup's, a nation cup's) is [key]'s board ([FollowMatch.opponent]
+     * its board's opponent), but its result and score are the teams': it is named by the other
+     * team (a club by its name, as [LeagueHost.name] gives it, not its id).
+     */
     private fun followMatch(w: LeagueWorld, p: SeasonPlan, m: SeasonMatch, key: String): FollowMatch {
         val f = m.fixture
         val team = f.kind == JobKind.TEAM
         val first = if (team) key in f.lineupA else f.a == key
         val opp = if (team) (if (first) f.lineupB else f.lineupA).getOrNull(m.ref.board).orEmpty() else if (first) f.b else f.a
-        val other = if (team || f.comp.byTeams) Competitions.teamLabel(if (first) f.b else f.a) else null
         val where = when (f.comp) {
             Comp.LEAGUE -> p.league.divisionOf(key)?.let { p.league.leagues.label(it) } ?: Comp.LEAGUE.label
             else -> listOf(f.comp.label, f.label).filter { it.isNotBlank() }.distinct().joinToString(" ")
         }
-        val name = when {
-            opp.isEmpty() -> other.orEmpty()
-            other != null -> "${host.shown(opp)} ($other)"
-            else -> host.shown(opp)
-        }
+        val name = if (team) host.name(if (first) f.b else f.a) else host.shown(opp)
         val score = m.score?.let { s -> if (first) "${num(s.scoreA)}:${num(s.scoreB)}" else "${num(s.scoreB)}:${num(s.scoreA)}" }
         val (a, b) = if (team) (f.lineupA.getOrNull(m.ref.board) to f.lineupB.getOrNull(m.ref.board)) else (f.a to f.b)
         val replay = m.played && a != null && b != null && runCatching { host.canReplay(m.ref, a, b) }.getOrDefault(false)
@@ -489,6 +512,22 @@ class HomeFeed internal constructor(private val host: LeagueHost) {
      */
     private fun chase(w: LeagueWorld, p: SeasonPlan, favs: Set<String>): List<ChaseLine> {
         val followed = favs.filter { ':' !in it && it in w.members }
+        // The nearest chases move with the weeks, not with each result: kept for the week in play (a record
+        // broken or set meanwhile, or another player followed, finds them again). Everyone's chases are
+        // a pass over the whole league, the build's largest part at a league of thousands.
+        val key = listOf(p, p.week, followed, w.stats.records.all)
+        if (key == chaseKey) return chased
+        return chaseOf(w, p, followed).also {
+            chaseKey = key
+            chased = it
+        }
+    }
+
+    /** What [chase] keeps, and for which plan, week, followed players and records (under the lock). */
+    private var chaseKey: List<Any?>? = null
+    private var chased: List<ChaseLine> = emptyList()
+
+    private fun chaseOf(w: LeagueWorld, p: SeasonPlan, followed: List<String>): List<ChaseLine> {
         fun old(l: ChaseLine) = w.stats.records[l.kind]?.let { it.season < p.number } == true
         val mine = if (followed.isEmpty()) emptyList() else RecordChase.of(w.stats, p, followed, top = 1).flatMap { it.second }.filter(::old)
         val all = RecordChase.of(w.stats, p, w.members, top = 1).flatMap { it.second }.filter(::old)
@@ -503,6 +542,9 @@ class HomeFeed internal constructor(private val host: LeagueHost) {
     }
 
     companion object {
+        /** A followed result's refresh waits this long for the results after it ([refreshSoon]). */
+        const val RESULT_REFRESH_MS = 1_500L
+
         /** A season's end is on the home for the next season's first weeks. */
         const val SEASON_END_WEEKS = 2
 

@@ -552,7 +552,8 @@ class LeagueController(
             config = cfg
             favourites = favs
             review = rv
-            // The league read: its home (the one of the league it replaced goes).
+            // The league read: its home and news (those of the league it replaced go).
+            newsList = null
             home.clear()
             home.refresh()
             if (!first) {
@@ -1131,7 +1132,8 @@ class LeagueController(
                     // extras of a match already recorded (a failure here must not give it back to the season).
                     if (played != null) runCatching { refsOf(result, rec.matches) }
                     if (played != null) runCatching { center.offer(result, sink) }.onFailure { e -> scope.launch { onError(e) } }
-                    if (followedIn(result)) home.refresh()
+                    // The home moves with a followed result (a few at a time: [HomeFeed.refreshSoon]).
+                    if (runCatching { followedIn(result) }.getOrDefault(false)) home.refreshSoon()
                     recorded = true
                     lastRecord = System.currentTimeMillis()
                     meter(result)

@@ -65,13 +65,11 @@ import yacht.engine.league.Article
 import yacht.engine.league.ChaseLine
 import yacht.engine.league.CloneProfile
 import yacht.engine.league.Comp
-import yacht.engine.league.Competitions
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueIds
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.MatchRef
 import yacht.engine.league.Origin
-import yacht.engine.league.byTeams
 
 // 홈: the league's daily landing page (UX design 2). One banner (a season just over, the first
 // national season, a reform to come, an empty league), ★ 응원 (followed players, clubs, nations and
@@ -278,7 +276,7 @@ private fun FollowRow(c: AppController, card: FollowCard) {
                 if (card.line.isNotEmpty()) Text(" · ${card.line}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val text = followLine(card, lg::name)
+                val text = followLine(card, lg.view?.clock?.leagueWeeks, lg::name)
                 Text(text, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 card.last?.takeIf { it.replay }?.let { m -> MiniAction("▶") { watchMatch(c, m.ref) } }
                 card.next?.takeIf { it.ref.isNotEmpty() }?.let { m -> MiniAction("🔮") { lg.nav.open(Page.Match(m.ref)) } }
@@ -296,19 +294,24 @@ private fun MiniAction(label: String, onClick: () -> Unit) {
     )
 }
 
+/** True when [m] is a board of a team match (a club cup's, a nation cup's): its result and score are the teams'. */
+private fun teamBoard(m: FollowMatch): Boolean = (MatchRef.decode(m.ref)?.board ?: -1) >= 0
+
 /**
  * A followed row's second line: "최근 {opp}에게 2:0 승 · 다음 15주차 {opp} 62%", else its detail or
- * note; a player's opponents by [name] alone (no flag: the line is short).
+ * note; a player's opponents by [name] alone (no flag: the line is short), a team match's by the
+ * other team; weeks as the schedule names them ([leagueWeeks]: "개막 전", "포스트시즌 1주차").
  */
-private fun followLine(card: FollowCard, name: (String) -> String): String {
+internal fun followLine(card: FollowCard, leagueWeeks: Int?, name: (String) -> String): String {
     val parts = ArrayList<String>()
-    fun opp(m: FollowMatch) = if (m.opponent.isNotEmpty() && card.kind == FollowKind.PLAYER) name(m.opponent) else m.opponentName
+    fun opp(m: FollowMatch) = if (m.opponent.isNotEmpty() && card.kind == FollowKind.PLAYER && !teamBoard(m)) name(m.opponent) else m.opponentName
     card.last?.let { m ->
         parts += if (card.kind == FollowKind.CLUB) "${m.where} ${m.score ?: ""} ${resultWord(m.result)}".trim()
         else "최근 ${if (m.opponentName.isEmpty()) m.where else "${opp(m)}에게"} ${m.score ?: ""} ${resultWord(m.result)}".replace("  ", " ").trim()
     }
     card.next?.let { m ->
-        parts += if (m.opponent.isEmpty()) "다음 ${m.week}주차 ${m.where} · 상대 미정" else "다음 ${m.week}주차 ${opp(m)}" + (m.winChance?.let { " $it%" } ?: "")
+        val week = weekName(m.week, leagueWeeks).ifEmpty { null }
+        parts += listOfNotNull("다음", week, if (m.opponent.isEmpty()) "${m.where} · 상대 미정" else opp(m) + (m.winChance?.let { " $it%" } ?: "")).joinToString(" ")
     }
     if (parts.isEmpty()) card.detail?.let { parts += it }
     if (parts.isEmpty()) card.note?.let { parts += it }
@@ -361,11 +364,13 @@ private fun MatchLine(c: AppController, v: LeagueView, head: String, m: FollowMa
     val lg = c.league
     val cs = MaterialTheme.colorScheme
     val week = weekLabel(m.week, v.clock?.season ?: 0, v.clock)
+    // A team match is the teams' (their result and score); the followed player's own board says whom it met.
+    val board = if (!club && teamBoard(m) && m.opponent.isNotEmpty()) " · 상대 ${lg.name(m.opponent)}" else ""
     val text = when {
         m.opponent.isEmpty() && m.result == null -> "$week ${m.where} · 상대가 아직 정해지지 않았어요"
-        m.result == null -> "$week ${m.where} · ${m.opponentName}" + (m.winChance?.let { " · 예상 승률 $it%" } ?: "")
+        m.result == null -> "$week ${m.where} · ${m.opponentName}" + (m.winChance?.let { " · 예상 승률 $it%" } ?: "") + board
         club -> "$week ${m.where} ${m.score ?: ""} ${resultWord(m.result)}"
-        else -> "$week ${m.where} · ${m.opponentName}에게 ${m.score ?: ""} ${resultWord(m.result)}"
+        else -> "$week ${m.where} · ${m.opponentName}에게 ${m.score ?: ""} ${resultWord(m.result)}$board"
     }
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
         Text("$head  $text".replace("  ", " "), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -411,9 +416,8 @@ private fun PickCard(c: AppController, p: BroadcastPick) {
     Card(Modifier.width(180.dp).clickable { lg.nav.open(Page.Match(p.ref)) }, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(compIcon(p.comp) + " " + p.title, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val team = p.comp.byTeams
-            fun side(k: String) = if (team) Competitions.teamLabel(k) else lg.name(k)
-            Text("${side(p.a)} 대 ${side(p.b)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            // A side by its name: a player's, a club's (a club cup's sides are club ids), a nation's or a team's.
+            Text("${lg.name(p.a)} 대 ${lg.name(p.b)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             // Its status and why it was picked on one line, then ▶ or 🔮.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val status = when {
@@ -662,10 +666,8 @@ private fun NextWeek(lg: LeagueController, v: LeagueView) {
                 Text(row.stages.joinToString(" · ") { stageName(it, short = true) }, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             for (p in coming) {
-                val team = p.comp.byTeams
-                fun side(k: String) = if (team) Competitions.teamLabel(k) else lg.name(k)
                 Text(
-                    "🔮 ${side(p.a)} 대 ${side(p.b)} · ${p.reason}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    "🔮 ${lg.name(p.a)} 대 ${lg.name(p.b)} · ${p.reason}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { lg.nav.open(Page.Match(p.ref)) }.padding(vertical = 2.dp),
                 )
             }
