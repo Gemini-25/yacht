@@ -16,14 +16,21 @@ import yacht.app.core.Page
 import yacht.app.core.PressureLevel
 import yacht.app.core.UiPrefs
 import yacht.app.core.pageOf
+import yacht.app.ui.arcIcon
 import yacht.app.ui.articleLink
+import yacht.app.ui.familyColor
 import yacht.app.ui.filterLabel
+import yacht.app.ui.honourLabel
 import yacht.app.ui.infoText
 import yacht.app.ui.infoTitle
 import yacht.app.ui.kindIcon
+import yacht.app.ui.linkable
 import yacht.app.ui.moodWord
 import yacht.app.ui.newsShown
+import yacht.app.ui.ownerIcon
 import yacht.app.ui.rankMove
+import yacht.app.ui.storyPill
+import yacht.app.ui.trophy
 import yacht.engine.OppModel
 import yacht.engine.Tables
 import yacht.engine.explain.Ko
@@ -33,12 +40,16 @@ import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.OwnerType
+import yacht.engine.league.StyleFamily
 import yacht.engine.league.WinEstimate
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -137,6 +148,42 @@ class StoryTextsTest {
         val arcs = { k: ArcKind, season: Int -> if (k == ArcKind.SUPER_LEAGUE && season == 7) 4 else null }
         assertEquals("🌐 자세히 ›" to "ev:4", articleLink(a("superleague_announce", season = 7), arcs))
         for (k in today.keys) assertNull(articleLink(a(k), arcs), "$k has no story pill")
+    }
+
+    @Test
+    fun aPageWaitingForItsContentHasNoLinkYet() {
+        // Rule 4: a page's entry points ship with its content. The stage that ships one of these
+        // takes it off [linkable] (and off this list); until then no link built from data opens it.
+        val waiting = listOf(
+            Page.Coach("k1"), Page.ClubRanking(), Page.Press(), Page.Events, Page.Event(4), Page.WcStory(3), Page.Encyclopedia("p:g001"), Page.Search,
+        )
+        for (p in waiting) assertFalse(linkable(p), "$p is linkable before its content")
+        for (p in listOf(Page.Player("g001"), Page.Club("c01"), Page.League("KR"), Page.Nation("KR"), Page.Market(), Page.Meta())) assertTrue(linkable(p), "$p")
+        // So an article's story pill shows only where it can lead: 이적 센터 and the meta report today.
+        fun a(kind: String) = Article(3, kind, "제목", "본문", emptyList(), null, 2, scope = "KR")
+        val arcs = { _: ArcKind, _: Int -> 4 }
+        assertEquals("💸 이적 센터 ›" to Page.Market(), storyPill(a("record_fee"), arcs))
+        assertEquals("🧭 시대 ›" to Page.Meta(), storyPill(a("era_begins"), arcs))
+        for (k in listOf("power_ranking", "predictions", "press_award", "wc_bids", "wc_host_vote", "wc_draw_ceremony", "club_ranking", "superleague_announce")) {
+            assertNotNull(articleLink(a(k), arcs), k)
+            assertNull(storyPill(a(k), arcs), "$k leads to a page still waiting")
+        }
+    }
+
+    @Test
+    fun thePhasesLabelsAndIconsAreTheirOwn() {
+        // UX 14.1's honours, owner and arc icons; UX 8.3's family colours, lighter in the dark theme.
+        assertEquals(listOf("골든 다이스", "올해의 영입"), listOf("GD", "SIGN").map(::honourLabel))
+        assertEquals(listOf("🎲", "✍"), listOf("GD", "SIGN").map(::trophy))
+        assertEquals(OwnerType.entries.size, OwnerType.entries.map(::ownerIcon).toSet().size)
+        assertEquals(ArcKind.entries.size, ArcKind.entries.map(::arcIcon).toSet().size)
+        val families: List<StyleFamily?> = StyleFamily.entries + null
+        assertEquals(families.size, families.map { familyColor(it, dark = false) }.toSet().size)
+        for (f in families) {
+            val light = familyColor(f, dark = false)
+            val dark = familyColor(f, dark = true)
+            assertTrue(dark != light && dark.red >= light.red && dark.green >= light.green && dark.blue >= light.blue, "$f")
+        }
     }
 
     @Test

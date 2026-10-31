@@ -301,6 +301,13 @@ internal fun articleLink(a: Article, arcId: (ArcKind, Int) -> Int?): Pair<String
     }
 }
 
+/**
+ * The story pill an article's card shows: [articleLink]'s label and page, only while that page
+ * may be opened from a link ([linkable]: rule 4, a page still waiting for its content gets no pill).
+ */
+internal fun storyPill(a: Article, arcId: (ArcKind, Int) -> Int?): Pair<String, Page>? =
+    articleLink(a, arcId)?.let { (label, link) -> pageOf(link)?.takeIf(::linkable)?.let { label to it } }
+
 /** The market's kinds whose pill opens 이적 센터. */
 private val MARKET_STORIES = setOf("market_week", "deal_collapsed", "record_fee", "rival_move", "release_clause", "free_agent", "winter_window", "deadline_day", "loan_digest")
 
@@ -324,9 +331,9 @@ internal fun ArticleCard(a: Article, clock: ClockView?, onOpen: (String) -> Unit
 
 /**
  * An article of the news page and the home: kind and scope, 🔥 by importance, the headline and
- * body, up to three of its people (players → their page, clubs → theirs; a digest's list behind
- * "+{n}명") and its match ("📋 리포트", "▶" when [replayable]). [compact]: the home's, without the
- * people; [lead]: the week's big story, in large.
+ * body, up to three of its people (players → their page, clubs and coaches → theirs; a digest's
+ * list behind "+{n}명"), its story's page ([storyPill]) and its match ("📋 리포트", "▶" when
+ * [replayable]). [compact]: the home's, without the people; [lead]: the week's big story, in large.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -339,7 +346,7 @@ internal fun ArticleCard(c: AppController, v: LeagueView, a: Article, compact: B
     ArticleFrame(a, v.clock, lead, compact, onClick = { a.keys.firstOrNull { lg.isAi(it) }?.let { nav.open(Page.Player(it)) } ?: ref?.let { openReport(lg, it) } }, report = report) {
         if (compact) return@ArticleFrame
         val people = peopleOf(lg, v, a)
-        val story = articleLink(a, lg.eventPages::arcId)?.let { (label, link) -> pageOf(link)?.takeIf(::linkable)?.let { label to it } }
+        val story = storyPill(a, lg.eventPages::arcId)
         var open by rememberSaveable(a.season, a.week, a.headline) { mutableStateOf(false) }
         val digest = a.kind in DIGESTS && people.size > PEOPLE
         if (people.isNotEmpty() || ref != null || story != null) {
