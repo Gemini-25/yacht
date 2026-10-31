@@ -20,10 +20,15 @@ import yacht.engine.league.BracketRound
 import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.CustomAiSpec
+import yacht.engine.league.GameScore
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueAi
+import yacht.engine.league.LeagueConfig
+import yacht.engine.league.LeagueFixture
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.Season
+import yacht.engine.league.SeasonPlan
 import yacht.engine.league.TieView
 import yacht.engine.league.WinEstimate
 import java.io.File
@@ -121,6 +126,48 @@ class PlayerPageTest {
         assertEquals(listOf("0.5:1.5", "2:0"), m.map { it.score })
         assertEquals(listOf("d", "b"), m.map { it.opponent })
         assertTrue(m.all { it.ref == null && it.comp == Comp.CUP })
+    }
+
+    @Test
+    fun leagueMatchesAreReadFromThePlayersSideNewestFirstWithTheNextOneToCome() {
+        val keys = listOf("a", "b", "c", "d")
+        val w = LeagueWorld(Ladder(keys))
+        val season = Season.start(1, 7L, listOf(keys))
+        w.plan = SeasonPlan(season, LeagueConfig())
+        // Two of the three rounds: the first side wins every match 2-0.
+        val played = ArrayList<LeagueFixture>()
+        repeat(4) {
+            val f = assertNotNull(season.next(emptySet()))
+            assertTrue(season.record(f.id, listOf(GameScore(220, 180), GameScore(205, 190))))
+            played += f
+        }
+        val an = LeagueAnalytics(Host(w))
+        an.load("a")
+        val page = assertNotNull(an.player(Page.Player("a")))
+        val own = played.filter { it.a == "a" || it.b == "a" }.sortedByDescending { it.matchday }
+        assertEquals(2, own.size)
+        assertEquals(own.map { "1:${Comp.LEAGUE.code}:${it.id}" }, page.matches.map { it.ref })
+        assertEquals(own.map { it.matchday + 1 }, page.matches.map { it.week })
+        assertEquals(own.map { "리그 ${it.round + 1}라운드" }, page.matches.map { it.where })
+        assertEquals(own.map { if (it.a == "a") it.b else it.a }, page.matches.map { it.opponent })
+        // Won as the first side, lost as the second; the scores read from a's side too.
+        assertEquals(own.map { if (it.a == "a") 1 else -1 }, page.matches.map { it.result })
+        assertEquals(own.map { if (it.a == "a") "220:180 · 205:190" else "180:220 · 190:205" }, page.matches.map { it.score })
+        assertTrue(page.matches.all { it.comp == Comp.LEAGUE })
+        // The next: its fixture of the third round, not played yet.
+        val next = assertNotNull(page.next)
+        val third = (0 until season.fixturesTotal).map { season.fixture(it) }.single { (it.a == "a" || it.b == "a") && it.matchday == 2 }
+        assertEquals("1:${Comp.LEAGUE.code}:${third.id}", next.ref)
+        assertEquals(3, next.week)
+        assertEquals(if (third.a == "a") third.b else third.a, next.opponent)
+        // Its place in its division's table and the tier's label.
+        assertEquals(0, page.division)
+        assertEquals("1부", page.tierLabel)
+        assertEquals(season.table(0).indexOfFirst { it.key == "a" } + 1, page.position)
+        // My own line has a page too (no league matches, no official numbers).
+        an.load(Ladder.ME)
+        val me = assertNotNull(an.player(Page.Player(Ladder.ME)))
+        assertTrue(me.matches.isEmpty() && me.cells.isEmpty() && me.next == null && me.position == null)
     }
 
     private fun stats(games: Int, wins: Int, avg: Int, yachts: Int = 0, sd: Int = 0) = AiStats().apply {

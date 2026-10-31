@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,6 +65,7 @@ import yacht.app.core.StatScope
 import yacht.app.core.TableMode
 import yacht.app.core.TablesView
 import yacht.engine.Category
+import yacht.engine.explain.Ko
 import yacht.engine.game.label
 import yacht.engine.league.AiStats
 import yacht.engine.league.Awards
@@ -80,9 +84,16 @@ import yacht.engine.league.Origin
 /**
  * [Page.Player]: loads the page (again after each of the player's matches) and draws the last one
  * loaded for it at once, so going back from a rival's page shows this player's data and tab.
+ * Each player's page is a composition of its own: a rival opened from far down starts at the top,
+ * with its own folds and filters, not the ones of the page under it.
  */
 @Composable
 internal fun PlayerPageBody(c: AppController, v: LeagueView, page: Page.Player) {
+    key(page.key) { PlayerPageContent(c, v, page) }
+}
+
+@Composable
+private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player) {
     val lg = c.league
     val nav = lg.nav
     val live = v.rows.firstOrNull { it.key == page.key }
@@ -100,7 +111,8 @@ internal fun PlayerPageBody(c: AppController, v: LeagueView, page: Page.Player) 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PlayerHeader(lg, v, p, row)
-            QuickButtons(lg, p)
+            // I play no league matches: no buttons to them.
+            if (page.key != Ladder.ME) QuickButtons(lg, p)
         }
         TabRow(selectedTabIndex = page.tab.ordinal, containerColor = MaterialTheme.colorScheme.background) {
             for (t in PlayerTab.entries) {
@@ -110,7 +122,7 @@ internal fun PlayerPageBody(c: AppController, v: LeagueView, page: Page.Player) 
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             when (page.tab) {
                 PlayerTab.OVERVIEW -> OverviewTab(lg, p, row, open)
-                PlayerTab.STATS -> StatsTab(lg, page, loaded)
+                PlayerTab.STATS -> StatsTab(lg, page, loaded, row)
                 PlayerTab.MATCHES -> MatchesTab(lg, v, p, open)
                 PlayerTab.HONOURS -> HonoursTab(lg, p)
             }
@@ -118,21 +130,30 @@ internal fun PlayerPageBody(c: AppController, v: LeagueView, page: Page.Player) 
     }
 }
 
-/** The page bar's actions on a player's page: ☆/★ (응원), ⚖ (비교) and ⋯ (the actions sheet); none on my own line. */
+/**
+ * The page bar's actions on a player's page: ☆/★ (응원), ⚖ (비교) and ⋯ (the actions sheet); none on
+ * my own line. A player no longer in the league (retired) has nothing to do in the sheet and is not
+ * followed anew (☆ stays only to stop following it).
+ */
 @Composable
 internal fun PlayerBarActions(lg: LeagueController, page: Page.Player) {
     if (page.key == Ladder.ME) return
     val nav = lg.nav
     val fav = page.key in lg.favourites
-    IconButton(onClick = { lg.toggleFavourite(page.key) }) {
-        Text(if (fav) "★" else "☆", fontSize = 20.sp, color = if (fav) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
-            modifier = Modifier.clearAndSetSemantics { contentDescription = if (fav) "응원 그만하기" else "응원하기" })
+    val plays = lg.view?.rows?.any { it.key == page.key } == true
+    if (plays || fav) {
+        IconButton(onClick = { lg.toggleFavourite(page.key) }) {
+            Text(if (fav) "★" else "☆", fontSize = 20.sp, color = if (fav) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
+                modifier = Modifier.clearAndSetSemantics { contentDescription = if (fav) "응원 그만하기" else "응원하기" })
+        }
     }
     IconButton(onClick = { nav.open(Page.Compare(page.key)) }) {
         Text("⚖", fontSize = 18.sp, modifier = Modifier.clearAndSetSemantics { contentDescription = "다른 선수와 비교" })
     }
-    IconButton(onClick = { nav.sheet = Sheet.PLAYER_ACTIONS }) {
-        Text("⋯", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clearAndSetSemantics { contentDescription = "더 하기" })
+    if (plays) {
+        IconButton(onClick = { nav.sheet = Sheet.PLAYER_ACTIONS }) {
+            Text("⋯", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clearAndSetSemantics { contentDescription = "더 하기" })
+        }
     }
 }
 
@@ -149,20 +170,22 @@ internal fun PlayerActionsSheet(c: AppController) {
     if (nav.sheet != Sheet.PLAYER_ACTIONS) return
     val key = page.key
     val close = { nav.sheet = Sheet.NONE }
-    val row = lg.view?.rows?.firstOrNull { it.key == key }
+    val row = lg.view?.rows?.firstOrNull { it.key == key } ?: return
     LeagueSheet(lg.name(key), close) {
-        if (row != null) {
-            LinkLine("🎮 이 선수와 랭크전", "내 레이팅이 걸린 한 판이에요") {
+        LinkLine("🎮 이 선수와 랭크전", "내 레이팅이 걸린 한 판이에요") {
+            close()
+            c.newRankedGame(key)
+        }
+        // Its rival (the page's) while it still plays in the league, else someone near its rating.
+        val rival = StatScope.entries.firstNotNullOfOrNull { lg.analytics.player(page.copy(scope = it)) }?.rival?.other
+            ?.takeIf { r -> lg.view?.rows?.any { it.key == r && !it.isMe } == true }
+        val with = rival?.let { "라이벌 ${Ko.wa(lg.name(it))}" } ?: "레이팅이 비슷한 상대와"
+        LinkLine("🤝 친선 경기 보기 (레이팅 반영)", "$with 새로 한 판을 두는 걸 지켜봐요") {
+            val other = rival ?: lg.rivalOf(key, java.util.Random())
+            if (other != null) {
                 close()
-                c.newRankedGame(key)
-            }
-            LinkLine("🤝 친선 경기 보기 (레이팅 반영)", "라이벌과 새로 한 경기를 치르는 걸 지켜봐요") {
-                val rival = lg.rivalOf(key, java.util.Random())
-                if (rival != null) {
-                    close()
-                    lg.center.watchFriendly(key, rival)
-                    c.screen = Screen.WATCH
-                }
+                lg.center.watchFriendly(key, other)
+                c.screen = Screen.WATCH
             }
         }
         LinkLine("⚗ 연구소에서 붙이기", "AI 연구소에서 이 선수를 골라 다른 AI와 수백 번 붙여 봐요") {
@@ -170,7 +193,7 @@ internal fun PlayerActionsSheet(c: AppController) {
             nav.open(Page.Lab)
         }
         // A league player (generated, evolved or made): remade in 선수 만들기.
-        if (row != null && (row.origin == Origin.GENERATED || row.origin == Origin.EVOLVED || row.origin == Origin.CREATED)) {
+        if (row.origin == Origin.GENERATED || row.origin == Origin.EVOLVED || row.origin == Origin.CREATED) {
             LinkLine("✏️ 선수 고치기", "능력치와 스타일을 바꿔요") {
                 close()
                 c.editingPlayer = key
@@ -193,6 +216,7 @@ internal fun PlayerActionsSheet(c: AppController) {
  * The header above the tabs: tier badge, flag and name (and nickname), club, "{league} {tier}
  * {place}위" (a tap: 순위 › 리그 at that division) or the retirement, then the rating line.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row: LadderRow?) {
     val cs = MaterialTheme.colorScheme
@@ -226,14 +250,17 @@ private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row
                 row != null && row.division == null && !row.isMe -> Text("이번 시즌은 리그 경기가 없어요", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
             }
             if (row != null) {
-                Text(
-                    listOfNotNull(
-                        "레이팅 ${row.rating ?: "–"}" + (row.margin?.let { " ±$it" } ?: ""),
-                        row.rank?.let { "전체 ${it}위" },
-                        row.peak?.let { "최고 $it" },
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                // Its parts wrap whole: Korean text breaks between any two syllables ("최\n고 1539" at 360 dp).
+                val parts = listOfNotNull(
+                    "레이팅 ${row.rating ?: "–"}" + (row.margin?.let { " ±$it" } ?: ""),
+                    row.rank?.let { "전체 ${it}위" },
+                    row.peak?.let { "최고 $it" },
                 )
+                FlowRow {
+                    for ((i, part) in parts.withIndex()) {
+                        Text(if (i < parts.lastIndex) "$part · " else part, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, softWrap = false)
+                    }
+                }
             }
         }
     }
@@ -328,11 +355,13 @@ private fun ColumnScope.OverviewTab(lg: LeagueController, p: PlayerPage, row: La
         }
     }
     profile.season?.takeIf { it.matches > 0 }?.let { s ->
-        Text(
-            "이번 시즌 ${s.matches}경기 ${s.matchWins}승 ${s.matchDraws}무 ${s.matchLosses}패 · 평균 ${"%.1f".format(s.avgScore)}" +
-                if (s.avgRating.isNaN()) "" else " · 평점 ${"%.2f".format(s.avgRating)}",
-            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
-        )
+        Column {
+            Text("이번 시즌 ${s.matches}경기 ${s.matchWins}승 ${s.matchDraws}무 ${s.matchLosses}패", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "평균 ${"%.1f".format(s.avgScore)}점" + if (s.avgRating.isNaN()) "" else " · 평점 ${"%.2f".format(s.avgRating)}",
+                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+            )
+        }
     }
     // The nickname is in the header, the rival (tappable) below.
     profile.identity?.let { IdentityPart(it.copy(nickname = null, rival = null), alive = profile.retired == null, onOpen = open) }
@@ -389,7 +418,7 @@ private fun MatchupLine(m: Matchup, open: (String) -> Unit) {
     }
 }
 
-/** 레이팅 흐름: its rating after each of its last matches, at least 20 points tall. */
+/** 레이팅 흐름: its rating after each of its last matches, at least 20 points tall; the first and the last value under its ends. */
 @Composable
 private fun RatingLine(points: List<Int>) {
     val line = gameColors.me
@@ -409,8 +438,8 @@ private fun RatingLine(points: List<Int>) {
             }
         }
         Row {
-            Text("$lo", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            Text("$hi", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${points.first()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text("${points.last()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -423,8 +452,18 @@ private fun RatingLine(points: List<Int>) {
  * [p] is the page of [page]'s own scope (null while it loads).
  */
 @Composable
-private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: PlayerPage?) {
+private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: PlayerPage?, row: LadderRow?) {
     val cs = MaterialTheme.colorScheme
+    // My games are ranked games and friendlies, never official ones: my ladder line's numbers, as before the page.
+    if (page.key == Ladder.ME) {
+        if (row == null || row.games == 0) {
+            Text("아직 레이팅이 걸린 판이 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        } else {
+            Text("랭크전과 친선 경기 등 레이팅이 걸린 모든 판 기준이에요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            CellGrid(ladderCells(row))
+        }
+        return
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (s in StatScope.entries) {
             FilterChip(selected = page.scope == s, onClick = { lg.nav.replaceTop(page.copy(scope = s)) }, label = { Text(s.label, fontSize = 13.sp) })
@@ -435,7 +474,12 @@ private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: Pla
         return
     }
     if (p.cells.isEmpty()) {
-        Text(if (p.scope == StatScope.SEASON) "이번 시즌 공식 경기 기록이 아직 없어요." else "공식 경기 기록이 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        val none = when {
+            p.scope == StatScope.CAREER -> "공식 경기 기록이 없어요."
+            p.profile.retired != null -> "은퇴해서 이번 시즌 기록이 없어요."
+            else -> "이번 시즌 공식 경기 기록이 아직 없어요."
+        }
+        Text(none, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
     } else {
         Text("공식 경기 기준이에요. 순위는 같은 리그 선수들 사이에서 매겨요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         CellGrid(p.cells.take(FIRST_CELLS))
@@ -467,6 +511,18 @@ private fun ColumnScope.StatsTab(lg: LeagueController, page: Page.Player, p: Pla
         )
     }
 }
+
+/** My ladder line in cells (every rated game: ranked games and friendlies). */
+private fun ladderCells(r: LadderRow): List<StatCell> = listOf(
+    StatCell("판 수", "${r.games}판", null, null),
+    StatCell("승-무-패", "${r.wins}-${r.ties}-${r.losses}", null, null),
+    StatCell("승률", "%.1f%%".format(100 * r.winRate), null, null),
+    StatCell("평균 점수", "%.1f".format(r.avgScore), null, null),
+    StatCell("최고 점수", "${r.best}점", null, null),
+    StatCell("최다 연승", "${r.bestStreak}연승", null, null),
+    StatCell("요트", "%.0f%%".format(100.0 * r.yachts / r.games), null, null),
+    StatCell("보너스", "%.0f%%".format(100.0 * r.bonuses / r.games), null, null),
+)
 
 /** Stat cells three to a row: label, value, and its place in the league. */
 @Composable
@@ -612,7 +668,14 @@ private fun ColumnScope.MatchesTab(lg: LeagueController, v: LeagueView, p: Playe
     val shownLeague = if (filter == MatchFilter.COMPS) emptyList() else league
     val shownTies = if (filter == MatchFilter.LEAGUE) emptyList() else ties
     if (shownLeague.isEmpty() && shownTies.isEmpty()) {
-        Text(if (p.profile.retired != null) "은퇴한 선수예요. 남은 하이라이트를 볼 수 있어요." else "이번 시즌 치른 경기가 아직 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        val none = when {
+            p.profile.retired != null -> if (p.highlights.isEmpty()) "은퇴한 선수예요." else "은퇴한 선수예요. 남은 하이라이트를 볼 수 있어요."
+            p.profile.key == Ladder.ME -> "리그 경기에는 나가지 않아요."
+            filter == MatchFilter.LEAGUE -> "이번 시즌 치른 리그 경기가 아직 없어요."
+            filter == MatchFilter.COMPS -> "이번 시즌 대회 토너먼트에서 치른 경기가 아직 없어요."
+            else -> "이번 시즌 치른 경기가 아직 없어요."
+        }
+        Text(none, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
     }
     for (m in shownLeague) MatchRow(m, "${m.week}주차 · ${compIcon(Comp.LEAGUE)} ${m.where}") { openMatch(lg, p, m.ref, m.week) }
     if (shownTies.isNotEmpty()) {
