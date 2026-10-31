@@ -18,6 +18,7 @@ import yacht.engine.league.Offseason
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.SeasonStart
 import yacht.engine.league.TieRule
+import java.security.MessageDigest
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -593,5 +594,82 @@ class ClubsTest {
         assertEquals(picks.size, picks.toSet().size, picks.toString())
         assertTrue(picks.max() > first)
         assertTrue(book.clubs.none { gone in it.squad })
+    }
+
+    /**
+     * A book of the club league (`clubs 1`) is made, changed and saved byte for byte as before
+     * clubs became every player's affiliation: creation, names and badges, off-seasons through both
+     * entry points (resizes, squad changes, the league off, departures, replays, a league that
+     * started over), their news and the file. The hash was taken from the code before that change.
+     */
+    @Test
+    fun aLegacyBookIsAsBefore() {
+        val out = StringBuilder()
+        for (seed in listOf(1L, 7L, 42L)) for (id in (1..40).map { ClubBook.idOf(it) } + "x9") {
+            out.append(ClubNames.identity(id, seed, cities)).append('\n')
+        }
+        out.append(ClubNames.identity("c05", 3L, emptyList())).append('\n')
+        val rng = Random(11)
+        val ratings = HashMap<String, Double>()
+        val pool = keys(260)
+        for (k in pool) ratings[k] = 1150.0 + rng.nextInt(500)
+        val rating = { k: String -> ratings[k] ?: Double.NaN }
+        for ((clubs, squad, n) in listOf(Triple(16, 6, 150), Triple(8, 8, 60), Triple(24, 5, 260), Triple(4, 6, 20))) {
+            var book = ClubBook.create(pool.take(n).sortedWith(compareByDescending<String> { rating(it) }.thenBy { it }), clubs, squad, 100L + n, cities)
+            out.append(book.encode())
+            var alive = pool.take(n).toSet()
+            var c = clubs
+            var sq = squad
+            for (season in 1..7) {
+                val members = book.clubs.flatMap { it.squad }
+                val table = book.clubs.map { it.id }.shuffled(rng)
+                val honours = if (members.isEmpty()) emptyList() else listOf(
+                    Honour(season, "CUP", members.pick(rng)), Honour(season, "CL", members.pick(rng)), Honour(season, "CL2", members.pick(rng)),
+                    Honour(season, "CUP2", pool.pick(rng)), Honour(season, "CLUB", table.first()),
+                )
+                val retired = alive.shuffled(rng).take(n / 15).toSet()
+                val born = (1..n / 15).map { "e${season}_$it" }
+                for (k in born) ratings[k] = 1200.0 + rng.nextInt(500)
+                alive = alive - retired + born
+                for (k in alive) ratings[k] = ratings.getValue(k) + rng.nextGaussian() * 30
+                when (season) {
+                    3 -> c = (c - 4).coerceAtLeast(4)
+                    4 -> sq = (sq + 1).coerceAtMost(8)
+                    5 -> c = 0
+                    6 -> c = clubs + 2
+                }
+                val events = book.offseason(season, table, honours, rating, alive, c, sq, 900L + season)
+                for (e in events) out.append(e.encode()).append('\n')
+                for (e in book.offseason(season, table, honours, rating, alive - alive.take(2).toSet(), c, sq, 900L + season)) out.append(e.encode()).append('\n')
+                val text = book.encode()
+                out.append(text)
+                book = ClubBook.decode(text)
+            }
+            // A league that started over at season 2, with another plan seed.
+            for (e in book.offseason(2, book.clubs.map { it.id }, emptyList(), rating, alive, clubs, squad, 5L)) out.append(e.encode()).append('\n')
+            out.append(book.encode())
+        }
+        // The plan entry point after a played club season.
+        val keys = keys(60)
+        val r2 = { k: String -> 1100.0 + strength(k) }
+        val book = ClubBook.create(keys.sortedByDescending(r2), 8, 6, 9L, cities)
+        val config = LeagueConfig(divisions = 2, clubs = 8, squad = 6)
+        val plan = Offseason.first(77L, Offseason.Context(keys, r2, { null }, { "서울" }, config, listOf(ClubLeague.factory({ book }))))
+        val play = Random(3)
+        while (true) {
+            val f = plan.next(emptySet(), 0, 1) ?: break
+            plan.record(result(f, play))
+        }
+        plan.startPost(emptyList())
+        out.append(plan.encode())
+        for (e in book.offseason(plan, r2, keys.drop(3).toSet(), config.copy(clubs = 10))) out.append(e.encode()).append('\n')
+        out.append(book.encode())
+        val sha = MessageDigest.getInstance("SHA-256").digest(out.toString().toByteArray()).joinToString("") { "%02x".format(it) }
+        assertEquals(LEGACY_BOOK, sha)
+    }
+
+    private companion object {
+        /** From the code before clubs became every player's affiliation. */
+        const val LEGACY_BOOK = "8e42b7122cf2e068941beb87ae700175eae00af8ca1183b4f4c1801c764c855c"
     }
 }
