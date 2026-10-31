@@ -176,7 +176,8 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
 
     /**
      * Logs the boards of [r] (just recorded, under the lock) that are worth keeping (UX 3.4: finals,
-     * highlights, broadcast picks, adaptive sides, late knockouts; followed players' in memory only),
+     * highlights, broadcast picks, the news desk's candidates, adaptive sides, late knockouts;
+     * followed players' in memory only),
      * from the decisions [sink] took while it was played.
      */
     internal fun offer(r: JobResult, sink: LogSink?) {
@@ -190,7 +191,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         // A job of the season before (taken before a close, recorded after) is not this season's match.
         val m = SeasonMatches.of(p, f.comp, f.id) ?: return
         if (m.fixture.seed != f.seed) return
-        val common = classesOf(p, f, book.picks)
+        // A match the news desk may write up (an upset, a comeback): kept like the broadcast picks' for its report.
+        val news = runCatching { MatchRef(p.number, f.comp, f.id).encode() in w.desk.candidates }.getOrDefault(false)
+        val common = classesOf(p, f, book.picks) or (if (news) LogClass.NEWS.bit else 0)
         val highlights = w.highlights.let { it.thisSeason + it.allTime }.filter { it.season == p.number && it.fixture.comp == f.comp && it.fixture.id == f.id }
         val followed = followed(w)
         val tag = tagOf(p, f)
@@ -600,8 +603,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             if (preview != null && f.comp != Comp.FRIENDLY) addAll(preview.stakes)
             if (f.comp == Comp.LEAGUE && s?.bonus == true && !team) add("2:0 완승으로 승점 ${WIN_POINTS + 1}점을 챙겨요.")
         }
-        // Articles of the match's week about both players (the article of the match itself among them).
-        val news = if (team) emptyList() else w.news.about(f.a).filter { it.season == ref.season && f.b in it.keys && (f.week == SeasonCalendar.NONE || it.week == f.week) }.take(NEWS)
+        // The articles of this match itself (their ref names it, a board or game of it too), then those of
+        // the match's week about both players.
+        val own = w.news.all.filter { a -> a.ref?.let { MatchRef.decode(it)?.whole } == ref }
+        val about = if (team) emptyList() else w.news.about(f.a).filter { it.season == ref.season && f.b in it.keys && (f.week == SeasonCalendar.NONE || it.week == f.week) }
+        val news = (own + about.filter { it !in own }).take(NEWS)
         val delta = view?.feed?.firstOrNull { it.ref?.let { r -> MatchRef.decode(r)?.whole } == ref && !team }
         return MatchReport(
             loadKey, ref.encode(), titleOf(p, f, ref.season), state, f.a, f.b, side(f.a), side(f.b), host.badge(f.a), host.badge(f.b),

@@ -28,6 +28,7 @@ import yacht.engine.league.Fixture
 import yacht.engine.league.Honour
 import yacht.engine.league.HonourBook
 import yacht.engine.league.JobKind
+import yacht.engine.league.byTeams
 import yacht.engine.league.JobResult
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.Federation
@@ -256,10 +257,20 @@ class LeagueController(
         favourites = if (key in favourites) favourites - key else favourites + key
         val text = favourites.sorted().joinToString("\n")
         scope.launch(fileWrites) { runCatching { favouriteFile.writeTextAtomically(text) } }
+        home.refresh()
     }
 
-    /** A season that just ended (shown until dismissed). */
-    var seasonNews by mutableStateOf<SeasonHistoryItem?>(null)
+    /** Closes the home's banner [b] for its season (saved in ui.txt); the empty league's cannot be closed. */
+    fun dismissBanner(b: HomeBanner) {
+        val (key, season) = when (b) {
+            is HomeBanner.SeasonEnd -> UiPrefs.SEASON_END to b.season
+            is HomeBanner.Reform -> UiPrefs.REFORM to b.season
+            is HomeBanner.Coming -> UiPrefs.COMING to b.season
+            HomeBanner.Empty -> return
+        }
+        updateUiPrefs { it.dismiss(key, season) }
+        home.refresh()
+    }
 
     private var tables: Tables? = null
     private var baseRoster: List<LeagueAi> = emptyList()
@@ -396,6 +407,10 @@ class LeagueController(
         override fun saveWatchPace(p: WatchPace) {
             scope.launch { updateUiPrefs { it.copy(watchPace = p) } }
         }
+
+        override fun uiPrefs(): UiPrefs = uiPrefs
+
+        override fun canReplay(ref: MatchRef, a: String, b: String): Boolean = center.canReplay(ref, a, b)
     }
 
     /** Watching real matches: reports, replays, the match log book and the broadcast channel. */
@@ -537,7 +552,10 @@ class LeagueController(
             config = cfg
             favourites = favs
             review = rv
-            seasonNews = null
+            // The league read: its home and news (those of the league it replaced go).
+            newsList = null
+            home.clear()
+            home.refresh()
             if (!first) {
                 form = null
                 nav.week = null
@@ -977,11 +995,9 @@ class LeagueController(
         configureWorld(w, opening)
         w.openSeason()
         timings.note("rollover", System.nanoTime() - t0)
-        val news = historyItem(closing.season, closing.honours)
         val rv = w.archive.pendingReview
         val shown = followedDivision(w, favourites)
         scope.launch {
-            seasonNews = news
             if (rv != null) review = rv
             showNewSeason(shown)
         }
@@ -1116,6 +1132,8 @@ class LeagueController(
                     // extras of a match already recorded (a failure here must not give it back to the season).
                     if (played != null) runCatching { refsOf(result, rec.matches) }
                     if (played != null) runCatching { center.offer(result, sink) }.onFailure { e -> scope.launch { onError(e) } }
+                    // The home moves with a followed result (a few at a time: [HomeFeed.refreshSoon]).
+                    if (runCatching { followedIn(result) }.getOrDefault(false)) home.refreshSoon()
                     recorded = true
                     lastRecord = System.currentTimeMillis()
                     meter(result)
@@ -1440,7 +1458,12 @@ class LeagueController(
         val text = c.encode()
         scope.launch(fileWrites) { runCatching { configFile.writeTextAtomically(text) } }
         // The season being played keeps its own copy (SeasonPlan.config); closing it reads these.
-        scope.launch(Dispatchers.Default) { synchronized(lock) { world?.config = c } }
+        // The screen then says what the next season will be (SeasonView.nextNational), and the home its banner.
+        scope.launch(Dispatchers.Default) {
+            synchronized(lock) { world?.config = c }
+            publish(force = true)
+            home.refresh()
+        }
     }
 
     /**
@@ -1598,7 +1621,6 @@ class LeagueController(
                 for (name in LeagueWorld.FILES + MatchCenter.LOGS) runCatching { File(folder, name).delete() }
             }
             review = null
-            seasonNews = null
             clearLoadedViews()
             save()
             publish(force = true)
@@ -1607,8 +1629,7 @@ class LeagueController(
 
     /** Views loaded on request (records, legends, a profile, ...) after the league was replaced: read again or dropped. */
     private fun clearLoadedViews() {
-        // An open profile or matrix is read again from the new league (its screen does not ask twice).
-        profile?.key?.let { loadProfile(it) }
+        // An open matrix is read again from the new league (its screen does not ask twice).
         lastMatrix?.let { (title, groups, labels) -> loadMatrix(title, groups, labels) }
         calendar = null
         form = null
@@ -1630,6 +1651,11 @@ class LeagueController(
         prospects = emptyList()
         loadNations()
         loadProspects()
+        // A new league's seasons start again at 1: no banner of the old one stays closed; its news and home go.
+        updateUiPrefs { it.undismissed() }
+        newsList = null
+        home.clear()
+        home.refresh()
     }
 
     private suspend fun save() = withContext(Dispatchers.Default) {
@@ -1831,6 +1857,7 @@ class LeagueController(
                 if (week != pickedWeek) {
                     pickedWeek = week
                     center.refreshPicks()
+                    home.refresh()
                 }
                 if (running) {
                     val minutes = (System.currentTimeMillis() - runStart) / 60_000.0
@@ -2135,18 +2162,60 @@ class LeagueController(
         )
     }
 
-    /** The profile asked for last (read off the main thread). */
-    var profile by mutableStateOf<ProfileView?>(null)
+    /**
+     * True when [r] (just recorded, under the lock) is a followed player's, a followed club
+     * member's or a followed nation's match: the home's ★ rows and the club cards move with it.
+     */
+    private fun followedIn(r: JobResult): Boolean {
+        val favs = favourites
+        if (favs.isEmpty()) return false
+        val f = r.fixture
+        if (f.comp == Comp.FRIENDLY || f.comp == Comp.LAB) return false
+        if (f.comp.byTeams && (LeagueSelector.NATION + f.a in favs || LeagueSelector.NATION + f.b in favs)) return true
+        val clubs = nationalClubs()
+        return r.boards.any { b ->
+            b.a in favs || b.b in favs ||
+                clubs != null && (clubs.clubOf(b.a)?.let { LeagueSelector.CLUB + it in favs } == true || clubs.clubOf(b.b)?.let { LeagueSelector.CLUB + it in favs } == true)
+        }
+    }
+
+    /**
+     * The newest result of the followed players as the league's notification says it ("★ 홍길동 ·
+     * 김철수에게 2:0 승 · 한국 1부"): of the latest week, the best-rated player's (the home's order); from
+     * the home's last build; null without one.
+     */
+    fun followedLine(): String? {
+        val card = home.view?.followed?.filter { it.kind == FollowKind.PLAYER && it.last?.result != null }?.maxByOrNull { it.last!!.week } ?: return null
+        val m = card.last ?: return null
+        val word = when (m.result) {
+            1 -> "승"
+            0 -> "무"
+            else -> "패"
+        }
+        return "★ ${card.title} · ${m.opponentName}에게 ${m.score.orEmpty()} $word · ${m.where}".replace("  ", " ")
+    }
+
+    /** The news page's articles: every one the book keeps (the snapshot has the newest [NEWS]), read on request ([loadNews]). */
+    var newsList by mutableStateOf<NewsList?>(null)
         private set
 
-    /** Loads [key]'s profile into [profile] (as the player page reads it, [profileOf]). */
-    fun loadProfile(key: String) {
+    /** Reads every article the league keeps into [newsList], with the refs of the matches that can be played again (▶). */
+    fun loadNews() {
         scope.launch(Dispatchers.Default) {
-            val v = synchronized(lock) {
-                val w = world ?: return@synchronized null
-                profileOf(w, key, ::name)
+            val (w, v) = synchronized(lock) {
+                val w = world ?: return@launch
+                val all = w.news.all
+                val replay = HashSet<String>()
+                for (a in all) {
+                    val ref = a.ref?.let { MatchRef.decode(it) } ?: continue
+                    val m = w.plan?.let { yacht.engine.league.SeasonMatches.of(it, ref) }
+                    // A team match's own board (the article names it), else the match's sides.
+                    val (x, y) = m?.fixture?.let { f -> if (f.kind == JobKind.TEAM) (f.lineupA.getOrNull(ref.board) to f.lineupB.getOrNull(ref.board)) else (f.a to f.b) } ?: (null to null)
+                    if (runCatching { center.canReplay(ref, x ?: a.keys.getOrNull(0).orEmpty(), y ?: a.keys.getOrNull(1).orEmpty()) }.getOrDefault(false)) replay += a.ref!!
+                }
+                w to NewsList(all, replay)
             }
-            scope.launch { profile = v }
+            scope.launch { if (world === w) newsList = v }
         }
     }
 
@@ -2163,7 +2232,6 @@ class LeagueController(
                     st.records.all, w.archive.dynasties.toList(), w.archive.hallOfFame.toList(),
                     w.archive.summaries.sortedByDescending { it.season }, st.milestones.reversed(),
                     runCatching { st.liveMeta() }.getOrNull(), st.previousMeta ?: st.meta,
-                    st.top(10, career = false, min = { it.matches >= 10 && !it.avgRating.isNaN() }) { it.avgRating }.map { (k, a) -> k to a.copy() },
                 )
             }
             scope.launch { records = v }
@@ -2683,7 +2751,7 @@ class LeagueController(
 
         /** Share of matches given to AIs waiting for the next season, so they get a rating. */
         private const val CLUB_MOVES = 60
-        private const val NEWS = 120
+        private const val NEWS = 60
         private const val FRIENDLY_SHARE = 0.2
 
         /** The rating scale's anchor (1500) and the share of jobs it plays as 기준 경기. */

@@ -3,6 +3,7 @@ package yacht.app
 import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -37,7 +38,9 @@ import yacht.app.core.AppController
 import yacht.app.core.BackAction
 import yacht.app.core.LeagueBackground
 import yacht.app.core.GameStorage
+import yacht.app.core.Screen
 import yacht.app.core.backTarget
+import yacht.app.core.deepLinkTab
 import yacht.app.ui.AppRoot
 import yacht.app.ui.FilePort
 import yacht.app.ui.LocalFilePort
@@ -107,6 +110,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
         }
+        // The notification says the latest followed result (the home is built again when one lands).
+        scope.launch {
+            snapshotFlow { controller.league.followedLine() }
+                .distinctUntilChanged()
+                .collect { LeagueService.update(app, it) }
+        }
     }
 
     override fun onCleared() {
@@ -155,9 +164,28 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    /** The league notification tapped while the app is open: its tab. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openFrom(intent)
+    }
+
+    /** Opens the league tab [intent] names ([LeagueService.EXTRA_TAB]); nothing for any other intent. */
+    private fun openFrom(intent: Intent?) {
+        val tab = deepLinkTab(intent?.getStringExtra(LeagueService.EXTRA_TAB)) ?: return
+        // Taken once: a recreated activity (a theme change) does not open it again.
+        intent?.removeExtra(LeagueService.EXTRA_TAB)
+        val c = vm.controller
+        if (c.screen == Screen.WATCH) c.league.stopWatch()
+        c.screen = Screen.LEAGUE
+        c.league.nav.go(tab)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashLog.install(application)
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) openFrom(intent)
         enableEdgeToEdge()
         setContent {
             // Backups go through the system file picker. Nothing waits in the composition for
