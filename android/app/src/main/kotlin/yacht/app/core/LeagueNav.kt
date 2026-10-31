@@ -219,13 +219,14 @@ sealed interface Page {
  * The page a link names (UX 2.4): one string form for every tappable reference that crosses a
  * view boundary (home lines, news pills, encyclopedia values, event subjects, vote rows); null for
  * anything else. Entity prefixes are the encyclopedia's: `p:<key>` a player, `c:<id>` a club
- * (`c:<id>@<founded>`, a gone or reused club's id: its encyclopedia page), `k:<id>` a coach, `l:<id>` a
- * league, `n:<code>` a nation, `x:<comp>` a competition (its [Comp.code] or [Comp] name, or an
- * honour's competition: CL, CCL, CUP, SUPER, WC; a `.<section>` after it is read past) when [has]
- * says the season holds it, else its encyclopedia page; then `ev:<id>` a world event, `wc:<season>` a
- * World Cup story, `mk[:<tab>]` 이적 센터, `pr[:<league>]` 기자단, `meta[:<tab>]` 시대와 메타,
- * `cr[:<kind>]` 클럽 랭킹 (tabs and kinds by their enum names), `m:<matchref>` a match report and
- * `enc:<ref>` an encyclopedia page.
+ * (`c:<id>@<year>`, a gone or reused club's id with its founding year: its encyclopedia page),
+ * `k:<id>` a coach, `l:<id>` a league, `n:<code>` a nation, `x:<comp>` a competition (its
+ * [Comp.code] or [Comp] name, or an honour's competition: CL, CCL, CUP, SUPER, WC; a `.<section>`
+ * after it is read past) when [has] says the season holds it, else its encyclopedia page; then
+ * `ev:<id>` a world event, `wc:<season>` a World Cup story, `mk[:<tab>]` 이적 센터, `pr[:<league>]`
+ * 기자단, `meta[:<tab>]` 시대와 메타, `cr[:<kind>]` 클럽 랭킹 (tabs and kinds by their enum names),
+ * `m:<matchref>` a match report and `enc:<ref>` an encyclopedia page (the ref an entity's prefix, a
+ * colon and its id, as above).
  */
 fun pageOf(link: String, has: (Comp) -> Boolean = { true }): Page? {
     val colon = link.indexOf(':')
