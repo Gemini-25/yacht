@@ -477,6 +477,28 @@ class ClubBookV2Test {
     }
 
     @Test
+    fun aNewClubSizeFillsTheNewClubsAndMakesOneArticle() {
+        // Korea, four clubs of ten; the club size goes from 8 to 5: eight clubs.
+        val keys = (1..40).map { "k$it" }
+        val text = "clubs 2\nmeta 3 0 - 5\n" + (0 until 4).joinToString("") { c ->
+            "club c0${c + 1} KR 도시 c0${c + 1} 도시%20c0${c + 1} 0 ffc62828 ffffffff 가 0 0 1 ${keys.drop(10 * c).take(10).joinToString(",")}\n"
+        }
+        for ((i, k) in keys.withIndex()) {
+            extraNation[k] = "KR"
+            extraRating[k] = 1500.0 - i
+        }
+        val book = ClubBook.decode(text)
+        val closing = SeasonPlan(Season.start(1, 6L, listOf(keys), false, Leagues.national(listOf("KR"), listOf(1))), config)
+        val small = config.copy(clubSize = 5)
+        val events = book.offseason(closing, ClubInput(keys, ::rating, ::nation, small))
+        assertWhole(book, keys)
+        assertEquals(listOf(7, 7, 7, 7, 3, 3, 3, 3), book.clubsOf("KR").map { it.squad.size })
+        assertEquals(12, book.history.count { it.season == 1 && it.type == ClubMoveType.RELEASED })
+        assertEquals(listOf(LeagueEvent("club_digest", 1, listOf("c05", "c06", "c07", "c08"), listOf("4", "0"), Comp.CLUB)), events.filter { it.kind.startsWith("club_") && it.kind != "club_title" })
+        assertEquals(events, book.offseason(closing, ClubInput(keys, ::rating, ::nation, small)))
+    }
+
+    @Test
     fun onlyPlayersNewToTheLeagueJoinTheirMentorsClub() {
         // Korea, two clubs; an evolved veteran who played the closing season is without a club (a
         // cut file), and so is a pupil new to the league: both have a mentor in c01.

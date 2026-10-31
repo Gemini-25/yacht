@@ -713,7 +713,8 @@ class ClubBook private constructor(
      * [ai, from, to] (fromLeague, toLeague) for up to 3 holders of a major title, `transfer_abroad`
      * [ai, from, to] (fromLeague, toLeague, fee) for the 3 biggest fees and one `transfer_window`
      * [≤ 6 of them] (abroad, returns); `transfer` [ai, from, to] (fee) for the 3 biggest domestic
-     * fees; `club_dissolved` [club] (members released) and `club_founded` [club] (nation); `draft`
+     * fees; `club_dissolved` [club] (members released) and `club_founded` [club] (nation), or, with
+     * more than 3 of them, one `club_digest` [≤ 6 clubs, founded first] (founded, dissolved); `draft`
      * [ai, club] (pick within its nation) or `youth` [ai, club] for the 3 best rated rookies; one
      * `market_digest` [≤ 6 of them] (domestic, rookies, biggest-fee ai, from, to, fee).
      */
@@ -1135,10 +1136,15 @@ class ClubBook private constructor(
         }
         if (d.abroad + d.returns > 0) event("transfer_window", (d.abroadNamed + d.homeNamed).map { it.key }.distinct(), listOf(d.abroad.toString(), d.returns.toString()))
         for (k in d.bought) move(ClubMoveType.TRANSFER, k)?.let { m -> event("transfer", listOf(k, m.from ?: "-", m.to ?: "-"), listOf(m.amount.toString())) }
-        for (g in goneList.filter { it.dissolved == s }.sortedWith(compareBy(ID_ORDER) { it.id })) {
-            event("club_dissolved", listOf(g.id), listOf(ms.count { it.type == ClubMoveType.RELEASED && it.from == g.id }.toString()))
+        val dissolved = goneList.filter { it.dissolved == s }.sortedWith(compareBy(ID_ORDER) { it.id })
+        val founded = entries.filter { it.founded == s + 1 }
+        if (dissolved.size + founded.size <= NAMED) {
+            for (g in dissolved) event("club_dissolved", listOf(g.id), listOf(ms.count { it.type == ClubMoveType.RELEASED && it.from == g.id }.toString()))
+            for (e in founded) event("club_founded", listOf(e.id), listOf(e.nation))
+        } else {
+            // A new club size (or a big change of the members): one article, not dozens.
+            event("club_digest", (founded.map { it.id } + dissolved.map { it.id }).take(2 * NAMED), listOf(founded.size.toString(), dissolved.size.toString()))
         }
-        for (e in entries) if (e.founded == s + 1) event("club_founded", listOf(e.id), listOf(e.nation))
         for (k in d.drafted) {
             val youth = move(ClubMoveType.YOUTH, k)
             if (youth != null) event("youth", listOf(k, youth.to ?: "-")) else move(ClubMoveType.DRAFT, k)?.let { m -> event("draft", listOf(k, m.to ?: "-"), listOf(m.amount.toString())) }
