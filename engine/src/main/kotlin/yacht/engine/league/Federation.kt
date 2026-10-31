@@ -26,22 +26,30 @@ enum class Lever(val key: String, val label: String) {
  * [threshold] ([Federation.pressure]; a kind whose threshold is below its floor fires as x falls).
  * [structureFree] kinds read statistics a legacy season has too, so they are the only ones of the
  * first assembly, at the move to national leagues.
+ *
+ * The floors are calibrated on real seasons (FederationCalibration, docs/LEAGUE_SPEC.md 11.4):
+ * under the default rules each live statistic passes its floor in about a third of the seasons,
+ * so an assembly tables one or two proposals as a rule and a quiet season none, and it reaches
+ * its threshold only in an unusual season. Two statistics never get there on purpose: under
+ * 판 승점제 almost every decided league match is a 2-0 (96-97%: any other decided match needs a
+ * drawn game), so the sweep share cannot tell one season from another; and the rounds stay 38-42
+ * at the default division size, inside the SIZE kinds' dead band.
  */
 enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Double, val structureFree: Boolean = false) {
-    /** Many promoted players go straight back down (elevator): autoSwap - 1. */
-    SWAP_DOWN(Lever.AUTO_SWAP, 0.35, 0.50),
+    /** Many promoted players go straight back down (elevator: about 20% with autoSwap 2, 37% with 3): autoSwap - 1. */
+    SWAP_DOWN(Lever.AUTO_SWAP, 0.38, 0.50),
 
     /** Few go back down and the 2부 champions outscore the 1부's middle: autoSwap + 1. */
-    SWAP_UP(Lever.AUTO_SWAP, 0.30, 0.20),
+    SWAP_UP(Lever.AUTO_SWAP, 0.20, 0.12),
 
-    /** The regular-season leader often loses the title playoff (leaderLost): off. */
-    TITLE_PO_OFF(Lever.TITLE_PO, 0.40, 0.60),
+    /** The regular-season leader often loses the title playoff (leaderLost, about 70% of 4-player playoffs): off. */
+    TITLE_PO_OFF(Lever.TITLE_PO, 0.72, 0.86),
 
-    /** Without a playoff the leader often runs away with the title (runaway): on. */
-    TITLE_PO_ON(Lever.TITLE_PO, 0.25, 0.40),
+    /** Without a playoff the leader often runs away with the title (runaway, about 30%): on. */
+    TITLE_PO_ON(Lever.TITLE_PO, 0.33, 0.50),
 
-    /** Most decided matches are 2-0 sweeps anyway (sweep): the bonus off. */
-    SWEEP_OFF(Lever.SWEEP, 0.60, 0.70, true),
+    /** Most decided matches are 2-0 sweeps anyway (sweep): the bonus off. Out of reach under 판 승점제 (see above). */
+    SWEEP_OFF(Lever.SWEEP, 0.99, 1.00, true),
 
     /** Few are: the bonus on. */
     SWEEP_ON(Lever.SWEEP, 0.52, 0.45, true),
@@ -52,17 +60,24 @@ enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Doub
     /** It takes few, and bigger divisions would cost no more than the old pyramid: divisionSize + 2. */
     SIZE_UP(Lever.DIVISION_SIZE, 36.0, 34.0),
 
-    /** The 요트컵's last 8 on are often won by the much lower rated side (koUpsets): long knockouts on. */
-    LONG_KO_ON(Lever.LONG_KO, 0.30, 0.40, true),
+    /**
+     * The 요트컵's last 8 on are often won by the much lower rated side (koUpsets): long knockouts
+     * on. Short series see about as few as long ones (0-1 in 22 ties), so 2 or more is the floor.
+     */
+    LONG_KO_ON(Lever.LONG_KO, 0.09, 0.25, true),
 
-    /** They seldom are: off. */
-    LONG_KO_OFF(Lever.LONG_KO, 0.15, 0.10, true),
+    /**
+     * They seldom are: off. Only a season without a single upset passes the floor, at 0.3 (the
+     * threshold lies below zero): with long knockouts about two seasons in five have none, so it
+     * is a standing argument, not news.
+     */
+    LONG_KO_OFF(Lever.LONG_KO, 0.0, -0.10, true),
 
-    /** League champions do better in the 챔피언스 리그 than the 대륙 챔피언스' finalists (clEdge): clDirect + 1. */
-    CL_DIRECT_UP(Lever.CL_DIRECT, 0.15, 0.30),
+    /** League champions do better in the 챔피언스 리그 than the 대륙 챔피언스' finalists (clEdge, ±0.33 from season to season): clDirect + 1. */
+    CL_DIRECT_UP(Lever.CL_DIRECT, 0.30, 0.65),
 
     /** They do worse: clDirect - 1. */
-    CL_DIRECT_DOWN(Lever.CL_DIRECT, -0.15, -0.30),
+    CL_DIRECT_DOWN(Lever.CL_DIRECT, -0.30, -0.65),
 }
 
 /**
