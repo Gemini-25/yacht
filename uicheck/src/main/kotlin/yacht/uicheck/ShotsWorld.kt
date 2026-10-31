@@ -57,9 +57,28 @@ internal object ShotsWorld : LeagueShots {
         nav.go(LeagueTab.MATCHES)
         nav.matches = MatchesView.WEEK
         shot(c, out, "${prefix}_lg10_week", heightDp = 1500)
+        competitionShots(c, out, prefix)
+        lg.view?.rows?.filter { it.rank != null && it.division != null && !it.isMe }?.minByOrNull { it.rank!! }?.let { top ->
+            nav.open(Page.Player(top.key))
+            lg.analytics.loadPlayer(top.key, yacht.app.core.StatScope.SEASON)
+            waitFor("player page") { lg.analytics.player(Page.Player(top.key)) != null }
+            shot(c, out, "${prefix}_lg50_player", heightDp = 1800)
+        }
+        nav.go(LeagueTab.HOME)
+    }
+
+    /**
+     * 순위 › 대회 and the national competitions' pages with their stage sheets (one heading a
+     * section): the 대륙 챔피언스 and the title playoffs (a bracket a league), when the season has
+     * them. Returns the pages drawn.
+     */
+    fun competitionShots(c: AppController, out: File, prefix: String): Int {
+        val lg = c.league
+        val nav = lg.nav
         nav.go(LeagueTab.TABLES)
         nav.tables = TablesView.COMPS
         shot(c, out, "${prefix}_lg28_comps", heightDp = 1300)
+        var drawn = 0
         for ((comp, name) in listOf(Comp.CONT_CHAMPIONS to "lg29c_ccl", Comp.TITLE_PLAYOFF to "lg75_playoffs")) {
             if (lg.view?.comps?.none { it.first == comp } != false) continue
             nav.open(Page.Competition(comp))
@@ -70,14 +89,9 @@ internal object ShotsWorld : LeagueShots {
             shot(c, out, "${prefix}_${name}_stage", heightDp = 1100)
             nav.sheet = Sheet.NONE
             nav.go(LeagueTab.TABLES)
+            drawn++
         }
-        lg.view?.rows?.filter { it.rank != null && it.division != null && !it.isMe }?.minByOrNull { it.rank!! }?.let { top ->
-            nav.open(Page.Player(top.key))
-            lg.analytics.loadPlayer(top.key, yacht.app.core.StatScope.SEASON)
-            waitFor("player page") { lg.analytics.player(Page.Player(top.key)) != null }
-            shot(c, out, "${prefix}_lg50_player", heightDp = 1800)
-        }
-        nav.go(LeagueTab.HOME)
+        return drawn
     }
 
     /**

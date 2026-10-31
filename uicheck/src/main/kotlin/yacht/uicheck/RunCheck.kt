@@ -13,6 +13,7 @@ import yacht.app.core.Screen
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
 import yacht.engine.Tables
+import yacht.engine.league.Comp
 import yacht.engine.league.LeagueConfig
 import yacht.engine.league.PlayerMaker
 import java.io.File
@@ -459,8 +460,9 @@ private const val NATIONAL_MINUTES = 40L
  * its first season and the rollover. Every error the app is told of fails the run (a snapshot
  * that throws, a failing odds run, a stop). Halfway through season 1, and again once season 2 is
  * open, every league's 순위 › 리그 is drawn in every view ([ShotsWorld.everyLeague]) and the
- * screens a national season changes are shot ([ShotsWorld.nationalShots]), into [shots] (a
- * temporary folder, deleted, when null).
+ * screens a national season changes are shot ([ShotsWorld.nationalShots]); in season 1's
+ * post-season the title playoffs' page and stage sheet ([ShotsWorld.competitionShots], "nat1po");
+ * all into [shots] (a temporary folder, deleted, when null).
  */
 private fun national(tablesDir: File, speed: LeagueSpeed, shots: File?, players: Int = NATIONAL_PLAYERS) {
     val dir = Files.createTempDirectory("yacht-national").toFile()
@@ -510,11 +512,24 @@ private fun national(tablesDir: File, speed: LeagueSpeed, shots: File?, players:
     ShotsWorld.nationalShots(c, out, "nat1")
     println("season 1: $drawn1 league table views drawn")
     check(lg.view?.season?.number == 1) { "season 1 moved on while stopped" }
-    // The rest of the season, its close and the next season's opening, then the league stops.
-    val m1 = lg.view?.matches ?: 0L
-    lg.start()
-    waitUntil("season 1 going on") { lg.running && (lg.view?.matches ?: 0L) > m1 }
-    lg.stopAfterSeason(1)
+    // The rest of the season, its close and the next season's opening, then the league stops;
+    // on the way, once the post-season is on, stopped again for the title playoffs' page (a
+    // bracket a league) and its stage sheet (a heading a league).
+    fun goOn(what: String) {
+        val m = lg.view?.matches ?: 0L
+        lg.start()
+        waitUntil(what) { lg.running && (lg.view?.matches ?: 0L) > m }
+        lg.stopAfterSeason(1)
+    }
+    goOn("season 1 going on")
+    waitUntil("season 1 post-season") { !lg.running || lg.view?.comps?.any { it.first == Comp.TITLE_PLAYOFF } == true }
+    if (lg.running) lg.stop()?.let { j -> kotlinx.coroutines.runBlocking { j.join() } }
+    if (lg.view?.season?.number == 1 && lg.view?.comps?.any { it.first == Comp.TITLE_PLAYOFF } == true) {
+        println("season 1 post-season: ${ShotsWorld.competitionShots(c, out, "nat1po")} competition pages drawn")
+        goOn("season 1 post-season going on")
+    } else {
+        println("season 1 post-season: over before it was seen")
+    }
     waitUntil("season 1 played") { !lg.running }
     waitUntil("season 2 open") { (lg.view?.clock?.season ?: 0) >= 2 && lg.view?.season?.number == 2 }
     val second = lg.view!!.season!!
