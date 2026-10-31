@@ -1,11 +1,16 @@
 package yacht.app.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import yacht.app.core.LeagueController
+import yacht.engine.league.ArcKind
 import yacht.engine.league.Awards
 import yacht.engine.league.Confed
 import yacht.engine.league.ContinentalChampions
 import yacht.engine.league.HonourKind
 import yacht.engine.league.LeagueIds
+import yacht.engine.league.OwnerType
+import yacht.engine.league.StyleFamily
 
 /** An honour in Korean ("1부 우승", "한국 리그 우승", "아시아 챔피언스 우승", "요트컵 준우승", "신인왕", ...). */
 fun honourLabel(kind: String): String {
@@ -44,6 +49,9 @@ fun honourLabel(kind: String): String {
         "CCW" -> "대륙컵 우승 멤버"
         "NSQ" -> "국가대표 선발"
         "POTW" -> "이 주의 선수"
+        // The press vote's honours (PressAwards.KINDS).
+        "GD" -> "골든 다이스"
+        "SIGN" -> "올해의 영입"
         else -> kind
     }
 }
@@ -96,8 +104,47 @@ internal fun trophy(kind: String): String? = when {
     kind in setOf("CUP", "CL", "SUPER", "FAMILY", "CLUB", "WC", "WCW", "CC", "CCW") -> "🏆"
     kind in setOf("MVP", "ROOKIE", "MIP", "YACHT", "SCORER", "REG", "WCMVP", "WCTOP") -> "🏅"
     kind == "WC4" -> "🥉"
+    kind == "GD" -> "🎲"
+    kind == "SIGN" -> "✍"
     kind.endsWith("2") || kind == "L0R" -> "🥈"
     else -> null
+}
+
+/**
+ * A style family's colour (UX 8.3), always drawn next to its label; in the dark theme each is
+ * lightened by a quarter of white. Null (춘추전국 시대, a gap) is grey.
+ */
+internal fun familyColor(f: StyleFamily?, dark: Boolean): Color {
+    val c = when (f) {
+        StyleFamily.EV -> Color(0xFF5B8DEF)
+        StyleFamily.YACHT -> Color(0xFFE8833A)
+        StyleFamily.COMBO -> Color(0xFF8E6CD8)
+        StyleFamily.BONUS -> Color(0xFF2FA36B)
+        StyleFamily.CAUTION -> Color(0xFF7A8A99)
+        StyleFamily.BOLD -> Color(0xFFD9534F)
+        StyleFamily.MIND -> Color(0xFFC9A227)
+        StyleFamily.ODD -> Color(0xFF3BB3C3)
+        null -> Color(0xFF9E9E9E)
+    }
+    return if (dark) lerp(c, Color.White, 0.25f) else c
+}
+
+/** An owner type's icon (UX 14.1): 재벌 구단주 💎, 팬 소유 🧡, 지역 기업 🏢, 투자 펀드 📊, 국부 펀드 🏰. */
+internal fun ownerIcon(t: OwnerType): String = when (t) {
+    OwnerType.TYCOON -> "💎"
+    OwnerType.FANS -> "🧡"
+    OwnerType.LOCAL -> "🏢"
+    OwnerType.FUND -> "📊"
+    OwnerType.STATE -> "🏰"
+}
+
+/** A world event's icon (UX 14.1): 슈퍼리그 🔱, 투자자 인수 📊, 금융 위기 📉, 리그 통합 🔗, 요트 붐 🆕. */
+internal fun arcIcon(k: ArcKind): String = when (k) {
+    ArcKind.SUPER_LEAGUE -> "🔱"
+    ArcKind.INVESTOR -> "📊"
+    ArcKind.CRISIS -> "📉"
+    ArcKind.MERGER -> "🔗"
+    ArcKind.BOOM -> "🆕"
 }
 
 /** A milestone event's args (kind, value) in Korean. */

@@ -43,19 +43,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import yacht.app.core.AppController
 import yacht.app.core.LeagueBackground
+import yacht.app.core.LeagueController
 import yacht.app.core.LeagueRunMode
 import yacht.app.core.LeagueSpeed
 import yacht.app.core.LeagueView
 import yacht.app.core.Page
 import yacht.app.core.ResultsFilter
 import yacht.app.core.Screen
+import yacht.app.core.SeasonView
 import yacht.app.core.Sheet
 import yacht.app.core.TableMode
+import yacht.app.core.pageOf
 import yacht.engine.league.CloneProfile
 import yacht.engine.league.Ladder
 
 // The bottom sheets over the league screen, one per `Sheet` (`nav.sheet`): settings, the season's
-// weeks, the table's views, the filters, the competition stage and the rating's explanation.
+// weeks, the table's views, the filters, the competition stage, the rating's explanation, an ⓘ's
+// explanation, a page's own league and a page's list of links.
 
 /** The sheet `nav.sheet` names, over the whole league screen ([onReset]: the reset confirmation). */
 @Composable
@@ -94,7 +98,10 @@ internal fun LeagueSheets(c: AppController, v: LeagueView?, onReset: () -> Unit)
         Sheet.RATING_INFO -> LeagueSheet("레이팅과 티어", close) { RatingInfo() }
         Sheet.STAGE -> StageSheet(lg)
         Sheet.LEAGUES -> v?.season?.let { LeagueSelectorSheet(lg, v, it) }
-        // The leaderboards' and the ranking's filters, a player's actions: later.
+        Sheet.INFO -> LeagueSheet(infoTitle(nav.info), close) { Text(infoText(nav.info), style = MaterialTheme.typography.bodySmall) }
+        Sheet.LEAGUE_PICK -> v?.season?.let { LeaguePickSheet(lg, it) }
+        Sheet.LIST -> sheetList(lg)?.let { ListSheet(lg, v, it) }
+        // The leaderboards' and the ranking's filters, a player's actions: in their own sheets' files.
         else -> {}
     }
 }
@@ -127,6 +134,63 @@ private fun LeagueSelectorSheet(lg: yacht.app.core.LeagueController, v: LeagueVi
                 "나라마다 자기 리그에서 뛰고, 선수가 적은 나라는 대륙별 연합 리그에 모여요. 리그 랭킹은 국제 대회 성적(국제 성적 점수)으로 매기고, " +
                     "첫 국가 리그 시즌은 리그마다 상위 5명의 레이팅으로 매겨요.",
             )
+        }
+    }
+}
+
+/**
+ * The league sheet of a page that shows a league of its own (UX 2.3, [Sheet.LEAGUE_PICK]): 기자단's
+ * predictions and top 5, 클럽 랭킹's scope (which also offers the whole world). A tap changes only
+ * the top page ([yacht.app.core.LeagueNav.replaceTop]), never the league the tabs show.
+ */
+@Composable
+private fun LeaguePickSheet(lg: LeagueController, season: SeasonView) {
+    val nav = lg.nav
+    val close = { nav.sheet = Sheet.NONE }
+    val page = nav.page
+    val current = when (page) {
+        is Page.Press -> page.league ?: season.league
+        is Page.ClubRanking -> page.scope
+        else -> return
+    }
+    val pick = { id: String? ->
+        when (page) {
+            is Page.Press -> nav.replaceTop(page.copy(league = id))
+            is Page.ClubRanking -> nav.replaceTop(page.copy(scope = id))
+            else -> {}
+        }
+        close()
+    }
+    val sections = remember(season.leagues) { yacht.app.core.LeagueSelector.sections(season.leagues) }
+    LeagueSheet("리그 고르기", close) {
+        if (page is Page.ClubRanking) SheetChoice("🌍 세계", "모든 나라의 클럽", current == null) { pick(null) }
+        for ((title, infos) in sections) {
+            SheetHeading(title)
+            for (info in infos) SheetChoice(selectorTitle(info), null, info.id == current, parts = selectorParts(info)) { pick(info.id) }
+        }
+    }
+}
+
+/** What [Sheet.LIST] shows: its title and its lines, each its text and the link a tap opens ([pageOf]; null: a plain line). */
+internal data class SheetList(val title: String, val rows: List<Pair<String, String?>>)
+
+/** [Sheet.LIST]: [list]'s lines, those with a page that may be opened ([linkable]) as links. */
+@Composable
+private fun ListSheet(lg: LeagueController, v: LeagueView?, list: SheetList) {
+    val nav = lg.nav
+    val close = { nav.sheet = Sheet.NONE }
+    val has: (yacht.engine.league.Comp) -> Boolean = { c -> v?.comps?.any { it.first == c } == true }
+    LeagueSheet(list.title, close) {
+        for ((text, link) in list.rows) {
+            val page = link?.let { pageOf(it, has) }?.takeIf(::linkable)
+            if (page == null) {
+                Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp))
+            } else {
+                LinkLine(text) {
+                    close()
+                    nav.open(page)
+                }
+            }
         }
     }
 }
@@ -239,12 +303,15 @@ internal fun SheetHeading(text: String) =
 internal fun SheetNote(text: String) =
     Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-/** The players and matches of the league, as the settings sheet and the home's footer say them. */
-internal fun countsLine(c: AppController, v: LeagueView?): String {
+/**
+ * The players and matches of the league, as the settings sheet and the home's footer say them,
+ * then the meta's [era] when one is given ("🧭 보너스파의 시대 3시즌째", UX 3.2).
+ */
+internal fun countsLine(c: AppController, v: LeagueView?, era: String? = null): String {
     val lg = c.league
     // A league of generated players: its players (the hand-made AIs left it).
     val who = if (lg.config.baseAis) "${lg.size}개 AI" else "선수 ${"%,d".format(v?.rows?.count { !it.isMe && it.origin != yacht.engine.league.Origin.BASE } ?: 0)}명"
-    return who + (v?.let { " · 총 ${"%,d".format(it.matches)}경기" } ?: "")
+    return who + (v?.let { " · 총 ${"%,d".format(it.matches)}경기" } ?: "") + (era?.let { " · $it" } ?: "")
 }
 
 /** 리그 설정: how ▶ goes, the speed, the app hidden, the rules, the makers and the lab, the seed and the reset. */

@@ -26,12 +26,13 @@ import kotlin.math.roundToInt
 
 /**
  * The world's pages on request (`lg.worldPages`): competitions, clubs, leagues, the league
- * ranking, the federation and the transfer market, each loader keeping its last results by key.
+ * ranking and the federation, each loader keeping its last results by key (the transfer market
+ * moved to [MarketPages]).
  * The competition pages come from the screen's snapshot; the others are read from the league
  * under its lock off the main thread (O(the league's members), or one pass over its fixtures for
  * a club's matches), and never in the 300 ms snapshot.
  */
-class WorldPages internal constructor(private val host: LeagueHost) {
+class WorldPages internal constructor(private val host: LeagueHost, private val marketPages: MarketPages = MarketPages(host)) {
     /**
      * The competition pages loaded last (at most [KEEP]), by [Page.Competition.loadKey], the newest
      * last. Compared by identity: a page loaded again unchanged still moves to the end.
@@ -49,13 +50,14 @@ class WorldPages internal constructor(private val host: LeagueHost) {
     var leagues by mutableStateOf<Map<String, LeaguePage>>(emptyMap(), referentialEqualityPolicy())
         private set
 
-    /** 순위 › 랭킹, the 요트협회's page and the national clubs' moves, as loaded last. */
+    /** 순위 › 랭킹 and the 요트협회's page, as loaded last. */
     var ranking by mutableStateOf<RankingView?>(null)
         private set
     var federation by mutableStateOf<FederationView?>(null)
         private set
-    var market by mutableStateOf<MarketView?>(null)
-        private set
+
+    /** The national clubs' moves: [MarketPages.view], for the callers from before it moved there. */
+    val market: MarketView? get() = marketPages.view
 
     /** The world the views were read from: a view of another (a reset, a restore) is not shown. */
     @Volatile
@@ -92,8 +94,8 @@ class WorldPages internal constructor(private val host: LeagueHost) {
     /** Loads the 요트협회's agenda, decisions and awards into [federation]. */
     fun loadFederation() = load("federation", { w -> federationOf(w) }) { federation = it }
 
-    /** Loads the national clubs' moves into [market]. */
-    fun loadMarket() = load("market", { w -> marketOf(w) }) { market = it }
+    /** [MarketPages.load], for the callers from before it moved there. */
+    fun loadMarket() = marketPages.load()
 
     /**
      * The player's vote on the 요트협회's pending proposal [number] of season [season]: [approve]
@@ -137,7 +139,6 @@ class WorldPages internal constructor(private val host: LeagueHost) {
                     leagues = emptyMap()
                     ranking = null
                     federation = null
-                    market = null
                 }
                 v?.let(done)
             }
@@ -343,11 +344,6 @@ class WorldPages internal constructor(private val host: LeagueHost) {
             number,
             closed,
         )
-    }
-
-    private fun marketOf(w: LeagueWorld): MarketView? {
-        val b = book(w) ?: return null
-        return MarketView(w.plan?.number ?: 0, b.history.asReversed(), b.digest)
     }
 
     companion object {
