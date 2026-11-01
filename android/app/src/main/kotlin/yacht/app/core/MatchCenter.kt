@@ -23,6 +23,7 @@ import yacht.engine.explain.OutlookAnalysis
 import yacht.engine.league.ClubBook
 import yacht.engine.league.ClubCheckpoint
 import yacht.engine.league.ClubHistoryBook
+import yacht.engine.league.ClubTable
 import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
 import yacht.engine.league.Derbies
@@ -52,6 +53,7 @@ import yacht.engine.league.SeasonMatches
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.TieRule
 import yacht.engine.league.WatchTurn
+import yacht.engine.league.WinterMove
 import yacht.engine.league.byTeams
 import java.lang.ref.WeakReference
 import java.util.Random
@@ -1747,7 +1749,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
      * The rival matches of [w]'s season in play [p] (design ENG 1b.6: 1부 league fixtures between counted
      * members of rival clubs, by the season's drawn ratings): worked out once a season and each time the
      * club book changes, null without a club world shown (none, or `clubWorld` off) or in a legacy season.
-     * Under the lock.
+     * The weeks up to this season's winter window are named with the clubs and squads before its moves
+     * ([BeforeWinter]), as the league named them those weeks (the `derby_result` news, the derby records),
+     * the rest with today's. Under the lock.
      */
     internal fun rivalsOf(w: LeagueWorld, p: SeasonPlan): RivalMarks? {
         val b = w.clubs?.takeIf { it.format == ClubBook.AFFILIATION && it.world != null && w.config.clubWorld } ?: return null
@@ -1755,13 +1759,50 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         if (!s.leagues.national) return null
         val key = listOf(p.number, b.version)
         rivalsRead?.takeIf { it.first.get() === p && it.second == key }?.let { return it.third }
-        val matches = Derbies.matches(b, drawnRatings(w, p))
+        val drawn = drawnRatings(w, p)
+        val matches = Derbies.matches(b, drawn)
+        val before = b.winterMoves(p.number).takeIf { it.isNotEmpty() }?.let { BeforeWinter(b, it, drawn) }
         val names = HashMap<String, String>()
         for (id in 0 until s.fixturesTotal) {
             val f = s.fixture(id)
-            matches.name(s, f.a, f.b)?.let { names[MatchRef(p.number, Comp.LEAGUE, id).encode()] = it }
+            val name = if (before != null && f.matchday + 1 <= before.week) before.name(s, f.a, f.b) else matches.name(s, f.a, f.b)
+            name?.let { names[MatchRef(p.number, Comp.LEAGUE, id).encode()] = it }
         }
         return RivalMarks(p.number, names).also { rivalsRead = Triple(WeakReference(p), key, it) }
+    }
+
+    /**
+     * The rival matches as they stood before the season's winter window ([moves], all of its week [week]): each
+     * winter mover at the club it left, each club's counted members (its [ClubTable.COUNTED] best by [rating], as
+     * [Derbies.matches] counts them) out of its squad then. The window's moves come after week [week]'s matches.
+     */
+    private class BeforeWinter(private val book: ClubBook, moves: List<WinterMove>, rating: (String) -> Double) {
+        val week = moves.maxOf { it.week }
+        private val clubThen = HashMap<String, String>()
+        private val counted = HashSet<String>()
+        private val names = HashMap<Pair<String, String>, String?>()
+
+        init {
+            val squads = HashMap<String, MutableSet<String>>()
+            for (c in book.clubs) squads[c.id] = c.squad.toHashSet()
+            for (m in moves.asReversed()) {
+                squads[m.to]?.remove(m.key)
+                squads[m.from]?.add(m.key)
+                clubThen[m.key] = m.from
+            }
+            val order = compareByDescending<String> { k -> rating(k).let { if (it.isNaN()) Double.NEGATIVE_INFINITY else it } }.thenBy { it }
+            for (squad in squads.values) counted += squad.sortedWith(order).take(ClubTable.COUNTED)
+        }
+
+        /** The engine's `RivalMatches.name` then: a 1부 league fixture of [league] between counted members of two rival clubs. */
+        fun name(league: yacht.engine.league.Season, a: String, b: String): String? {
+            val d = league.divisionOf(a) ?: return null
+            if (league.divisionOf(b) != d || league.leagues.tier(d) != 0 || a !in counted || b !in counted) return null
+            val ca = clubThen[a] ?: book.clubOf(a) ?: return null
+            val cb = clubThen[b] ?: book.clubOf(b) ?: return null
+            if (ca == cb) return null
+            return names.getOrPut(ClubHistoryBook.pair(ca, cb)) { Derbies.name(book, ca, cb) ?: Derbies.name(book, cb, ca) }
+        }
     }
 
     /**
@@ -1835,8 +1876,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
         if (f.comp != Comp.LEAGUE || f.kind == JobKind.TEAM) return null
         val name = rivalsOf(w, p)?.of(MatchRef(p.number, Comp.LEAGUE, f.id).encode()) ?: return null
         val b = w.clubs ?: return null
-        val ca = b.clubOf(f.a) ?: return null
-        val cb = b.clubOf(f.b) ?: return null
+        // The clubs the sides played for that week: a winter mover for the club it left up to the window's week.
+        val moved = b.winterMoves(p.number)
+        fun clubAt(k: String) = moved.firstOrNull { it.key == k && f.week <= it.week }?.from ?: b.clubOf(k)
+        val ca = clubAt(f.a) ?: return null
+        val cb = clubAt(f.b) ?: return null
         fun badge(id: String) = b.club(id)?.let { ClubBadge(it.id, it.name, it.city, it.nation, it.emblem) }
         val before = maxOf(0, f.week - 1)
         val record = Derbies.allTime(b, p, ca, cb, before)

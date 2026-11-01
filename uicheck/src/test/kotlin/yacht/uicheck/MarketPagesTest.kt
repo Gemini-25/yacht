@@ -16,6 +16,7 @@ import yacht.app.core.drawnRatings
 import yacht.engine.OppModel
 import yacht.engine.Tables
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.ClubBook
 import yacht.engine.league.ClubCheckpoint
 import yacht.engine.league.ClubMoveType
 import yacht.engine.league.Comp
@@ -367,17 +368,26 @@ class MarketPagesTest {
         val s = p.league
         val center = MatchCenter(Host(w))
         val marks = assertNotNull(center.rivalsOf(w, p))
-        // The marks: every 1부 league fixture between counted members of rival clubs (the engine's rivalName).
+        // The marks: every 1부 league fixture between counted members of rival clubs (the engine's rivalName), up to the
+        // winter window's week on the book as it was then (each winter mover back at the club it left).
+        val drawn = drawnRatings(w, p)
+        val moved = scene.book.winterMoves(p.number)
+        val winterWeek = moved.maxOf { it.week }
+        val then = bookBeforeWinter()
         var n = 0
+        var changed = 0
         for (id in 0 until s.fixturesTotal) {
             val f = s.fixture(id)
-            val name = Derbies.rivalName(scene.book, p, f.a, f.b, drawnRatings(w, p))
+            val now = Derbies.rivalName(scene.book, p, f.a, f.b, drawn)
+            val name = if (f.matchday + 1 <= winterWeek) Derbies.rivalName(then, p, f.a, f.b, drawn) else now
             assertEquals(name, marks.of(MatchRef(p.number, Comp.LEAGUE, id).encode()), "fixture $id")
             if (name != null) n++
+            if (name != now) changed++
         }
         assertEquals(n, marks.size)
         assertTrue(n > 0)
-        println("rival matches: $n of ${s.fixturesTotal} league fixtures")
+        println("rival matches: $n of ${s.fixturesTotal} league fixtures ($changed named otherwise with today's clubs, ${moved.size} winter moves)")
+        assertTrue(changed > 0, "the scene's winter changed no rival match")
         // Asked again with nothing changed: the same marks.
         assertTrue(center.rivalsOf(w, p) === marks)
         // The broadcast's candidates name the rivalry of a rival match, and only of one.
@@ -393,17 +403,51 @@ class MarketPagesTest {
         val r = wait { center.report(page) }
         val line = assertNotNull(r.rival)
         val ref = MatchRef.decode(scene.rivalMatch)!!
-        val f = s.fixture(ref.id)
-        val (ca, cb) = scene.book.clubOf(f.a)!! to scene.book.clubOf(f.b)!!
-        assertEquals(marks.of(scene.rivalMatch), line.name)
-        assertEquals(ca to cb, line.a.id to line.b.id)
-        val record = Derbies.allTime(scene.book, p, ca, cb, f.matchday) ?: Derbies.series(scene.book, p, f.matchday).values.firstOrNull { setOf(it.a, it.b) == setOf(ca, cb) }
-        assertEquals(record?.of(ca) ?: Triple(0, 0, 0), Triple(line.w, line.d, line.l))
+        fun checkLine(id: Int, line: yacht.app.core.RivalLine) {
+            val f = s.fixture(id)
+            // The clubs the sides played for that week (a winter mover for the club it left up to the window's week).
+            fun clubAt(k: String) = moved.firstOrNull { it.key == k && f.matchday + 1 <= it.week }?.from ?: scene.book.clubOf(k)
+            val (ca, cb) = clubAt(f.a)!! to clubAt(f.b)!!
+            assertEquals(marks.of(MatchRef(p.number, Comp.LEAGUE, id).encode()), line.name)
+            assertEquals(ca to cb, line.a.id to line.b.id)
+            val record = Derbies.allTime(scene.book, p, ca, cb, f.matchday) ?: Derbies.series(scene.book, p, f.matchday).values.firstOrNull { setOf(it.a, it.b) == setOf(ca, cb) }
+            assertEquals(record?.of(ca) ?: Triple(0, 0, 0), Triple(line.w, line.d, line.l))
+        }
+        checkLine(ref.id, line)
+        // A played rival match of a winter mover before the window: its line names the clubs of that week.
+        val early = (0 until s.fixturesTotal).firstOrNull { id ->
+            val f = s.fixture(id)
+            f.matchday + 1 <= winterWeek && s.result(id) != null && moved.any { it.key == f.a || it.key == f.b } &&
+                marks.of(MatchRef(p.number, Comp.LEAGUE, id).encode()) != null
+        }
+        if (early != null) {
+            val ep = Page.Match(MatchRef(p.number, Comp.LEAGUE, early).encode())
+            center.loadReport(ep)
+            checkLine(early, assertNotNull(wait { center.report(ep) }.rival))
+        }
+        println("a winter mover's rival match before the window: ${early ?: "none"}")
         // Without a club world: no marks, no rival candidates, no rival line.
         val plain = ClubStory.decode(StoryWorld.files())
         val none = MatchCenter(Host(plain))
         assertNull(none.rivalsOf(plain, plain.plan!!))
         assertTrue(none.candidatesNow(plain.plan!!.week).none { it.rival != null || it.rivalMove })
+    }
+
+    /** [scene]'s club book as it stood before the season's winter window: each winter mover back in the squad it left (a `club` line's last field). */
+    private fun bookBeforeWinter(): ClubBook {
+        val squads = HashMap<String, MutableList<String>>()
+        for (c in scene.book.clubs) squads[c.id] = c.squad.toMutableList()
+        for (m in scene.book.winterMoves(scene.world.plan!!.number).asReversed()) {
+            squads[m.to]?.remove(m.key)
+            squads[m.from]?.add(m.key)
+        }
+        val text = scene.files.getValue(LeagueWorld.CLUBS).decodeToString().lines().joinToString("\n") { l ->
+            if (!l.startsWith("club ")) return@joinToString l
+            val f = l.split(' ').toMutableList()
+            f[f.lastIndex] = squads.getValue(f[1]).joinToString(",").ifEmpty { "-" }
+            f.joinToString(" ")
+        }
+        return ClubBook.decode(text)
     }
 
     // ---- the host ------------------------------------------------------------------------------------
