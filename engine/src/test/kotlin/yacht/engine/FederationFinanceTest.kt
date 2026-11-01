@@ -313,6 +313,16 @@ class FederationFinanceTest {
         fun mean(ids: List<String>) = Math.round(ids.sumOf { report.incomes.getValue(it).toLong() }.toDouble() / ids.size).toInt()
         assertEquals(mean(inTop) to mean(rest), split.topIncome to split.restIncome)
         assertEquals(split.topIncome.toDouble() / split.restIncome, split.incomeGap!!, 1e-9)
+        // A club of the rest whose first member is now a newcomer from the best-ranked league stays among the rest.
+        val y = rest.first()
+        val newcomer = plan.league.standings.keys.first { k -> plan.league.leagueOf(k)?.id == first && l.book.clubOf(k).let { it != null && it != y } }
+        val squad = l.book.members(y)
+        for (k in squad) l.book.place(k, null)
+        l.book.place(newcomer, y)
+        for (k in squad) l.book.place(k, y)
+        assertEquals(first, plan.league.leagueOf(l.book.members(y).first())?.id)
+        val moved = FederationStats.of(plan, honours, f, config, clubs = l.book)
+        assertEquals(split.topIncome to split.restIncome, moved.topIncome to moved.restIncome)
         // The elite's style: the family most above its neutral share, and the era of that family going on.
         val elite = listOf(10, 60, 20, 10, 10, 5, 3, 2)
         val fs = FamilyStats(plan.number, elite, elite, emptyList(), List(8) { 0.0 }, emptyList(), emptyMap())
