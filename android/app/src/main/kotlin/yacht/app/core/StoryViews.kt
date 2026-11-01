@@ -48,7 +48,11 @@ enum class PressPhase { PRESEASON, SEASON, REVIEW }
  * 기자단 ([StoryPages.press], UX 7) of [league] at [week] of [season]: the power ranking of [powerWeek]
  * (none before [firstWeek]) with its column, the league's top 5, the weeks at no. 1 this season
  * and in all, the prediction and the last scorecard ([history]: season, "h/n", ρ), and the press
- * vote of [voteSeason] by [jury] voters with every 골든 다이스 (season, name).
+ * vote of [voteSeason] by [jury] voters with every 골든 다이스 (season, name). [powerSeason] is the
+ * season [power] is of (the season before in the review weeks, when only its last column is left:
+ * its rows then have no score); [names] the shown names of [weeksTop]'s and [careerTop]'s keys;
+ * [national] false for a legacy season, which keeps no press; [firstRanking] for the season's first
+ * ranked week, whose rows have no move to show.
  */
 data class PressView(
     val season: Int, val week: Int, val phase: PressPhase, val league: String,
@@ -56,6 +60,8 @@ data class PressView(
     val weeksTop: List<Pair<String, Int>>, val careerTop: List<Pair<String, Int>>,
     val prediction: PredictionView?, val scorecard: ScorecardView?, val history: List<Triple<Int, String, Int>>,
     val voteSeason: Int, val jury: Int, val votes: List<AwardVote>, val goldenDice: List<Pair<Int, String>>,
+    val powerSeason: Int = season, val names: Map<String, String> = emptyMap(), val national: Boolean = true,
+    val firstRanking: Boolean = false,
 )
 
 // ---- 시대와 메타 (UX 8) -----------------------------------------------------------------------------
@@ -76,13 +82,31 @@ data class FamilyShare(val family: StyleFamily, val elite: Int, val all: Int, va
  * 시대와 메타 ([StoryPages.meta], UX 8.1) at [season]: the era now ([titles]: k of T big titles), 춘추전국
  * ([chaos]), the candidate and every era (newest first); the shares by season and now, the last
  * season's matchups and the counter sentence; the newcomer weights, the style cap (13, 15, 17:
- * tenths of the usual share) and each best-ranked league's strongest family.
+ * tenths of the usual share) and each best-ranked league's strongest family. [measured] is the
+ * newest close measured (`fm`), whose [matchups] hold each row family's points a match above
+ * expectation against the column family in [H2hMatrix.score] (NaN below [StoryPages.MATCHUP_MIN]
+ * matches; not a share) and the matches in [H2hMatrix.games].
  */
 data class MetaView(
     val season: Int, val era: EraView?, val titles: Pair<Int, Int>?, val chaos: Boolean, val candidate: CandidateView?, val eras: List<EraView>,
     val shares: List<ShareSeason>, val now: List<FamilyShare>, val matchups: H2hMatrix?, val counter: String?,
     val weights: List<Pair<StyleFamily, Double>>, val styleCap: Int, val leagues: List<Pair<String, StyleFamily>>,
-)
+    val measured: Int = 0,
+) {
+    /**
+     * Whether the meta has kept anything yet (an era, a season's style shares or a family measure):
+     * without it 시대와 메타 is the boxes' report alone, as before the eras.
+     */
+    val any: Boolean get() = eras.isNotEmpty() || shares.isNotEmpty() || matchups != null || leagues.isNotEmpty()
+}
+
+/**
+ * What 기자단 and 시대와 메타 have to show ([StoryPages.status]), for the places that link to them:
+ * [press] when the press has started its work (the power ranking, a vote or a scorecard kept),
+ * [meta] when the meta has kept anything, and the era going on in a line ("🧭 보너스파의 시대
+ * 3시즌째"; null for none), as of [season]. A legacy season has none of them.
+ */
+data class StoryStatus(val season: Int, val press: Boolean, val meta: Boolean, val era: String?)
 
 // ---- 세계 정세 and the World Cup (UX 9) --------------------------------------------------------------
 

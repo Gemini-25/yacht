@@ -704,9 +704,13 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
                 (m.from?.let { b?.nationOf(it) } in nations || m.to?.let { b?.nationOf(it) } in nations)
         }.asReversed()
         val tiers = lg.divisions.mapNotNull { d -> aggregate(w, s.divisions[d])?.let { s.leagues.label(d) to it } }
+        // 🧭 강세 스타일 (UX 9.4): once the meta measures its closes (the style families' `fm`): the
+        // league's family at the last close, as 시대와 메타 lists it, and its share of the 1부 now.
+        val fm = w.stats.families.entries.maxByOrNull { it.key }?.value
+        val style = fm?.let { leagueStyle(s.divisions[lg.top], it.leagues[id]) { k -> StyleFamily.of(w.players[k]?.spec?.play) } }
         return LeaguePage(
             Page.League(id).loadKey, info, p.ranking.of(id), s.table(lg.top).take(TOP).map(::row),
-            if (b != null) standings(w, b, p, id).take(TOP) else emptyList(), stars, champions, moves, tiers,
+            if (b != null) standings(w, b, p, id).take(TOP) else emptyList(), stars, champions, moves, tiers, style = style,
         )
     }
 
@@ -785,6 +789,20 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
             return m
         }
     }
+}
+
+/**
+ * A 1부's strongest style (🧭 강세 스타일) and its share in per cent of [keys] (its members now) with
+ * a family: [measured] (the league's family at the meta's last close), else the family most of them
+ * belong to (ties to the earlier family, as the meta's own league families); null when none has one.
+ */
+internal fun leagueStyle(keys: Collection<String>, measured: StyleFamily?, family: (String) -> StyleFamily?): Pair<StyleFamily, Int>? {
+    val counts = IntArray(StyleFamily.entries.size)
+    for (k in keys) family(k)?.let { counts[it.ordinal]++ }
+    val total = counts.sum()
+    if (total == 0) return null
+    val best = measured ?: StyleFamily.entries.maxWith(compareBy<StyleFamily> { counts[it.ordinal] }.thenByDescending { it.ordinal })
+    return best to (100.0 * counts[best.ordinal] / total).roundToInt()
 }
 
 /** The load key of player [key]'s 💼 line ([WorldPages.playerClubs]). */

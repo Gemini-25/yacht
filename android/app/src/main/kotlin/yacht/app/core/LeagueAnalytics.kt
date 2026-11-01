@@ -13,6 +13,8 @@ import yacht.engine.Mode
 import yacht.engine.Tables
 import yacht.engine.explain.Ko
 import yacht.engine.league.AiStats
+import yacht.engine.league.BigStory
+import yacht.engine.league.ClubBook
 import yacht.engine.league.Coefficients
 import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
@@ -24,8 +26,10 @@ import yacht.engine.league.Leaders
 import yacht.engine.league.LeagueIds
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.MatchRef
+import yacht.engine.league.Money
 import yacht.engine.league.Nations
 import yacht.engine.league.Origin
+import yacht.engine.league.PressAwards
 import yacht.engine.league.Preview
 import yacht.engine.league.RecordChase
 import yacht.engine.league.RecordGroup
@@ -33,12 +37,14 @@ import yacht.engine.league.Season
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
+import yacht.engine.league.SeasonStories
 import yacht.engine.league.ViewableCompetition
 import yacht.engine.league.TieRule
 import yacht.engine.league.TieView
 import yacht.engine.league.WatchTurn
 import yacht.engine.league.byTeams
 import yacht.engine.league.diff
+import yacht.engine.league.valuer
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -62,6 +68,10 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
 
     /** 기록 › 리더 as loaded last ([loadLeaders]). */
     var leaders by mutableStateOf<LeadersView?>(null, referentialEqualityPolicy())
+        private set
+
+    /** The club world's boards of the hub (💰 몸값, 🌱 유스 출신) as loaded last ([loadClubBoards]). */
+    var clubBoards by mutableStateOf<ClubBoards?>(null, referentialEqualityPolicy())
         private set
 
     /** Whole leaderboards loaded last (at most [WorldPages.KEEP]), by [boardKey]. */
@@ -113,6 +123,9 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
     /** 기록 › 리더 as loaded last, whatever its filter (shown while another loads). */
     fun anyLeaders(): LeadersView? = leaders?.takeIf { fresh() }
 
+    /** The club world's boards for [filter] when loaded from the league in play (else null). */
+    fun clubBoards(filter: LeaderFilter): ClubBoards? = clubBoards?.takeIf { fresh() && it.filter == filter }
+
     /** [kind]'s whole board for [filter], when loaded. */
     fun board(kind: LeaderKind, filter: LeaderFilter): LeaderBoardView? = boards[boardKey(kind, filter)]?.takeIf { fresh() }
 
@@ -152,6 +165,7 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
                     source = w
                     players = emptyMap()
                     leaders = null
+                    clubBoards = null
                     boards = emptyMap()
                     room = null
                     hall = null
@@ -181,6 +195,15 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
     /** Loads 기록 › 리더 for [filter]: the top [HUB_TOP] of every board, O(boards × players of the scope). */
     fun loadLeaders(filter: LeaderFilter) {
         load("leaders", { w, view -> leadersOf(w, view, filter) }) { leaders = it }
+    }
+
+    /**
+     * Loads the hub's club-world boards for [filter] ([clubBoards]): 💰 몸값 and 🌱 유스 출신 of its area
+     * this season (UX 7.5), empty without a club world on, or over careers and the last matches
+     * (a value and an academy are now's). O(the area's players).
+     */
+    fun loadClubBoards(filter: LeaderFilter) {
+        load("clubBoards", { w, view -> clubBoardsOf(w, view, filter) }) { clubBoards = it }
     }
 
     /** Loads [kind]'s whole board for [filter] (its first [BOARD_TOP] lines and the followed players further down). */
@@ -544,6 +567,25 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         return LeadersView(filter, boards, area, missing, w.plan?.number ?: 0)
     }
 
+    private fun clubBoardsOf(w: LeagueWorld, view: LeagueView?, filter: LeaderFilter): ClubBoards {
+        val none = ClubBoards(filter, emptyList(), emptyList())
+        val b = w.clubs?.takeIf { it.format == ClubBook.AFFILIATION && it.world != null && w.config.clubWorld } ?: return none
+        if (filter.recent || filter.scope != StatScope.SEASON) return none
+        val keys = areaOf(w, view, filter).second
+        val s = w.plan?.number ?: 0
+        val rating = { k: String -> w.ladder.rating(k) }
+        val value = b.valuer(rating, { k -> w.players[k]?.age(s) }, { k -> w.players[k]?.identity?.potential }, { k -> w.players[k]?.identity?.abilities?.overall })
+        fun line(e: LeaderEntry, text: String, sub: String) = LeaderLine(e.key, host.shown(e.key), host.badge(e.key), host.leagueLabel(e.key), e.value, text, sub)
+        val values = Leaders.club(LeaderStat.VALUE, keys, b, rating, value).take(CLUB_BOARD).map { e ->
+            line(e, Money.text(e.value.roundToInt()), "레이팅 ${grouped(e.extra)}")
+        }
+        val graduates = Leaders.club(LeaderStat.GRADUATE, keys, b, rating, value).take(CLUB_BOARD).map { e ->
+            val academy = b.terms(e.key)?.academy?.let { b.club(it)?.name }
+            line(e, grouped(e.value), listOfNotNull(academy?.let { "$it 유스" }, "시즌 ${e.extra.roundToInt()} 입단").joinToString(" · "))
+        }
+        return ClubBoards(filter, values, graduates)
+    }
+
     private fun boardOf(w: LeagueWorld, view: LeagueView?, kind: LeaderKind, filter: LeaderFilter): LeaderBoardView {
         val (area, keys) = areaOf(w, view, filter)
         val recent = if (filter.recent) w.plan?.league?.let { recentStats(it, keys) } else null
@@ -665,9 +707,11 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
             }
             for (h in hs.filter { it.kind in CHRONICLE_TITLES }) lines += ChronicleLine("🏆", "${TITLE_NAMES[h.kind] ?: h.kind} ${host.name(h.key)}", h.key.takeIf { h.kind != "FAMILY" && h.kind != "ALLSTAR" })
             hs.firstOrNull { it.kind == "MVP" }?.let { lines += ChronicleLine("⭐", "MVP ${host.name(it.key)}", it.key) }
+            hs.firstOrNull { it.kind == PressAwards.GOLDEN_DICE }?.let { lines += ChronicleLine("🎙", "골든 다이스 ${host.name(it.key)}", it.key) }
             first[s]?.let { lines += ChronicleLine("🌍", "리그 랭킹 1위 ${LeagueIds.icon(it)} ${LeagueIds.label(it)}") }
             best[s]?.let { (k, r) -> lines += ChronicleLine("📈", "시즌 최고 레이팅 ${host.name(k)} (${grouped(r)})", k) }
             for (d in dynasties.filter { it.to == s && it.kind == "RUN" }) lines += ChronicleLine("🔥", "${host.name(d.key)} ${titleLabel(d.title)} ${d.count}연패", d.key)
+            lines += storyLines(w, s)
             ChronicleSeason(s, lines)
         }.filter { it.lines.isNotEmpty() }
         val eras = ArrayList<ChronicleLine>()
@@ -693,6 +737,23 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         return ChronicleView(rows, eras)
     }
 
+    /**
+     * A chronicle season's story lines (UX 7.5): the era that began with it, the world events that
+     * began or ended in it, and the world-record fee of its window (the `tx` move flagged W).
+     */
+    private fun storyLines(w: LeagueWorld, s: Int): List<ChronicleLine> = buildList {
+        val meta = w.world.meta
+        for (e in meta.eras.filter { it.from == s }) add(ChronicleLine("🧭", "${meta.name(e)} 시작"))
+        val events = w.world.events
+        for ((kind, start) in events.arcs.map { it.kind to it.start } + events.ended.map { it.kind to it.start }) {
+            if (start == s) add(ChronicleLine(StoryLines.arcIcon(kind), "${kind.label} 시작"))
+        }
+        for (a in events.ended.filter { it.end == s }) add(ChronicleLine(StoryLines.arcIcon(a.kind), "${a.kind.label} 결말"))
+        w.clubs?.notable?.filter { it.season == s && 'W' in it.flags }?.maxByOrNull { it.fee }?.let { m ->
+            add(ChronicleLine("💰", "세계 최고 이적료 ${Money.text(m.fee)} ${host.name(m.key)}", m.key))
+        }
+    }
+
     // ---- reviews ------------------------------------------------------------------------------------
 
     private fun reviewListOf(w: LeagueWorld): ReviewList {
@@ -706,6 +767,8 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
                 val world = hs.filter { it.kind == "CL" || it.kind == "CUP" }.joinToString(" · ") { "${TITLE_NAMES[it.kind]} ${host.name(it.key)}" }
                 if (world.isNotEmpty()) add("🏆 $world")
                 hs.firstOrNull { it.kind == "MVP" }?.let { add("⭐ MVP ${host.name(it.key)}") }
+                // The meta's era the season was in (UX 7.5).
+                w.world.meta.eras.lastOrNull { e -> sum.season >= e.from && (e.to == 0 || sum.season <= e.to) }?.let { add("🧭 ${w.world.meta.name(it)}") }
             }
             ReviewListItem(sum.season, sum.season in kept, lines, sum.avgScore, sum.games)
         }
@@ -768,7 +831,54 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
             )
         }.take(FOLLOWED)
         val leagueLabels = review?.ranking.orEmpty().associate { (id, _) -> id to "${LeagueIds.icon(id)} ${LeagueIds.label(id)}" }
-        return ReviewPage(key, season, review, summary, names + followed.associate { it.key to host.shown(it.key) }, champions, world, best, top, upset, followed, leagueLabels)
+        return ReviewPage(
+            key, season, review, summary, names + followed.associate { it.key to host.shown(it.key) }, champions, world, best, top, upset, followed, leagueLabels,
+            stories = w.archive.stories(season)?.let { storiesOf(w, season, it) },
+        )
+    }
+
+    /**
+     * The review's big stories (UX 3.5, 7.5) from season [season]'s story sub-lines: the close's big
+     * stories as lines with their links (in the order the close ranked them), 골든 다이스's top 3, the
+     * predictions in a line with the biggest overachiever, the record fee, the deals and sackings,
+     * the coach of the year and the era in words; null when the sub-lines tell none of them.
+     */
+    private fun storiesOf(w: LeagueWorld, season: Int, st: SeasonStories): ReviewStories? {
+        val badges = host.view()?.badges.orEmpty()
+        val big = st.big.mapNotNull { bigLine(season, it, st) }.take(BIG_LINES)
+        val golden = st.media?.goldenDice.orEmpty().map { VoteLine("p:${it.key}", host.shown(it.key), it.points, it.firsts) }
+        val over = w.world.media.scorecard(season)?.over
+        val predict = st.media?.let { m -> StoryLines.predict(m.hits, m.leagues, over?.let { host.shown(it.key) }) }
+        val record = st.market?.record?.let { r -> FeeLine(r.season, r.key, host.shown(r.key), r.from?.let { badges[it] }, r.to?.let { badges[it] }, r.fee, "") }
+        val coach = st.coaches?.coachOfYear?.let { id -> w.clubs?.let(::coachNames)?.get(id) ?: id }
+        val era = st.era?.let { e ->
+            val meta = w.world.meta
+            val name = e.family?.let { f -> meta.eras.filter { it.family == f }.sortedBy { it.n }.getOrNull(e.nth - 1)?.let(meta::name) ?: f.era }
+                ?: yacht.engine.league.MetaBook.CHAOS
+            StoryLines.era(name, e.change)
+        }
+        val out = ReviewStories(big, golden, predict, record, st.market?.deals ?: 0, st.coaches?.sackings ?: 0, coach, era)
+        return out.takeIf { big.isNotEmpty() || golden.isNotEmpty() || predict != null || record != null || coach != null || era != null || out.deals + out.sackings > 0 }
+    }
+
+    /**
+     * One big story of season [season] as a line and its link (UX 3.5): an arc's outcome, an era's
+     * change, the World Cup host, the record fee or 골든 다이스, read from the close's event it was
+     * made of ([BigStory.kind], keys and args as the event's); null for a kind the review does not tell.
+     */
+    private fun bigLine(season: Int, b: BigStory, st: SeasonStories): Pair<String, String>? {
+        fun arg(i: Int) = b.args.getOrNull(i)?.takeIf { it != "-" }
+        fun key(i: Int) = b.keys.getOrNull(i)?.takeIf { it != "-" }
+        return when (b.kind) {
+            "era_begins" -> arg(3)?.let { StoryLines.eraBegins(it) to "meta" }
+            "era_ends" -> arg(1)?.let { StoryLines.eraEnds(it, arg(2)?.toIntOrNull()) to "meta" }
+            "wc_host_vote" -> key(0)?.let { code -> StoryLines.wcHost(season + 1, Nations.of(code)?.let { "${it.flag} ${it.name}" } ?: code) to "wc:${season + 1}" }
+            "record_fee" -> (st.market?.record?.let { it.key to it.fee } ?: key(0)?.let { k -> arg(0)?.toIntOrNull()?.let { k to it } })
+                ?.let { (k, fee) -> StoryLines.recordFee(Money.text(fee), host.shown(k)) to "p:$k" }
+            // 골든 다이스 is the card's own block when the media line keeps its top 3.
+            "press_award" -> if (st.media?.goldenDice?.isNotEmpty() == true) null else key(0)?.let { k -> StoryLines.goldenDice(host.shown(k), arg(0)?.toIntOrNull()) to "pr" }
+            else -> StoryLines.arcOf(b.kind)?.let { kind -> StoryLines.arcOutcome(kind, b.kind) to "" }
+        }
     }
 
     // ---- fun facts, the league comparison, a nation's numbers -----------------------------------------
@@ -975,9 +1085,13 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         /** The end of a group's round-robin fixture labels ("A조 2차전"). */
         private const val GROUP_MATCH = "차전"
 
-        /** Lines per hub card, per board page. */
+        /** Lines per hub card, per board page; per club-world board (its card's top 3, unfolded). */
         const val HUB_TOP = 3
         const val BOARD_TOP = 50
+        const val CLUB_BOARD = 10
+
+        /** Big stories the review's first card tells (UX 3.5). */
+        const val BIG_LINES = 4
 
         /** The "최근 10경기" boards: matches a player needs, close games for 클러치, games for 꾸준함 and 보너스. */
         const val RECENT_MIN = 5
@@ -1053,6 +1167,12 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
         }
     }
 }
+
+/**
+ * The hub's club-world boards for [filter] (UX 7.5, "더 보기"): 💰 몸값 (market value, rating under it)
+ * and 🌱 유스 출신 (academy graduates by rating, their academy and intake season), best first.
+ */
+data class ClubBoards(val filter: LeaderFilter, val value: List<LeaderLine>, val graduates: List<LeaderLine>)
 
 /**
  * The player page's stat grid from [own] ([key]'s numbers of [scope]; [others]: the league's

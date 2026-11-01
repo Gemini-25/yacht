@@ -70,10 +70,16 @@ fun RecordsTab(lg: LeagueController, v: LeagueView, onOpen: (String) -> Unit) {
     }
 }
 
-/** 기록 › 더 보기: the pages that are not a chip of their own. */
+/**
+ * 기록 › 더 보기: the pages that are not a chip of their own. 🎙 기자단 shows once the press has
+ * started its work; 시대와 메타 holds the meta report (칸별 메타) and, once the meta keeps its
+ * closes, the eras ([yacht.app.core.StoryPages.status]).
+ */
 @Composable
 private fun MoreList(lg: LeagueController, v: LeagueView) {
     val nav = lg.nav
+    LaunchedEffect(v.season?.number, v.clock?.week) { lg.storyPages.loadStatus() }
+    val story = lg.storyPages.status
     // 선수 비교 starts from the best-ranked followed player, else the best-ranked one.
     val first = v.rows.filter { it.rank != null && !it.isMe }.sortedBy { it.rank }.let { rows -> rows.firstOrNull { it.key in lg.favourites } ?: rows.firstOrNull() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -82,7 +88,8 @@ private fun MoreList(lg: LeagueController, v: LeagueView) {
         LinkLine("🌱 유망주", "22세 이하 선수를 잠재력 순으로") { nav.open(Page.Prospects) }
         LinkLine("🏛 레전드 보관소", "은퇴한 선수와 레전드") { nav.open(Page.Legends) }
         LinkLine("🧬 계열별", "AI 계열마다 선수와 계열 대 계열 전적") { nav.open(Page.Families) }
-        LinkLine("📊 메타 리포트", "칸마다 리그 평균 점수와 0점 비율, 상위권의 성향") { nav.open(Page.Meta()) }
+        if (story?.press == true) LinkLine("🎙 기자단", "파워 랭킹, 시즌 전망, 기자단 투표") { nav.open(Page.Press()) }
+        LinkLine("🧭 시대와 메타", if (story?.meta == true) "시대의 흐름, 스타일 점유율과 상성, 칸별 메타" else "칸마다 리그 평균 점수와 0점 비율, 상위권의 성향") { nav.open(Page.Meta()) }
         if (first != null) LinkLine("⚖ 선수 비교", "두 선수의 기록과 능력치를 나란히") { nav.open(Page.Compare(first.key)) }
         LinkLine("⚗ AI 연구소", "두 AI를 수천 번 붙여서 누가 얼마나 강한지 재요") { nav.open(Page.Lab) }
         if (v.season?.national == true || v.season?.nextNational == true) LinkLine("🏛 요트협회 기록", "안건과 결정, 시상의 역사") { nav.open(Page.Federation) }
@@ -328,7 +335,8 @@ internal fun ChronicleBody(c: ChronicleView, onPlayer: (String) -> Unit) {
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer)) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text("🏛 시대를 만든 이름들", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer)
+                        // "시대" names only the meta's eras (UX 14.2).
+                        Text("🏛 왕조를 만든 이름들", fontWeight = FontWeight.Bold, color = cs.onSecondaryContainer)
                         for (l in c.eras) ChronicleText(l, cs.onSecondaryContainer, onPlayer)
                     }
                 }

@@ -263,6 +263,10 @@ private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
             is Page.Match -> MatchBarAction(c, page)
             // 클럽 랭킹's scope (UX 4.8): the league sheet changes only this page's scope.
             is Page.ClubRanking -> TextButton(onClick = { nav.sheet = Sheet.LEAGUE_PICK }) { Text(clubRankScope(page.scope), maxLines = 1) }
+            // 기자단's league (UX 7.1): the same sheet changes only this page's, never the tabs'.
+            is Page.Press -> if (v?.season?.national == true) {
+                TextButton(onClick = { nav.sheet = Sheet.LEAGUE_PICK }) { Text(pressScope(page.league ?: v.season.league), maxLines = 1) }
+            }
             else -> {}
         }
         if (lg.running) {
@@ -293,7 +297,7 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     Page.Prospects -> "유망주"
     Page.Legends -> "레전드 보관소"
     Page.Families -> "계열별"
-    is Page.Meta -> "메타 리포트"
+    is Page.Meta -> "시대와 메타"
     Page.Follows -> "응원"
     Page.Federation -> "요트협회"
     is Page.Leaderboard -> yacht.app.core.LeagueAnalytics.title(page.kind)
@@ -337,7 +341,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         Page.Prospects -> Prospects(lg, open)
         Page.Legends -> Legends(lg, open)
         Page.Families -> FamilyList(lg, v, open)
-        is Page.Meta -> MetaPageBody(lg, v)
+        is Page.Meta -> MetaPageBody(lg, v, page)
         is Page.Leaderboard -> LeaderBoardPage(lg, v, page)
         is Page.Review -> ReviewPageBody(c, v, page)
         is Page.Facts -> FactsPage(lg, v, page)
@@ -345,8 +349,8 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Matches -> MatchesPage(c, v, page)
         is Page.Coach -> CoachPageBody(lg, v, page)
         is Page.ClubRanking -> ClubRankingBody(lg, v, page)
-        // Not reachable from a link yet ([linkable]): each waits for its view.
         is Page.Press -> PressPageBody(lg, v, page)
+        // Not reachable from a link yet ([linkable]): each waits for its view.
         Page.Events -> EventsPageBody(lg, v)
         is Page.Event -> EventPageBody(lg, v, page)
         is Page.WcStory -> WcStoryBody(lg, v, page)
@@ -361,7 +365,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
  * content together with its entry points; that stage takes its page off this list.
  */
 internal fun linkable(page: Page): Boolean = when (page) {
-    is Page.Press, Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> false
+    Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> false
     else -> true
 }
 
