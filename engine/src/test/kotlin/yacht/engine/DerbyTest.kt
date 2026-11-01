@@ -117,6 +117,9 @@ class DerbyTest {
         val rebuilt = Derbies.born(book, 5, final, links)
         assertEquals(listOf("c05 c06 P", "c08 c09 F", "c03 c06 K", "c04 c05 K"), rebuilt.map { "${it.a} ${it.b} ${it.why}" })
         assertEquals(events, Derbies.events(5, rebuilt))
+        // Rebuilt after a restart, without the captains' moves nor the final: the reasons only the caller knew fall back to a
+        // captain's move and the top two, never to a kind code the news cannot read.
+        assertEquals(listOf("c05 c06 P", "c08 c09 P", "c03 c06 K", "c04 c05 K"), Derbies.born(book, 5).map { "${it.a} ${it.b} ${it.why}" })
         // Again: the same rivals, nothing born, no new version.
         val v = book.version
         assertTrue(Derbies.recompute(book, 5, final, links).isEmpty())
@@ -215,6 +218,13 @@ class DerbyTest {
         val reread = ClubBook.decode(text)
         assertEquals(0, Derbies.fold(reread, plan))
         assertEquals(text, reread.encode())
+        // A pair that is rival no more keeps its record; the close would fold nothing more into it, so nor does the season on request.
+        val next = Eco.plan(2, listOf("KR" to listOf("a1", "a3", "b1", "b2", "b3", "d1", "d2")))
+        Hist.play(next.league)
+        val stored = reread.derby("c01", "c02")!!
+        assertEquals(stored.games + Derbies.series(reread, next).getValue("c01 c02").games, Derbies.allTime(reread, next, "c01", "c02")!!.games)
+        reread.world!!.history.rivals.clear()
+        assertEquals(stored, Derbies.allTime(reread, next, "c01", "c02"))
     }
 
     /** A finished competition whose matches are [matches] (for the series: which competitions count). */

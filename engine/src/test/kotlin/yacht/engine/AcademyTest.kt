@@ -112,6 +112,17 @@ class AcademyTest {
     }
 
     @Test
+    fun aStarWithoutAClubAsksForAStarsNumber() {
+        val book = book(listOf(2, 2, 2, 2))
+        val members = book.clubs.flatMap { it.squad }
+        // The nation's best player was released: the draft places it, and it is still among its nation's ten best.
+        val played = members.toSet() + "star"
+        val rating = { k: String -> if (k == "star") 1900.0 else 1500.0 }
+        Academy.draft(book, 5, input(book, listOf("star"), rating = rating), AcademyInput(), played)
+        assertTrue(book.terms("star")!!.number in yacht.engine.league.ClubHistory.STAR_NUMBERS, "${book.terms("star")}")
+    }
+
+    @Test
     fun pupilsGoToTheirMentorsClubFirst() {
         val book = book(listOf(1, 1, 1, 1))
         val played = book.clubs.flatMap { it.squad }.toSet()

@@ -11,11 +11,18 @@ data class RivalLink(val a: String, val b: String, val kind: Char, val season: I
 /**
  * Who plays a rival match this season (라이벌전, design ENG 1b.6): each club's counted members (its
  * [ClubTable.COUNTED] best by the season's drawn ratings, so a fixture's flag stays the same all
- * season) and the book's rival pairs. Built by [Derbies.matches] once a season (or on a new
- * [ClubBook.version]); asked per fixture.
+ * season) and the book's rival pairs with their names. Built by [Derbies.matches] once a season
+ * (or on a new [ClubBook.version]); asked per fixture, from any thread (nothing changes after it is
+ * built).
  */
 class RivalMatches internal constructor(private val book: ClubBook, private val counted: Set<String>) {
-    private val names = HashMap<String, String?>()
+    /** Each rival pair's name, by [ClubHistoryBook.pairKey]. */
+    private val names: Map<String, String> = HashMap<String, String>().apply {
+        for (c in book.clubs) for (r in book.rivals(c.id)) {
+            val k = ClubHistoryBook.pairKey(c.id, r.club)
+            if (k !in this) Derbies.name(book, c.id, r.club)?.let { put(k, it) }
+        }
+    }
 
     /** The rivalry's name when [a] and [b] are counted members of two rival clubs, in any competition; else null. */
     fun of(a: String, b: String): String? {
@@ -23,7 +30,7 @@ class RivalMatches internal constructor(private val book: ClubBook, private val 
         val ca = book.clubOf(a) ?: return null
         val cb = book.clubOf(b) ?: return null
         if (ca == cb) return null
-        return names.getOrPut(ClubHistoryBook.pairKey(ca, cb)) { if (book.isRival(ca, cb)) Derbies.name(book, ca, cb) else null }
+        return names[ClubHistoryBook.pairKey(ca, cb)]
     }
 
     /** [of] for a 1부 league fixture of [league] (both players in one division of the top tier); else null. */
@@ -185,7 +192,10 @@ object Derbies {
     /**
      * The history and transfer rivalries born at the close of [season] (those whose `since` is the
      * next season), rebuilt from the book with what made them ([candidates]' reasons; [honours] and
-     * [links] as they were given to [recompute]).
+     * [links] as they were given to [recompute]). A reason the book no longer shows is the one only
+     * the caller knew: a transfer rivalry without a record fee in the `tx` lines came from a
+     * captain's move (K; nothing in the book keeps the captains' moves, so a rebuild after a
+     * restart passes no links), a history rivalry without its club tables or final the top two (P).
      */
     fun born(book: ClubBook, season: Int, honours: List<Honour> = emptyList(), links: List<RivalLink> = emptyList()): List<RivalLink> {
         val why = HashMap<String, Char>()
@@ -193,10 +203,14 @@ object Derbies {
         val out = ArrayList<RivalLink>()
         for ((id, rs) in book.world?.history?.rivals.orEmpty()) for (r in rs) {
             if (r.since != season + 1 || (r.kind != HISTORY && r.kind != TRANSFER) || ClubBook.ID_ORDER.compare(id, r.club) > 0) continue
-            out += RivalLink(id, r.club, r.kind, r.since, why[ClubHistoryBook.pairKey(id, r.club)] ?: r.kind)
+            val reason = why[ClubHistoryBook.pairKey(id, r.club)]?.takeIf { it in REASONS.getValue(r.kind) } ?: REASONS.getValue(r.kind).first()
+            out += RivalLink(id, r.club, r.kind, r.since, reason)
         }
         return out.sortedWith(compareBy<RivalLink> { priority(it.kind) }.thenBy { ClubHistoryBook.pairKey(it.a, it.b) })
     }
+
+    /** The reasons each born kind can have, the one a rebuild falls back on first. */
+    private val REASONS = mapOf(HISTORY to "PF", TRANSFER to "KX")
 
     /** `rivalry_born` [club, club] (why: P, F, X or K, [RivalLink.why]) for the first history or transfer rivalry of [born] (comp [Comp.CLUB]), ≤ 1. */
     fun events(season: Int, born: List<RivalLink>): List<LeagueEvent> =
@@ -275,13 +289,16 @@ object Derbies {
 
     /**
      * The all-time series of clubs [a] and [b] with this season's matches of [plan] through week
-     * [through] added (unless the record holds that season already); null when they have no record.
+     * [through] added (unless the record holds that season already, or they are rivals no more: the
+     * close folds only rivals); null when they have no record. Counts this pair's matches only.
      */
     fun allTime(book: ClubBook, plan: SeasonPlan, a: String, b: String, through: Int? = null): DerbyRecord? {
         val stored = book.derby(a, b) ?: return null
-        if (stored.last >= plan.number) return stored
-        val now = series(book, plan, through)[ClubHistoryBook.pairKey(a, b)] ?: return stored
-        return stored.copy(winsA = stored.winsA + now.winsA, draws = stored.draws + now.draws, winsB = stored.winsB + now.winsB, games = stored.games + now.games, last = plan.number)
+        // A pair that is no longer rival keeps its record, and the close folds nothing more into it.
+        if (stored.last >= plan.number || !book.isRival(a, b)) return stored
+        val key = ClubHistoryBook.pairKey(a, b)
+        val c = tally(book, plan, setOf(key), through)[key] ?: return stored
+        return stored.copy(winsA = stored.winsA + c[0], draws = stored.draws + c[1], winsB = stored.winsB + c[2], games = stored.games + c.sum(), last = plan.number)
     }
 
     /** Wins of the pair's first club, draws, wins of the second, by pair key, over [plan]'s played official matches through [through]. */

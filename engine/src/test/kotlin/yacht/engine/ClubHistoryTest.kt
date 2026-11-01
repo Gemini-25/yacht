@@ -351,6 +351,61 @@ class ClubHistoryTest {
     }
 
     @Test
+    fun aMemberOnLoanIsNoCaptainThereAndItsLoanMatchesCountForNoClub() {
+        val a = listOf("a1", "a2", "a3")
+        val b = listOf("b1", "b2")
+        val book = book("c01" to a, "c02" to b)
+        val w = book.world!!
+        // a1: at c01 since season 1 with 300 apps; c02's members only since 6.
+        w.terms["a1"] = Hist.terms(apps = 300, number = 7, since = 1)
+        w.terms["a2"] = Hist.terms(apps = 10, number = 8, since = 5)
+        w.terms["a3"] = Hist.terms(apps = 5, number = 9, since = 6)
+        w.terms["b1"] = Hist.terms(apps = 40, number = 7, since = 6)
+        w.terms["b2"] = Hist.terms(apps = 30, number = 8, since = 6)
+        assertTrue(ClubHistory.loanOut(book, "a1", "c02", star = false))
+        // c02's armband goes to one of its own (a1's `since` is c01's), c01's to a2.
+        assertEquals(listOf("c01" to "a2", "c02" to "b1"), ClubHistory.captains(book, 7, { 1500.0 }))
+        val plan = Eco.plan(7, listOf("KR" to a + b))
+        Hist.play(plan.league)
+        val played = plan.league.standings.getValue("a1").played
+        assertTrue(played > 0)
+        ClubHistory.close(book, plan, yacht.engine.league.ClubInput(a + b, { 1500.0 }, { "KR" }, yacht.engine.league.LeagueConfig())) { emptyList() }
+        // Its terms are c01's: the loan matches add nothing to them, and c02's 최다 출전 is one of its own members'.
+        assertEquals(300, book.terms("a1")!!.apps)
+        assertEquals("b1", book.life("c02")!!.records.first { it.kind == ClubRecordKind.APPS }.key)
+        assertEquals(40 + plan.league.standings.getValue("b1").played, book.terms("b1")!!.apps)
+        // Only when nobody else can is a member on loan its loan club's captain.
+        val solo = book("c01" to listOf("x1"), "c02" to listOf("y1"))
+        solo.world!!.terms["x1"] = Hist.terms(since = 2)
+        ClubHistory.loanOut(solo, "x1", "c02", star = false)
+        solo.place("y1", "c01")
+        assertEquals(listOf("c01" to "y1", "c02" to "x1"), ClubHistory.captains(solo, 4, { 1500.0 }))
+    }
+
+    @Test
+    fun newcomersDropTheTermsOfPlayersWithoutAClubAndChangeNothingTwice() {
+        val book = book("c01" to listOf("a", "b"), "c02" to listOf("c"))
+        val w = book.world!!
+        for (k in listOf("a", "b", "c")) ClubHistory.join(book, k, book.clubOf(k)!!, 2, 4, 10, star = false, academy = "c01")
+        // b is released: until the off-season's terms step it keeps its terms (the draft reads its academy).
+        book.place("b", null)
+        assertNotNull(w.terms["b"])
+        assertEquals(0, ClubHistory.newcomers(book, 3, emptySet(), { 5 }, { _, _ -> 1 }))
+        assertNull(w.terms["b"], "the file keeps no terms of a player without a club")
+        assertEquals(ClubBook.decode(book.encode()).world!!.terms, w.terms)
+        // A club with no number left keeps what its members wear, and asking again changes nothing.
+        val full = (1..99).map { "f$it" }
+        val big = book("c01" to full)
+        for (k in full.dropLast(1)) ClubHistory.join(big, k, "c01", 2, 4, 10, star = false)
+        big.world!!.terms["f99"] = Hist.terms(number = 0)
+        assertEquals((2..99).toSet(), full.dropLast(1).map { big.terms(it)!!.number }.toSet())
+        assertEquals(0, ClubHistory.newcomers(big, 3, emptySet(), { 5 }, { _, _ -> 1 }))
+        val v = big.version
+        assertEquals(0, ClubHistory.newcomers(big, 3, emptySet(), { 5 }, { _, _ -> 1 }))
+        assertEquals(v, big.version)
+    }
+
+    @Test
     fun aClubWorldStartsWithTermsRecordsLegendsAndCaptains() {
         val book = book("c01" to listOf("a1", "a2", "a3"), "c02" to listOf("b1", "b2"))
         val lines = mapOf(

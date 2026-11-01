@@ -343,7 +343,8 @@ object ClubHistory {
     /**
      * The history step of the off-season after [closing] (design ENG 1b.10 step 5), once per club and
      * season ([ClubHistoryBook.folded]): the season's league matches folded into every member's apps
-     * at its club (`played`, members of the club now), the rival pairs' season series
+     * at its club (`played`, members of the club now; a member on loan played for another club than
+     * its terms', so its loan matches count for neither), the rival pairs' season series
      * ([Derbies.fold]), the club records of apps and titles, every member not in the next season's
      * [ClubInput.members] retiring ([leave]), then the captains of clubs without one ([captains], from
      * the next season). Call it **before** the departures take the retired members off the squads.
@@ -361,7 +362,7 @@ object ClubHistory {
             if ((h.folded[c.id] ?: 0) >= s) continue
             for (k in c.squad) {
                 val played = closing.league.standings[k]?.played ?: 0
-                val t = w.terms[k] ?: continue
+                val t = w.terms[k]?.takeIf { it.loanFrom == null } ?: continue
                 if (played > 0) w.terms[k] = t.copy(apps = t.apps + played)
             }
             records(book, c.id, s, lines, byKey)
@@ -390,13 +391,14 @@ object ClubHistory {
 
     /**
      * The club records of apps and titles of club [club] after [season] (ENG 1b.7): the most apps at
-     * the club among its members' terms, the most titles won there by a member (its [lines] and
-     * honours [byKey]); a record is beaten only by more (the older holder keeps a tie).
+     * the club among its members' terms (not a member on loan there: its terms count its own club's
+     * apps), the most titles won there by a member (its [lines] and honours [byKey]); a record is
+     * beaten only by more (the older holder keeps a tie).
      */
     private fun records(book: ClubBook, club: String, season: Int, lines: (String) -> List<SeasonLine>, byKey: Map<String, List<Honour>>) {
         val w = book.world ?: return
         for (k in book.members(club)) {
-            w.terms[k]?.let { record(book, club, ClubRecordKind.APPS, k, it.apps, season) }
+            w.terms[k]?.takeIf { it.loanFrom == null }?.let { record(book, club, ClubRecordKind.APPS, k, it.apps, season) }
             val (majors, others) = titlesAt(k, club, lines(k), byKey[k].orEmpty())
             record(book, club, ClubRecordKind.TITLES, k, majors + others, season)
         }
@@ -429,8 +431,9 @@ object ClubHistory {
      * Captains (주장, ENG 1b.8): every club whose captain is no member of it any more (or that has
      * none) gives the armband, from season [from], to the member with the most seasons there (the
      * earliest `since` of its terms), then the most apps, the higher [rating], the key; only members
-     * that [stay] (the off-season's history step passes those of the next season). Its clubs and new
-     * captains, by club id.
+     * that [stay] (the off-season's history step passes those of the next season), and a member on
+     * loan there only when nobody else can (its terms' `since` and apps are its own club's). Its
+     * clubs and new captains, by club id.
      */
     fun captains(book: ClubBook, from: Int, rating: (String) -> Double, stay: (String) -> Boolean = { true }): List<Pair<String, String>> {
         val w = book.world ?: return emptyList()
@@ -439,7 +442,7 @@ object ClubHistory {
             val st = w.clubs[c.id] ?: continue
             if (st.captain != null && st.captain in c.squad && stay(st.captain!!)) continue
             val best = c.squad.filter(stay).minWithOrNull(
-                compareBy<String> { w.terms[it]?.since ?: from }.thenByDescending { w.terms[it]?.apps ?: 0 }
+                compareBy<String> { w.terms[it]?.loanFrom != null }.thenBy { w.terms[it]?.since ?: from }.thenByDescending { w.terms[it]?.apps ?: 0 }
                     .thenByDescending { rating(it).let { r -> if (r.isNaN()) Double.NEGATIVE_INFINITY else r } }.thenBy { it },
             )
             if (best == st.captain) continue
@@ -512,7 +515,10 @@ object ClubHistory {
      * Terms for every club member without any (design ENG 1b.10 step 13: the newcomers of moves that
      * did not make terms themselves), from season [since] to [until] at [wage], numbered at its
      * club; and a member whose number another member of its club wears too (an older terms' number
-     * from elsewhere) gets a free one, the longer-serving keeping it. Members renumbered or termed.
+     * from elsewhere) gets a free one, the longer-serving keeping it (a club with no number left
+     * keeps what it has). The terms of players left without a club go: the `sq` lines keep none, so
+     * the book in memory is the book a reload gives (until then a released member keeps its academy
+     * for the draft, [join]). Members renumbered or termed.
      */
     fun newcomers(book: ClubBook, since: Int, stars: Set<String>, until: (String) -> Int, wage: (String, String) -> Int): Int {
         val w = book.world ?: return 0
@@ -528,21 +534,20 @@ object ClubHistory {
                         n++
                     }
                     t.number <= 0 || worn.containsKey(t.number) -> {
-                        w.terms[k] = t.copy(number = number(book, c.id, k, k in stars).takeIf { it !in worn } ?: free(book, c.id, worn.keys))
-                        n++
+                        // The first number nobody else there wears (0: none left, it keeps its own).
+                        val no = number(book, c.id, k, k in stars)
+                        if (no > 0 && no != t.number) {
+                            w.terms[k] = t.copy(number = no)
+                            n++
+                        }
                     }
                 }
-                w.terms[k]?.number?.let { worn[it] = k }
+                w.terms[k]?.number?.takeIf { it > 0 }?.let { worn[it] = k }
             }
         }
+        w.terms.keys.removeIf { book.clubOf(it) == null }
         if (n > 0) book.touch()
         return n
-    }
-
-    /** The lowest number of [FIRST_NUMBER]..[LAST_NUMBER] not in [taken] nor retired at [club]. */
-    private fun free(book: ClubBook, club: String, taken: Set<Int>): Int {
-        val retired = book.world?.history?.retired?.get(club).orEmpty().mapTo(HashSet()) { it.number }
-        return (FIRST_NUMBER..LAST_NUMBER).firstOrNull { it !in taken && it !in retired } ?: 0
     }
 
     // ---- loans (임대, ENG 1b.8: the market decides who, this keeps the books) -------------------------

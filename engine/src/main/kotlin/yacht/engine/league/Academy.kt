@@ -119,7 +119,6 @@ object Academy {
         val w = book.world ?: return AcademyReport(season, emptyList(), emptyList(), emptyList())
         val alive = input.members.toHashSet()
         val order = ClubBook.ratingOrder(input.rating)
-        val stars = ClubHistory.stars(book, input.rating)
         val free = alive.filter { book.clubOf(it) == null }.groupBy { ClubBook.homeOf(input.nation(it)) }
         val potential = { k: String -> academy.potential(k) ?: Int.MIN_VALUE }
         val byPotential = compareByDescending<String> { potential(it) }.then(order)
@@ -129,6 +128,8 @@ object Academy {
             val clubs = book.clubsOf(nation.code)
             if (clubs.isEmpty()) continue
             val size = clubs.associateTo(HashMap()) { it.id to it.squad.size }
+            // The shirt numbers' stars: the nation's best by rating, its players without a club among them.
+            val stars = (clubs.flatMap { it.squad } + pool).sortedWith(order).take(ClubHistory.STAR_RANK).toHashSet()
             val members = clubs.sumOf { it.squad.size } + pool.size
             val max = ClubBook.maxSize(members, clubs.size)
             val rookies = pool.filter { it !in played }
