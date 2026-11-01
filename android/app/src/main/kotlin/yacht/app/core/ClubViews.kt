@@ -137,7 +137,11 @@ data class CoachPage(
     val signings: List<Pair<StyleFamily, Int>>, val retired: Int?, val freeRank: Int?,
 )
 
-/** A row of 클럽 랭킹: its rank, the list's value in words, the move since the last close (top 10; null: none). */
+/**
+ * A row of 클럽 랭킹: its rank, the list's value in words, and [move], the places gained since the
+ * last close's top 10 (the `rk` line). Null both for a club new to the top 10 ("NEW") and for every
+ * row below the top 10, which shows no move: read it with the rank.
+ */
 data class ClubRankLine(val rank: Int, val badge: ClubBadge, val value: String, val move: Int?, val followed: Boolean)
 
 /**
