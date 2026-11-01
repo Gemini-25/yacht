@@ -293,10 +293,11 @@ object Media {
      * [Odds]' priors), its last [FORM] matches' mean points above their mean expected points, and
      * the stage ([TOP_STAGE] in a 1부 of the [TOP_LEAGUES] best-ranked leagues, else [STAGE]).
      * "Through week w" is through matchday w − 1 (fixtures of later matchdays played early never
-     * count, as [Season.pointsThrough]). Ranks from 1; no `prev` and no weeks at #1 ([power] adds
-     * them). Empty for a legacy season. O(league fixtures).
+     * count, as [Season.pointsThrough]). Members [gone] (deleted from the roster) are not ranked,
+     * their results still count for their opponents. Ranks from 1; no `prev` and no weeks at #1
+     * ([power] adds them). Empty for a legacy season. O(league fixtures).
      */
-    fun ranking(plan: SeasonPlan, drawn: (String) -> Double, week: Int, league: String? = null): List<PowerRow> {
+    fun ranking(plan: SeasonPlan, drawn: (String) -> Double, week: Int, league: String? = null, gone: (String) -> Boolean = { false }): List<PowerRow> {
         val season = plan.league
         if (!season.leagues.national || week < 1) return emptyList()
         val top = leagues(plan, drawn).take(TOP_LEAGUES).toSet()
@@ -333,7 +334,7 @@ object Media {
         }
         val rows = ArrayList<PowerRow>()
         for ((k, x) in forms) {
-            if (x.matches.size < MIN_PLAYED) continue
+            if (x.matches.size < MIN_PLAYED || gone(k)) continue
             val d = season.divisionOf(k) ?: continue
             val s = stage[d] ?: continue
             val last = x.matches.sortedWith(compareBy<DoubleArray> { it[0] }.thenBy { it[1] }).takeLast(FORM)
@@ -368,12 +369,19 @@ object Media {
      * The power ranking as the desk last ranked it ([NewsDesk.powerWeek]), for the screens: the
      * world's ([league] null; the desk's top 10 in its order, then the rest) or a league's, its
      * first [n] with last week's place ([PowerRow.prev]: the desk's last list for the world's, the
-     * week before's for a league's; null for a newcomer) and this season's weeks at #1. Empty
-     * before the first ranked week or for another season's desk.
+     * week before's for a league's; null for a newcomer) and this season's weeks at #1; members
+     * [gone] left out ([ranking]). Empty before the first ranked week or for another season's desk.
      */
-    fun power(plan: SeasonPlan, desk: NewsDesk, drawn: (String) -> Double, league: String? = null, n: Int = if (league == null) WORLD_TOP else LEAGUE_TOP): List<PowerRow> {
+    fun power(
+        plan: SeasonPlan,
+        desk: NewsDesk,
+        drawn: (String) -> Double,
+        league: String? = null,
+        n: Int = if (league == null) WORLD_TOP else LEAGUE_TOP,
+        gone: (String) -> Boolean = { false },
+    ): List<PowerRow> {
         if (desk.season != plan.number || desk.powerWeek <= 0) return emptyList()
-        val rows = ranking(plan, drawn, desk.powerWeek, league)
+        val rows = ranking(plan, drawn, desk.powerWeek, league, gone)
         val ordered = if (league == null) {
             val byKey = rows.associateBy { it.key }
             val told = desk.power.toSet()
@@ -383,7 +391,7 @@ object Media {
         }
         val before = when {
             league == null -> desk.powerPrev
-            desk.powerPrevWeek > 0 -> ranking(plan, drawn, desk.powerPrevWeek, league).map { it.key }
+            desk.powerPrevWeek > 0 -> ranking(plan, drawn, desk.powerPrevWeek, league, gone).map { it.key }
             else -> emptyList()
         }
         return ordered.take(n).mapIndexed { i, r ->

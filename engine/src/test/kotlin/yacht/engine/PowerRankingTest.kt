@@ -118,6 +118,22 @@ class PowerRankingTest {
     }
 
     @Test
+    fun aMemberDeletedFromTheRosterIsLeftOut() {
+        val p = plan()
+        Hist.play(p.league, last = 7)
+        val all = Media.ranking(p, ::drawn, 8)
+        val out = all.first().key
+        val without = Media.ranking(p, ::drawn, 8, gone = { it == out })
+        // The others' numbers as they were (its results still count for its opponents), ranked from 1.
+        assertEquals(all.drop(1).map { it.copy(rank = it.rank - 1) }, without)
+        // The desk's list and the screens' leave it out too.
+        val desk = NewsDesk(media = true).also { it.begin(p) }
+        desk.close(NewsDesk.Context(p, StatsBook(), null, drawn = ::drawn, gone = { it == out }), 9)
+        assertTrue(out !in desk.power && out !in desk.weeksTop)
+        assertTrue(Media.power(p, desk, ::drawn, gone = { it == out }).none { it.key == out })
+    }
+
+    @Test
     fun theFirstRankedWeekIsWhenAMemberCanHaveFourMatches() {
         val p = plan()
         Hist.play(p.league)

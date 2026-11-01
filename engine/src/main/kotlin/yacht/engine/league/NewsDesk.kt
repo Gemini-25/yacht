@@ -41,6 +41,8 @@ class NewsDesk(
         val drawn: ((String) -> Double)? = null,
         /** The season's rival matches ([Derbies.matches] over [clubs] and [drawn]), when the caller keeps them; null: made for the week. */
         val rivals: RivalMatches? = null,
+        /** True for a member deleted from the roster during the season: the power ranking leaves it out. */
+        val gone: (String) -> Boolean = { false },
         /** True for a match an article already links: a week played again after a kill is not written twice. */
         val written: (String) -> Boolean = { false },
     )
@@ -370,7 +372,7 @@ class NewsDesk(
                 derbies++
                 if (e.ref == null || !ctx.written(e.ref)) out += e
             }
-            val ranked = runCatching { Media.ranking(p, drawn, w) }.getOrDefault(emptyList())
+            val ranked = runCatching { Media.ranking(p, drawn, w, gone = ctx.gone) }.getOrDefault(emptyList())
             if (ranked.isEmpty()) continue
             val now = ranked.take(Media.WORLD_TOP).map { it.key }
             powerPrevWeek = powerWeek
