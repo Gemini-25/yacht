@@ -3,8 +3,12 @@ package yacht.engine.league
 import yacht.engine.DiceStream
 import java.util.Random
 
-/** What one season's evolution did: who retired, who debuts next season (pupils and rookies), and the news. */
-class EvolutionResult(val retired: List<String>, val born: List<String>, val events: List<LeagueEvent>)
+/**
+ * What one season's evolution did: who retired, who debuts next season (pupils and rookies), and
+ * the news; [capped] are the families the style cap refused a newcomer this season (known only
+ * when it ran, empty on a replay).
+ */
+class EvolutionResult(val retired: List<String>, val born: List<String>, val events: List<LeagueEvent>, val capped: Set<StyleFamily> = emptySet())
 
 /**
  * The generations of the league at the end of a season (docs/LEAGUE_SPEC.md section 5 step 3):
@@ -36,9 +40,13 @@ object Evolution {
     const val NEWS_ROOKIES = 3
     const val NEWS_CHANGES = 3
 
+    /** Players named in the imitation digest. */
+    const val NEWS_IMITATIONS = 3
+
     private const val SALT = 0xE7011L
     private const val RETIRE_SALT = 0x2E71L
     private const val GROW_SALT = 0x6202L
+    private const val IMITATE_SALT = 0x1A17L
 
     private val MISREAD = setOf("ss3", "fh2pair")
 
@@ -59,6 +67,15 @@ object Evolution {
      * `e<season>_<n>`, a rookie the next g-key; all debut in season + 1. Deterministic from [seed]
      * and the inputs. [speed] is each player's growth speed ([Profiles.grow]; 1.0 for every player
      * gives the growth of before).
+     *
+     * The meta (design ENG 4.3-4.4; every one off by default, which gives the evolution of before):
+     * [metaWeights] tilt the newcomers' styles by family ([NewcomerMeta.forNation] on top of the
+     * fashion, for rookies and for a pupil's own style); [styleCap] (k: 1.3, 1.5 or 1.7) refuses a
+     * family that holds its share of the season's newcomers ([StyleCap]: a rookie's index is
+     * skipped, a pupil takes its own style); [imitation] lets young players of the bottom half take
+     * up a second style from a model after growth (the `imitation` digest); [careerClubs] is a new
+     * legend's career clubs ([CareerClubs], the roster's `lc=`); [rookieBoost] multiplies a nation's
+     * weight in the rookie draw (nation code → factor, the 요트 붐).
      */
     fun run(
         book: PlayerBook,
@@ -75,10 +92,20 @@ object Evolution {
         fashion: String? = null,
         aging: Boolean = true,
         speed: (String) -> Double = { 1.0 },
+        metaWeights: NewcomerMeta? = null,
+        styleCap: Double? = null,
+        imitation: Imitation? = null,
+        careerClubs: (String) -> String? = { null },
+        rookieBoost: Map<String, Double> = emptyMap(),
     ): EvolutionResult {
         if (season <= book.evolvedSeason) return replay(book, season)
         book.fashion(fashion)
         val meta = book.meta
+        // The newcomers' styles by nation (the weights and a champion's local fashion on the fashion).
+        val metaFor: ((String) -> Map<String, Double>)? = metaWeights?.let { mw ->
+            val byNation = HashMap<String, Map<String, Double>>()
+            ({ nation: String -> byNation.getOrPut(nation) { mw.forNation(nation, meta) } })
+        }
         var reformed = 0
         for (p in book.alive) if (p.spec.play == null) {
             book.update(Profiles.reform(p, season))
@@ -98,7 +125,7 @@ object Evolution {
         for (p in book.alive.filter { it.leaving }) {
             val t = titles(p.key)
             val legend = t > 0 || hasHonour(p.key)
-            book.retire(p.key, season, t, rating(p.key), if (legend) summary(honours(p.key)) else null) ?: continue
+            book.retire(p.key, season, t, rating(p.key), if (legend) summary(honours(p.key)) else null, if (legend) careerClubs(p.key) else null) ?: continue
             retired += p.key
         }
         if (!aging) {
@@ -118,7 +145,7 @@ object Evolution {
                 if (r.nextDouble() >= Profiles.retireChance(age, percentile[p.key] ?: 0.5, id.nearCeiling(p.key))) continue
                 val t = titles(p.key)
                 val legend = t > 0 || hasHonour(p.key)
-                book.retire(p.key, season, t, rating(p.key), if (legend) summary(honours(p.key)) else null) ?: continue
+                book.retire(p.key, season, t, rating(p.key), if (legend) summary(honours(p.key)) else null, if (legend) careerClubs(p.key) else null) ?: continue
                 retired += p.key
             }
             for (p0 in playing) {
@@ -137,8 +164,23 @@ object Evolution {
                 book.update(p.copy(identity = next, spec = Profiles.apply(p.spec.copy(play = gene), next)))
             }
         }
+        if (imitation != null) imitate(book, season, seed, imitation)
         val rng = Random(DiceStream.mix(seed, SALT, season.toLong()))
         val wanted = population - book.size
+        // The style cap counts the season's newcomers by family (off: nobody is refused).
+        val cap = styleCap?.takeIf { wanted > 0 }?.let { StyleCap(it, wanted) }
+        val newcomerAccept: (CustomAiSpec) -> Boolean = if (cap == null) accept else { s ->
+            val f = StyleFamily.of(s.play)
+            when {
+                !accept(s) -> false
+                f != null && cap.refuse(f) -> false
+                else -> {
+                    f?.let(cap::take)
+                    true
+                }
+            }
+        }
+        val boost: ((Nation) -> Double)? = rookieBoost.takeIf { it.isNotEmpty() }?.let { m -> { n: Nation -> m[n.code] ?: 1.0 } }
         // A league grown by the rules (200 players to 1000, say): the places beyond the
         // retirees' come as a founding class of every age, not hundreds of teenage rookies.
         val expansion = (population - (book.size + retired.size)).coerceIn(0, maxOf(0, wanted))
@@ -149,8 +191,9 @@ object Evolution {
             val genes = book.geneSet()
             // A main style may not take more than its share of the season's pupils (drift would narrow the league).
             val styles = HashMap<String, Int>()
-            val cap = maxOf(2, Math.ceil(PUPIL_CAP * pupils).toInt())
-            val capped = { primary: String -> (styles[primary] ?: 0) >= cap }
+            val pupilCap = maxOf(2, Math.ceil(PUPIL_CAP * pupils).toInt())
+            // And with the style cap, a main style of a family full for the season.
+            val capped = { primary: String -> (styles[primary] ?: 0) >= pupilCap || cap?.refuse(StyleFamily.of(primary)) == true }
             var n = 0
             repeat(pupils) {
                 var child: PlayerRecord? = null
@@ -163,7 +206,7 @@ object Evolution {
                         compatriots.size >= 2 && rng.nextBoolean() -> tournament(compatriots, rng)
                         else -> tournament(others, rng)
                     }
-                    val c = pupil("e${season}_${n + 1}", season, a, b, rng, taken, counts, book.size + n, meta, genes, capped)
+                    val c = pupil("e${season}_${n + 1}", season, a, b, rng, taken, counts, book.size + n, meta, genes, capped, metaFor)
                     if (accept(c.spec)) {
                         child = c
                         break
@@ -177,14 +220,42 @@ object Evolution {
                     c.spec.play?.let { g ->
                         genes += g.encode()
                         styles.merge(g.primary, 1, Int::plus)
+                        cap?.take(StyleFamily.of(g.primary))
                     }
                 }
             }
-            book.ensureGenerated(population - expansion, season + 1, meta = meta, founding = false, accept = accept)
-            book.ensureGenerated(population, season + 1, meta = meta, founding = true, accept = accept)
+            book.ensureGenerated(population - expansion, season + 1, meta = meta, founding = false, accept = newcomerAccept, boost = boost, metaFor = metaFor)
+            book.ensureGenerated(population, season + 1, meta = meta, founding = true, accept = newcomerAccept, boost = boost, metaFor = metaFor)
         }
         book.evolvedSeason = season
-        return EvolutionResult(retired, debuts(book, season), events(book, season, learned))
+        return EvolutionResult(retired, debuts(book, season), events(book, season, learned), cap?.bound.orEmpty())
+    }
+
+    /**
+     * Young players' imitation after growth (design ENG 4.4): a player of [Imitation.AGE] or
+     * younger who played the season, is not forever in its prime, finished in the bottom half of
+     * its division and has imitated fewer than [Imitation.MAX] times takes up, with chance
+     * [Imitation.CHANCE] (its own stream), a second style from its model: its club's best member
+     * ([Imitation.CLUB]) or its league's champion (either when the other has none), the recipe
+     * [Imitation.secondFor] gives, in place of any second style. Its tastes, intensity and main
+     * style stay.
+     */
+    private fun imitate(book: PlayerBook, season: Int, seed: Long, input: Imitation) {
+        for (p0 in book.alive) {
+            if (p0.born > season || p0.keep || p0.imitations >= Imitation.MAX) continue
+            val id = p0.identity ?: continue
+            val gene = p0.spec.play ?: continue
+            if (id.age(season, p0.born) > Imitation.AGE || !input.bottomHalf(p0.key)) continue
+            val r = Random(DiceStream.mix(seed, IMITATE_SALT, season.toLong(), p0.key.hashCode().toLong()))
+            if (r.nextDouble() >= Imitation.CHANCE) continue
+            val club = input.clubModel(p0.key)
+            val champion = input.championModel(p0.key)
+            val model = (if (r.nextDouble() < Imitation.CLUB) club ?: champion else champion ?: club) ?: continue
+            val second = Imitation.secondFor(model, gene.primary, PlayerGenerator.Tier.of(id.potential)) ?: continue
+            if (second == gene.secondary) continue
+            val p = book[p0.key] ?: continue
+            book.update(p.copy(spec = Profiles.apply(p.spec.copy(play = gene.copy(secondary = second)), id), imitations = p.imitations + 1, imitatedIn = season))
+        }
     }
 
     /** A season already evolved: who retired then and who debuts after it, from the book. */
@@ -222,6 +293,7 @@ object Evolution {
         }
         out += changes(book, season)
         out += learned
+        imitationDigest(book, season)?.let { out += it }
         for (k in debuts(book, season)) {
             val p = book[k] ?: continue
             if (p.origin == Origin.EVOLVED) out += LeagueEvent("born", season, listOfNotNull(k, p.parentA, p.parentB))
@@ -236,6 +308,19 @@ object Evolution {
             }
         }
         return out
+    }
+
+    /**
+     * The season's imitation digest from the book (the same on a replay): `imitation` [≤
+     * [NEWS_IMITATIONS] imitators of the family most taken up, most promising first] (their count,
+     * the family's code, every imitator's count); null when nobody imitated.
+     */
+    private fun imitationDigest(book: PlayerBook, season: Int): LeagueEvent? {
+        val all = book.alive.filter { it.imitations > 0 && it.imitatedIn == season }
+        val byFamily = all.mapNotNull { r -> r.spec.play?.secondary?.let { StyleFamily.of(it) to r } }.groupBy({ it.first }, { it.second })
+        val (family, ps) = byFamily.entries.maxWithOrNull(compareBy<Map.Entry<StyleFamily, List<PlayerRecord>>> { it.value.size }.thenByDescending { it.key.ordinal }) ?: return null
+        val named = ps.sortedWith(compareByDescending<PlayerRecord> { it.identity?.potential ?: 0 }.thenBy { it.key }).take(NEWS_IMITATIONS)
+        return LeagueEvent("imitation", season, named.map { it.key }, listOf(ps.size.toString(), family.code.toString(), all.size.toString()))
     }
 
     /** The biggest growths (an ability +6, or +12 in all) and declines (−5, or −8 in all) of the season. */
@@ -267,7 +352,8 @@ object Evolution {
      * least represented ones (a mentor's nation above its share less often), a city, a name of that nation, a potential halfway from the
      * league's usual toward its mentors', and
      * a style from A (50%), B (30%) or of its own ([crossPlay]; [capped] main styles are not
-     * taken up), never equal to an [alive] player's genes (its tastes change again).
+     * taken up; its own drawn with [meta], or with [metaFor] its nation when given), never equal
+     * to an [alive] player's genes (its tastes change again).
      */
     fun pupil(
         key: String,
@@ -281,6 +367,7 @@ object Evolution {
         meta: Map<String, Double> = emptyMap(),
         alive: Set<String> = emptySet(),
         capped: (String) -> Boolean = { false },
+        metaFor: ((String) -> Map<String, Double>)? = null,
     ): PlayerRecord {
         val ia = a.identity ?: Profiles.legacy(a, season)
         val ib = b.identity ?: Profiles.legacy(b, season)
@@ -309,7 +396,7 @@ object Evolution {
             nation.code, gender, age, Profiles.drawAbilities(rng, key, age, potential, school.bias), potential,
             if (rng.nextBoolean()) ia.temperKind else ib.temperKind, if (rng.nextBoolean()) ia.feel else ib.feel,
         )
-        var spec = Profiles.apply(CustomAiSpec(key, name, play = crossPlay(a.spec.play, b.spec.play, rng, potential, school, meta, capped)), id)
+        var spec = Profiles.apply(CustomAiSpec(key, name, play = crossPlay(a.spec.play, b.spec.play, rng, potential, school, metaFor?.invoke(nation.code) ?: meta, capped)), id)
         var redraws = 0
         while (spec.play!!.encode() in alive && redraws++ < PlayerGenerator.REDRAWS) {
             val g = spec.play!!

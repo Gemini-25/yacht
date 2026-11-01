@@ -68,6 +68,10 @@ data class PlayerRecord(
     val keep: Boolean = false,
     /** Retiring at this season's end (은퇴시키기: a made player the player let go). */
     val leaving: Boolean = false,
+    /** Times it took up a second style from a successful one ([Imitation], at most [Imitation.MAX] a career). */
+    val imitations: Int = 0,
+    /** The close of its last imitation (0: none), so the close's news is rebuilt from the book. */
+    val imitatedIn: Int = 0,
 ) {
     /** Age in [season] (its debut age when it has no identity yet). */
     fun age(season: Int): Int = identity?.age(season, born) ?: 0
@@ -100,9 +104,10 @@ data class RetiredRecord(
 
 /**
  * A retired AI with honours, kept with its genes (a `legend` line) so it can be rebuilt for the
- * legend match and the 레전드 보관소. [honours] is a summary such as "L0:2,CUP:1" ([Evolution.summary]).
+ * legend match and the 레전드 보관소. [honours] is a summary such as "L0:2,CUP:1" ([Evolution.summary]);
+ * [clubs] its career's clubs as [CareerClubs] writes them (the roster's `lc=` token; null when not kept).
  */
-data class Legend(val record: RetiredRecord, val spec: CustomAiSpec, val honours: String, val identity: Identity? = null) {
+data class Legend(val record: RetiredRecord, val spec: CustomAiSpec, val honours: String, val identity: Identity? = null, val clubs: String? = null) {
     val key: String get() = record.key
     val name: String get() = record.name
 
@@ -115,6 +120,40 @@ data class Legend(val record: RetiredRecord, val spec: CustomAiSpec, val honours
         val id = identity ?: return spec
         val peak = id.peakAbl ?: return spec
         return Profiles.apply(spec, id.copy(abilities = peak))
+    }
+}
+
+/**
+ * A legend's career clubs (the roster's `lc=` token, design ENG 7.4), read from its season lines at
+ * retirement: each spell at a club with its first and last season there, in the order played
+ * ("c03:2-9,c11:10-14"; a club joined again later is a new spell, seasons without a club are
+ * skipped). Club ids are escaped as stats.txt escapes them, so the token has no space.
+ */
+object CareerClubs {
+    /** Seasons [from]..[to] at [club]. */
+    data class Spell(val club: String, val from: Int, val to: Int)
+
+    /** The spells of [lines] (any order), oldest first. */
+    fun spells(lines: List<SeasonLine>): List<Spell> {
+        val out = ArrayList<Spell>()
+        for (l in lines.sortedBy { it.season }) {
+            val club = l.club ?: continue
+            val last = out.lastOrNull()
+            if (last != null && last.club == club) out[out.size - 1] = last.copy(to = l.season) else out += Spell(club, l.season, l.season)
+        }
+        return out
+    }
+
+    /** The token of [lines]; null without a club in them. */
+    fun of(lines: List<SeasonLine>): String? = spells(lines).takeIf { it.isNotEmpty() }?.joinToString(",") { "${Field.esc(it.club)}:${it.from}-${it.to}" }
+
+    /** The spells of a token ([of]); bad parts are skipped. */
+    fun decode(token: String?): List<Spell> = LineParts.items(token.orEmpty()).mapNotNull { part ->
+        val club = Field.unesc(part.substringBefore(':')).ifEmpty { return@mapNotNull null }
+        val range = part.substringAfter(':', "")
+        val from = range.substringBefore('-').toIntOrNull() ?: return@mapNotNull null
+        val to = range.substringAfter('-', "").toIntOrNull() ?: return@mapNotNull null
+        Spell(club, from, to)
     }
 }
 
@@ -239,7 +278,8 @@ object PlayerGenerator {
     /**
      * New player [i] debuting in [season] ([founding]: one of a new league's first players, of
      * any age), named apart from [taken]; [boost] tilts the nation draw, [meta] adds to recipes'
-     * weights (a style in fashion after a cup).
+     * weights (a style in fashion after a cup), or [metaFor] by the nation drawn (the meta's
+     * newcomer weights with a league champion's local fashion, [NewcomerMeta]) in its place.
      */
     fun recruit(
         i: Int,
@@ -249,6 +289,7 @@ object PlayerGenerator {
         boost: (Nation) -> Double = { 1.0 },
         meta: Map<String, Double> = emptyMap(),
         alive: Set<String> = emptySet(),
+        metaFor: ((String) -> Map<String, Double>)? = null,
     ): PlayerRecord {
         val key = key(i)
         val idRng = Random(DiceStream.mix(GEN_SEED, IDENTITY_SALT, i.toLong()))
@@ -264,7 +305,7 @@ object PlayerGenerator {
             nation.code, gender, age, Profiles.drawAbilities(rng, key, age, potential, school.bias), potential,
             TEMPERS[rng.nextInt(TEMPERS.size)], rng.nextDouble() < FEEL_SHARE,
         )
-        var spec = Profiles.apply(CustomAiSpec(key, name, play = style(rng, potential, school, meta)), id)
+        var spec = Profiles.apply(CustomAiSpec(key, name, play = style(rng, potential, school, metaFor?.invoke(nation.code) ?: meta)), id)
         var redraws = 0
         while (spec.play!!.encode() in alive && redraws++ < REDRAWS) {
             val g = spec.play!!
@@ -544,7 +585,8 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         for (r in made) {
             if (r.origin != Origin.CREATED || r.key in byKey) continue
             val id = r.identity?.let { id -> (if (id.fixedAge != null) id else id.aging(id.age(season, r.born), 1, 1)).copy(peakAbl = null, lastAbl = null) }
-            byKey[r.key] = r.copy(born = 1, parentA = null, parentB = null, peak = Double.NaN, identity = id, leaving = false)
+            // Its imitations stay with its genes; the close they happened in was the old league's.
+            byKey[r.key] = r.copy(born = 1, parentA = null, parentB = null, peak = Double.NaN, identity = id, leaving = false, imitatedIn = 0)
         }
         madeNext = maxOf(madeNext, next)
     }
@@ -572,7 +614,10 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
      * (at most [max]); returns them. Lowering [n] removes nobody: the population only shrinks
      * through retirements. [founding] players are of every age (a new league's first players,
      * or a big top-up: 50 or more at once, or a fifth of [n]); others are rookies. Nations are
-     * drawn toward the weights from the counts so far ([Nations.rebalance]); [meta] tilts styles.
+     * drawn toward the weights from the counts so far ([Nations.rebalance]), each nation's weight
+     * times [boost] when given (a nation's 요트 붐); [meta] tilts styles, or [metaFor] by the
+     * nation drawn ([PlayerGenerator.recruit]). A player [accept] refuses (the chaos preset's
+     * filter, the meta's style cap) is never generated: its index is skipped.
      */
     fun ensureGenerated(
         n: Int,
@@ -581,6 +626,8 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         meta: Map<String, Double> = emptyMap(),
         founding: Boolean? = null,
         accept: (CustomAiSpec) -> Boolean = { true },
+        boost: ((Nation) -> Double)? = null,
+        metaFor: ((String) -> Map<String, Double>)? = null,
     ): List<PlayerRecord> {
         val count = minOf(n - byKey.size, max)
         if (count <= 0) return emptyList()
@@ -594,8 +641,9 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         while (added.size < count && refused < count * Evolution.TRIES) {
             val i = next++
             // Founding players too: drawn freely, 1000 of them would scatter 25 to 46 a nation.
-            val boost = Nations.rebalance(nations, total)
-            val r = PlayerGenerator.recruit(i, season, old, taken, boost, meta, genes)
+            val rebalance = Nations.rebalance(nations, total)
+            val tilt = if (boost == null) rebalance else { nation: Nation -> rebalance(nation) * boost(nation) }
+            val r = PlayerGenerator.recruit(i, season, old, taken, tilt, meta, genes, metaFor)
             // A player the league's filter refuses (the chaos preset's only flawed players) is never generated.
             if (!accept(r.spec)) {
                 refused++
@@ -659,10 +707,10 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
 
     /**
      * Retires [key] at the end of [season]: its retired record (best rating [bestRating] or its
-     * peak, [titles]) and, with an [honours] summary, a legend that keeps its genes. Null when
-     * [key] is not alive here.
+     * peak, [titles]) and, with an [honours] summary, a legend that keeps its genes (and its career
+     * [clubs], [CareerClubs]). Null when [key] is not alive here.
      */
-    fun retire(key: String, season: Int, titles: Int = 0, bestRating: Double = Double.NaN, honours: String? = null): RetiredRecord? {
+    fun retire(key: String, season: Int, titles: Int = 0, bestRating: Double = Double.NaN, honours: String? = null, clubs: String? = null): RetiredRecord? {
         val p = byKey.remove(key) ?: return null
         // Only the keys older versions could generate again (they made g001..g300).
         PlayerGenerator.index(key)?.takeIf { it <= OLD_GENERATED }?.let { gone += it }
@@ -677,7 +725,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         while (retiredList.size > MAX_RETIRED) retiredList.removeAt(0)
         if (honours != null) {
             legendList.removeAll { it.key == key }
-            legendList += Legend(r, p.spec, honours.ifBlank { "-" }, id)
+            legendList += Legend(r, p.spec, honours.ifBlank { "-" }, id, clubs?.takeIf { it.isNotEmpty() && ' ' !in it })
             trimLegends()
         }
         return r
@@ -767,6 +815,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             p.identity?.let { append(' ').append(it.tokens()) }
             if (p.keep) append(" keep=1")
             if (p.leaving) append(" leave=1")
+            if (p.imitations > 0) append(" im=").append(p.imitations).append(':').append(p.imitatedIn)
             append(styleTokens(p.spec)).append('\n')
         }
         for (r in retiredList) {
@@ -781,7 +830,9 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
             append("legend ${r.key} ${esc(r.name)} ${r.born} ${r.retired} ${l.spec.genes().joinToString(" ")} ${esc(l.honours)} ")
             append("${r.parentA ?: "-"} ${r.parentB ?: "-"} ${num(r.bestRating)} ${r.titles} ${esc(r.hometown)} ${originToken(r.origin)}")
             l.identity?.let { append(' ').append(it.tokens()) }
-            append(styleTokens(l.spec)).append('\n')
+            append(styleTokens(l.spec))
+            l.clubs?.let { append(" lc=").append(it) }
+            append('\n')
         }
     }
 
@@ -868,7 +919,9 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
                 var id = Identity.read(t) ?: Profiles.legacy(r, evolvedSeason + 1)
                 // 영원히 현역 from before fixed ages (its debut age moved back each season): its age now.
                 if (keep && id.fixedAge == null) id = id.copy(fixedAge = id.age(evolvedSeason + 1, r.born))
-                byKey[key] = r.copy(identity = id, keep = keep, leaving = t["leave"] == "1")
+                // Imitations "count:close" (a newer version's other shape reads as none).
+                val im = t["im"]?.split(':')?.takeIf { it.size == 2 }?.map { it.toIntOrNull() }?.takeIf { it.all { n -> n != null && n >= 0 } }
+                byKey[key] = r.copy(identity = id, keep = keep, leaving = t["leave"] == "1", imitations = im?.get(0) ?: 0, imitatedIn = im?.get(1) ?: 0)
                 PlayerGenerator.index(key)?.let { if (it >= next) next = it + 1 }
                 madeIndex(key)?.let { if (it >= madeNext) madeNext = it + 1 }
             }
@@ -899,7 +952,7 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
                 PlayerGenerator.index(key)?.let { if (it >= next) next = it + 1 }
                 madeIndex(key)?.let { if (it >= madeNext) madeNext = it + 1 }
                 legendList.removeAll { it.key == key }
-                legendList += Legend(r, spec, unesc(f[at]).ifEmpty { "-" }, id)
+                legendList += Legend(r, spec, unesc(f[at]).ifEmpty { "-" }, id, t["lc"]?.takeIf { it.isNotEmpty() })
                 trimLegends()
             }
         }
