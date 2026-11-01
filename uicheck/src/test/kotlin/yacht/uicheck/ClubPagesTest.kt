@@ -256,22 +256,13 @@ class ClubPagesTest {
             assertEquals(ex.club, c.coachClub?.id)
             assertEquals(0, c.coachRetired)
         }
-        // A player whose coaching days are over too: the coach line says so (not "쉬고 있는 감독"). The
-        // scene's retired coach was a legend another coach was made from too, so it is moved to a
-        // retired player no coach was.
-        val b = scene.book
-        val player = scene.world.players.retired.first { r -> b.coaches.none { it.player == r.key } && b.retiredCoaches.none { it.player == r.key } }.key
-        val files = StoryWorld.variant(scene.files) {
-            clubs = clubs?.lines()?.joinToString("\n") { l ->
-                if (l.startsWith("kr ${ClubScene.RETIRED_COACH} ")) l.split(' ').toMutableList().also { it[9] = player }.joinToString(" ") else l
-            }
-        }
-        val w = ClubStory.decode(files)
-        val moved = WorldPages(Host(w))
-        val retired = w.clubs!!.retiredCoaches.first { it.id == ClubScene.RETIRED_COACH }
-        assertEquals(player, retired.player)
-        moved.loadPlayerClub(player)
-        val r = wait { moved.playerClub(player) }
+        // A player whose coaching days are over too (the scene's retired ex-player coach, made of a player
+        // no other coach was): the coach line says so, not "쉬고 있는 감독".
+        val retired = scene.book.retiredCoaches.first { it.id == ClubScene.RETIRED_COACH }
+        val player = assertNotNull(retired.player)
+        assertTrue(scene.book.coaches.none { it.player == player } && scene.book.retiredCoaches.count { it.player == player } == 1)
+        pages.loadPlayerClub(player)
+        val r = wait { pages.playerClub(player) }
         assertNull(r.terms)
         assertEquals(ClubScene.RETIRED_COACH, r.coach)
         assertNull(r.coachClub)

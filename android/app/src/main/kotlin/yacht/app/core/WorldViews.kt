@@ -447,10 +447,11 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
     }
 
     /**
-     * The season's series of rival pairs read last ([seriesOf]) and what it was read from: the plan, its
-     * week, the book's version and the matches played (under the lock).
+     * The season's series of rival pairs read last ([seriesOf]) and what it was read from: the plan (held
+     * weakly, so a replaced league's season is not kept), its week, the book's version and the matches
+     * played. Under the lock.
      */
-    private var series: Pair<List<Any>, Map<String, DerbyRecord>>? = null
+    private var series: Triple<java.lang.ref.WeakReference<SeasonPlan>, List<Int>, Map<String, DerbyRecord>>? = null
 
     /**
      * [Derbies.series] of [p] through its closed weeks: one pass over every match of the season, the
@@ -459,9 +460,9 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
      */
     private fun seriesOf(b: ClubBook, p: SeasonPlan): Map<String, DerbyRecord> {
         val played = p.league.fixturesPlayed + (p.comps + p.post).sumOf { c -> c.stageCounts().sumOf { it.played } }
-        val key = listOf(p, p.week, b.version, played)
-        series?.takeIf { it.first == key }?.let { return it.second }
-        return Derbies.series(b, p, p.week - 1).also { series = key to it }
+        val key = listOf(p.week, b.version, played)
+        series?.takeIf { it.first.get() === p && it.second == key }?.let { return it.third }
+        return Derbies.series(b, p, p.week - 1).also { series = Triple(java.lang.ref.WeakReference(p), key, it) }
     }
 
     /** A rival match of club [id]'s members in the week in play or the next (UX 4.2: 다음 라이벌전), the earliest. */

@@ -287,8 +287,11 @@ internal class ClubScene private constructor(
                 extra += "tx ${s - 1 - i} T ${esc(k)} ${others[i % others.size]} ${p.club} ${60 + 35 * i} ${if (i == 2) "L" else "C"}"
             }
             b.members(others.first()).firstOrNull()?.let { k -> extra += "tx ${s - 2} T ${esc(k)} ${p.club} ${others.first()} 75 V" }
-            // A retired coach who was a player (a legend of the roster's when there is one).
-            val legend = w.players.legends.maxByOrNull { it.record.titles }?.record ?: w.players.retired.first()
+            // A retired coach who was a player: the legend with the most titles no coach was made from yet
+            // (CoachMarket.start makes coaches of legends too), else such a retired player.
+            val coached = (b.coaches.mapNotNull { it.player } + b.retiredCoaches.mapNotNull { it.player }).toSet()
+            val legend = w.players.legends.filter { it.record.key !in coached }.maxByOrNull { it.record.titles }?.record
+                ?: w.players.retired.first { it.key !in coached }
             extra += "kr $RETIRED_COACH ${esc(legend.name)} ${legend.nation} ${(legend.gender ?: Gender.MALE).code} ${s - 1 - 64} ${s - 1} C 71 ${esc(legend.key)} CT:2,L0:5,COY:1,clubs:4,seasons:17,sacked:1,longest:8"
             return t.trimEnd('\n') + "\n" + extra.joinToString("\n") + "\n"
         }
