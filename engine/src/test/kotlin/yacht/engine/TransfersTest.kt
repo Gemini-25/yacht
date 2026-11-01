@@ -11,6 +11,7 @@ import yacht.engine.league.Origin
 import yacht.engine.league.Season
 import yacht.engine.league.Transfer
 import yacht.engine.league.TransferInput
+import yacht.engine.league.TransferMoney
 import yacht.engine.league.Transfers
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -184,5 +185,36 @@ class TransfersTest {
         // One league only, or no ranking: no transfers abroad.
         val one = Season.start(1, 5L, divisions.take(2), false, Leagues.national(listOf("GB"), listOf(2)))
         assertEquals(emptyList(), Transfers.plan(TransferInput(one, ranking, members(), { ratings[it] ?: Double.NaN }, { 25 }, { nations[it] }, Origin::of, clubs(), { 12 }, LeagueConfig.DEFAULT)).filter { !it.home })
+    }
+
+    @Test
+    fun theClubWorldsMoneyKeepsTheDestinationClub() {
+        // Money that is today's (the budgets as the plan pays them, today's fee) plans today's moves: the
+        // count, candidates, leagues, caps and the destination club (the most room, then the richer) stay.
+        val gb = (0 until 8).map { key(0, it) }
+        val two = clubs().also {
+            it[0] = club("c01", "GB", gb.take(4), budget = 80)
+            it += club("c06", "GB", gb.drop(4), budget = 90)
+        }
+        nations[key(0, 6)] = "KR"
+        ages[key(0, 6)] = 33
+        for (c in listOf(clubs(), two)) for (n in listOf(1, 4)) {
+            val budgets = c.associate { it.id to it.budget }.toMutableMap()
+            val money = object : TransferMoney {
+                override fun budget(club: String): Int = budgets.getValue(club)
+                override fun asked(key: String, buyer: String): Int = ClubBook.fee(ClubBook.value(ratings[key] ?: Double.NaN))
+                override fun allows(key: String, buyer: String): Boolean = true
+                override fun moved(transfer: Transfer) {
+                    if (transfer.home) return
+                    budgets.merge(transfer.toClub, -transfer.fee, Int::plus)
+                    budgets.merge(transfer.fromClub, transfer.fee, Int::plus)
+                }
+            }
+            val today = Transfers.plan(input(clubs = c, members = members(n)))
+            val base = input(clubs = c, members = members(n))
+            val withMoney = TransferInput(base.closing, base.ranking, base.members, base.rating, base.age, base.nation, base.origin, base.clubs, base.maxSize, base.config, money)
+            assertEquals(today, Transfers.plan(withMoney))
+            assertTrue(today.isNotEmpty())
+        }
     }
 }

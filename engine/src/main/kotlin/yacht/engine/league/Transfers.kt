@@ -27,7 +27,45 @@ class TransferInput(
     /** The most members a club takes (by id). */
     val maxSize: (String) -> Int,
     val config: LeagueConfig,
+    /** The club world's money (design ENG 1.5, 3.2); null: planned as before the club world, from the clubs' budgets. */
+    val money: TransferMoney? = null,
 )
+
+/**
+ * What a club world's market gives [Transfers.plan] (design ENG 1.5, 3.2): the plan keeps today's
+ * count, candidates, destination leagues, caps and destination club (the most room, then the richer),
+ * and reads the money here instead: a buyer's transfer [budget] only filters (a club with less than half
+ * the [asked] fee is passed over for the next with room; the fee is the asked one capped at the budget),
+ * [allows] refuses a buyer (the concentration guard, the wage rules), [talks] for an abroad move are
+ * tried first and count toward the caps, [free] agents are candidates from the club they left (no fee),
+ * and every planned move is handed to [moved] at once, so the next budgets and the guard see it.
+ */
+interface TransferMoney {
+    /** Club [club]'s transfer budget now (0 under an embargo or at its buys cap). */
+    fun budget(club: String): Int
+
+    /** The fee [buyer] is asked for [key] (0 for a free agent). */
+    fun asked(key: String, buyer: String): Int
+
+    /** Whether [buyer] may sign [key]. */
+    fun allows(key: String, buyer: String): Boolean
+
+    /** Talks for a move abroad (key, buyer), tried first in this order. */
+    val talks: List<Pair<String, String>> get() = emptyList()
+
+    /** Free agents (key → the club it left): candidates as if still there. */
+    val free: Map<String, String> get() = emptyMap()
+
+    /**
+     * Talks of [key] with [buyer] end: [open] is false when the player has moved or the caps or the
+     * buyer's ceiling leave no room. The fee paid when they come true (the plan then moves the player),
+     * null when they do not.
+     */
+    fun talk(key: String, buyer: String, open: Boolean): Int? = null
+
+    /** The planned [transfer] is made now. */
+    fun moved(transfer: Transfer)
+}
 
 /**
  * Cross-league transfers (해외 이적, design ENG 2), planned once per off-season without any
@@ -43,7 +81,10 @@ class TransferInput(
  *   [ClubBook.fee] of its [ClubBook.value]: the buyer pays what it can, and one with less than
  *   half the fee is passed over. A league loses and takes at most `1 + n / 28` players.
  *
- * A player's nation never changes, so the national teams stay as they are.
+ * A player's nation never changes, so the national teams stay as they are. With a club world's
+ * [TransferInput.money] the plan is the same but for the money ([TransferMoney]): budgets, fees and
+ * the guard come from the market, talks go first, free agents are candidates, and each move is made
+ * as it is planned.
  */
 object Transfers {
     /** A destination ranks at least this many places above the player's league. */
@@ -88,9 +129,16 @@ object Transfers {
     /** The returns, then the transfers, in the order to apply them. */
     fun plan(input: TransferInput): List<Transfer> {
         val cl = input.closing
+        val money = input.money
         val byId = input.clubs.associateBy { it.id }
         val clubOf = HashMap<String, String>()
         for (c in input.clubs) for (k in c.squad) clubOf.putIfAbsent(k, c.id)
+        // Free agents count as their old club's for who and where, but not for its size.
+        val unattached = HashSet<String>()
+        if (money != null) for ((k, c) in money.free) if (k !in clubOf && c in byId) {
+            clubOf[k] = c
+            unattached += k
+        }
         val size = HashMap<String, Int>()
         val budget = HashMap<String, Int>()
         for (c in input.clubs) {
@@ -103,7 +151,7 @@ object Transfers {
         fun isAbroad(k: String) = abroad(nation(k), clubNation(k))
         fun league(k: String): String? = cl.divisionOf(k)?.let { cl.leagues.of(it).id }
         fun moveTo(k: String, from: String, to: String?) {
-            size.merge(from, -1, Int::plus)
+            if (!unattached.remove(k)) size.merge(from, -1, Int::plus)
             if (to == null) clubOf.remove(k) else {
                 size.merge(to, 1, Int::plus)
                 clubOf[k] = to
@@ -121,14 +169,41 @@ object Transfers {
             val from = clubOf.getValue(k)
             val to = input.clubs.filter { it.nation == home }.minWithOrNull(compareBy<Club> { size.getValue(it.id) }.thenComparing({ it.id }, ClubBook.ID_ORDER))
             val fromLeague = league(k) ?: byId[from]?.nation?.let { leagueOf[it] }
-            out += Transfer(k, from, to?.id.orEmpty(), fromLeague.orEmpty(), leagueOf[home].orEmpty(), 0, true)
+            val t = Transfer(k, from, to?.id.orEmpty(), fromLeague.orEmpty(), leagueOf[home].orEmpty(), 0, true)
+            out += t
             moveTo(k, from, to?.id)
             moved += k
+            money?.moved(t)
         }
 
         val n = count(input.config, members.size)
-        if (n == 0 || cl.leagues.list.size < 2 || input.ranking.rows.isEmpty()) return out
         val cap = 1 + n / LEAGUE_SHARE
+        val lost = HashMap<String, Int>()
+        val taken = HashMap<String, Int>()
+        var made = 0
+        val ranked = n > 0 && cl.leagues.list.size >= 2 && input.ranking.rows.isNotEmpty()
+        // Talks for a move abroad go first, to the club they were with, and count toward the caps.
+        if (money != null) for ((k, buyer) in money.talks) {
+            val c = byId[buyer]
+            val source = league(k)
+            val d = c?.let { leagueOf[it.nation] }
+            val open = ranked && c != null && source != null && d != null && k in clubOf && k !in moved && made < n &&
+                (lost[source] ?: 0) < cap && (taken[d] ?: 0) < cap && size.getValue(c.id) < input.maxSize(c.id)
+            val fee = money.talk(k, buyer, open) ?: continue
+            if (!open) continue
+            val from = clubOf.getValue(k)
+            val t = Transfer(k, from, c!!.id, source!!, d!!, fee, false)
+            out += t
+            budget[c.id] = budget.getValue(c.id) - fee
+            budget.merge(from, fee, Int::plus)
+            moveTo(k, from, c.id)
+            moved += k
+            lost.merge(source, 1, Int::plus)
+            taken.merge(d, 1, Int::plus)
+            made++
+            money.moved(t)
+        }
+        if (!ranked) return out
         val order = ClubBook.ratingOrder(input.rating)
         val median = HashMap<String, Double>()
         val candidates = ArrayList<String>()
@@ -142,16 +217,13 @@ object Transfers {
             }
         }
         candidates.sortWith(order)
-        val lost = HashMap<String, Int>()
-        val taken = HashMap<String, Int>()
-        var made = 0
         for (k in candidates) {
             if (made >= n) break
             val source = league(k) ?: continue
             val rank = input.ranking.rank(source)
             if (rank == Int.MAX_VALUE || (lost[source] ?: 0) >= cap) continue
             val rating = input.rating(k)
-            val fee = ClubBook.fee(ClubBook.value(rating))
+            val today = if (money == null) ClubBook.fee(ClubBook.value(rating)) else 0
             val destinations = cl.leagues.list.map { it.id }
                 .filter { d -> input.ranking.rank(d) <= rank - GAP && (taken[d] ?: 0) < cap && (median[d]?.let { it <= rating } == true) }
                 .sortedBy { input.ranking.rank(it) }
@@ -162,18 +234,23 @@ object Transfers {
                             .thenComparing({ it.id }, ClubBook.ID_ORDER),
                     )
                 for (c in clubs) {
-                    val money = budget.getValue(c.id)
-                    if (2L * money < fee) continue
-                    val paid = minOf(fee, money)
+                    val local = budget.getValue(c.id)
+                    val fee = money?.asked(k, c.id) ?: today
+                    val have = money?.budget(c.id) ?: local
+                    if (2L * have < fee) continue
+                    if (money != null && !money.allows(k, c.id)) continue
+                    val paid = minOf(fee, have)
                     val from = clubOf.getValue(k)
-                    out += Transfer(k, from, c.id, source, d, paid, false)
-                    budget[c.id] = money - paid
+                    val t = Transfer(k, from, c.id, source, d, paid, false)
+                    out += t
+                    budget[c.id] = local - paid
                     budget.merge(from, paid, Int::plus)
                     moveTo(k, from, c.id)
                     moved += k
                     lost.merge(source, 1, Int::plus)
                     taken.merge(d, 1, Int::plus)
                     made++
+                    money?.moved(t)
                     break@search
                 }
             }
