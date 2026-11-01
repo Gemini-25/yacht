@@ -382,6 +382,13 @@ class NewsDeskTest {
         assertEquals(expected, derbies)
         assertTrue(derbies.size <= yacht.engine.league.Derbies.SEASON_RESULTS)
         assertEquals(derbies.size, desk.derbies)
+        // Every week closed at once (the rival matches made once): the same derbies, the same desk.
+        val (p2, book2) = clubWorld()
+        val all = NewsDesk(media = true).also { it.begin(p2) }
+        Hist.play(p2.league)
+        assertEquals(derbies, all.close(NewsDesk.Context(p2, StatsBook(), book2, drawn = ::drawn), days + 1).filter { it.kind == "derby_result" })
+        fun media(d: NewsDesk) = d.encode().lines().filter { it.startsWith("pw ") || it.startsWith("p1 ") || it.startsWith("dd ") }
+        assertEquals(media(desk), media(all))
         // A column every ranked week; the desk's lines read back as they were.
         assertEquals((yacht.engine.league.Media.firstWeek(p)..days).toList(), columns.map { it.week })
         assertTrue(desk.encode().lines().count { it.startsWith("pw 1 ") } == 2)

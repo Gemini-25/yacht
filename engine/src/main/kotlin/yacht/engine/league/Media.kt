@@ -483,8 +483,8 @@ object Media {
      * The predictions' scorecard of closing season [plan] (예측 성적표, design ENG 5.2; `psc`): every
      * national league's predictions computed again from the same plan and [drawn] ratings (so they
      * are the open's, [promoted] as the open had it) against how it ended: the favourite won the
-     * league title ("L0.<id>" of [honours] of this season, else of the title playoff, else the regular season's
-     * leader), the champion among the favourites, the relegation picks that went down
+     * league title ("L0.<id>" of this season's [honours], else of the title playoff, else the
+     * regular season's leader), the champion among the favourites, the relegation picks that went down
      * ([Offseason.moves]; AIs in [gone] do not move), Spearman's ρ of the predicted against the
      * final regular-season order of the 1부; over every league, the biggest overachiever and flop
      * (predicted − final place, then the better-ranked league, then key). Leagues best-ranked

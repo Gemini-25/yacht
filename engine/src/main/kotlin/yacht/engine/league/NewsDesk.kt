@@ -39,7 +39,7 @@ class NewsDesk(
         val clubs: ClubBook? = null,
         /** The ratings the season was drawn with: the power ranking and the derby slot read them ([media]; null: neither runs). */
         val drawn: ((String) -> Double)? = null,
-        /** The season's rival matches ([Derbies.matches] over [clubs] and [drawn]), when the caller keeps them; null: made for the week. */
+        /** The season's rival matches ([Derbies.matches] over [clubs] and [drawn]), when the caller keeps them; null: made once for the weeks a close closes. */
         val rivals: RivalMatches? = null,
         /** True for a member deleted from the roster during the season: the power ranking leaves it out. */
         val gone: (String) -> Boolean = { false },
@@ -366,9 +366,13 @@ class NewsDesk(
         val book = ctx.clubs?.takeIf { it.world != null }
         var column: LeagueEvent? = null
         val days = p.league.matchdays
+        val first = maxOf(from, 1)
+        val last = minOf(to, days)
+        // The rival matches once for the weeks closed together (the book is the same through them).
+        val rivals = if (book == null || first > last) null else ctx.rivals ?: runCatching { Derbies.matches(book, drawn) }.getOrNull()
         // The league's weeks only (the post-season's have no league matchday, no derby to tell).
-        for (w in maxOf(from, 1)..minOf(to, days)) {
-            if (book != null) runCatching { Derbies.weekResult(book, p, w, drawn, derbies, ctx.rivals) }.getOrNull()?.let { e ->
+        for (w in first..last) {
+            if (book != null && rivals != null) runCatching { Derbies.weekResult(book, p, w, drawn, derbies, rivals) }.getOrNull()?.let { e ->
                 derbies++
                 if (e.ref == null || !ctx.written(e.ref)) out += e
             }
