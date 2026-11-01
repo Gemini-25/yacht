@@ -311,6 +311,31 @@ class TransfersMoneyTest {
     }
 
     @Test
+    fun aClubAtItsBuysCapTakesNoFreeAgentFromAbroad() {
+        // c04 (GB) keeps its two loanees (two buys) and has the most room and money of GB: the free agent
+        // star of KR, who costs no fee, still passes it over for the next club with room.
+        val m = fourLeagues()
+        for (n in 5..8) m.book.place(Mk.key(4, n), null)
+        for (n in 1..2) {
+            val k = Mk.key(3, n)
+            m.book.place(k, "c04")
+            m.setTerms(k) { it.copy(loanFrom = "c03") }
+        }
+        m.book.world!!.clubs.getValue("c04").balance = 2000
+        Eco.closed(m.book, "c04", s, 2000, 60)
+        val star = Mk.key(13, 1)
+        m.setTerms(star) { it.copy(until = s, wage = 5) }
+        m.story(1, star, "c01", stage = StoryStage.RUMOUR)
+        val r = m.run(m.input(config = LeagueConfig(transfers = 8)))
+        assertEquals(2, r.of(MarketPhase.BACK).count { it.to == "c04" && it.type != MarketReport.LOAN_BACK }, r.deals.toString())
+        val d = r.deals.single { it.key == star }
+        assertEquals(MarketPhase.ABROAD to MarketReport.FREE, d.phase to d.type)
+        assertEquals("GB", m.book.nationOf(d.to!!))
+        assertTrue(d.to != "c04", r.deals.toString())
+        assertTrue(Mk.incoming(r, "c04").count { it.phase != MarketPhase.FREE } <= Market.MAX_BUYS, r.deals.toString())
+    }
+
+    @Test
     fun aPlayerAbroadComesHomeAt33WithAContractThere() {
         val m = fourLeagues()
         val back = Mk.key(13, 8)

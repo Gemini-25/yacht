@@ -688,6 +688,31 @@ class MarketTest {
     }
 
     @Test
+    fun theWintersRecordFeeIsTold() {
+        val m = Mk.market(clubs = 16, size = 6)
+        m.book.world!!.worldRecord = FeeRecord("old", null, null, 1, 1)
+        val r = Market.winter(m.book, m.plan(s), m.input(), { 1 })
+        val record = assertNotNull(r.record, r.deals.toString())
+        assertEquals("W", record.scope)
+        val d = r.deals[record.deal]
+        assertTrue('W' in d.flags)
+        assertEquals(listOf(d.key, d.from, d.to), r.events().single { it.kind == "record_fee" }.keys)
+    }
+
+    @Test
+    fun aPlayersTraitsAreReadOncePerWindow() {
+        // The off-season's traits come from the genes: the window asks for each player's once, however
+        // many buyers score it.
+        val m = Mk.market(clubs = 8)
+        for (c in m.book.clubs) Coaching.coach(m.book, "k${c.id.drop(1).toInt()}", c.id, philosophy = Philosophy.YOUTH)
+        val asked = HashMap<String, Int>()
+        val base = m.input()
+        val r = m.run(MarketInput(base.club, base.tables, traits = { k -> asked.merge(k, 1, Int::plus); m.traits[k] }))
+        assertTrue(r.deals.isNotEmpty())
+        assertTrue(asked.isNotEmpty() && asked.values.all { it == 1 }, asked.toString())
+    }
+
+    @Test
     fun randomWindowsKeepTheirRules() {
         val all = listOf("GB", "ES", "DE", "KR", "JP")
         for (seed in 1L..40L) {

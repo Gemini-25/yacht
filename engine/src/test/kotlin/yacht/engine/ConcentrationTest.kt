@@ -17,6 +17,18 @@ class ConcentrationTest {
     private val s = Mk.SEASON
 
     @Test
+    fun theGuardsBestSixteenAreThoseOfASort() {
+        val rnd = java.util.Random(3)
+        repeat(200) {
+            val members = (1..rnd.nextInt(60)).map { "g$it" to "c${rnd.nextInt(5)}" }.shuffled(rnd)
+            // Ties and unknown ratings (the guard counts NaN as below everyone) among them.
+            val ratings = members.associate { (k, _) -> k to if (rnd.nextInt(6) == 0) Double.NEGATIVE_INFINITY else 1400.0 + rnd.nextInt(40) }
+            val sorted = members.sortedWith(compareByDescending<Pair<String, String>> { ratings.getValue(it.first) }.thenBy { it.first }).take(Market.GUARD_TOP)
+            assertEquals(sorted, Market.top(members) { ratings.getValue(it) })
+        }
+    }
+
+    @Test
     fun theCapIsRelativeToTheClubs() {
         assertEquals(listOf(12, 8, 6, 5, 3, 2), listOf(2, 3, 4, 5, 8, 16).map(Market::cap))
         assertEquals(Int.MAX_VALUE, Market.cap(1))

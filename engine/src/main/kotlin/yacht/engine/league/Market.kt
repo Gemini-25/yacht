@@ -351,15 +351,41 @@ object Market {
         val cap = cap(clubs.size)
         if (cap >= GUARD_TOP) return true
         val r = { k: String -> rating(k).let { if (it.isNaN()) Double.NEGATIVE_INFINITY else it } }
-        val order = compareByDescending<Pair<String, String>> { r(it.first) }.thenBy { it.first }
         val now = ArrayList<Pair<String, String>>()
         for (c in clubs) for (k in c.squad) now += k to c.id
-        val before = now.sortedWith(order).take(GUARD_TOP).count { it.second == buyer }
+        val before = top(now, r).count { it.second == buyer }
         // Under the cap before, one member more is at most the cap.
         if (before < cap) return true
         val then = now.filter { it.first != key } + (key to buyer)
-        val after = then.sortedWith(order).take(GUARD_TOP).count { it.second == buyer }
+        val after = top(then, r).count { it.second == buyer }
         return after <= cap || after <= before
+    }
+
+    /**
+     * The [GUARD_TOP] best of [members] (member to club) by [r], best first, then by key: what sorting
+     * them all would give, in one pass (the guard asks for every buyer and every target).
+     */
+    internal fun top(members: List<Pair<String, String>>, r: (String) -> Double): List<Pair<String, String>> {
+        val best = ArrayList<Pair<String, String>>(GUARD_TOP + 1)
+        val ratings = ArrayList<Double>(GUARD_TOP + 1)
+        for (m in members) {
+            val x = r(m.first)
+            // The place among the best so far: after every better one (a higher rating, or the same and a smaller key).
+            var i = best.size
+            while (i > 0) {
+                val c = java.lang.Double.compare(ratings[i - 1], x)
+                if (c > 0 || (c == 0 && best[i - 1].first < m.first)) break
+                i--
+            }
+            if (i >= GUARD_TOP) continue
+            best.add(i, m)
+            ratings.add(i, x)
+            if (best.size > GUARD_TOP) {
+                best.removeAt(GUARD_TOP)
+                ratings.removeAt(GUARD_TOP)
+            }
+        }
+        return best
     }
 
     // ---- prices, wages and contracts (ENG 1.1, 1b.8) ------------------------------------------------
@@ -643,7 +669,15 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
     private val rating = ci.rating
     private val order = ClubBook.ratingOrder(rating)
     private val alive = ci.members.toHashSet()
-    private val value: (String) -> Int = input.value ?: book.valuer(rating, ci.age, { input.traits(it)?.potential }, { input.traits(it)?.overall })
+
+    /**
+     * Each player's traits and market value, read once a window: both are fixed while it runs, and a
+     * buyer's scoring asks for every member of its nation (the off-season's traits come from the genes).
+     */
+    private val traitsOf = HashMap<String, PlayerTraits?>()
+    private val values = HashMap<String, Int>()
+    private val valuer: (String) -> Int = input.value ?: book.valuer(rating, ci.age, { traits(it)?.potential }, { traits(it)?.overall })
+    private val value: (String) -> Int = { k -> values.getOrPut(k) { valuer(k) } }
     private val honours = ci.honours.groupBy { it.key }
 
     private val deals = ArrayList<MarketDeal>()
@@ -728,7 +762,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
         notable()
         book.touch()
         val stories = w.market.stories(s).filter { it.winter && it.stage != StoryStage.RUMOUR && it.stage != StoryStage.TALKS }
-        return MarketReport(s, deals.toList(), stories = stories, leagueRecords = TreeMap(leagueRecords))
+        return MarketReport(s, deals.toList(), stories = stories, record = told(), leagueRecords = TreeMap(leagueRecords))
     }
 
     fun run(): MarketReport {
@@ -748,12 +782,14 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
         for (nation in nations()) loansOut(nation)
         notable()
         stories()
-        val told = recordNews.filter { it.scope == WORLD }.maxByOrNull { deals[it.deal].fee }
-            ?: recordNews.maxWithOrNull(compareBy<RecordFee> { deals[it.deal].fee }.thenBy { it.deal })
-        w.market.window = WindowLine(s, offset, deals.map { WindowLine.Entry(it.phase, it.type, it.flags, it.wage) }, renewals, renewal, told, TreeMap(leagueRecords))
+        w.market.window = WindowLine(s, offset, deals.map { WindowLine.Entry(it.phase, it.type, it.flags, it.wage) }, renewals, renewal, told(), TreeMap(leagueRecords))
         book.touch()
         return Market.report(book, s)
     }
+
+    /** The record fee the news tells: the world record's biggest beating, else the biggest league record's (then the earlier deal). */
+    private fun told(): RecordFee? = recordNews.filter { it.scope == WORLD }.maxByOrNull { deals[it.deal].fee }
+        ?: recordNews.maxWithOrNull(compareBy<RecordFee> { deals[it.deal].fee }.thenBy { it.deal })
 
     // ---- reading the book ---------------------------------------------------------------------------
 
@@ -761,6 +797,8 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
     private fun nations(): List<String> = Nations.ALL.map { it.code }.filter { (clubCount[it] ?: 0) >= 2 }
 
     private fun r(k: String): Double = rating(k).let { if (it.isNaN()) Double.NEGATIVE_INFINITY else it }
+
+    private fun traits(k: String): PlayerTraits? = if (k in traitsOf) traitsOf[k] else input.traits(k).also { traitsOf[k] = it }
 
     private fun leagueOfClub(club: String): String = book.nationOf(club)?.let { leagueOf[it] }.orEmpty()
 
@@ -930,7 +968,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
                 val t = w.terms[k] ?: continue
                 if (t.until > s || t.loanFrom != null || k !in alive) continue
                 val age = ci.age(k)
-                val young = age != null && age <= Market.RENEW_AGE && Market.room(input.traits(k)) >= Market.RENEW_ROOM
+                val young = age != null && age <= Market.RENEW_AGE && Market.room(traits(k)) >= Market.RENEW_ROOM
                 val offered = (k in six || young) && !(inTrouble && k !in best.take(Market.TROUBLE_KEEP))
                 val wage = ClubEconomy.renewal(offer(k, c.id), inTrouble)
                 if (offered && accepts(k, c.id, t, age, if (ci.market) open else emptyList())) {
@@ -979,8 +1017,9 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
                 val p = price(key, seller, buyer)
                 return if (p.clause) p.fee else premium(buyer, p.fee)
             }
+            // The caps too: a free agent costs no fee, so the budget alone does not stop a club at its buys cap.
             override fun allows(key: String, buyer: String): Boolean =
-                !embargo(buyer) && wageOk(buyer, offer(key, buyer)) && Market.allowed(book, key, buyer, rating)
+                canBuy(buyer) && wageOk(buyer, offer(key, buyer)) && Market.allowed(book, key, buyer, rating)
             override val talks: List<Pair<String, String>> = abroadTalks.map { it.key to it.buyer }
             override val free: Map<String, String> = LinkedHashMap(this@MarketWindow.free)
             override fun talk(key: String, buyer: String, open: Boolean): Int? {
@@ -1018,10 +1057,11 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
     }
 
     /** [fee] as a buyer with a 스타 영입형 coach pays it: up to [Market.STAR_PREMIUM] × it, as far as its budget goes. */
-    private fun premium(buyer: String, fee: Int): Int {
-        if (book.coachOf(buyer)?.philosophy != Philosophy.STAR) return fee
-        return maxOf(fee, minOf(Math.round(fee * Market.STAR_PREMIUM).toInt(), tb(buyer)))
-    }
+    private fun premium(buyer: String, fee: Int): Int =
+        if (book.coachOf(buyer)?.philosophy != Philosophy.STAR) fee else starFee(fee, tb(buyer))
+
+    /** [premium] of a 스타 영입형 buyer whose budget is [budget]. */
+    private fun starFee(fee: Int, budget: Int): Int = maxOf(fee, minOf(Math.round(fee * Market.STAR_PREMIUM).toInt(), budget))
 
     // ---- 4. the talks -------------------------------------------------------------------------------
 
@@ -1096,7 +1136,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
         val from = coach.current?.from ?: return false
         if (from <= st.season) return false
         val before = book.tenuresAt(st.buyer).firstOrNull { (id, t) -> id != coach.id && t.to >= st.season }?.let { (id, _) -> book.coach(id)?.philosophy }
-        val traits = input.traits(st.key)
+        val traits = traits(st.key)
         val age = ci.age(st.key)
         return Market.fit(coach.philosophy, traits, age) < Market.fit(before, traits, age)
     }
@@ -1187,6 +1227,13 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
         val nation = book.nationOf(buyer) ?: return null
         val budget = tb(buyer)
         val floor = floor(buyer)
+        val philosophy = book.coachOf(buyer)?.philosophy
+        // What it pays over the asked fee: the deadline's premium, else a 스타 영입형 coach's (the budget is the same for every target).
+        fun pays(fee: Int): Int = when {
+            premium > 1.0 -> Math.round(fee * premium).toInt()
+            philosophy == Philosophy.STAR -> starFee(fee, budget)
+            else -> fee
+        }
         val targets = ArrayList<Target>()
         for (c in book.clubsOf(nation)) {
             if (c.id == buyer || frozen(c.id)) continue
@@ -1197,7 +1244,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
                 val clause = w.terms[k]?.clause ?: 0
                 val target = when {
                     allowed && p.clause -> Target(k, c.id, p.fee, true, r(k))
-                    allowed -> Target(k, c.id, if (premium > 1.0) Math.round(p.fee * premium).toInt() else premium(buyer, p.fee), false, r(k))
+                    allowed -> Target(k, c.id, pays(p.fee), false, r(k))
                     clause > 0 -> Target(k, c.id, clause, true, r(k))
                     else -> null
                 } ?: continue
@@ -1212,10 +1259,10 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
         val (mean, sd) = stats[nation] ?: (0.0 to 0.0)
         val costs = Spread(targets.map { it.fee.toDouble() / maxOf(1, budget) })
         val efficiency = Spread(targets.map { it.rating / maxOf(it.fee, Valuation.MIN_ASKED) })
-        val philosophy = book.coachOf(buyer)?.philosophy
         for ((i, t) in targets.withIndex()) {
             val zr = z(t.rating, mean, sd)
-            t.score = zr + Market.fit(philosophy, input.traits(t.key), ci.age(t.key), zr, efficiency.z(i)) - Market.COST_WEIGHT * costs.z(i)
+            val fit = if (philosophy == null) 0.0 else Market.fit(philosophy, traits(t.key), ci.age(t.key), zr, efficiency.z(i))
+            t.score = zr + fit - Market.COST_WEIGHT * costs.z(i)
         }
         targets.sortWith(compareByDescending<Target> { it.score }.thenByDescending { it.rating }.thenBy { it.key })
         val guard = Guard(buyer)
@@ -1251,7 +1298,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
         init {
             val nation = book.nationOf(buyer)
             val members = nation?.let { n -> book.clubsOf(n).flatMap { c -> c.squad.map { it to c.id } } }.orEmpty()
-            val top = members.sortedWith(compareByDescending<Pair<String, String>> { r(it.first) }.thenBy { it.first }).take(Market.GUARD_TOP)
+            val top = Market.top(members) { r(it) }
             open = nation == null || top.count { it.second == buyer } < Market.cap(clubCount[nation] ?: 0)
             sixteenth = if (top.size < Market.GUARD_TOP) Double.NEGATIVE_INFINITY else r(top.last().first)
         }
