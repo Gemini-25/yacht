@@ -129,6 +129,40 @@ class NationalLeaguesTest {
         assertEquals("XAS", NationalLeagues.plan(counts, national.copy(leagueMin = 31), emptySet())["KR"])
     }
 
+    /** A league merger of the world events (ENG 6.5): its nations keep no league of their own; without one, nothing changes. */
+    @Test
+    fun mergedNationsPlayInTheirConfederationsLeagueAndWithoutAMergerNothingChanges() {
+        val counts = mapOf("KR" to 30, "JP" to 21, "CN" to 10, "GB" to 40, "FR" to 12, "DE" to 13, "US" to 25)
+        for (last in listOf(emptySet(), setOf("JP"), setOf("XEU"), setOf("KR", "GB", "US"))) {
+            assertEquals(NationalLeagues.plan(counts, national, last), NationalLeagues.plan(counts, national, last, emptySet()))
+        }
+        // Korea and Japan merged: however many they are, they join Asia's 연합 리그 with China.
+        val merged = NationalLeagues.plan(counts, national, setOf("KR", "JP"), setOf("KR", "JP"))
+        assertEquals(mapOf("KR" to "XAS", "JP" to "XAS", "CN" to "XAS", "US" to "US", "GB" to "GB", "FR" to "XEU", "DE" to "XEU"), merged)
+        // Next season's ladders: the context's merged set reaches the formation; an empty one gives today's.
+        val w = World(1000)
+        val plan = Offseason.first(4L, ctx(w, national))
+        drive(plan, w, Random(9))
+        val moves = Offseason.moves(plan)
+        fun next(m: Set<String>) = NationalLeagues.next(plan, moves, Offseason.Context(w.keys, w::rating, { null }, { "" }, national, nation = w::nation, merged = m))
+        val (today, todayLeagues) = NationalLeagues.next(plan, moves, ctx(w, national))
+        val (same, sameLeagues) = next(emptySet())
+        assertEquals(today, same)
+        assertEquals(todayLeagues.list.map { it.id to it.tiers.count }, sameLeagues.list.map { it.id to it.tiers.count })
+        // Two of Asia's leagues merged: gone from the season, their members in 아시아 연합.
+        val pair = todayLeagues.list.map { it.id }.filter { Nations.of(it) != null && Nations.confedOf(it) == Confed.ASIA && it != "KR" }.take(2).toSet()
+        assertEquals(2, pair.size, "${todayLeagues.list.map { it.id }}")
+        val (divisions, leagues) = next(pair)
+        assertTrue(leagues.list.none { it.id in pair })
+        val asia = leagues.byId(LeagueIds.region(Confed.ASIA))!!
+        val inAsia = asia.divisions.flatMap { divisions[it] }.toSet()
+        for (k in w.keys) if (w.nation(k) in pair) assertTrue(k in inAsia, "$k of ${w.nation(k)}")
+        assertEquals(w.keys.sorted(), divisions.flatten().sorted(), "everyone once")
+        // The first season of a league with a merger in force, too.
+        val (_, firstLeagues) = NationalLeagues.first(w.keys, Offseason.Context(w.keys, w::rating, { null }, { "" }, national, nation = w::nation, merged = pair))
+        assertTrue(firstLeagues.list.none { it.id in pair })
+    }
+
     @Test
     fun theRestFormTheWorldLeagueOrJoinTheSmallest() {
         // 25 left over: 국제 연합 리그, of its largest nation's confederation.
