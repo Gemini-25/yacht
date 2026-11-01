@@ -345,9 +345,15 @@ private fun NationalClubsTab(lg: LeagueController, v: LeagueView, season: Season
         item {
             Column(Modifier.padding(top = 6.dp)) {
                 LinkLine(if (all) "클럽 전체 (우승 순) 접기" else "클럽 전체 (우승 순)", t?.let { "${it.all.size}개 클럽의 우승과 자금" }) { all = !all }
-                LinkLine("이적·드래프트", "해외 이적, 귀국, 국내 이적과 드래프트") { nav.open(Page.Market()) }
-                // The club rankings come with the club world (rule 4: no link before its page has content).
-                if (t?.all?.any { it.health != null } == true) LinkLine("🏅 세계 클럽 랭킹", "가치·성적·수입·인기·재정으로 본 클럽 순위") { nav.open(Page.ClubRanking()) }
+                // With a club world shown the market is the 이적 센터 (UX 4.6), and the club rankings come with it
+                // (rule 4: no link before its page has content).
+                val world = t?.all?.any { it.health != null } == true
+                if (world) {
+                    LinkLine("💸 이적 센터", "이적설과 협상, 이적 내역, 최고 이적료, 감독 이동") { nav.open(Page.Market()) }
+                } else {
+                    LinkLine("이적·드래프트", "해외 이적, 귀국, 국내 이적과 드래프트") { nav.open(Page.Market()) }
+                }
+                if (world) LinkLine("🏅 세계 클럽 랭킹", "가치·성적·수입·인기·재정으로 본 클럽 순위") { nav.open(Page.ClubRanking()) }
                 if (v.comps.any { it.first == Comp.CLUB_CUP }) LinkLine("🏟 ${Comp.CLUB_CUP.label}", "나라마다 우승 클럽이 겨루는 단체전") { nav.open(Page.Competition(Comp.CLUB_CUP)) }
             }
         }

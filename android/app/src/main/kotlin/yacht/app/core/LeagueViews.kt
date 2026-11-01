@@ -692,7 +692,7 @@ data class FollowMatch(
     val winChance: Int?,
 )
 
-/** One of the week's broadcast picks ('📺 이번 주 중계'). */
+/** One of the week's broadcast picks ('📺 이번 주 중계'); [rival] the rivalry's name of a rival match (UX 6.6). */
 data class BroadcastPick(
     val ref: String,
     val week: Int,
@@ -706,6 +706,7 @@ data class BroadcastPick(
     val played: Boolean,
     val result: String?,
     val watched: Boolean,
+    val rival: String? = null,
 )
 
 /**

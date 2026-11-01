@@ -364,7 +364,7 @@ internal interface LeagueShots {
 }
 
 /** The league's shot files, in the order each point of the run calls them. */
-private val LEAGUE_SHOTS: List<LeagueShots> = listOf(ShotsLeague, ShotsPlayer, ShotsWorld, ShotsWatch, ShotsRecords, ShotsHome, ShotsClubs, ShotsStories)
+private val LEAGUE_SHOTS: List<LeagueShots> = listOf(ShotsLeague, ShotsPlayer, ShotsWorld, ShotsWatch, ShotsRecords, ShotsHome, ShotsClubs, ShotsStories, ShotsMarket)
 
 /** Calls [phase] on every file of [LEAGUE_SHOTS], each from the league screen's 홈 tab. */
 private fun leagueShots(c: AppController, phase: (LeagueShots) -> Unit) {

@@ -287,7 +287,7 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     is Page.Competition -> v?.comps?.firstOrNull { it.first == page.comp }?.second?.title ?: page.comp.label
     is Page.Match -> "경기 리포트"
     is Page.Club -> v?.clubs?.clubs?.firstOrNull { it.id == page.id }?.name ?: v?.badges?.get(page.id)?.name ?: "클럽"
-    is Page.Market -> "이적·드래프트"
+    is Page.Market -> if (lg.marketPages.view?.centre == true) "이적 센터" else "이적·드래프트"
     is Page.Nation -> Nations.of(page.code)?.let { "${it.flag} ${it.name} 대표팀" } ?: page.code
     Page.Nations -> "국가대표 랭킹"
     is Page.Compare -> "선수 비교"
@@ -328,7 +328,7 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Competition -> CompetitionScreen(lg, v, page, open)
         is Page.Match -> MatchReportPage(c, v, page)
         is Page.Club -> ClubPageBody(lg, v, page, open)
-        is Page.Market -> MarketBody(lg, v)
+        is Page.Market -> MarketBody(lg, v, page)
         is Page.League -> LeaguePageBody(lg, v, page, open)
         Page.Federation -> FederationPage(lg, v)
         is Page.Nation -> NationPage(lg, page.code, open)

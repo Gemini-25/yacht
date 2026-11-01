@@ -8,6 +8,7 @@ import yacht.engine.league.JobKind
 import yacht.engine.league.MatchRef
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -26,7 +27,9 @@ class BroadcastPicksTest {
         percentile: Double = 0.5,
         close: Boolean = false,
         id: Int = ids++,
-    ) = Candidate(MatchRef(1, comp, id), 3, comp, "", keys[0], keys[1], keys, league, base, race, star, mates, percentile, close)
+        rival: String? = null,
+        rivalMove: Boolean = false,
+    ) = Candidate(MatchRef(1, comp, id), 3, comp, "", keys[0], keys[1], keys, league, base, race, star, mates, percentile, close, rival, rivalMove)
 
     private fun fixture(comp: Comp, label: String, kind: JobKind = JobKind.TIE) = Fixture(comp, 1, "a", "b", 7L, kind, label = label)
 
@@ -133,6 +136,55 @@ class BroadcastPicksTest {
         assertEquals(1, more.count { it.star }, "one star pick left")
         // Nothing to add once the week is full.
         assertEquals(emptyList(), BroadcastPicks.choose(now, now.take(6)))
+    }
+
+    @Test
+    fun aRivalMatchGetsItsBonusesReasonAndTags() {
+        val name = "서울-부산 클래식"
+        // UX 6.6: + 15 for a rival match, + 10 more for a mover's first meeting with the club it left; the base unchanged.
+        assertEquals(cand(base = 24).score + BroadcastPicks.RIVAL_BONUS, cand(base = 24, rival = name).score)
+        assertEquals(cand(base = 24).score + 15 + 10, cand(base = 24, rival = name, rivalMove = true).score)
+        assertEquals(15 to 10, BroadcastPicks.RIVAL_BONUS to BroadcastPicks.RIVAL_MOVE_BONUS)
+        assertEquals(24, cand(base = 24, rival = name).base)
+        // The rivalry is the reason below a base of 60, after a followed player and the title race.
+        val rival = cand(base = 24, rival = name)
+        assertEquals("⚔ $name", BroadcastPicks.reason(rival))
+        assertEquals(emptyList(), BroadcastPicks.tags(rival).filter { it.startsWith("⚔") }, "not told twice")
+        val race = cand(base = 24, rival = name, race = true)
+        assertEquals("우승 경쟁", BroadcastPicks.reason(race))
+        assertTrue(BroadcastPicks.RIVAL_TAG in BroadcastPicks.tags(race))
+        val star = cand(base = 24, rival = name, star = true)
+        assertEquals("★ 응원하는 선수", BroadcastPicks.reason(star))
+        assertTrue(BroadcastPicks.RIVAL_TAG in BroadcastPicks.tags(star))
+        val big = cand(Comp.LEAGUE, base = 60, rival = name)
+        assertEquals("토너먼트 빅매치", BroadcastPicks.reason(big))
+        assertEquals("⚔ 라이벌전", BroadcastPicks.RIVAL_TAG)
+        assertTrue(BroadcastPicks.RIVAL_TAG in BroadcastPicks.tags(big))
+        // A mover's first meeting: its own tag; the rivalry stays the reason.
+        val move = cand(base = 24, rival = name, rivalMove = true)
+        assertEquals("⚔ $name", BroadcastPicks.reason(move))
+        assertEquals(listOf("🔥 이적 후 첫 맞대결"), BroadcastPicks.tags(move))
+        // The bonus lifts a rival match over an even match of the same base (the picks' order).
+        val plain = cand(base = 24, percentile = 0.5, league = "JP")
+        val derby = cand(base = 24, percentile = 0.5, rival = name)
+        assertEquals(listOf(derby, plain), BroadcastPicks.choose(listOf(plain, derby), emptyList()))
+        assertEquals(listOf(derby), BroadcastPicks.choose(listOf(plain, derby), emptyList(), total = 1))
+    }
+
+    @Test
+    fun withoutARivalThePicksAreTodays() {
+        // A candidate without a rivalry (every one of a book without a club world): today's score, reason and tags.
+        val today = listOf(
+            cand(base = 24, percentile = 0.25, close = true), cand(base = 30, race = true), cand(Comp.CUP, base = 50, star = true),
+            cand(base = 10, mates = true), cand(base = 0, percentile = 0.05), cand(Comp.CHAMPIONS, base = 60),
+        )
+        for (c in today) {
+            assertNull(c.rival)
+            assertFalse(c.rivalMove)
+            assertEquals(c.base + (if (c.race) 25 else 0) + (if (c.star) 80 else 0) + (if (c.mates) 10 else 0) + c.level, c.score)
+            assertTrue(BroadcastPicks.reason(c).none { it == '⚔' })
+            assertTrue(BroadcastPicks.tags(c).none { it == BroadcastPicks.RIVAL_TAG || it == BroadcastPicks.RIVAL_MOVE_TAG })
+        }
     }
 
     @Test

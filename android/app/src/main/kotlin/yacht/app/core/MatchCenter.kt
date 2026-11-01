@@ -20,8 +20,12 @@ import yacht.engine.explain.AiStep
 import yacht.engine.explain.Commentary
 import yacht.engine.explain.Ko
 import yacht.engine.explain.OutlookAnalysis
+import yacht.engine.league.ClubBook
+import yacht.engine.league.ClubCheckpoint
+import yacht.engine.league.ClubHistoryBook
 import yacht.engine.league.Comp
 import yacht.engine.league.Competitions
+import yacht.engine.league.Derbies
 import yacht.engine.league.Drama
 import yacht.engine.league.DramaContext
 import yacht.engine.league.Fixture
@@ -36,11 +40,13 @@ import yacht.engine.league.LeagueWorld
 import yacht.engine.league.LogClass
 import yacht.engine.league.LogSink
 import yacht.engine.league.LoggedGame
+import yacht.engine.league.Market
 import yacht.engine.league.MatchLog
 import yacht.engine.league.MatchLogBook
 import yacht.engine.league.MatchRef
 import yacht.engine.league.Preview
 import yacht.engine.league.RatingScale
+import yacht.engine.league.RivalMatches
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
@@ -48,6 +54,7 @@ import yacht.engine.league.SeasonPlan
 import yacht.engine.league.TieRule
 import yacht.engine.league.WatchTurn
 import yacht.engine.league.byTeams
+import java.lang.ref.WeakReference
 import java.util.Random
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
@@ -617,6 +624,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             news = news, comp = f.comp, label = f.label, season = ref.season, week = f.week, placeA = place(f.a), placeB = place(f.b),
             team = team, firstTo = f.firstTo,
             deltaA = delta?.let { if (it.a == f.a) it.deltaA else it.deltaB }, deltaB = delta?.let { if (it.a == f.a) it.deltaB else it.deltaA },
+            rival = if (x.current && p != null) runCatching { rivalLine(w, p, f) }.getOrNull() else null,
         )
     }
 
@@ -1631,6 +1639,11 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
     var broadcast by mutableStateOf<BroadcastView?>(null)
         private set
 
+    /** Shows [view] as the channel's ([broadcast]) with no league work: the screenshot harness's hand-made home (P2's request). */
+    internal fun show(view: BroadcastView?) {
+        broadcast = view
+    }
+
     /** Makes this week's picks when they are not made yet, and works out the channel's view ([broadcast]) off the main thread. */
     fun refreshPicks() {
         host.scope.launch(Dispatchers.Default) {
@@ -1686,6 +1699,9 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             }
         }
         val race = RaceTable(s)
+        // Rival matches (UX 6.6): their name, and a player who moved to its rival's club in the last windows.
+        val rivals = rivalsOf(w, p)
+        val movers = if (rivals == null) emptyMap() else rivalMovers(w.clubs!!, p)
         return SeasonMatches.ofWeek(p, week).mapNotNull { m ->
             val f = m.fixture
             if (f.comp == Comp.FRIENDLY || f.comp == Comp.LAB) return@mapNotNull null
@@ -1709,13 +1725,125 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
                 s.leagues.national -> lg?.id
                 else -> s.divisionOf(f.a)?.let { "d$it" }
             }
+            val rival = if (f.comp == Comp.LEAGUE && !team) rivals?.matches?.name(s, f.a, f.b) else null
             BroadcastPicks.Candidate(
                 MatchRef(p.number, f.comp, f.id), week, f.comp, titleOf(p, f, p.number), f.a, f.b, keys,
                 league, BroadcastPicks.base(f, rank, tier, upperTier(s, f)),
                 f.comp == Comp.LEAGUE && tier == 0 && race.both(f.a, f.b), star, mates,
                 keys.map(::pct).average(), !team && !ra.isNaN() && !rb.isNaN() && abs(ra - rb) <= BroadcastPicks.CLOSE_GAP,
+                rival, rival != null && firstMeeting(w.clubs!!, p, f.id, f.a, f.b, movers),
             )
         }
+    }
+
+    // ---- rival matches (UX 6.6) -----------------------------------------------------------------------
+
+    /**
+     * The season in play's rival matches as read last ([rivalsOf]) and what they were read from: the plan
+     * (held weakly), its season and the club book's version. Under the lock.
+     */
+    private var rivalsRead: Triple<WeakReference<SeasonPlan>, List<Int>, RivalMarks>? = null
+
+    /**
+     * The rival matches of [w]'s season in play [p] (design ENG 1b.6: 1부 league fixtures between counted
+     * members of rival clubs, by the season's drawn ratings): worked out once a season and each time the
+     * club book changes, null without a club world shown (none, or `clubWorld` off) or in a legacy season.
+     * Under the lock.
+     */
+    internal fun rivalsOf(w: LeagueWorld, p: SeasonPlan): RivalMarks? {
+        val b = w.clubs?.takeIf { it.format == ClubBook.AFFILIATION && it.world != null && w.config.clubWorld } ?: return null
+        val s = p.league
+        if (!s.leagues.national) return null
+        val key = listOf(p.number, b.version)
+        rivalsRead?.takeIf { it.first.get() === p && it.second == key }?.let { return it.third }
+        val matches = Derbies.matches(b, drawnRatings(w, p))
+        val names = HashMap<String, String>()
+        for (id in 0 until s.fixturesTotal) {
+            val f = s.fixture(id)
+            matches.name(s, f.a, f.b)?.let { names[MatchRef(p.number, Comp.LEAGUE, id).encode()] = it }
+        }
+        return RivalMarks(p.number, names, matches).also { rivalsRead = Triple(WeakReference(p), key, it) }
+    }
+
+    /**
+     * Who moved to a rival's club in the last off-season's window or this season's winter window (a
+     * move flagged V): player → (the club it left, the club it joined, the week it moved: 0 for the
+     * off-season's).
+     */
+    private fun rivalMovers(b: ClubBook, p: SeasonPlan): Map<String, Triple<String, String, Int>> {
+        val out = HashMap<String, Triple<String, String, Int>>()
+        for (d in Market.report(b, p.number - 1).deals) {
+            if ('V' in d.flags && d.from != null && d.to != null) out[d.key] = Triple(d.from!!, d.to!!, 0)
+        }
+        val winter = ClubCheckpoint.report(b, p.number)
+        for (d in winter.deals) {
+            if ('V' in d.flags && d.from != null && d.to != null) out[d.key] = Triple(d.from!!, d.to!!, winter.week)
+        }
+        return out
+    }
+
+    /**
+     * Whether league fixture [id] ([a] against [b]) is a mover's first meeting with the club it left for
+     * its rival ([movers]): one side moved from the other side's club to its own, and no earlier league
+     * fixture since the move put it against a member of the club it left.
+     */
+    private fun firstMeeting(book: ClubBook, p: SeasonPlan, id: Int, a: String, b: String, movers: Map<String, Triple<String, String, Int>>): Boolean {
+        val s = p.league
+        val day = s.fixture(id).matchday
+        for ((k, other) in listOf(a to b, b to a)) {
+            val (from, to, week) = movers[k] ?: continue
+            if (book.clubOf(other) != from || book.clubOf(k) != to) continue
+            val left = book.members(from).toHashSet()
+            val earlier = (0 until s.fixturesTotal).any { j ->
+                val f = s.fixture(j)
+                j != id && f.matchday < day && f.matchday + 1 > week && ((f.a == k && f.b in left) || (f.b == k && f.a in left))
+            }
+            if (!earlier) return true
+        }
+        return false
+    }
+
+    private var rivalMarks by mutableStateOf<RivalMarks?>(null)
+    private var rivalMarksOf: LeagueWorld? = null
+
+    /** The rival marks of the season in play as loaded last ([loadRivals]), from the league in play; null before or without a club world. */
+    fun rivals(): RivalMarks? = rivalMarks?.takeIf { rivalMarksOf === host.world() }
+
+    /**
+     * Reads the season's rival matches for the "⚔" marks of the match rows off the main thread (a club
+     * page's 🎲 rows, 경기 › 결과, the match lists): at once when nothing changed since the last read.
+     */
+    fun loadRivals() {
+        host.scope.launch(Dispatchers.Default) {
+            val (w, m) = synchronized(host.lock) {
+                val w = host.world() ?: return@launch
+                w to runCatching { w.plan?.let { rivalsOf(w, it) } }.getOrNull()
+            }
+            host.scope.launch {
+                if (w !== host.world()) return@launch
+                rivalMarksOf = w
+                if (m !== rivalMarks) rivalMarks = m
+            }
+        }
+    }
+
+    /**
+     * The rival line of a report (UX 6.6) of league fixture [f] of the season in play [p]: the rivalry's
+     * name and side A's club's all-time record against side B's before the match (the stored record
+     * with this season's matches before its week added); null for any other match. Under the lock.
+     */
+    private fun rivalLine(w: LeagueWorld, p: SeasonPlan, f: Fixture): RivalLine? {
+        if (f.comp != Comp.LEAGUE || f.kind == JobKind.TEAM) return null
+        val name = rivalsOf(w, p)?.of(MatchRef(p.number, Comp.LEAGUE, f.id).encode()) ?: return null
+        val b = w.clubs ?: return null
+        val ca = b.clubOf(f.a) ?: return null
+        val cb = b.clubOf(f.b) ?: return null
+        fun badge(id: String) = b.club(id)?.let { ClubBadge(it.id, it.name, it.city, it.nation, it.emblem) }
+        val before = maxOf(0, f.week - 1)
+        val record = Derbies.allTime(b, p, ca, cb, before)
+            ?: Derbies.series(b, p, before)[ClubHistoryBook.pair(ca, cb).let { "${it.first} ${it.second}" }]
+        val (wins, draws, losses) = record?.of(ca) ?: Triple(0, 0, 0)
+        return RivalLine(name, badge(ca) ?: return null, badge(cb) ?: return null, wins, draws, losses)
     }
 
     /** The leaders' race of each division ([Drama.RACE_POINTS] from the top, once [Drama.RACE_FROM] of the league is played). */
@@ -1768,7 +1896,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             return BroadcastPick(
                 ref.encode(), week, f.comp, titleOf(p, f, p.number), side(f.a), side(f.b),
                 c?.let { BroadcastPicks.reason(it) } ?: "", c?.let { BroadcastPicks.tags(it) }.orEmpty(), c?.score ?: 0,
-                m.played, result, ref.encode() in watched,
+                m.played, result, ref.encode() in watched, c?.rival,
             )
         }
         val now = picks[p.week].orEmpty().mapNotNull { pick(p.week, it) }
@@ -1906,6 +2034,10 @@ internal object BroadcastPicks {
     const val LEVEL = 20
     const val CLOSE = 10
 
+    /** A rival match's bonus, and a mover's first meeting with the club it left for its rival (UX 6.6). */
+    const val RIVAL_BONUS = 15
+    const val RIVAL_MOVE_BONUS = 10
+
     /** The best-ranked leagues (0-based rank) whose title and 1·2부 promotion playoffs count as big. */
     const val TOP_RANK = 3
 
@@ -1917,6 +2049,8 @@ internal object BroadcastPicks {
      * followed side ([star]), two counted members of a top club ([mates]), the sides' average
      * rating rank among the members ([percentile], 0 the best) and whether they are [close] in
      * rating. [keys] are the players (each picked at most once a week), [league] a league fixture's league.
+     * A rival match (UX 6.6) names its [rival]ry; [rivalMove]: a side meets the club it left for its rival
+     * for the first time since.
      */
     data class Candidate(
         val ref: MatchRef,
@@ -1933,9 +2067,12 @@ internal object BroadcastPicks {
         val mates: Boolean,
         val percentile: Double,
         val close: Boolean,
+        val rival: String? = null,
+        val rivalMove: Boolean = false,
     ) {
         val level: Int get() = (LEVEL * (1 - percentile.coerceIn(0.0, 1.0))).roundToInt() + if (close) CLOSE else 0
-        val score: Int get() = base + (if (race) RACE else 0) + (if (star) STAR else 0) + (if (mates) MATES else 0) + level
+        val score: Int get() = base + (if (race) RACE else 0) + (if (star) STAR else 0) + (if (mates) MATES else 0) + level +
+            (if (rival != null) RIVAL_BONUS else 0) + (if (rivalMove) RIVAL_MOVE_BONUS else 0)
     }
 
     /** A pick made before whose match is no candidate now (counted by its competition only). */
@@ -2031,6 +2168,7 @@ internal object BroadcastPicks {
         c.base >= 100 -> "결승 무대"
         c.star -> "★ 응원하는 선수"
         c.race -> "우승 경쟁"
+        c.rival != null && c.base < 60 -> "⚔ ${c.rival}"
         c.base >= 60 -> "토너먼트 빅매치"
         c.base >= 35 -> "걸린 게 큰 경기"
         c.mates -> MATES_REASON
@@ -2041,12 +2179,34 @@ internal object BroadcastPicks {
 
     private const val MATES_REASON = "같은 클럽 맞대결"
 
+    /** A rival match's tag when the rivalry is not its reason, and a mover's first meeting with its old club. */
+    const val RIVAL_TAG = "⚔ 라이벌전"
+    const val RIVAL_MOVE_TAG = "🔥 이적 후 첫 맞대결"
+
     /** Short tags on the pick's row. */
     fun tags(c: Candidate): List<String> = buildList {
         if (c.star) add("★")
         if (c.race) add("우승 경쟁")
         // Not when it is the reason already (the row shows the reason first).
+        if (c.rival != null && reason(c) != "⚔ ${c.rival}") add(RIVAL_TAG)
+        if (c.rivalMove) add(RIVAL_MOVE_TAG)
         if (c.mates && reason(c) != MATES_REASON) add("🤝 $MATES_REASON")
         if (c.close) add("접전 예상")
     }
+}
+
+/**
+ * The season's rival matches (라이벌전, UX 6.6) for the "⚔" marks of match rows: league fixtures of
+ * [season] by their ref ("7:L:123") with the rivalry's name; built off the main thread once a season
+ * and when the club book changes ([MatchCenter.loadRivals]), never in the 300 ms snapshot.
+ */
+class RivalMarks internal constructor(val season: Int, private val names: Map<String, String>, internal val matches: RivalMatches) {
+    /** The rivalry's name of the match of [ref] (a whole match's, or a board's or game's of it); null for any other. */
+    fun of(ref: String?): String? {
+        if (ref == null) return null
+        return names[ref] ?: MatchRef.decode(ref)?.whole?.encode()?.let { names[it] }
+    }
+
+    /** How many rival matches the season has. */
+    val size: Int get() = names.size
 }

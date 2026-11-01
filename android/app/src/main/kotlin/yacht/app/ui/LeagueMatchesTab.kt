@@ -83,6 +83,9 @@ internal fun FeedList(c: AppController, v: LeagueView) {
     // The matches in play under the same filter (★ 응원: only the followed players' own).
     val live = remember(v.live, filter, favs) { v.live.filter { resultShown(filter, it.comp, it.a, it.b, favs) } }
     var liveOpen by remember { mutableStateOf(false) }
+    // The season's rival matches, for the ⚔ marks (UX 6.6; read off the main thread, again as the weeks go on).
+    LaunchedEffect(v.clock?.season, v.clock?.week) { lg.center.loadRivals() }
+    val rivals = lg.center.rivals()
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item { FilterLine("필터: ${filter.label}") { nav.sheet = Sheet.RESULTS_FILTER } }
         if (live.isNotEmpty()) {
@@ -125,6 +128,7 @@ internal fun FeedList(c: AppController, v: LeagueView) {
                 lg, m, clock, bonusSeason != null && m.season == bonusSeason,
                 onOpen = m.ref?.let { r -> { nav.open(Page.Match(r)) } },
                 onWatch = m.ref?.takeIf { m.replay }?.let { r -> { watchMatch(c, r) } },
+                rival = rivals?.of(m.ref) != null,
             )
         }
     }
@@ -165,10 +169,13 @@ private fun whereLine(m: FeedItem, clock: yacht.app.core.ClockView?): String? {
  * One result. A series of more than two games shows the games won ("3-1", a drawn game half)
  * with the scores below; [bonus]: this season's rule gives a 2-0 sweep in a league or group
  * match the bonus point (완승 +1). [onOpen] opens its report, [onWatch] (▶) plays it again;
- * null when it has none (a friendly) or cannot be.
+ * null when it has none (a friendly) or cannot be. A [rival] match (라이벌전) has "⚔" before its score.
  */
 @Composable
-private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?, bonus: Boolean, onOpen: (() -> Unit)? = null, onWatch: (() -> Unit)? = null) {
+private fun FeedCard(
+    lg: LeagueController, m: FeedItem, clock: yacht.app.core.ClockView?, bonus: Boolean, onOpen: (() -> Unit)? = null, onWatch: (() -> Unit)? = null,
+    rival: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     val aPts: Int = m.games.map { if (it.a > it.b) 2 else if (it.a == it.b) 1 else 0 }.sum()
     val bPts = m.games.size * 2 - aPts
@@ -192,7 +199,7 @@ private fun FeedCard(lg: LeagueController, m: FeedItem, clock: yacht.app.core.Cl
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FeedSide(m.aName, m.deltaA, aPts > bPts, Modifier.weight(1f), TextAlign.Start, if (aSweep) "완승 +1" else null)
                 Text(
-                    if (series) "${halfText(aPts / 2.0)}-${halfText(bPts / 2.0)}" else m.games.joinToString("  ") { "${it.a}:${it.b}" },
+                    (if (rival) RIVAL_MARK else "") + if (series) "${halfText(aPts / 2.0)}-${halfText(bPts / 2.0)}" else m.games.joinToString("  ") { "${it.a}:${it.b}" },
                     style = if (series) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 6.dp),
@@ -484,7 +491,7 @@ private fun PickRow(p: BroadcastPick, onClick: () -> Unit) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(p.a, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 2)
-                Text(p.result ?: "vs", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
+                Text((if (p.rival != null) RIVAL_MARK else "") + (p.result ?: "vs"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
                 Text(p.b, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End, maxLines = 2)
             }
             if (p.reason.isNotEmpty() || p.tags.isNotEmpty()) {
@@ -515,6 +522,8 @@ internal fun MatchesPage(c: AppController, v: LeagueView, page: Page.Matches) {
     // Again as the season is played on (every few hundred results, not every snapshot).
     val played = v.season?.played ?: 0
     LaunchedEffect(page.loadKey, v.clock?.season, played / MATCHES_REFRESH) { lg.analytics.loadMatches(page, lg.center) }
+    LaunchedEffect(v.clock?.season, v.clock?.week) { lg.center.loadRivals() }
+    val rivals = lg.center.rivals()
     val list = lg.analytics.matches(page)
     when {
         list == null -> CenterText("경기를 불러오는 중…")
@@ -527,7 +536,7 @@ internal fun MatchesPage(c: AppController, v: LeagueView, page: Page.Matches) {
                     style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
                 )
             }
-            items(list.rows, key = { it.ref }) { m -> MatchListRow(c, v, m, list.season) }
+            items(list.rows, key = { it.ref }) { m -> MatchListRow(c, v, m, list.season, rivals?.of(m.ref) != null) }
         }
     }
 }
@@ -535,9 +544,12 @@ internal fun MatchesPage(c: AppController, v: LeagueView, page: Page.Matches) {
 /** Results between two refreshes of a [MatchesPage] while the league plays. */
 private const val MATCHES_REFRESH = 200
 
-/** A [MatchesPage] row: when and where, the two sides with the score (the winner in bold), ▶, 📋 or 🔮. */
+/** Before the score of a rival match's row (라이벌전, UX 6.6): no height of its own. */
+internal const val RIVAL_MARK = "⚔ "
+
+/** A [MatchesPage] row: when and where, the two sides with the score (the winner in bold; "⚔" before it for a [rival] match), ▶, 📋 or 🔮. */
 @Composable
-private fun MatchListRow(c: AppController, v: LeagueView, m: MatchLine, season: Int) {
+private fun MatchListRow(c: AppController, v: LeagueView, m: MatchLine, season: Int, rival: Boolean = false) {
     val lg = c.league
     val cs = MaterialTheme.colorScheme
     val done = m.winner != null
@@ -561,7 +573,7 @@ private fun MatchListRow(c: AppController, v: LeagueView, m: MatchLine, season: 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ClubMark(m.aBadge, 14.dp)
                 Text(m.aName, Modifier.weight(1f), fontWeight = if (m.winner == 1) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(m.score.ifEmpty { "vs" }, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp))
+                Text((if (rival) RIVAL_MARK else "") + m.score.ifEmpty { "vs" }, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp))
                 Text(m.bName, Modifier.weight(1f), fontWeight = if (m.winner == -1) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 ClubMark(m.bBadge, 14.dp)
             }

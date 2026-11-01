@@ -52,6 +52,7 @@ import yacht.app.core.CoachLine
 import yacht.app.core.InfoTopic
 import yacht.app.core.LeagueController
 import yacht.app.core.LeagueView
+import yacht.app.core.MarketTab
 import yacht.app.core.MatchQuery
 import yacht.app.core.Page
 import yacht.app.core.PressureLevel
@@ -296,6 +297,8 @@ private fun OverviewTab(lg: LeagueController, v: LeagueView, page: Page.Club, p:
             StatusChip("💰 재정 ${life.health} · ${healthWord(life.health)}") { nav.replaceTop(page.copy(tab = ClubTab.BUSINESS)) }
             StatusChip("📣 팬 만족 ${life.mood} $face") { nav.replaceTop(page.copy(tab = ClubTab.BUSINESS)) }
             life.valueRank?.let { StatusChip("🏅 가치 세계 ${it}위") { nav.open(Page.ClubRanking(ClubRankKind.VALUE)) } }
+            // Its open stories (UX 4.2): to 이적 센터's 이적설.
+            maxOf(life.openStories, life.stories.size).takeIf { it > 0 }?.let { n -> StatusChip(MarketTexts.storiesChip(n)) { nav.open(Page.Market(MarketTab.LIVE)) } }
         }
     }
     StandingBlock(p, onOpen)
@@ -326,7 +329,7 @@ private fun OverviewTab(lg: LeagueController, v: LeagueView, page: Page.Club, p:
         Heading("📅 이번 주")
         Small("선수단 ${p.week}")
     }
-    RecentBlock(lg, p)
+    RecentBlock(lg, p, rivals = life != null)
     if (p.gone == null) {
         LinkLine("선수단 경기 전체", "리그와 대회 경기를 한눈에 봐요.") {
             lg.nav.open(Page.Matches(MatchQuery.OfClub(p.key), "${p.badge.name} 선수단 경기"))
@@ -438,11 +441,13 @@ private fun StoryLine(s: StoryView, onClick: () -> Unit) {
     }
 }
 
-/** 🎲 최근 결과 (today's block). */
+/** 🎲 최근 결과 (today's block); with [rivals] (a club world's page) a rival match has "⚔" before its score (UX 6.6). */
 @Composable
-private fun RecentBlock(lg: LeagueController, p: ClubPage) {
+private fun RecentBlock(lg: LeagueController, p: ClubPage, rivals: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     if (p.recent.isEmpty()) return
+    if (rivals) LaunchedEffect(p.key, p.recent.firstOrNull()?.ref) { lg.center.loadRivals() }
+    val marks = if (rivals) lg.center.rivals() else null
     Heading("🎲 최근 결과")
     for (m in p.recent) {
         val res = when (m.result) {
@@ -461,7 +466,7 @@ private fun RecentBlock(lg: LeagueController, p: ClubPage) {
                     Text(m.opponentName, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Text(m.score, style = MaterialTheme.typography.labelSmall)
+            Text((if (marks?.of(m.ref) != null) RIVAL_MARK else "") + m.score, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -738,7 +743,7 @@ private fun HistoryTab(lg: LeagueController, v: LeagueView, p: ClubPage, onOpen:
     }
     if (p.moves.isNotEmpty()) {
         Heading("🔁 이적")
-        for (m in p.moves) MoveText(lg, m) { id -> v.badges[id]?.name ?: id }
+        for (m in p.moves) MoveText(lg, m, money = true) { id -> v.badges[id]?.name ?: id }
     }
 }
 

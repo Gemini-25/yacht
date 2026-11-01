@@ -21,6 +21,7 @@ import yacht.app.core.EraView
 import yacht.app.core.HomeBanner
 import yacht.app.core.HomeFeed
 import yacht.app.core.InfoTopic
+import yacht.app.core.MarketTab
 import yacht.app.core.LeagueHost
 import yacht.app.core.LeagueView
 import yacht.app.core.NewsFilter
@@ -33,6 +34,7 @@ import yacht.app.core.storyReason
 import yacht.app.ui.ClubRankTexts
 import yacht.app.ui.ClubTexts
 import yacht.app.ui.CoachTexts
+import yacht.app.ui.MarketTexts
 import yacht.app.ui.MetaTexts
 import yacht.app.ui.PlayerClubTexts
 import yacht.app.ui.PressTexts
@@ -61,6 +63,7 @@ import yacht.engine.Tables
 import yacht.engine.explain.Ko
 import yacht.engine.league.ArcKind
 import yacht.engine.league.Article
+import yacht.engine.league.ClubMoveType
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
@@ -285,7 +288,7 @@ class StoryTextsTest {
                     Case("info $t", type.bodySmall, SHEET_DP, INFO_LINES) { infoText(t) },
                 )
             } +
-            CLUB_CASES + STORY_CASES
+            CLUB_CASES + STORY_CASES + MARKET_CASES
 
         /** 기자단's and 시대·스타일's card text width at 360 dp (the page's 12 dp sides and the card's 12), and a title's beside its ⓘ. */
         private const val CARD_DP = 360f - 2 * 12 - 2 * 12
@@ -414,6 +417,47 @@ class StoryTextsTest {
             Case("style", type.labelMedium, PAGE_DP - 16, 1) { PlayerClubTexts.style("요트 사냥꾼", StyleFamily.YACHT)!! },
             Case("ranking grades", type.labelMedium, PAGE_DP, 1) { ClubRankTexts.grades(listOf(3, 12, 14, 8, 3)) },
         ) + ClubRankKind.entries.map { k -> Case("ranking $k", type.labelSmall, 360f - 2 * 12, 2) { ClubRankTexts.sentence(k) } }
+
+        /** 이적 센터's list width at 360 dp (its 12 dp sides). */
+        private const val MARKET_DP = 360f - 2 * 12
+
+        /** 이적 센터's texts (UX 6), the club page's 💸 chip and the match report's rival line (P16). */
+        private val MARKET_CASES: List<Case> get() = listOf(
+            Case("market quiet", type.labelMedium, MARKET_DP, 2) { MarketTexts.windowLine(10, 26, 22) },
+            Case("market winter", type.labelMedium, MARKET_DP, 2) { MarketTexts.windowLine(21, 26, 22) },
+            Case("market rumours", type.labelMedium, MARKET_DP, 2) { MarketTexts.windowLine(30, 26, 22) },
+            Case("market story", type.bodySmall, MARKET_DP - 50, WRAP_LINES) { n -> MarketTexts.storyLine(true, "🇨🇦 ${n.player}", n.club, "${n.nation} 반달곰") },
+            Case("market story weeks", type.labelSmall, MARKET_DP, 1) { MarketTexts.storyWeeks(27, 30, true, true) },
+            Case("market done", type.bodySmall, MARKET_DP, WRAP_LINES) { n -> MarketTexts.outcome(StoryStage.DONE, n.player, n.club, null, "12.5억", null) },
+            Case("market collapsed", type.bodySmall, MARKET_DP, WRAP_LINES) { n -> MarketTexts.outcome(StoryStage.COLLAPSED, n.player, n.club, null, "12.5억", storyReason('F', null)) },
+            Case("market hijacked", type.bodySmall, MARKET_DP, WRAP_LINES) { n ->
+                MarketTexts.outcome(StoryStage.HIJACKED, n.player, "${n.nation} 반달곰", n.club, "12.5억", storyReason('H', n.club))
+            },
+            Case("market heading", type.labelMedium, MARKET_DP, 1) { n -> MarketTexts.windowHeading(n.season, true) },
+            Case("market move", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.TRANSFER, n.player, n.club, "${n.nation} 반달곰", 185, "WVD") },
+            Case("market move clause", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.RELEASE_CLAUSE, n.player, n.club, "${n.nation} 반달곰", 240, "K") },
+            Case("market move loan", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.LOAN, n.player, n.club, "${n.nation} 반달곰", 0, "") },
+            Case("market move back", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.LOAN_BACK, n.player, "${n.nation} 반달곰", n.club, 0, "") },
+            Case("market move free", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.FREE_AGENT, n.player, n.club, "${n.nation} 반달곰", 0, "") },
+            Case("market move winter", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.WINTER, n.player, n.club, "${n.nation} 반달곰", 66, "D") },
+            Case("market move forced", type.bodySmall, MARKET_DP - 34, 2) { n -> MarketTexts.move(ClubMoveType.FORCED_SALE, n.player, n.club, "${n.nation} 반달곰", 90, "F") },
+            Case("market move graduate", type.bodySmall, MARKET_DP - 34, 1) { n -> MarketTexts.move(ClubMoveType.GRADUATE, n.player, null, n.club, 0, "") },
+            Case("market move released", type.bodySmall, MARKET_DP - 34, 1) { n -> MarketTexts.move(ClubMoveType.RELEASED, n.player, n.club, null, 0, "") },
+            Case("market world record", type.bodyMedium, MARKET_DP - 24, 2) { n -> MarketTexts.worldRecord("45.0억", n.player, n.club, "${n.nation} 반달곰", n.season) },
+            Case("market fee row", type.bodySmall, MARKET_DP - 90, 2) { n -> "1. " + MarketTexts.fee(n.player, n.club, "${n.nation} 반달곰") },
+            Case("market league record", type.bodySmall, MARKET_DP, 1) { n -> MarketTexts.leagueRecord("🇨🇦 ${n.nation} 리그", "21.0억", n.player) },
+            Case("market hot seat", type.bodySmall, MARKET_DP - 24 - 50, 1) { n -> MarketTexts.hotSeat(n.club, "🇨🇦 ${n.player}") },
+            Case("market hot seat board", type.labelSmall, MARKET_DP - 24 - 50, 1) { MarketTexts.hotSeatBoard(3, 12, yacht.app.core.PressureLevel.EDGE.word) },
+            Case("market coach sacked", type.bodySmall, MARKET_DP, WRAP_LINES) { n -> MarketTexts.coachMove(n.season, true, n.club, 'S', "🇨🇦 ${n.player}", null) },
+            Case("market coach poached", type.bodySmall, MARKET_DP, WRAP_LINES) { n -> MarketTexts.coachMove(n.season, false, n.club, 'P', "🇨🇦 ${n.player}", "${n.nation} 반달곰") },
+            Case("market coach retired", type.bodySmall, MARKET_DP, 1) { n -> MarketTexts.coachMove(n.season, false, null, 'R', "🇨🇦 ${n.player}", null) },
+            Case("report rival line", type.labelMedium, 360f - 2 * 12 - 2 * 12, 2) { n -> MarketTexts.rivalLine("서울-부산 클래식", n.club, 7, 3, 5) },
+            Case("report rival first", type.labelMedium, 360f - 2 * 12 - 2 * 12, 1) { MarketTexts.rivalLine("서울-부산 클래식", "–", 0, 0, 0) },
+            Case("club stories chip", type.labelMedium, PAGE_DP - 20, 1) { MarketTexts.storiesChip(4) },
+        ) + MarketTab.entries.map { t -> Case("market tab $t", type.labelLarge, 120f, 1) { t.label } }
+
+        /** The lines a wrapping row may take (the club page's and 이적 센터's [yacht.app.ui.WRAP]). */
+        private const val WRAP_LINES = 2
 
         /** Lines an ⓘ explanation may take (bodySmall, 16 dp a line: under 200 dp; the longest, FINANCE, takes 9 here). */
         private const val INFO_LINES = 12
