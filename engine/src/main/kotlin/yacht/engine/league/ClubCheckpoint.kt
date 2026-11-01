@@ -208,9 +208,9 @@ object ClubCheckpoint {
      *    drawn ratings, the board's targets, the 클럽 대항전's clubs frozen; a `ws` line per move with the
      *    member's league points through W and its tier; winter rumours never turned into talks end
      *    without news.
-     * 4. The summary line, the guard; when
-     *    the winter's moves took the move log past its cap, the book as its file reads back (the oldest
-     *    moves trimmed; [ClubBook.world] is then a new object: read it again after a checkpoint).
+     * 4. The summary line and the guard; when the winter's moves took the move log past its cap, the book
+     *    as its file reads back (the oldest moves trimmed; [ClubBook.world] is then a new object: read it
+     *    again after a checkpoint).
      * The world events' winter stages run after it, on the world book ([Stories.close]'s hook).
      */
     fun run(book: ClubBook, plan: SeasonPlan, input: ClubInput, week: Int): List<LeagueEvent> {
