@@ -305,8 +305,9 @@ internal object MetaTexts {
     /** A matchup cell's value: "+0.2", "-0.1". */
     fun excess(x: Double): String = String.format(Locale.ROOT, "%+.1f", x).let { if (it == "+0.0" || it == "-0.0") "0" else it }
 
-    /** A tapped cell: "정석파가 요트파를 만나 기대보다 경기당 +0.21점 (52경기)". */
+    /** A tapped cell: "정석파가 요트파를 만나 기대보다 경기당 승점을 0.21점 더 땄어요 (52경기)." ("덜" below expectation). */
     fun cell(row: String, col: String, x: Double, games: Int): String =
         if (x.isNaN()) "$row 대 $col: ${games}경기라 아직 셀 수 없어요."
-        else "${row}가 ${col}를 만나 기대보다 경기당 ${String.format(Locale.ROOT, "%+.2f", x)}점 (${games}경기)"
+        else if (kotlin.math.abs(x) < 0.005) "${row}가 ${col}를 만나 기대만큼 승점을 땄어요 (${games}경기)."
+        else "${row}가 ${col}를 만나 기대보다 경기당 승점을 ${String.format(Locale.ROOT, "%.2f", kotlin.math.abs(x))}점 ${if (x < 0) "덜" else "더"} 땄어요 (${games}경기)."
 }

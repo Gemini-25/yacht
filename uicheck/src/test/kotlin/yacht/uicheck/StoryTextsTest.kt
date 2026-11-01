@@ -37,6 +37,7 @@ import yacht.app.ui.MetaTexts
 import yacht.app.ui.PlayerClubTexts
 import yacht.app.ui.PressTexts
 import yacht.app.ui.ReviewTexts
+import yacht.app.ui.VOTE_POINTS
 import yacht.app.ui.WorldPageTexts
 import yacht.app.ui.arcIcon
 import yacht.app.ui.articleLink
@@ -227,6 +228,10 @@ class StoryTextsTest {
         assertEquals(listOf("+3.2", "-1.0", "0"), listOf(3.24, -1.0, 0.02).map(StoryLines::signed))
         assertEquals(listOf("+0.2", "-0.1", "0"), listOf(0.21, -0.14, -0.04).map(MetaTexts::excess))
         assertEquals(listOf("0.42", "-0.10"), listOf(42, -10).map(PressTexts::rho))
+        // A tapped matchup cell in a sentence: more or fewer points than expected, or as many.
+        assertEquals("족보파가 요트파를 만나 기대보다 경기당 승점을 0.31점 더 땄어요 (52경기).", MetaTexts.cell("족보파", "요트파", 0.31, 52))
+        assertEquals("요트파가 족보파를 만나 기대보다 경기당 승점을 0.25점 덜 땄어요 (52경기).", MetaTexts.cell("요트파", "족보파", -0.25, 52))
+        assertEquals("정석파가 신중파를 만나 기대만큼 승점을 땄어요 (40경기).", MetaTexts.cell("정석파", "신중파", 0.001, 40))
     }
 
     @Test
@@ -313,7 +318,7 @@ class StoryTextsTest {
             Case("press ballot", type.bodySmall, CARD_DP, 2) { PressTexts.BALLOT },
             Case("press no vote (first)", type.bodySmall, CARD_DP, 2) { n -> PressTexts.noVote(n.season, first = true) },
             Case("press no vote", type.bodySmall, CARD_DP, 2) { n -> PressTexts.noVote(n.season, first = false) },
-            Case("press points", type.labelMedium.copy(fontWeight = FontWeight.Bold), 130f, 1) { PressTexts.points(142, 18) },
+            Case("press points", type.labelMedium.copy(fontWeight = FontWeight.Bold), VOTE_POINTS.value, 1) { PressTexts.points(150, 30) },
             Case("press legacy", type.bodyMedium, PAGE_DP, 2) { PressTexts.LEGACY },
             Case("meta now", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 2) { n -> MetaTexts.now(era(n), chaos = false) },
             Case("meta chaos", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 2) { MetaTexts.CHAOS },
@@ -327,6 +332,7 @@ class StoryTextsTest {
             Case("meta grid", type.labelSmall, CARD_DP, 2) { MetaTexts.GRID },
             Case("meta cell", type.labelSmall, CARD_DP, 2) { MetaTexts.cell("심리전파", "정석파", -0.214, 52) },
             Case("meta cell (few)", type.labelSmall, CARD_DP, 2) { MetaTexts.cell("심리전파", "정석파", Double.NaN, 12) },
+            Case("meta cell (even)", type.labelSmall, CARD_DP, 2) { MetaTexts.cell("심리전파", "정석파", 0.0, 152) },
             Case("meta empty", type.bodyMedium, PAGE_DP, 2) { MetaTexts.EMPTY },
             Case("meta counter", type.bodySmall, CARD_DP, 2) { StoryLines.counter(StyleFamily.MIND, StyleFamily.CAUTION, 0.31) },
             Case("counts line with the era", type.bodySmall, SHEET_DP, 2) { n -> "선수 3,000명 · 총 123,456경기 · " + StoryLines.eraLine("두 번째 심리전파의 시대", n.season) },

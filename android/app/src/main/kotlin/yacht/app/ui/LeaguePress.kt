@@ -75,26 +75,34 @@ internal fun PressPageBody(lg: LeagueController, v: LeagueView, page: Page.Press
     }
     val open: (String) -> Unit = { link -> pageOf(link)?.takeIf(::linkable)?.let { lg.nav.open(it) } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val order = when (view.phase) {
-            PressPhase.REVIEW -> listOf(Part.VOTES, Part.SCORECARD, Part.PREDICTION, Part.POWER)
-            PressPhase.PRESEASON -> listOf(Part.PREDICTION, Part.SCORECARD, Part.VOTES)
-            PressPhase.SEASON -> listOf(Part.POWER, Part.PREDICTION, Part.VOTES)
-        }
-        for ((i, part) in order.withIndex()) {
+        for ((i, part) in pressSections(view.phase).withIndex()) {
             // The first section is the one the first screen must show (UX 15.2).
             val m = if (i == 0) Modifier.shotSection(PRESS_SECTION) else Modifier
             when (part) {
-                Part.POWER -> PowerCard(lg, v, view, m, open)
-                Part.PREDICTION -> PredictionCard(lg, view, view.prediction, view.phase == PressPhase.SEASON, m, open)
-                Part.SCORECARD -> ScorecardCard(lg, view, view.scorecard, m, open)
-                Part.VOTES -> VotesCard(lg, view, page, m, open)
+                PressPart.POWER -> PowerCard(lg, v, view, m, open)
+                PressPart.PREDICTION -> PredictionCard(lg, view, view.prediction, view.phase == PressPhase.SEASON, m, open)
+                PressPart.SCORECARD -> ScorecardCard(lg, view, view.scorecard, m, open)
+                PressPart.VOTES -> VotesCard(lg, view, page, m, open)
             }
         }
     }
 }
 
 /** 기자단's sections. */
-private enum class Part { POWER, PREDICTION, SCORECARD, VOTES }
+internal enum class PressPart { POWER, PREDICTION, SCORECARD, VOTES }
+
+/**
+ * 기자단's sections in [phase]'s order (UX 7.1): the review weeks the last vote first, the first
+ * weeks the predictions first, the season after them the power ranking first. Every phase ends
+ * with the sections it does not lead with that still have something to show: the review weeks the
+ * new season's predictions and the last power ranking, the first weeks the power ranking (its
+ * first ranked week can come before week 6, and the league page's "📈 파워 랭킹" opens this page).
+ */
+internal fun pressSections(phase: PressPhase): List<PressPart> = when (phase) {
+    PressPhase.REVIEW -> listOf(PressPart.VOTES, PressPart.SCORECARD, PressPart.PREDICTION, PressPart.POWER)
+    PressPhase.PRESEASON -> listOf(PressPart.PREDICTION, PressPart.SCORECARD, PressPart.VOTES, PressPart.POWER)
+    PressPhase.SEASON -> listOf(PressPart.POWER, PressPart.PREDICTION, PressPart.VOTES)
+}
 
 /** The name of 기자단's first section for the first-screen check (UX 15.2). */
 internal const val PRESS_SECTION = "press_first"
@@ -324,12 +332,16 @@ private fun VoteRow(rank: Int, r: VoteLine, jury: Int, shown: Boolean, onClick: 
             Text(if (shown) r.shown else "· · ·", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (shown) cs.onSurface else cs.onSurfaceVariant)
             PointsBar(if (shown && jury > 0) r.points / (5.0 * jury) else 0.0, if (rank == 1) cs.primary else cs.secondary, Modifier.fillMaxWidth())
         }
+        // A column of its own width, so every row's bar runs the same length (the bars compare the points).
         Text(
             if (shown) PressTexts.points(r.points, r.firsts) else "?점", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.End,
-            color = if (shown) cs.onSurface else cs.onSurfaceVariant,
+            color = if (shown) cs.onSurface else cs.onSurfaceVariant, maxLines = 1, softWrap = false, modifier = Modifier.width(VOTE_POINTS),
         )
     }
 }
+
+/** A vote row's points column ("142점 · 1위 표 18표" in one line; StoryTextsTest measures it). */
+internal val VOTE_POINTS = 130.dp
 
 /** Rows of a folded list (the world's top 10 shows its first five). */
 private const val FOLDED = 5

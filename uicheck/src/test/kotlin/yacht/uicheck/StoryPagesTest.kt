@@ -25,9 +25,12 @@ import yacht.app.core.StatScope
 import yacht.app.core.StoryPages
 import yacht.app.core.drawnRatings
 import yacht.app.core.leagueStyle
+import yacht.app.ui.PressPart
+import yacht.app.ui.pressSections
 import yacht.engine.OppModel
 import yacht.engine.Tables
 import yacht.engine.league.CustomAiSpec
+import yacht.engine.league.FamilyStats
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
@@ -65,6 +68,50 @@ class StoryPagesTest {
         assertEquals(PressPhase.SEASON, v.phase)
         assertEquals(scene.world.plan!!.week, v.week)
         assertEquals(scene.last, v.voteSeason)
+    }
+
+    @Test
+    fun theReviewWeeksPutTheLastCloseFirst() {
+        // Week 1 of the season after a close that voted: the vote first; the desk has not ranked
+        // this season yet, so the last column of the season before stands in (its rows without
+        // score, move or form), and the new season's predictions have no places before a match.
+        val w = reviewWeeks.world
+        val p = w.plan!!
+        val v = press(w, reviewWeeks.league)
+        assertEquals(1, v.week)
+        assertEquals(PressPhase.REVIEW, v.phase)
+        assertEquals(reviewWeeks.last, v.voteSeason)
+        assertEquals(p.number - 1, v.voteSeason)
+        assertTrue(v.votes.isNotEmpty())
+        assertEquals(0, w.desk.powerWeek)
+        assertEquals(v.season - 1, v.powerSeason)
+        val column = assertNotNull(v.column)
+        assertEquals(v.powerSeason, column.season)
+        assertEquals(column.keys.take(Media.WORLD_TOP), v.power.map { it.key })
+        assertEquals((1..v.power.size).toList(), v.power.map { it.rank })
+        assertTrue(v.power.all { it.score == null && it.move == null && it.sub.isEmpty() && it.where.isEmpty() }, v.power.toString())
+        assertTrue(v.leagueTop.isEmpty() && v.weeksTop.isEmpty())
+        assertFalse(v.firstRanking)
+        val pr = assertNotNull(v.prediction)
+        assertEquals(p.number, pr.season)
+        assertTrue(pr.order.all { it.now == null }, "no places before the season's first match")
+        assertEquals(reviewWeeks.last, v.scorecard?.season)
+    }
+
+    @Test
+    fun everyPhaseLeadsWithItsOwnSectionAndKeepsThePowerRanking() {
+        // UX 7.1's first sections; the power ranking in every phase, so the league page's "📈 파워
+        // 랭킹" always lands on one (the first ranked week can come before week 6).
+        assertEquals(listOf(PressPart.VOTES, PressPart.SCORECARD), pressSections(PressPhase.REVIEW).take(2))
+        assertEquals(listOf(PressPart.PREDICTION, PressPart.SCORECARD, PressPart.VOTES), pressSections(PressPhase.PRESEASON).take(3))
+        assertEquals(listOf(PressPart.POWER, PressPart.PREDICTION, PressPart.VOTES), pressSections(PressPhase.SEASON))
+        for (phase in PressPhase.entries) {
+            val parts = pressSections(phase)
+            assertTrue(PressPart.POWER in parts && PressPart.PREDICTION in parts && PressPart.VOTES in parts, "$phase: $parts")
+            assertEquals(parts.distinct(), parts)
+        }
+        // A fresh close past the review weeks is in the first weeks (the shots' lg87b at week 3).
+        assertEquals(PressPhase.PRESEASON, StoryPages.phaseOf(3, fresh = true))
     }
 
     @Test
@@ -210,6 +257,16 @@ class StoryPagesTest {
         assertFalse(wait(StoryPages(Host(plain)).also { it.loadMeta() }::meta).any)
         val all = wait(StoryPages(Host(scene.world)).also { it.loadStatus() }::status)
         assertTrue(all.press && all.meta)
+        // The status's meta is the page's eras tab: a family measure with neither matchups nor
+        // leagues (nothing the tab would show) links to the report alone, as the page then shows it.
+        val s = plain.plan!!.number
+        val bare = FamilyStats(s - 1, List(8) { 10 }, List(8) { 40 }, emptyList(), List(8) { 0.0 }, emptyList(), emptyMap())
+        val measured = ClubStory.decode(StoryWorld.variant(StoryWorld.files()) { this[LeagueWorld.STATS] = this[LeagueWorld.STATS]!! + bare.encode() })
+        assertNotNull(measured.stats.families(s - 1), "the bare measure reads back")
+        val bareStatus = wait(StoryPages(Host(measured)).also { it.loadStatus() }::status)
+        val bareMeta = wait(StoryPages(Host(measured)).also { it.loadMeta() }::meta)
+        assertEquals(bareMeta.any, bareStatus.meta)
+        assertFalse(bareStatus.meta)
         assertEquals("🧭 족보파의 시대 ${scene.world.plan!!.number - scene.last + 1}시즌째", all.era)
         // The league page's 🧭: the family measured at the last close, its share of the 1부 now.
         val keys = listOf("a", "b", "c", "d", "e")
@@ -282,10 +339,10 @@ class StoryPagesTest {
         assertTrue(nothing.value.isEmpty() && nothing.graduates.isEmpty())
     }
 
-    /** 기자단 of the variant's best-ranked league, loaded on [w] (the scene's by default). */
-    private fun press(w: LeagueWorld = scene.world): yacht.app.core.PressView {
+    /** 기자단 of [league] (the variant's best-ranked), loaded on [w] (the scene's by default). */
+    private fun press(w: LeagueWorld = scene.world, league: String = scene.league): yacht.app.core.PressView {
         val pages = StoryPages(Host(w))
-        pages.loadPress(scene.league)
+        pages.loadPress(league)
         return wait { pages.press }
     }
 
@@ -327,5 +384,10 @@ class StoryPagesTest {
     companion object {
         /** The press-and-meta variant of the story world in the season (the shots' own), built once. */
         private val scene: PressStory.Scene by lazy { PressStory.of(ClubScene.default.files, ranked = true) }
+
+        /** The variant at week 1 of the season after its close (the review weeks; the shots' lg87c), built once. */
+        private val reviewWeeks: PressStory.Scene by lazy {
+            PressStory.of(ClubStory.build(StoryWorld.files(StoryWorld.build(untilWeek = 1))).files, ranked = false)
+        }
     }
 }

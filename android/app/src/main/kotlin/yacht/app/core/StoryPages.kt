@@ -227,7 +227,10 @@ class StoryPages internal constructor(private val host: LeagueHost) {
         val media = w.world.media
         val press = (w.desk.media && w.desk.season == s) || w.stats.pressVotes.isNotEmpty() || media.allScorecards.isNotEmpty() || media.careerTop.isNotEmpty()
         val book = w.world.meta
-        val meta = w.stats.families.isNotEmpty() || book.shares.isNotEmpty() || book.eras.isNotEmpty()
+        // As [MetaView.any] has it (the page shows its eras tab exactly then): an era, a season's
+        // shares, or the newest family measure with its matchups or leagues.
+        val fm = w.stats.families.entries.maxByOrNull { it.key }?.value
+        val meta = book.eras.isNotEmpty() || book.shares.isNotEmpty() || fm != null && (fm.matchups.isNotEmpty() || fm.leagues.isNotEmpty())
         val era = book.era?.let { e -> StoryLines.eraLine(book.name(e), s - e.from + 1) }
         return StoryStatus(s, press, meta, era)
     }
