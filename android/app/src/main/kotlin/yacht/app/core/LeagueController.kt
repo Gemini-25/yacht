@@ -408,8 +408,20 @@ class LeagueController(
     /** Player pages, leaderboards, reviews and match lists, on request. */
     val analytics: LeagueAnalytics = LeagueAnalytics(host)
 
-    /** Competition, club, league, ranking and federation pages, on request. */
-    val worldPages: WorldPages = WorldPages(host)
+    /** 이적 센터 (the national clubs' moves), on request. */
+    val marketPages: MarketPages = MarketPages(host)
+
+    /** Competition, club, league, ranking and federation pages, on request (and the market's old entry points). */
+    val worldPages: WorldPages = WorldPages(host, marketPages)
+
+    /** 기자단 and 시대와 메타, on request. */
+    val storyPages: StoryPages = StoryPages(host)
+
+    /** 세계 정세, one world event and a World Cup's story, on request. */
+    val eventPages: EventPages = EventPages(host)
+
+    /** The encyclopedia's pages and search, on request. */
+    val encPages: EncPages = EncPages(host)
 
     /** The home dashboard. */
     val home: HomeFeed = HomeFeed(host)
@@ -1957,6 +1969,7 @@ class LeagueController(
             w?.news?.all?.take(NEWS).orEmpty(), w?.highlights?.thisSeason.orEmpty(), w?.highlights?.allTime.orEmpty(),
             s?.let { runCatching { clockView(it) }.getOrNull() },
             clubBadges,
+            coaches = book?.let { coaches(it) }.orEmpty(),
         )
     }
 
@@ -1981,6 +1994,21 @@ class LeagueController(
         badgeVersion = b.version
         clubNames = m.mapValues { it.value.name }
         return m
+    }
+
+    /** [coaches]' last result and the book version it was built for (under the lock). */
+    private var coachMap: Map<String, String> = emptyMap()
+    private var coachVersion = -1
+
+    /**
+     * Every coach of national book [b] by id ([coachNames]), built again only when the book changes
+     * ([ClubBook.version]: the engine bumps it on every coach change), else the same map. Under the lock.
+     */
+    private fun coaches(b: ClubBook): Map<String, String> {
+        if (b.version == coachVersion) return coachMap
+        coachMap = coachNames(b)
+        coachVersion = b.version
+        return coachMap
     }
 
     /**
@@ -2811,6 +2839,18 @@ internal fun rulesAfterClose(config: LeagueConfig, rules: LeagueConfig, closing:
         onlyFlawed = rules.onlyFlawed, onlyTop = rules.onlyTop,
         clubs = rules.clubs, squad = rules.squad,
     )
+}
+
+/**
+ * Every coach of club book [b] by id, active and retired, as the screens name them ("🇰🇷 이 감독",
+ * [LeagueView.coaches]); empty without a club world.
+ */
+internal fun coachNames(b: ClubBook): Map<String, String> {
+    fun shown(nation: String, name: String) = Nations.of(nation)?.flag?.let { "$it $name" } ?: name
+    val m = LinkedHashMap<String, String>()
+    for (c in b.retiredCoaches) m[c.id] = shown(c.nation, c.name)
+    for (c in b.coaches) m[c.id] = shown(c.nation, c.name)
+    return m
 }
 
 /**

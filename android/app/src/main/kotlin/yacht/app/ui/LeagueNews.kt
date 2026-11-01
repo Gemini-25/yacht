@@ -41,6 +41,8 @@ import yacht.app.core.LeagueView
 import yacht.app.core.NewsFilter
 import yacht.app.core.Page
 import yacht.app.core.Screen
+import yacht.app.core.pageOf
+import yacht.engine.league.ArcKind
 import yacht.engine.league.Article
 import yacht.engine.league.Comp
 import yacht.engine.league.Confed
@@ -49,16 +51,41 @@ import yacht.engine.league.MatchRef
 import yacht.engine.league.Nations
 import yacht.engine.league.SeasonCalendar
 
-// 뉴스 (UX design 5.4): the league's articles by week, filtered (전체 · 주요 · 리그 · 국제 · 이적·협회)
+// 뉴스 (UX design 5.4, 11): the league's articles by week, filtered (전체 · 주요 · 리그 · 국제 · 이적·클럽)
 // and, with the bar's ★, only the followed ones; the week's big story on top; each article with
-// its kind, where it happened, the people in it, and its match (📋 리포트, ▶) when it has one.
+// its kind, where it happened, the people in it (players, clubs, coaches, nations), the page of
+// its story (기자단, 이적 센터, …) and its match (📋 리포트, ▶) when it has one.
 
-/** The kinds of [NewsFilter.WORLD]: the international stage and the league ranking (with the CL, CCL and nation cups' news). */
-private val WORLD_KINDS = setOf("intl_week", "league_ranking", "draw_ccl", "draw_cl", "draw_wc", "draw_cc", "wc_open", "cc_open", "nation_squad", "nation_awards")
+/**
+ * The kinds of [NewsFilter.WORLD] (with the CL, CCL and nation cups' news by their competition):
+ * the international stage and the league ranking, the 요트협회, the world events, the World Cup's
+ * host vote and draw, the eras, and the media's power ranking, predictions and votes (UX 11).
+ */
+private fun worldKind(kind: String): Boolean = kind in WORLD_KINDS || WORLD_PREFIXES.any { kind.startsWith(it) }
 
-/** The kinds of [NewsFilter.MARKET]: transfers, drafts and the 요트협회. */
-private fun marketKind(kind: String): Boolean =
-    kind.startsWith("transfer") || kind.startsWith("federation_") || kind in setOf("return_home", "market_digest", "draft", "youth")
+private val WORLD_KINDS = setOf(
+    "intl_week", "league_ranking", "draw_ccl", "draw_cl", "draw_wc", "draw_cc", "wc_open", "cc_open", "nation_squad", "nation_awards",
+    "merger_proposed", "league_merged", "league_split", "counter_style", "imitation", "press_award", "press_awards", "predictions",
+    "prediction_scorecard", "power_ranking",
+)
+private val WORLD_PREFIXES = listOf("federation_", "superleague_", "investor_", "crisis_", "boom_", "wc_", "era_")
+
+/**
+ * The kinds of [NewsFilter.MARKET] (이적·클럽, UX 11): transfers and the market, drafts and the
+ * youth, the coaches, and the clubs' own news (money, owners, sponsors, stadiums, fans, academies,
+ * legends, captains, rivals).
+ */
+private fun marketKind(kind: String): Boolean = kind in MARKET_KINDS || MARKET_PREFIXES.any { kind.startsWith(it) }
+
+private val MARKET_KINDS = setOf(
+    "market_week", "deal_collapsed", "record_fee", "rival_move", "release_clause", "free_agent", "contract_renewal", "winter_window",
+    "deadline_day", "loan_digest", "return_home", "market_digest", "draft", "youth", "player_to_coach", "forced_sale", "administration",
+    "rescue", "takeover", "owner_exit", "wonderkid", "academy_graduates", "one_club_man", "captain", "derby_result", "rivalry_born",
+)
+private val MARKET_PREFIXES = listOf("transfer", "coach_", "club_", "sponsor_", "stadium_", "fan_")
+
+/** A filter's chip label: [NewsFilter.MARKET] holds the clubs' news too since UX 11, so it reads 이적·클럽 (its enum label is older). */
+internal fun filterLabel(f: NewsFilter): String = if (f == NewsFilter.MARKET) "이적·클럽" else f.label
 
 /** Digest articles: their keys are the people of a list ("+{n}명" opens it). */
 private val DIGESTS = setOf("cup_digest", "group_digest", "milestones_week", "milestones", "league_titles_digest", "market_digest", "club_digest", "retirements", "rookies")
@@ -70,7 +97,7 @@ internal fun newsShown(a: Article, filter: NewsFilter): Boolean = when (filter) 
     // A legacy season's articles have no league scope: its league's own news by its competition.
     NewsFilter.LEAGUE -> if (a.scope.isNotEmpty()) Confed.entries.none { it.name == a.scope } else a.comp == Comp.LEAGUE
     NewsFilter.WORLD -> a.comp == Comp.CHAMPIONS || a.comp == Comp.CONT_CHAMPIONS || a.comp == Comp.WORLD_CUP || a.comp == Comp.CONTINENTAL ||
-        a.kind in WORLD_KINDS || Confed.entries.any { it.name == a.scope }
+        worldKind(a.kind) || Confed.entries.any { it.name == a.scope }
     NewsFilter.MARKET -> marketKind(a.kind)
 }
 
@@ -97,6 +124,9 @@ internal fun NewsPage(c: AppController, v: LeagueView) {
     LaunchedEffect(v.news.firstOrNull()) { lg.loadNews() }
     val list = lg.newsList
     val all = list?.articles ?: v.news
+    // The world events' ids, for their articles' pills (only while there is such an article).
+    val arcs = remember(all) { all.any { arcOf(it.kind) != null } }
+    LaunchedEffect(arcs, v.news.firstOrNull()) { if (arcs) lg.eventPages.loadEvents() }
     val replay = list?.replayable.orEmpty()
     val favs = lg.favourites
     val filter = nav.newsFilter
@@ -115,7 +145,7 @@ internal fun NewsPage(c: AppController, v: LeagueView) {
             CenterText(
                 when {
                     onlyFollowed -> "응원하는 선수나 클럽, 국가, 리그의 소식이 아직 없어요. 선수를 눌러 ‘☆ 응원하기’를, 순위 › 랭킹 › 국가대표 랭킹에서 나라를 골라 ‘☆ 응원’을 눌러 보세요."
-                    filter != NewsFilter.ALL -> "‘${filter.label}’ 소식이 아직 없어요."
+                    filter != NewsFilter.ALL -> "‘${filterLabel(filter)}’ 소식이 아직 없어요."
                     else -> "리그가 진행되면 우승 경쟁, 이변, 기록, 이적 같은 소식이 기사로 올라와요."
                 },
             )
@@ -129,7 +159,7 @@ internal fun NewsPage(c: AppController, v: LeagueView) {
 @Composable
 private fun NewsChips(selected: NewsFilter, onSelect: (NewsFilter) -> Unit) {
     Row(Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        for (f in NewsFilter.entries) FilterChip(selected = f == selected, onClick = { onSelect(f) }, label = { Text(f.label, fontSize = 12.sp, maxLines = 1) })
+        for (f in NewsFilter.entries) FilterChip(selected = f == selected, onClick = { onSelect(f) }, label = { Text(filterLabel(f), fontSize = 12.sp, maxLines = 1) })
     }
 }
 
@@ -199,7 +229,11 @@ private fun WeekHeading(a: Article, text: String) {
     }
 }
 
-/** An article's kind as an icon: 🏆 titles, ⚡ upsets, 🔄 comebacks, ✈️ transfers, 🏛 the 요트협회, 📈 rankings and races, 📝 records, 🎂 milestones, 📰 the rest. */
+/**
+ * An article's kind as an icon: 🏆 titles, ⚡ upsets, 🔄 comebacks, ✈️ transfers, 🏛 the 요트협회, 📈
+ * rankings and races, 📝 records, 🎂 milestones; the club world's, the media's and the world
+ * events' kinds one icon a meaning (UX 11: [arcIcon], [STORY_ICONS]); 📰 the rest.
+ */
 internal fun kindIcon(kind: String): String = when {
     kind == "title" || kind == "final" || kind == "award" || kind.endsWith("_title") || kind.endsWith("_champions") || kind == "league_titles_digest" || kind == "season_review" -> "🏆"
     kind == "upset" || kind == "league_upset" -> "⚡"
@@ -209,8 +243,73 @@ internal fun kindIcon(kind: String): String = when {
     kind == "league_ranking" || kind == "intl_week" || kind == "club_race" || kind == "title_race" -> "📈"
     kind == "record" || kind == "record_chase" || kind == "hall_of_fame" || kind == "dynasty" || kind == "dynasties" -> "📝"
     kind.startsWith("milestone") -> "🎂"
-    else -> "📰"
+    else -> arcOf(kind)?.let(::arcIcon) ?: STORY_ICONS[kind] ?: STORY_PREFIX_ICONS.firstOrNull { kind.startsWith(it.first) }?.second ?: "📰"
 }
+
+/** The club world's, the market's and the media's kinds by icon (today's kinds keep theirs above). */
+private val STORY_ICONS: Map<String, String> = buildMap {
+    for (k in listOf("club_accounts", "club_trouble", "forced_sale", "administration", "club_folded", "club_world_digest")) put(k, "💰")
+    for (k in listOf("takeover", "owner_exit", "rescue")) put(k, "🏢")
+    put("player_to_coach", "👔")
+    for (k in listOf("market_week", "deal_collapsed", "record_fee", "rival_move", "release_clause", "free_agent", "contract_renewal", "winter_window", "deadline_day", "loan_digest")) put(k, "✈️")
+    for (k in listOf("wonderkid", "academy_graduates")) put(k, "🌱")
+    for (k in listOf("club_legend", "one_club_man")) put(k, "🏛")
+    put("captain", "©")
+    for (k in listOf("derby_result", "rivalry_born")) put(k, "⚔")
+    for (k in listOf("counter_style", "imitation")) put(k, "🧭")
+    put("power_ranking", "📈")
+    for (k in listOf("predictions", "prediction_scorecard")) put(k, "🔮")
+    for (k in listOf("press_award", "press_awards")) put(k, "🎙")
+    for (k in listOf("wc_bids", "wc_host_vote")) put(k, "🗳")
+    put("wc_draw_ceremony", "🎟")
+    put("club_ranking", "🏅")
+}
+
+/** Kinds of the phase by their prefix (no kind of today starts so). */
+private val STORY_PREFIX_ICONS = listOf("sponsor_" to "🪧", "stadium_" to "🏟", "fan_" to "📣", "coach_" to "👔", "era_" to "🧭")
+
+/** The world event an article is about, by its kind (the arcs' news, UX 9); null for another. */
+private fun arcOf(kind: String): ArcKind? = when {
+    kind.startsWith("superleague_") -> ArcKind.SUPER_LEAGUE
+    kind.startsWith("investor_") -> ArcKind.INVESTOR
+    kind.startsWith("crisis_") -> ArcKind.CRISIS
+    kind == "merger_proposed" || kind == "league_merged" || kind == "league_split" -> ArcKind.MERGER
+    kind.startsWith("boom_") -> ArcKind.BOOM
+    else -> null
+}
+
+/**
+ * An article's story pill (UX 11): its label and the [pageOf] link it opens, for the media's,
+ * the eras', the world events', the World Cup's, the market's and the club ranking's news; null
+ * for the others. A world event's article names its arc by [arcId] (the arc of its kind under
+ * way in its season); no pill while that is not known.
+ */
+internal fun articleLink(a: Article, arcId: (ArcKind, Int) -> Int?): Pair<String, String>? {
+    arcOf(a.kind)?.let { k -> return arcId(k, a.season)?.let { "🌐 자세히 ›" to "ev:$it" } }
+    return when {
+        a.kind == "power_ranking" -> "📈 파워 랭킹 ›" to "pr"
+        a.kind == "predictions" || a.kind == "prediction_scorecard" -> "🔮 시즌 전망 ›" to (if (LeagueIds.known(a.scope)) "pr:${a.scope}" else "pr")
+        a.kind == "press_award" || a.kind == "press_awards" -> "🎙 투표 결과 ›" to "pr"
+        a.kind.startsWith("era_") || a.kind == "counter_style" || a.kind == "imitation" -> "🧭 시대 ›" to "meta"
+        // The host vote is held in the season before its World Cup; the draw opens the World Cup's season.
+        a.kind == "wc_bids" -> "🗳 유치전 ›" to "wc:${a.season + 1}"
+        a.kind == "wc_host_vote" -> "🗳 투표 결과 ›" to "wc:${a.season + 1}"
+        a.kind == "wc_draw_ceremony" -> "🎟 추첨식 ›" to "wc:${a.season}"
+        a.kind in MARKET_STORIES -> "💸 이적 센터 ›" to "mk"
+        a.kind == "club_ranking" -> "🏅 클럽 랭킹 ›" to "cr"
+        else -> null
+    }
+}
+
+/**
+ * The story pill an article's card shows: [articleLink]'s label and page, only while that page
+ * may be opened from a link ([linkable]: rule 4, a page still waiting for its content gets no pill).
+ */
+internal fun storyPill(a: Article, arcId: (ArcKind, Int) -> Int?): Pair<String, Page>? =
+    articleLink(a, arcId)?.let { (label, link) -> pageOf(link)?.takeIf(::linkable)?.let { label to it } }
+
+/** The market's kinds whose pill opens 이적 센터. */
+private val MARKET_STORIES = setOf("market_week", "deal_collapsed", "record_fee", "rival_move", "release_clause", "free_agent", "winter_window", "deadline_day", "loan_digest")
 
 /** Where [a] happened, as its card's top line: its league ("🇰🇷 한국 리그"), a confederation's 대륙 챔피언스, or its competition. */
 private fun scopeLine(a: Article, clock: ClockView?): String {
@@ -232,9 +331,9 @@ internal fun ArticleCard(a: Article, clock: ClockView?, onOpen: (String) -> Unit
 
 /**
  * An article of the news page and the home: kind and scope, 🔥 by importance, the headline and
- * body, up to three of its people (players → their page, clubs → theirs; a digest's list behind
- * "+{n}명") and its match ("📋 리포트", "▶" when [replayable]). [compact]: the home's, without the
- * people; [lead]: the week's big story, in large.
+ * body, up to three of its people (players → their page, clubs and coaches → theirs; a digest's
+ * list behind "+{n}명"), its story's page ([storyPill]) and its match ("📋 리포트", "▶" when
+ * [replayable]). [compact]: the home's, without the people; [lead]: the week's big story, in large.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -247,12 +346,14 @@ internal fun ArticleCard(c: AppController, v: LeagueView, a: Article, compact: B
     ArticleFrame(a, v.clock, lead, compact, onClick = { a.keys.firstOrNull { lg.isAi(it) }?.let { nav.open(Page.Player(it)) } ?: ref?.let { openReport(lg, it) } }, report = report) {
         if (compact) return@ArticleFrame
         val people = peopleOf(lg, v, a)
+        val story = storyPill(a, lg.eventPages::arcId)
         var open by rememberSaveable(a.season, a.week, a.headline) { mutableStateOf(false) }
         val digest = a.kind in DIGESTS && people.size > PEOPLE
-        if (people.isNotEmpty() || ref != null) {
+        if (people.isNotEmpty() || ref != null || story != null) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
                 for ((label, page) in if (open) people else people.take(PEOPLE)) Pill(label) { nav.open(page) }
                 if (people.size > PEOPLE && !open) Pill(if (digest) "+${people.size - PEOPLE}명" else "+${people.size - PEOPLE}") { open = true }
+                story?.let { (label, page) -> Pill(label, accent = true) { nav.open(page) } }
                 if (ref != null) {
                     Pill("📋 리포트", accent = true) { openReport(lg, ref) }
                     if (replayable) Pill("▶", accent = true) { watchRef(c, ref) }
@@ -262,11 +363,12 @@ internal fun ArticleCard(c: AppController, v: LeagueView, a: Article, compact: B
     }
 }
 
-/** People named on an article's card: (label, page) of its players and clubs (and a nation cup's teams). */
+/** People named on an article's card: (label, page) of its players, clubs and coaches (and a nation cup's teams). */
 private fun peopleOf(lg: LeagueController, v: LeagueView, a: Article): List<Pair<String, Page>> = a.keys.distinct().mapNotNull { k ->
     when {
         lg.isAi(k) -> lg.name(k) to Page.Player(k)
         v.badges.containsKey(k) -> v.badges.getValue(k).name to Page.Club(k)
+        v.coaches.containsKey(k) -> Page.Coach(k).takeIf(::linkable)?.let { v.coaches.getValue(k) to it }
         (a.comp == Comp.WORLD_CUP || a.comp == Comp.CONTINENTAL) && Nations.of(k) != null -> Nations.of(k)!!.let { "${it.flag} ${it.name}" } to Page.Nation(k)
         else -> null
     }

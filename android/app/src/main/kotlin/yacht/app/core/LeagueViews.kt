@@ -6,7 +6,6 @@ import yacht.engine.league.AiStats
 import yacht.engine.league.Article
 import yacht.engine.league.ChaseLine
 import yacht.engine.league.Club
-import yacht.engine.league.ClubDigest
 import yacht.engine.league.ClubMatch
 import yacht.engine.league.ClubMove
 import yacht.engine.league.ClubRow
@@ -36,6 +35,7 @@ import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonLine
 import yacht.engine.league.SeasonReview
 import yacht.engine.league.SeasonSummary
+import yacht.engine.league.StyleFamily
 import yacht.engine.league.Tier
 import yacht.engine.league.WeekStage
 
@@ -178,6 +178,11 @@ data class LeagueView(
      * again only when the club book changes; empty in a legacy league, whose club league is [clubs].
      */
     val badges: Map<String, ClubBadge> = emptyMap(),
+    /**
+     * Every coach's shown name ("🇰🇷 이 감독") by id, active and retired, built again only when the club
+     * book changes (news pills and links name coaches by id); empty without a club world.
+     */
+    val coaches: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -634,8 +639,12 @@ sealed interface HomeBanner {
     /** 0a: no match played yet. */
     data object Empty : HomeBanner
 
-    /** 0b: season [season] just closed: its titles ([lines]), until dismissed or two weeks into the next. */
-    data class SeasonEnd(val season: Int, val lines: List<String>) : HomeBanner
+    /**
+     * 0b: season [season] just closed: its titles ([lines]), until dismissed or two weeks into the
+     * next; [story] the close's big story (line 2 when there is one, UX 3.5) and [ceremony] the World
+     * Cup season whose draw ceremony the banner offers (🎟 추첨식), null for none.
+     */
+    data class SeasonEnd(val season: Int, val lines: List<String>, val story: String? = null, val ceremony: Int? = null) : HomeBanner
 
     /** 0c: the first national season ([season]), until dismissed. */
     data class Reform(val season: Int) : HomeBanner
@@ -763,6 +772,8 @@ data class MatchReport(
     /** Rating changes of each side over the match, when the results feed still has them. */
     val deltaA: Int? = null,
     val deltaB: Int? = null,
+    /** A match between rival clubs' members: the rivalry and side A's club's record (UX 6.6). */
+    val rival: RivalLine? = null,
 )
 
 /** One board of a report; [games] is null until the detail phase of an unlogged tie. */
@@ -960,7 +971,8 @@ data class FollowedSeason(val key: String, val text: String, val sub: String)
  * a season older than the kept reviews ([summary] only). [names] are the shown names of every
  * player it names; [champions] the leagues' champions (best-ranked first), [world] the world titles,
  * [best] / [topRated] / [upset] its games, [followed] my followed players' seasons, [leagueLabels]
- * the labels of the leagues in its ranking moves.
+ * the labels of the leagues in its ranking moves, [stories] its big stories (the archive's story
+ * sub-lines; null for a season without them).
  */
 data class ReviewPage(
     val key: String,
@@ -975,6 +987,7 @@ data class ReviewPage(
     val upset: ReviewGameView?,
     val followed: List<FollowedSeason>,
     val leagueLabels: Map<String, String>,
+    val stories: ReviewStories? = null,
 )
 
 /** A line of a fun fact: [text] with names written in, the players it is about ([keys], the first tappable) and the match it points at ([ref]). */
@@ -1103,8 +1116,11 @@ data class ClubStandingRow(
     val week: String,
 )
 
-/** A club of "클럽 전체 (우승 순)": its members now, money and club-table titles. */
-data class ClubListRow(val badge: ClubBadge, val members: Int, val budget: Int, val titles: Int)
+/**
+ * A club of "클럽 전체 (우승 순)": its members now, money and club-table titles; with a club world its
+ * [balance], health grade A..E and whether its fans are angry (mood ≤ 25: 😡).
+ */
+data class ClubListRow(val badge: ClubBadge, val members: Int, val budget: Int, val titles: Int, val balance: Int = 0, val health: Char? = null, val angry: Boolean = false)
 
 /**
  * 순위 › 클럽 of national league [league] (the loader's key) in [season]: the club table best first
@@ -1116,7 +1132,7 @@ data class ClubTableView(val league: String, val season: Int, val week: Int, val
 /**
  * A club's member on its page: [contribution] its points for the club table when counted (null
  * otherwise), [record] its league W-D-L this season, [abroad] when it plays for a club of a nation
- * not its own (해외).
+ * not its own (해외), [terms] its contract with a club world.
  */
 data class ClubMember(
     val key: String,
@@ -1127,6 +1143,7 @@ data class ClubMember(
     val rating: Int?,
     val record: String,
     val abroad: Boolean,
+    val terms: TermsView? = null,
 )
 
 /**
@@ -1134,7 +1151,8 @@ data class ClubMember(
  * this season ("" when none), [places] its club-table place per kept season (only when in the top
  * 3, newest first), [moves] the moves in and out (newest first), [recent] its members' last league
  * matches, [gone] the season after which it was dissolved (null while it plays), [cupTitles] its
- * 클럽 대항전 titles.
+ * 클럽 대항전 titles; with a club world its [life] (개요, 선수단, 구단), [history] (역사) and the members
+ * it has out on loan ([loansOut]).
  */
 data class ClubPage(
     val key: String,
@@ -1153,6 +1171,9 @@ data class ClubPage(
     val aggregate: AggregateStats?,
     val gone: Int? = null,
     val cupTitles: Int = 0,
+    val life: ClubLifeView? = null,
+    val history: ClubHistoryView? = null,
+    val loansOut: List<ClubMember> = emptyList(),
 )
 
 /**
@@ -1179,6 +1200,19 @@ data class RankingView(val season: Int, val rows: List<RankRow>, val byStrength:
  */
 data class WorldSnippet(val stages: List<Pair<Comp, String>>, val ranking: List<RankRow>, val live: List<Pair<String, Double>>)
 
+/** The groups of 🗞 이번 주 화제's lines (UX 3.3), in the order the card prefers them after the followed ones. */
+enum class BuzzGroup { WORLD, COACH, MARKET, POWER, PRESS }
+
+/**
+ * A line of 🗞 이번 주 화제: its [group] and icon, the text and its right column ([right], never cut),
+ * what a tap opens ([link], a [pageOf] link), whether it is about something followed, and when it
+ * happened (a line stays until a newer one of its group exists).
+ */
+data class BuzzLine(val group: BuzzGroup, val icon: String, val text: String, val right: String?, val link: String, val followed: Boolean, val season: Int, val week: Int)
+
+/** 🗞 이번 주 화제 of [week]: its title's link ([more]: "pr", "mk", "mk:COACHES", …, as the top line's group) and at most three lines. */
+data class BuzzCard(val week: Int, val more: String, val lines: List<BuzzLine>)
+
 /**
  * The home dashboard (`lg.home.view`), built on request off the main thread (never in the
  * snapshot): the banner, the followed entities (players by rating, then clubs, nations,
@@ -1198,6 +1232,8 @@ data class HomeView(
     val pendingProposals: Int,
     val voted: Int,
     val chase: List<ChaseLine>,
+    /** 🗞 이번 주 화제 (null: no line to show). */
+    val buzz: BuzzCard? = null,
 ) {
     companion object {
         /** Followed rows on the home; the rest are on the 응원 page. */
@@ -1213,7 +1249,8 @@ data class NewsList(val articles: List<Article>, val replayable: Set<String>)
  * A league's page; [key] equals its page's load key. [top] its 1부's first 5, [clubs] its club
  * table's first 5, [stars] its best 5 by rating, [champions] (season, champion's name) of its kept
  * 1부 titles, newest first; [moves] the transfers abroad and home of the last window that touch it,
- * [tiers] each division's label and numbers.
+ * [tiers] each division's label and numbers; [style] its 1부's strongest family and its share in per
+ * cent (🧭 강세 스타일), [merged] the nations merged into this 연합 리그 by a world event.
  */
 data class LeaguePage(
     val key: String,
@@ -1225,6 +1262,8 @@ data class LeaguePage(
     val champions: List<Pair<Int, String>>,
     val moves: List<ClubMove>,
     val tiers: List<Pair<String, AggregateStats>>,
+    val style: Pair<StyleFamily, Int>? = null,
+    val merged: List<String> = emptyList(),
 )
 
 /** A federation proposal; [choice] the player's (null: none), [result] and [by] as decided ([Proposal]'s codes). */
@@ -1257,9 +1296,6 @@ data class FederationView(
     val nextClose: Int,
     val awardsSeason: Int = 0,
 )
-
-/** 이적·드래프트 of national clubs: the kept moves, newest first, and the last window's numbers. */
-data class MarketView(val season: Int, val moves: List<ClubMove>, val digest: ClubDigest?)
 
 // ---- UI preferences (league/ui.txt) ------------------------------------------------------------
 

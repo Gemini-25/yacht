@@ -16,11 +16,14 @@ import yacht.app.core.LeaderKind
 import yacht.app.core.LeagueAnalytics
 import yacht.app.core.LeagueHost
 import yacht.app.core.LeagueView
+import yacht.app.core.MarketPages
 import yacht.app.core.MatchQuery
 import yacht.app.core.MatchReport
 import yacht.app.core.Page
 import yacht.app.core.ReplaySource
 import yacht.app.core.ReportState
+import yacht.app.core.WorldPages
+import yacht.app.core.coachNames
 import yacht.app.core.leaderText
 import yacht.app.core.mvpRacers
 import yacht.app.core.radarOf
@@ -39,6 +42,9 @@ import yacht.engine.OppModel
 import yacht.engine.RuleSet
 import yacht.engine.TableIO
 import yacht.engine.Tables
+import yacht.engine.league.ClubBook
+import yacht.engine.league.ClubMove
+import yacht.engine.league.ClubMoveType
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.GameScore
 import yacht.engine.league.Ladder
@@ -61,9 +67,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-/** The analytics' loaders (leaderboards, 탐구, the records room) and their pure parts: 최근 10경기, seats, style, texts, 정확도, 경기 MVP. */
+/**
+ * The analytics' loaders (leaderboards, 탐구, the records room) and their pure parts: 최근 10경기, seats,
+ * style, texts, 정확도, 경기 MVP; and what the 300 ms snapshot holds.
+ */
 class AnalyticsTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -387,5 +397,53 @@ class AnalyticsTest {
         val team = report(listOf(board(0, "a", "b", listOf(game(0, 6.0, 6.5))), board(1, "c", "d", listOf(game(0, 8.4, 5.0), game(1, null, null)))))
         assertEquals("c" to 8.4, matchMvp(team))
         assertNull(matchMvp(report(listOf(board(0, "a", "b", listOf(game(0, null, null)))))))
+    }
+
+    @Test
+    fun theSnapshotGainsOnlyTheCoachesNames() {
+        // Pages load on request; the snapshot every screen reads every 300 ms gained only the
+        // coaches' names in the club world's phase (UX 13.4), rebuilt when the club book changes.
+        val fields = LeagueView::class.java.declaredFields.filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name }.toSet()
+        assertEquals(setOf("rows", "feed", "matches", "games", "live", "season", "comps", "clubs", "news", "highlights", "allTime", "clock", "badges", "coaches"), fields)
+    }
+
+    @Test
+    fun coachesAreNamedWithTheirFlagsActiveAndRetired() {
+        val plain = "clubs 2\nmeta 77 3 991 6\nclub c01 KR 서울 호랑이 서울%20호랑이 0 ffc62828 ffffffff 호 120 2 1 g1,g2\n"
+        // No club world (a save from before it, a legacy league's book): no coach.
+        assertTrue(coachNames(ClubBook.decode(plain)).isEmpty())
+        val book = ClubBook.decode(
+            plain + "cw 1 - - 0 0:0 4 0 1482 1\n" +
+                "k k1 이%20감독 KR F -45 Y 5 63 c01 3 5 31 - 9 2 1 2 1 c01:3:0:1:1:-\n" +
+                "k k2 Tanaka%20Ken JP M -38 X 2 40 - 0 0 0 g8 0 0 0 0 0 -\n" +
+                "kr k3 최%20감독 KR M -60 3 A 70 g7 CT%3A3\n",
+        )
+        assertEquals(listOf("k1", "k2"), book.coaches.map { it.id })
+        assertEquals(listOf("k3"), book.retiredCoaches.map { it.id })
+        assertEquals(mapOf("k1" to "🇰🇷 이 감독", "k2" to "🇯🇵 Tanaka Ken", "k3" to "🇰🇷 최 감독"), coachNames(book))
+    }
+
+    @Test
+    fun theMarketLoaderReadsTodaysMovesOfTheHostsLeagueOnly() {
+        // 이적 센터's loader gives what 이적·드래프트 showed (the kept moves newest first) and is the one
+        // WorldPages' old entry points read; like every page loader it shows nothing of a league the
+        // host no longer has (a reset, a restore), before any new load.
+        val w = LeagueWorld(Ladder(listOf("a", "b")))
+        w.clubs = ClubBook.decode(
+            "clubs 2\nmeta 77 3 991 6\nclub c01 KR 서울 호랑이 서울%20호랑이 0 ffc62828 ffffffff 호 120 2 1 a,b\n" +
+                "move 1 T a - c01 30\nmove 2 F b c01 c02 120\n",
+        )
+        val host = Host(w)
+        val market = MarketPages(host)
+        val pages = WorldPages(host, market)
+        pages.loadMarket()
+        waitFor { market.view != null }
+        val v = market.view!!
+        assertEquals(listOf(ClubMove(2, ClubMoveType.ABROAD, "b", "c01", "c02", 120), ClubMove(1, ClubMoveType.TRANSFER, "a", null, "c01", 30)), v.moves)
+        assertEquals(0, v.season)
+        assertSame(v, pages.market)
+        host.w = LeagueWorld(Ladder(listOf("a")))
+        assertNull(market.view)
+        assertNull(pages.market)
     }
 }

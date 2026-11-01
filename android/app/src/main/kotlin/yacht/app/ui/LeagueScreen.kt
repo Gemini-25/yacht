@@ -335,18 +335,41 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         Page.Prospects -> Prospects(lg, open)
         Page.Legends -> Legends(lg, open)
         Page.Families -> FamilyList(lg, v, open)
-        is Page.Meta -> {
-            androidx.compose.runtime.LaunchedEffect(v.season?.number) { lg.loadRecords() }
-            MetaReportView(lg.records)
-        }
+        is Page.Meta -> MetaPageBody(lg, v)
         is Page.Leaderboard -> LeaderBoardPage(lg, v, page)
         is Page.Review -> ReviewPageBody(c, v, page)
         is Page.Facts -> FactsPage(lg, v, page)
         Page.Chronicle -> ChroniclePage(lg, v)
         is Page.Matches -> MatchesPage(c, v, page)
-        // Not reachable from any link yet: each stage that fills one in adds its entry points with it.
-        is Page.Coach, is Page.ClubRanking, is Page.Press, Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> StubPage()
+        // Not reachable from a link yet ([linkable]): each waits for its view.
+        is Page.Coach -> CoachPageBody()
+        is Page.ClubRanking -> ClubRankingBody()
+        is Page.Press -> PressPageBody(lg, v, page)
+        Page.Events -> EventsPageBody(lg, v)
+        is Page.Event -> EventPageBody(lg, v, page)
+        is Page.WcStory -> WcStoryBody(lg, v, page)
+        is Page.Encyclopedia -> EncyclopediaBody(lg, v, page)
+        Page.Search -> SearchBody(lg, v)
     }
+}
+
+/**
+ * True when a link a user can tap may open [page] (a news pill, a sheet's row, the 📖 pill): every
+ * page whose content has shipped. The phase's new pages say no until their stage ships the page's
+ * content together with its entry points; that stage takes its page off this list.
+ */
+internal fun linkable(page: Page): Boolean = when (page) {
+    is Page.Coach, is Page.ClubRanking, is Page.Press, Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> false
+    else -> true
+}
+
+/**
+ * What [Sheet.LIST] lists over the top page (UX 2.3): an arc's subject clubs; null for a page
+ * without a list. Each page that opens the sheet adds its case here, beside its call site.
+ */
+internal fun sheetList(lg: LeagueController): SheetList? = when (val page = lg.nav.page) {
+    is Page.Event -> lg.eventPages.arc(page)?.let { a -> SheetList("${a.icon} ${a.title}", a.subjects) }
+    else -> null
 }
 
 /**
