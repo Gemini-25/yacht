@@ -252,7 +252,9 @@ data class LifeReport(
      * expansion finished / N a new stadium) ≤ 1, `fan_protest` [club, coach] (mood)
      * ≤ 2, `fan_party` [club] ≤ 1, and one `club_world_digest` [≤ 6 clubs] (sponsor deals, building
      * projects, facility investments). [balance], [mood] and [coach] read the book as it is now.
-     * `club_folded` is the dissolving step's.
+     * `club_folded` is the dissolving step's. An arc's takeover (reason A) is told as `takeover` too,
+     * which the INVESTOR arc's own `investor_takeover` would tell again: the arc or the off-season's
+     * digest keeps one of the two (P14, P11).
      */
     fun events(balance: (String) -> Int, mood: (String) -> Int, coach: (String) -> String?): List<LeagueEvent> {
         val out = ArrayList<LeagueEvent>()
