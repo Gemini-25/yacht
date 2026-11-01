@@ -873,8 +873,14 @@ class LeagueAnalytics internal constructor(private val host: LeagueHost) {
             "era_begins" -> arg(3)?.let { StoryLines.eraBegins(it) to "meta" }
             "era_ends" -> arg(1)?.let { StoryLines.eraEnds(it, arg(2)?.toIntOrNull()) to "meta" }
             "wc_host_vote" -> key(0)?.let { code -> StoryLines.wcHost(season + 1, Nations.of(code)?.let { "${it.flag} ${it.name}" } ?: code) to "wc:${season + 1}" }
-            "record_fee" -> (st.market?.record?.let { it.key to it.fee } ?: key(0)?.let { k -> arg(0)?.toIntOrNull()?.let { k to it } })
-                ?.let { (k, fee) -> StoryLines.recordFee(Money.text(fee), host.shown(k)) to "p:$k" }
+            // The event's scope (args: fee, previous, scope): the world's record ("W") or a league's.
+            "record_fee" -> {
+                val league = arg(2)?.takeIf { it != "W" }
+                val own = key(0)?.let { k -> arg(0)?.toIntOrNull()?.let { k to it } }
+                (if (league != null) own else st.market?.record?.let { it.key to it.fee } ?: own)?.let { (k, fee) ->
+                    StoryLines.recordFee(Money.text(fee), host.shown(k), league?.let { "${LeagueIds.icon(it)} ${LeagueIds.label(it)}" }) to "p:$k"
+                }
+            }
             // 골든 다이스 is the card's own block when the media line keeps its top 3.
             "press_award" -> if (st.media?.goldenDice?.isNotEmpty() == true) null else key(0)?.let { k -> StoryLines.goldenDice(host.shown(k), arg(0)?.toIntOrNull()) to "pr" }
             else -> StoryLines.arcOf(b.kind)?.let { kind -> StoryLines.arcOutcome(kind, b.kind) to "" }

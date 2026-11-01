@@ -342,6 +342,7 @@ class StoryTextsTest {
             Case("review era ends", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.eraEnds("두 번째 심리전파의 시대", n.season) },
             Case("review wc host", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.wcHost(n.season, "🇨🇦 ${n.nation}") },
             Case("review record fee", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.recordFee("1,240.0억", "🇨🇦 ${n.player}") },
+            Case("review league record fee", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.recordFee("1,240.0억", "🇨🇦 ${n.player}", "🌍 아프리카·중동 연합 리그") },
             Case("review golden dice", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.goldenDice("🇨🇦 ${n.player}", 142) },
             Case("review golden row", type.bodySmall, PAGE_DP - 16, 1) { n -> ReviewTexts.golden(1, "🇨🇦 ${n.player}", 142) },
             Case("review season", type.labelSmall, PAGE_DP, 2) { n -> ReviewTexts.season(23, 2, "🇨🇦 ${n.player}")!! },

@@ -29,16 +29,20 @@ import yacht.app.ui.PressPart
 import yacht.app.ui.pressSections
 import yacht.engine.OppModel
 import yacht.engine.Tables
+import yacht.engine.league.BigStory
 import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.FamilyStats
 import yacht.engine.league.LeagueAi
+import yacht.engine.league.LeagueIds
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.Media
 import yacht.engine.league.Meta
+import yacht.engine.league.Money
 import yacht.engine.league.PressAwards
 import yacht.engine.league.PressInput
 import yacht.engine.league.PressVotes
+import yacht.engine.league.SeasonStories
 import yacht.engine.league.StyleFamily
 import yacht.engine.league.WinEstimate
 
@@ -293,6 +297,14 @@ class StoryPagesTest {
         assertEquals("족보파의 시대가 열렸어요", s.era)
         assertEquals(23 to 2, s.deals to s.sackings)
         assertNotNull(s.coachOfYear)
+        // A league's record fee (the event's scope) names its league, not the world.
+        val own = ClubStory.decode(scene.files)
+        val k = own.members.first()
+        assertTrue(own.archive.amendReview(scene.last, stories = SeasonStories(big = listOf(BigStory("record_fee", listOf(k, "-", "-"), listOf("2400", "1800", scene.league))))))
+        val ownAn = LeagueAnalytics(Host(own))
+        ownAn.loadReview(scene.last)
+        val league = assertNotNull(wait { ownAn.review(Page.Review(scene.last)) }.stories).big.single()
+        assertEquals("💰 ${LeagueIds.icon(scene.league)} ${LeagueIds.label(scene.league)} 최고 이적료 ${Money.text(2400)} · $k" to "p:$k", league)
         // The chronicle: 골든 다이스 every season, the eras' starts, the world event, the record fee.
         an.loadChronicle()
         val ch = wait { an.chronicle() }

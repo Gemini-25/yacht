@@ -305,7 +305,8 @@ internal object StoryLines {
     /** "🗳 시즌 8 요트 월드컵 개최지가 🇯🇵 일본으로 정해졌어요". */
     fun wcHost(season: Int, nation: String): String = "🗳 시즌 $season 요트 월드컵 개최지가 ${Ko.ro(nation)} 정해졌어요"
 
-    fun recordFee(fee: String, player: String): String = "💰 세계 최고 이적료 $fee · $player"
+    /** "💰 세계 최고 이적료 185.0억 · 🇸🇳 앙투안 음바이"; a league's record names the league ([league]) in place of the world. */
+    fun recordFee(fee: String, player: String, league: String? = null): String = "💰 ${league ?: "세계"} 최고 이적료 $fee · $player"
 
     fun goldenDice(player: String, points: Int?): String = "🎙 골든 다이스 $player" + (points?.let { " · ${it}점" } ?: "")
 
