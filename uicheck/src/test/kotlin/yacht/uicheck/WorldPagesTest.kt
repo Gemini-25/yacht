@@ -1,7 +1,7 @@
 package yacht.uicheck
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import yacht.app.core.ClubBadge
 import yacht.app.core.LeagueHost
 import yacht.app.core.LeagueView
@@ -27,6 +27,9 @@ import yacht.engine.league.LeagueWorld
 import yacht.engine.league.TieRule
 import yacht.engine.league.WinEstimate
 import java.io.File
+import java.util.concurrent.Executor
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -175,12 +178,21 @@ class WorldPagesTest {
         return w
     }
 
-    /** [get] once it gives a value (the loaders read off the main thread). */
+    /**
+     * The main thread's work: the loaders hand their results over on [Host.scope], and [wait] runs
+     * them on the test's thread between its reads, as the app's main thread runs them between the
+     * screen's. Run on the workers instead, they would overlap the reads (a read seeing the old
+     * league's view just as the new league became the views') and each other (one first load's
+     * clearing dropping another's result).
+     */
+    private val main = LinkedBlockingQueue<Runnable>()
+
+    /** [get] once it gives a value (the loaders read off the main thread; their results are handed over here). */
     private fun <T : Any> wait(get: () -> T?): T {
         val until = System.currentTimeMillis() + 30_000
         while (System.currentTimeMillis() < until) {
             get()?.let { return it }
-            Thread.sleep(10)
+            main.poll(10, TimeUnit.MILLISECONDS)?.run()
         }
         error("nothing loaded in time")
     }
@@ -207,9 +219,9 @@ class WorldPagesTest {
         JobKind.TEAM -> f.lineupA.zip(f.lineupB).mapIndexed { i, (x, y) -> BoardResult(x, y, games(f, x, y, 2, i + 1), emptyList()) }.let { JobResult(f, it, TieRule.team(it), 0) }
     }
 
-    /** A host of world [w] alone (no snapshot, names as keys). */
-    private class Host(var w: LeagueWorld) : LeagueHost {
-        override val scope = CoroutineScope(Dispatchers.Unconfined)
+    /** A host of world [w] alone (no snapshot, names as keys), its main thread the test's ([main]). */
+    private inner class Host(var w: LeagueWorld) : LeagueHost {
+        override val scope = CoroutineScope(Executor { main.put(it) }.asCoroutineDispatcher())
         override val lock = Any()
         override val folder = File(".")
         override fun world(): LeagueWorld? = w
