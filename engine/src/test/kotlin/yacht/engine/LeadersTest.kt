@@ -56,6 +56,11 @@ class LeadersTest {
         val most = table.maxOf { it.played }
         fun board(stat: LeaderStat) = s.boards.getValue(stat)
         for ((stat, b) in s.boards) {
+            // The club world's boards (몸값, 유스 출신) come from the club book (LeadersClubTest), never from the stats.
+            if (stat.club) {
+                assertTrue(b.isEmpty(), "$stat from the stats")
+                continue
+            }
             assertTrue(b.isNotEmpty() || stat == LeaderStat.BONUS || stat == LeaderStat.GIANT || stat == LeaderStat.OVER300, "$stat empty")
             // Best first.
             val values = b.map { it.value }
