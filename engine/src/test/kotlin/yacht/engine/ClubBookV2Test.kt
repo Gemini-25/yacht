@@ -645,6 +645,32 @@ class ClubBookV2Test {
         assertNull(ClubLeague.factory({ v1 })(SeasonStart(3, 1L, legacy, next, ::rating, listOf(next), emptyList(), emptyList(), { null }, { "" })))
     }
 
+    /**
+     * With a club world the money is the balance (design ENG 1.6): a club's budget is `max(0, balance)`,
+     * which its `club` line writes, and today's off-season run with the club world frozen moves no money,
+     * so the budgets its window reads are the balances, before it as after.
+     */
+    @Test
+    fun withAClubWorldTheBudgetIsTheBalance() {
+        val (l, plan) = Cw.migrated(size = 300)
+        val book = l.book
+        val w = book.world!!
+        val c = book.clubs.first()
+        w.clubs.getValue(c.id).balance = -45
+        assertEquals(0 to -45, book.club(c.id)!!.let { it.budget to it.balance })
+        assertEquals("0", book.encode().lines().first { it.startsWith("club ${c.id} ") }.split(' ')[10])
+        assertEquals(0 to -45, ClubBook.decode(book.encode()).club(c.id)!!.let { it.budget to it.balance })
+        Cw.play(plan)
+        l.close(plan)
+        val balances = book.clubs.associate { it.id to w.clubs.getValue(it.id).balance }
+        assertTrue(book.offseason(plan, l.input(l.next(plan.number), plan, Cw.config.copy(clubWorld = false))).isNotEmpty())
+        for (club in book.clubs) {
+            if (club.id !in balances) continue
+            assertEquals(balances.getValue(club.id), club.balance, club.id)
+            assertEquals(maxOf(0, club.balance), club.budget, club.id)
+        }
+    }
+
     private companion object {
         /** 1100 generated players (1040 in the first season, 60 rookies). */
         val players: PlayerBook by lazy { PlayerBook().also { it.ensureGenerated(1100) } }

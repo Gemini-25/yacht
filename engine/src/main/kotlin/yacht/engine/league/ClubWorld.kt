@@ -323,5 +323,38 @@ class ClubWorld internal constructor(book: ClubBook) {
 
         /** Every prefix the club world writes. */
         val PREFIXES: Set<String> = PARTS.flatMap { it.prefixes }.toSet()
+
+        /**
+         * The week whose close brings [plan]'s winter checkpoint (design ENG 3.3): `⌊R / 2⌋ + 1` of a
+         * season of R league weeks (22 of 42). A club world started after it closed skips that
+         * season's checkpoint ([migrate]).
+         */
+        fun winterWeek(plan: SeasonPlan): Int = plan.leagueWeeks / 2 + 1
+
+        /**
+         * The club world of national book [book] that has none (design ENG 8.2: a `clubs 2` file without
+         * a `cw` line, at the end of `LeagueWorld.decode`; a club league's book right after its
+         * conversion, [ClubBook.migrate]), deterministic from the book's seed and [input], started in
+         * [start]'s season: kept moves' fees × 0.6 (the old units become money), the money of
+         * [ClubEconomy.migrate] (balances by the old budget's rank, ω at 0.62 of each league's revenue,
+         * wages ≤ 0.6 × income; last season's club-table places from the `cs` lines), identities, every
+         * member's terms (a contract to one of the three seasons after the one in play, staggered by
+         * key; its stint from the archive lines), captains, club records and legends from the archive,
+         * one coach per club (ex-player legends first) and the free pool, rivals from the 20 seasons of
+         * `cs` lines (their series start at zero), the world record and the 8 best-ranked leagues'
+         * record fees from the kept moves, and the in-season guards (a season whose winter week closed
+         * skips its checkpoint, the market's tick starts after [ClubStart.week]). Nothing for a book that
+         * has a club world (so a second call changes nothing) or a club league's book; true when it made
+         * one. It does not look at [LeagueConfig.clubWorld]: a club world made while it is off stays
+         * frozen until it is on ([ClubBook.offseason]).
+         */
+        fun migrate(book: ClubBook, input: ClubInput, start: ClubStart): Boolean = ClubWorldMigrate.migrate(book, input, start)
+
+        /**
+         * The club world of a new league's book [book] (design ENG 8.2: right after [ClubBook.found]),
+         * as [migrate] with every league at λ = 1, a balance of 10억 for every club, fans at the fan
+         * base and both facilities at level 2 ([ClubEconomy.found]). True when it made one.
+         */
+        fun found(book: ClubBook, input: ClubInput, start: ClubStart): Boolean = ClubWorldMigrate.found(book, input, start)
     }
 }
