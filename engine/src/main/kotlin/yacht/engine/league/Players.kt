@@ -568,10 +568,13 @@ class PlayerBook(reserved: Collection<String> = emptyList()) {
         return r
     }
 
-    /** [key] remade from [draft] (its records and debut stay); null when it is not alive here. */
+    /**
+     * [key] remade from [draft] (its records and debut stay, and its imitations: [Imitation.MAX]
+     * is a career's); null when it is not alive here.
+     */
     fun edit(key: String, draft: PlayerDraft, season: Int): PlayerRecord? {
         val old = byKey[key] ?: return null
-        val r = PlayerMaker.build(draft, key, season, old)
+        val r = PlayerMaker.build(draft, key, season, old).copy(imitations = old.imitations, imitatedIn = old.imitatedIn)
         byKey[key] = r
         return r
     }

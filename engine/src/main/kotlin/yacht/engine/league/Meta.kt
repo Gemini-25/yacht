@@ -506,7 +506,7 @@ object Meta {
         val all = IntArray(nf)
         for (f in family.values) all[f.ordinal]++
 
-        val top = input.top.filter { leagues.byId(it) != null }.ifEmpty { NationalLeagues.bestRanked(plan, Federation.TOP) }
+        val top = input.top.filter { leagues.byId(it) != null }.distinct().ifEmpty { NationalLeagues.bestRanked(plan, Federation.TOP) }
             .ifEmpty { leagues.list.map { it.id } }
         val elite = java.util.TreeSet<String>()
         for (id in top) leagues.byId(id)?.let { lg -> if (lg.size > 0) elite += season.divisions[lg.top] }

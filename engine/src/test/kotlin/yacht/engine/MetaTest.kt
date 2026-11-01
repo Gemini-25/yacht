@@ -445,6 +445,7 @@ class MetaTest {
         val imitation = Imitation({ true }, { "purist" }, { "hunter" })
         val genes = book.alive.associate { it.key to it.spec.play!! }
         val events = ArrayList<List<String>>()
+        val taken = HashMap<StyleFamily, Int>()
         for (s in 1..12) {
             val before = book.alive.associateBy { it.key }
             val r = Evolution.run(book, s, { 1500.0 }, { 0 }, 7L, 600, imitation = imitation, aging = false)
@@ -459,6 +460,7 @@ class MetaTest {
                 // Only the second style changes, to a recipe of the model's family its tier may take.
                 assertEquals(g0.copy(secondary = g.secondary), g)
                 assertTrue(StyleFamily.of(g.secondary!!) == BONUS || StyleFamily.of(g.secondary!!) == YACHT, g.secondary)
+                taken.merge(StyleFamily.of(g.secondary!!), 1, Int::plus)
                 assertTrue(PlayerGenerator.secondaryFor(PlayStyles.recipe(g.secondary!!)!!, PlayerGenerator.Tier.of(p.identity!!.potential)))
             }
             val digest = r.events.filter { it.kind == "imitation" }
@@ -472,6 +474,10 @@ class MetaTest {
             }
         }
         assertTrue(events.isNotEmpty(), "about 6% a season of the young imitate")
+        // The club's best member is the model 55% of the time, the league champion 45% (both
+        // models' families give every tier a second style here).
+        val clubShare = (taken[BONUS] ?: 0).toDouble() / taken.values.sum()
+        assertTrue(taken.values.sum() >= 100 && clubShare in 0.45..0.65, "club model share $clubShare of $taken")
         assertTrue(book.alive.all { it.imitations <= Imitation.MAX })
         // The roster keeps the count and the close; an old line reads none.
         val text = book.encode()
@@ -480,6 +486,10 @@ class MetaTest {
         assertEquals(book.alive.map { Triple(it.key, it.imitations, it.imitatedIn) }, back.alive.map { Triple(it.key, it.imitations, it.imitatedIn) })
         assertEquals(text, back.encode())
         assertEquals(0, PlayerBook.decode(text.replace(Regex(" im=\\d+:\\d+"), "")).alive.sumOf { it.imitations })
+        // Remade in 선수 고치기, an imitator keeps its count (two a career, whatever is edited).
+        val imitator = book.alive.first { it.imitations > 0 }
+        val edited = book.edit(imitator.key, yacht.engine.league.PlayerMaker.of(imitator, 12), 12)!!
+        assertEquals(imitator.imitations to imitator.imitatedIn, edited.imitations to edited.imitatedIn)
         // Only the second style ever changed.
         for (p in book.alive) genes[p.key]?.let { g0 -> assertEquals(g0.copy(secondary = p.spec.play!!.secondary), p.spec.play) }
         // Nobody outside the bottom half, nobody older than 25.
