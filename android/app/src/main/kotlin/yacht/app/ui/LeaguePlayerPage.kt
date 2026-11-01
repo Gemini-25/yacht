@@ -57,6 +57,7 @@ import yacht.app.core.LeagueTab
 import yacht.app.core.LeagueView
 import yacht.app.core.Matchup
 import yacht.app.core.Page
+import yacht.app.core.PlayerClubCard
 import yacht.app.core.PlayerMatch
 import yacht.app.core.PlayerPage
 import yacht.app.core.PlayerTab
@@ -78,7 +79,10 @@ import yacht.engine.league.Dynasty
 import yacht.engine.league.HonourBook
 import yacht.engine.league.Ladder
 import yacht.engine.league.LeagueIds
+import yacht.engine.league.Money
 import yacht.engine.league.Origin
+import yacht.engine.league.StoryStage
+import yacht.engine.league.StyleFamily
 
 // The player page (Page.Player): its header and quick buttons above four tabs (개요, 기록, 경기,
 // 수상), the page bar's ☆/★, ⚖ and ⋯, and the ⋯ sheet of actions. The data comes from
@@ -101,6 +105,9 @@ private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player
     val nav = lg.nav
     val live = v.rows.firstOrNull { it.key == page.key }
     LaunchedEffect(page.loadKey, live?.games, v.season?.number) { lg.analytics.loadPlayer(page.key, page.scope, lg.center) }
+    // Its 💼 line (UX 4.7), with a club world only (nothing changes without one).
+    LaunchedEffect(page.key, v.clock?.season, v.clock?.week) { lg.worldPages.loadPlayerClub(page.key) }
+    val card = lg.worldPages.playerClub(page.key)
     val loaded = lg.analytics.player(page)
     // While another scope loads, everything but its numbers is drawn from the scope loaded before.
     val p = loaded ?: StatScope.entries.firstNotNullOfOrNull { lg.analytics.player(page.copy(scope = it)) }
@@ -113,7 +120,7 @@ private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player
     val row = live ?: p.row
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            PlayerHeader(lg, v, p, row)
+            PlayerHeader(lg, v, p, row, card)
             // I play no league matches: no buttons to them.
             if (page.key != Ladder.ME) QuickButtons(c, p)
         }
@@ -124,7 +131,7 @@ private fun PlayerPageContent(c: AppController, v: LeagueView, page: Page.Player
         }
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             when (page.tab) {
-                PlayerTab.OVERVIEW -> OverviewTab(lg, p, row, open)
+                PlayerTab.OVERVIEW -> OverviewTab(lg, p, row, card, open)
                 PlayerTab.STATS -> StatsTab(lg, v, page, loaded, row)
                 PlayerTab.MATCHES -> MatchesTab(c, v, p, open)
                 PlayerTab.HONOURS -> HonoursTab(lg, p)
@@ -218,11 +225,13 @@ internal fun PlayerActionsSheet(c: AppController) {
 
 /**
  * The header above the tabs: tier badge, flag and name (and nickname), club, "{league} {tier}
- * {place}위" (a tap: 순위 › 리그 at that division) or the retirement, then the rating line.
+ * {place}위" (a tap: 순위 › 리그 at that division) or the retirement, then the rating line. With a
+ * club world the club is the 💼 line ([card]: the club, the shirt number and ©, a tap: the contract's
+ * sheet), and a retired player who coaches says where (UX 4.7).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row: LadderRow?) {
+private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row: LadderRow?, card: PlayerClubCard?) {
     val cs = MaterialTheme.colorScheme
     val nav = lg.nav
     val profile = p.profile
@@ -238,11 +247,27 @@ private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row
                 style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             id?.nickname?.let { Text("“$it”", style = MaterialTheme.typography.labelMedium, color = cs.tertiary, fontWeight = FontWeight.Bold) }
+            val terms = card?.terms
             p.badge?.let { b ->
-                Row(Modifier.clickable { nav.open(Page.Club(b.id)) }, verticalAlignment = Alignment.CenterVertically) {
-                    ClubEmblem(b.emblem, 18.dp)
-                    Text(" ${b.name}", style = MaterialTheme.typography.labelMedium, color = cs.secondary)
+                if (terms != null) {
+                    Row(Modifier.clickable { nav.sheet = Sheet.LIST }, verticalAlignment = Alignment.CenterVertically) {
+                        ClubEmblem(b.emblem, 18.dp)
+                        Text(" " + PlayerClubTexts.line(b.name, terms.number, terms.captain), style = MaterialTheme.typography.labelMedium, color = cs.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else {
+                    Row(Modifier.clickable { nav.open(Page.Club(b.id)) }, verticalAlignment = Alignment.CenterVertically) {
+                        ClubEmblem(b.emblem, 18.dp)
+                        Text(" ${b.name}", style = MaterialTheme.typography.labelMedium, color = cs.secondary)
+                    }
                 }
+            }
+            // The coach it became, also without a contract (a retired player).
+            val coach = card?.coach
+            if (coach != null && terms == null) {
+                Text(
+                    PlayerClubTexts.coach(card.coachClub?.name), style = MaterialTheme.typography.labelMedium, color = cs.secondary, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { nav.open(Page.Coach(coach)) },
+                )
             }
             val place = p.position?.let { pos -> listOfNotNull(p.leagueLabel, p.tierLabel).joinToString(" ") + " ${pos}위" }
             when {
@@ -320,7 +345,7 @@ private fun openMatch(lg: LeagueController, p: PlayerPage, ref: String?, week: I
  * season in a line, its identity (nation, abilities, style), its rival and matchups, the family tree.
  */
 @Composable
-private fun ColumnScope.OverviewTab(lg: LeagueController, p: PlayerPage, row: LadderRow?, open: (String) -> Unit) {
+private fun ColumnScope.OverviewTab(lg: LeagueController, p: PlayerPage, row: LadderRow?, card: PlayerClubCard?, open: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val profile = p.profile
     if (profile.key == CustomAis.CLONE) {
@@ -386,7 +411,8 @@ private fun ColumnScope.OverviewTab(lg: LeagueController, p: PlayerPage, row: La
         )
     }
     // The nickname is in the header, the rival (tappable) below.
-    profile.identity?.let { IdentityPart(it.copy(nickname = null, rival = null), alive = profile.retired == null, onOpen = open) }
+    // Its recipe's style with its family (UX 4.7: "요트 사냥꾼 (요트파)"), once the club world names families.
+    profile.identity?.let { IdentityPart(it.copy(nickname = null, rival = null, style = PlayerClubTexts.style(it.style, card?.family)), alive = profile.retired == null, onOpen = open) }
     profile.genes?.takeIf { profile.identity?.style == null && profile.origin in MADE }?.let {
         Text("스타일: $it", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
     }
@@ -976,3 +1002,51 @@ private const val RATING_POINTS = 40
 private const val SEASON_ROWS = 12
 private const val NEWS_FIRST = 3
 private const val MILESTONES = 20
+
+// ---- the 💼 line (UX 4.7) -------------------------------------------------------------------------
+
+/**
+ * [Sheet.LIST] over a player's page: its 💼 line's details (UX 4.7): the club's page, the contract
+ * (to when, wage, value, a release clause), the academy it came out of, the loan, the club's
+ * coach and an open story about it.
+ */
+internal fun playerClubList(lg: LeagueController, card: PlayerClubCard): SheetList {
+    val rows = ArrayList<Pair<String, String?>>()
+    card.club?.let { c -> rows += "${c.name} 클럽 페이지" to "c:${c.id}" }
+    card.terms?.let { t ->
+        rows += PlayerClubTexts.contract(t.until, Money.text(t.wage), Money.text(t.value), t.clause.takeIf { it > 0 }?.let(Money::text)) to null
+        if (t.academy) card.club?.let { c -> rows += PlayerClubTexts.academy(c.name, t.gradSeason) to "c:${c.id}" }
+        t.loanFrom?.let { c -> rows += PlayerClubTexts.loan(c.name) to "c:${c.id}" }
+    }
+    card.clubCoach?.let { id -> rows += PlayerClubTexts.clubCoach(lg.view?.coaches?.get(id) ?: id) to "k:$id" }
+    card.story?.let { s ->
+        val week = if (s.stage == StoryStage.TALKS && s.talksWeek > 0) s.talksWeek else s.rumourWeek
+        rows += PlayerClubTexts.story(s.buyer?.name ?: "–", s.stage.label, week) to "mk:LIVE"
+    }
+    return SheetList(PlayerClubTexts.TITLE, rows)
+}
+
+/** The 💼 line's texts (UX 4.7, 해요체), for StoryTextsTest. */
+internal object PlayerClubTexts {
+    const val TITLE = "💼 소속과 계약"
+
+    /** "{club} · {no}번 · © ›". */
+    fun line(club: String, number: Int, captain: Boolean): String = "$club · ${number}번" + (if (captain) " · ©" else "") + " ›"
+
+    /** A retired player's coaching job: "👔 지금은 {club} 감독이에요 ›" (a free coach: 쉬고 있는 감독). */
+    fun coach(club: String?): String = if (club != null) "👔 지금은 $club 감독이에요 ›" else "👔 지금은 쉬고 있는 감독이에요 ›"
+
+    fun contract(until: Int, wage: String, value: String, clause: String?): String =
+        "시즌 ${until}까지 · 연봉 $wage · 몸값 $value" + (clause?.let { " · 바이아웃 $it" } ?: "")
+
+    fun academy(club: String, season: Int): String = "🌱 $club 유스 출신" + (if (season > 0) " (시즌 $season)" else "")
+
+    fun loan(club: String): String = "↔ ${club}에서 임대 중"
+
+    fun clubCoach(coach: String): String = "👔 감독 $coach"
+
+    fun story(buyer: String, stage: String, week: Int): String = "💬 $buyer 관심 · $stage (${week}주차)"
+
+    /** The 🎨 line's recipe with its family ("요트 사냥꾼 (요트파)"); the recipe alone without a family. */
+    fun style(recipe: String?, family: StyleFamily?): String? = recipe?.let { r -> family?.let { "$r (${it.label})" } ?: r }
+}

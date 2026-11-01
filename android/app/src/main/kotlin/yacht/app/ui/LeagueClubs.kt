@@ -58,6 +58,7 @@ import yacht.engine.league.Comp
 import yacht.engine.league.Nations
 import yacht.engine.league.Emblem
 import yacht.engine.league.MatchFormat
+import yacht.engine.league.Money
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -334,8 +335,10 @@ private fun NationalClubsTab(lg: LeagueController, v: LeagueView, season: Season
                     Text("점수", Modifier.width(48.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End)
                 }
             }
+            // With a club world, a club whose fans are angry is marked 😡 (UX 4.6).
+            val angry = t.all.filter { it.angry }.mapTo(HashSet()) { it.badge.id }
             items(t.rows, key = { "nct-${it.badge.id}" }) { r ->
-                ClubTableRow(r, LeagueSelector.CLUB + r.badge.id in favs) { nav.open(Page.Club(r.badge.id)) }
+                ClubTableRow(r, LeagueSelector.CLUB + r.badge.id in favs, r.badge.id in angry) { nav.open(Page.Club(r.badge.id)) }
             }
             if (t.rows.isEmpty()) item { Text("이 리그에는 아직 클럽이 없어요.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
         }
@@ -343,6 +346,8 @@ private fun NationalClubsTab(lg: LeagueController, v: LeagueView, season: Season
             Column(Modifier.padding(top = 6.dp)) {
                 LinkLine(if (all) "클럽 전체 (우승 순) 접기" else "클럽 전체 (우승 순)", t?.let { "${it.all.size}개 클럽의 우승과 자금" }) { all = !all }
                 LinkLine("이적·드래프트", "해외 이적, 귀국, 국내 이적과 드래프트") { nav.open(Page.Market()) }
+                // The club rankings come with the club world (rule 4: no link before its page has content).
+                if (t?.all?.any { it.health != null } == true) LinkLine("🏅 세계 클럽 랭킹", "가치·성적·수입·인기·재정으로 본 클럽 순위") { nav.open(Page.ClubRanking()) }
                 if (v.comps.any { it.first == Comp.CLUB_CUP }) LinkLine("🏟 ${Comp.CLUB_CUP.label}", "나라마다 우승 클럽이 겨루는 단체전") { nav.open(Page.Competition(Comp.CLUB_CUP)) }
             }
         }
@@ -357,7 +362,8 @@ private fun NationalClubsTab(lg: LeagueController, v: LeagueView, season: Season
                             Text("${Nations.of(c.badge.nation)?.let { "${it.flag} ${it.short}" } ?: c.badge.nation} · 선수 ${c.members}명", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                         }
                         Column(horizontalAlignment = Alignment.End) {
-                            Text("💰 ${c.budget}", style = MaterialTheme.typography.labelMedium)
+                            // With a club world its money as it is and its health grade; else today's budget.
+                            Text(c.health?.let { g -> "💰 ${Money.text(c.balance)} · $g" } ?: "💰 ${c.budget}", style = MaterialTheme.typography.labelMedium)
                             if (c.titles > 0) Text("🏆 ${c.titles}", style = MaterialTheme.typography.labelMedium, color = cs.secondary)
                         }
                     }
@@ -367,9 +373,9 @@ private fun NationalClubsTab(lg: LeagueController, v: LeagueView, season: Season
     }
 }
 
-/** A club's line in the club table: place, badge and name (★ when followed), its members' week, its points. */
+/** A club's line in the club table: place, badge (😡 after it when its fans are [angry]) and name (★ when followed), its members' week, its points. */
 @Composable
-private fun ClubTableRow(r: ClubStandingRow, followed: Boolean, onClick: () -> Unit) {
+private fun ClubTableRow(r: ClubStandingRow, followed: Boolean, angry: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surface).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 5.dp),
@@ -378,7 +384,7 @@ private fun ClubTableRow(r: ClubStandingRow, followed: Boolean, onClick: () -> U
         Text("${r.position}", Modifier.width(22.dp), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
         ClubEmblem(r.badge.emblem, 22.dp)
         Text(
-            " " + (if (followed) "★ " else "") + r.badge.name, Modifier.weight(1f),
+            (if (angry) "😡" else "") + " " + (if (followed) "★ " else "") + r.badge.name, Modifier.weight(1f),
             style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         Text(r.week.ifEmpty { "–" }, Modifier.width(78.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, textAlign = TextAlign.End, maxLines = 1)

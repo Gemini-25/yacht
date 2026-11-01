@@ -6,6 +6,7 @@ import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import yacht.app.core.ClubBadge
+import yacht.app.core.ClubRankKind
 import yacht.app.core.HomeBanner
 import yacht.app.core.HomeFeed
 import yacht.app.core.InfoTopic
@@ -16,6 +17,11 @@ import yacht.app.core.Page
 import yacht.app.core.PressureLevel
 import yacht.app.core.UiPrefs
 import yacht.app.core.pageOf
+import yacht.app.core.storyReason
+import yacht.app.ui.ClubRankTexts
+import yacht.app.ui.ClubTexts
+import yacht.app.ui.CoachTexts
+import yacht.app.ui.PlayerClubTexts
 import yacht.app.ui.arcIcon
 import yacht.app.ui.articleLink
 import yacht.app.ui.familyColor
@@ -30,6 +36,8 @@ import yacht.app.ui.newsShown
 import yacht.app.ui.ownerIcon
 import yacht.app.ui.rankMove
 import yacht.app.ui.storyPill
+import yacht.app.ui.storyStage
+import yacht.app.ui.tenureEnd
 import yacht.app.ui.trophy
 import yacht.engine.OppModel
 import yacht.engine.Tables
@@ -41,6 +49,7 @@ import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
 import yacht.engine.league.OwnerType
+import yacht.engine.league.StoryStage
 import yacht.engine.league.StyleFamily
 import yacht.engine.league.WinEstimate
 import java.io.File
@@ -155,16 +164,19 @@ class StoryTextsTest {
         // Rule 4: a page's entry points ship with its content. The stage that ships one of these
         // takes it off [linkable] (and off this list); until then no link built from data opens it.
         val waiting = listOf(
-            Page.Coach("k1"), Page.ClubRanking(), Page.Press(), Page.Events, Page.Event(4), Page.WcStory(3), Page.Encyclopedia("p:g001"), Page.Search,
+            Page.Press(), Page.Events, Page.Event(4), Page.WcStory(3), Page.Encyclopedia("p:g001"), Page.Search,
         )
         for (p in waiting) assertFalse(linkable(p), "$p is linkable before its content")
-        for (p in listOf(Page.Player("g001"), Page.Club("c01"), Page.League("KR"), Page.Nation("KR"), Page.Market(), Page.Meta())) assertTrue(linkable(p), "$p")
-        // So an article's story pill shows only where it can lead: 이적 센터 and the meta report today.
+        // P8 shipped the coach page and 클럽 랭킹.
+        val shipped = listOf(Page.Player("g001"), Page.Club("c01"), Page.League("KR"), Page.Nation("KR"), Page.Market(), Page.Meta(), Page.Coach("k1"), Page.ClubRanking())
+        for (p in shipped) assertTrue(linkable(p), "$p")
+        // So an article's story pill shows only where it can lead: 이적 센터, the meta report and 클럽 랭킹 today.
         fun a(kind: String) = Article(3, kind, "제목", "본문", emptyList(), null, 2, scope = "KR")
         val arcs = { _: ArcKind, _: Int -> 4 }
         assertEquals("💸 이적 센터 ›" to Page.Market(), storyPill(a("record_fee"), arcs))
         assertEquals("🧭 시대 ›" to Page.Meta(), storyPill(a("era_begins"), arcs))
-        for (k in listOf("power_ranking", "predictions", "press_award", "wc_bids", "wc_host_vote", "wc_draw_ceremony", "club_ranking", "superleague_announce")) {
+        assertEquals("🏅 클럽 랭킹 ›" to Page.ClubRanking(), storyPill(a("club_ranking"), arcs))
+        for (k in listOf("power_ranking", "predictions", "press_award", "wc_bids", "wc_host_vote", "wc_draw_ceremony", "superleague_announce")) {
             assertNotNull(articleLink(a(k), arcs), k)
             assertNull(storyPill(a(k), arcs), "$k leads to a page still waiting")
         }
@@ -236,7 +248,66 @@ class StoryTextsTest {
                     Case("info $t title", type.titleMedium.copy(fontWeight = FontWeight.Bold), SHEET_TITLE_DP, 1) { infoTitle(t) },
                     Case("info $t", type.bodySmall, SHEET_DP, INFO_LINES) { infoText(t) },
                 )
-            }
+            } +
+            CLUB_CASES
+
+        /** A club or coach page's text width at 360 dp (its 16 dp sides), a line's beside its "›", the club header's beside its 48 dp emblem. */
+        private const val PAGE_DP = 360f - 2 * 16
+        private const val LINE_DP = PAGE_DP - 16
+        private const val HEADER_DP = PAGE_DP - 60
+
+        /** A rivalry's name as the engine names it, from the sample's club ("부산-서울 클래식"). */
+        private fun rivalry(n: Names) = "${n.club.substringBefore(' ')}-서울 클래식"
+
+        /** The club pages', the coach page's, the 💼 line's and 클럽 랭킹's texts (UX 4-5). */
+        private val CLUB_CASES: List<Case> get() = listOf(
+            Case("club identity", type.labelSmall, HEADER_DP, 2) { n -> ClubTexts.identity("${n.club}의 자존심", n.club.substringBefore(' '), "🇨🇦 ${n.nation}", 1923) },
+            Case("board warning (winter)", type.labelSmall, PAGE_DP, 1) { ClubTexts.warning(true) },
+            Case("board warning (close)", type.labelSmall, PAGE_DP, 1) { ClubTexts.warning(false) },
+            Case("captain", type.bodySmall, LINE_DP, 1) { n -> ClubTexts.captain("🇨🇦 ${n.player}", n.season) },
+            Case("rival", type.bodySmall, LINE_DP, 2) { n -> ClubTexts.rival(rivalry(n), n.club, 12, 3, 9) },
+            Case("rival history", type.bodySmall, LINE_DP, 2) { n -> ClubTexts.rivalHistory(rivalry(n), n.club, 12, 3, 9, listOf(1, 0, 1), n.season) },
+            Case("story", type.bodySmall, PAGE_DP - 48, 2) { n -> ClubTexts.story(storyStage(StoryStage.TALKS), n.player, n.club, "서울 하마") },
+            Case("squad lead", type.bodyMedium, PAGE_DP, 2) { ClubTexts.squadLead(12, 27.4, 64) },
+            Case("member", type.bodySmall, PAGE_DP - 26 - 60, 1) { n -> ClubTexts.member("🇨🇦 ${n.player}", true, true, "🌱⏳") },
+            Case("graduates", type.labelSmall, PAGE_DP, 1) { ClubTexts.graduates(4) },
+            Case("trouble 1", type.bodySmall, PAGE_DP - 24, 3) { ClubTexts.trouble(1)!! },
+            Case("trouble 2", type.bodySmall, PAGE_DP - 24, 3) { ClubTexts.trouble(2)!! },
+            Case("trouble 3", type.bodySmall, PAGE_DP - 24, 3) { ClubTexts.trouble(3)!! },
+            Case("accounts (net)", type.bodyMedium.copy(fontWeight = FontWeight.SemiBold), PAGE_DP, 2) { ClubTexts.accounts("32.2억", "18.8억", 134) },
+            Case("accounts (loss)", type.bodyMedium.copy(fontWeight = FontWeight.SemiBold), PAGE_DP, 2) { ClubTexts.accounts("1,240.0억", "1,302.5억", -625) },
+            Case("first accounts", type.bodyMedium, PAGE_DP, 1) { n -> ClubTexts.firstAccounts(n.season) },
+            Case("sponsor", type.bodySmall, PAGE_DP - 80, 2) { n -> ClubTexts.sponsor("${n.club.substringBefore(' ')} 텔레콤", "4.6억", 9) },
+            Case("stadium", type.bodySmall, PAGE_DP, 2) { n -> ClubTexts.stadium("${n.club.substringBefore(' ')} 스타디움", 13500, 12840, 95) },
+            Case("project E", type.labelSmall, PAGE_DP, 2) { ClubTexts.project('E', 13125, 8, "2.6억", "5.3억") },
+            Case("project N", type.labelSmall, PAGE_DP, 2) { ClubTexts.project('N', 30000, 9, "12.5억", "40.0억") },
+            Case("fans", type.bodySmall, PAGE_DP, 2) { n -> ClubTexts.fans(23320, 3, n.nation, 1, 68, "😊") },
+            Case("titles", type.labelSmall, PAGE_DP, 2) { ClubTexts.titles(4, listOf(2, 3, 5, 6)) },
+            Case("legend", type.bodySmall, PAGE_DP - 130, 2) { n -> ClubTexts.legend(7, "🇨🇦 ${n.player}", 11, 4) },
+            Case("record", type.bodySmall, LINE_DP, 2) { n -> ClubTexts.record("최다 출전", "🇨🇦 ${n.player}", "312경기", n.season) },
+            Case("tenure", type.bodySmall, LINE_DP, 2) { n -> ClubTexts.tenure(n.season, 0, "🇨🇦 ${n.player}", 2, 1, tenureEnd('-')) },
+            Case("fee", type.bodySmall, LINE_DP, 2) { n -> ClubTexts.fee(n.season, "🇨🇦 ${n.player}", true, n.club, "18.5억") },
+            Case("story reason", type.labelSmall, PAGE_DP, 1) { n -> storyReason('H', n.club)!! },
+            Case("coach header", type.labelMedium, PAGE_DP - 70, 1) { CoachTexts.header(47, "유망주 육성형") },
+            Case("coach club", type.labelMedium, PAGE_DP - 18, 1) { n -> CoachTexts.club(n.club, n.season) },
+            Case("coach free", type.labelMedium, PAGE_DP, 1) { CoachTexts.free(12) },
+            Case("coach retired", type.labelMedium, PAGE_DP, 1) { n -> CoachTexts.retired(n.season) },
+            Case("coach board", type.bodySmall, PAGE_DP, 3) { n -> CoachTexts.board("${n.nation} 리그", 12, 3, 7) },
+            Case("coach older", type.labelSmall, PAGE_DP, 1) { CoachTexts.older(3, 11) },
+            Case("coach career", type.labelSmall, PAGE_DP, 1) { CoachTexts.career(4, 17) },
+            Case("coach honours", type.labelSmall, PAGE_DP, 2) { CoachTexts.honours(2, 5, 1, 1) },
+            Case("coach fits", type.labelSmall, PAGE_DP, 1) { CoachTexts.fits(setOf(StyleFamily.YACHT, StyleFamily.BOLD)) },
+            Case("coach player days", type.bodySmall, PAGE_DP, 2) { CoachTexts.playerDays(14, 6) },
+            Case("contract line", type.labelMedium, PAGE_DP - 78 - 12 - 18, 1) { n -> PlayerClubTexts.line(n.club, 10, true) },
+            Case("coach line", type.labelMedium, PAGE_DP - 78 - 12, 1) { n -> PlayerClubTexts.coach(n.club) },
+            Case("contract", type.bodySmall, SHEET_DP, 2) { PlayerClubTexts.contract(9, "1.2억", "18.5억", "40.0억") },
+            Case("academy", type.bodySmall, SHEET_DP, 1) { n -> PlayerClubTexts.academy(n.club, n.season) },
+            Case("loan", type.bodySmall, SHEET_DP, 1) { n -> PlayerClubTexts.loan(n.club) },
+            Case("club coach", type.bodySmall, SHEET_DP, 1) { n -> PlayerClubTexts.clubCoach("🇨🇦 ${n.player}") },
+            Case("story line", type.bodySmall, SHEET_DP, 1) { n -> PlayerClubTexts.story(n.club, StoryStage.TALKS.label, 24) },
+            Case("style", type.labelMedium, PAGE_DP - 16, 1) { PlayerClubTexts.style("요트 사냥꾼", StyleFamily.YACHT)!! },
+            Case("ranking grades", type.labelMedium, PAGE_DP, 1) { ClubRankTexts.grades(listOf(3, 12, 14, 8, 3)) },
+        ) + ClubRankKind.entries.map { k -> Case("ranking $k", type.labelSmall, 360f - 2 * 12, 2) { ClubRankTexts.sentence(k) } }
 
         /** Lines an ⓘ explanation may take (bodySmall, 16 dp a line: under 200 dp; the longest, FINANCE, takes 9 here). */
         private const val INFO_LINES = 12

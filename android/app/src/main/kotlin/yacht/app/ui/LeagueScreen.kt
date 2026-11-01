@@ -261,6 +261,8 @@ private fun PageBar(c: AppController, v: LeagueView?, page: Page) {
             Page.News -> TextButton(onClick = { nav.newsFollowed = !nav.newsFollowed }) { Text(if (nav.newsFollowed) "★ 응원만" else "☆ 전체") }
             is Page.Player -> PlayerBarActions(lg, page)
             is Page.Match -> MatchBarAction(c, page)
+            // 클럽 랭킹's scope (UX 4.8): the league sheet changes only this page's scope.
+            is Page.ClubRanking -> TextButton(onClick = { nav.sheet = Sheet.LEAGUE_PICK }) { Text(clubRankScope(page.scope), maxLines = 1) }
             else -> {}
         }
         if (lg.running) {
@@ -301,8 +303,8 @@ private fun pageTitle(lg: LeagueController, v: LeagueView?, page: Page): String 
     is Page.Matches -> page.title
     is Page.League -> LeagueIds.label(page.id)
     is Page.Player -> lg.name(page.key)
-    // The phase's new pages (UX 14.1); their own stages name them in full (a coach's name, an arc's).
-    is Page.Coach -> "감독"
+    // The phase's new pages (UX 14.1); their own stages name them in full (an arc's).
+    is Page.Coach -> lg.worldPages.coach(page)?.name?.ifEmpty { null }?.let { "$it 감독" } ?: "감독"
     is Page.ClubRanking -> page.scope?.let { "${LeagueIds.label(it)} 클럽 랭킹" } ?: "세계 클럽 랭킹"
     is Page.Press -> "기자단"
     Page.Events, is Page.Event -> "세계 정세"
@@ -341,9 +343,9 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
         is Page.Facts -> FactsPage(lg, v, page)
         Page.Chronicle -> ChroniclePage(lg, v)
         is Page.Matches -> MatchesPage(c, v, page)
+        is Page.Coach -> CoachPageBody(lg, v, page)
+        is Page.ClubRanking -> ClubRankingBody(lg, v, page)
         // Not reachable from a link yet ([linkable]): each waits for its view.
-        is Page.Coach -> CoachPageBody()
-        is Page.ClubRanking -> ClubRankingBody()
         is Page.Press -> PressPageBody(lg, v, page)
         Page.Events -> EventsPageBody(lg, v)
         is Page.Event -> EventPageBody(lg, v, page)
@@ -359,16 +361,18 @@ private fun PageBody(c: AppController, v: LeagueView, page: Page) {
  * content together with its entry points; that stage takes its page off this list.
  */
 internal fun linkable(page: Page): Boolean = when (page) {
-    is Page.Coach, is Page.ClubRanking, is Page.Press, Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> false
+    is Page.Press, Page.Events, is Page.Event, is Page.WcStory, is Page.Encyclopedia, Page.Search -> false
     else -> true
 }
 
 /**
- * What [Sheet.LIST] lists over the top page (UX 2.3): an arc's subject clubs; null for a page
- * without a list. Each page that opens the sheet adds its case here, beside its call site.
+ * What [Sheet.LIST] lists over the top page (UX 2.3): an arc's subject clubs, a player's contract
+ * (the 💼 line's details); null for a page without a list. Each page that opens the sheet adds its
+ * case here, beside its call site.
  */
 internal fun sheetList(lg: LeagueController): SheetList? = when (val page = lg.nav.page) {
     is Page.Event -> lg.eventPages.arc(page)?.let { a -> SheetList("${a.icon} ${a.title}", a.subjects) }
+    is Page.Player -> lg.worldPages.playerClub(page.key)?.let { playerClubList(lg, it) }
     else -> null
 }
 
