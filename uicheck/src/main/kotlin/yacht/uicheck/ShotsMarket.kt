@@ -31,11 +31,11 @@ import java.io.File
 import java.util.Locale
 
 /**
- * P16's shots (UX 15.3: lg85-lg85e, lg96) on [MarketScene]'s variant of the story world, restored into
- * the real screen: 이적 센터's four tabs (이적설 with the first-screen check of its first story, 이적 내역
- * with ☀ 다시 보기 stopped half-way, 최고 이적료, 감독 with the hot seat), the centre opened before the
- * rumour weeks (it lands on 이적 내역) and a rival match's report. Restores the story world as it was
- * before it returns.
+ * P16's shots (UX 15.3: lg85-lg85e, lg96; lg85f added by its review) on [MarketScene]'s variant of the
+ * story world, restored into the real screen: 이적 센터's four tabs (이적설 with the first-screen check of
+ * its first story, 이적 내역 with ☀ 다시 보기 stopped half-way and as the whole list, 최고 이적료, 감독 with
+ * the hot seat), the centre opened before the rumour weeks (it lands on 이적 내역) and a rival match's
+ * report. Restores the story world as it was before it returns.
  */
 internal object ShotsMarket : LeagueShots {
     override fun story(c: AppController, out: File) {
@@ -60,6 +60,10 @@ internal object ShotsMarket : LeagueShots {
         market(MarketTab.MOVES, replay = minOf(at, view.window.size))
         shot(c, out, "lg85b_market_moves", heightDp = 1300, settleMs = 300)
         lg.marketPages.replayPaused = false
+        // The whole list: the winter's moves under their own heading, then last summer's with its numbers and marks.
+        market(MarketTab.MOVES)
+        check(lg.marketPages.view!!.let { v -> MarketPages.blocks(v).count { it.winter } == 1 && v.winterMoves.isNotEmpty() }) { "이적 내역 has one winter heading" }
+        shot(c, out, "lg85f_market_history", heightDp = 1300)
         market(MarketTab.RECORDS)
         shot(c, out, "lg85c_market_records", heightDp = 1300)
         market(MarketTab.COACHES)
