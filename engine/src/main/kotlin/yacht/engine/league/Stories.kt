@@ -239,10 +239,10 @@ object Stories {
          * loan and have no open story, who are underpaid ([ClubEconomy.underpaid]), or among the [TOP] best
          * rated of their league's 1부 at a club outside its league's [VALUE_TOP] most valuable; and outside
          * the winter the abroad candidates of [Transfers] (among the [TOP] of a 1부, aged
-         * [Transfers.MIN_AGE]..[Transfers.MAX_AGE], generated or evolved, at home, with a league ranked
-         * [Transfers.GAP] places above whose 1부 median it reaches) while the season's stories with a buyer
-         * abroad are fewer than the off-season's transfers abroad ([Transfers.count]). A winter week leaves
-         * out the 클럽 대항전's clubs.
+         * [Transfers.MIN_AGE]..[Transfers.MAX_AGE] in the coming season, generated or evolved, at home, with a
+         * league ranked [Transfers.GAP] places above whose 1부 median it reaches) while the season's stories
+         * with a buyer abroad are fewer than the off-season's transfers abroad ([Transfers.count]). A winter
+         * week leaves out the 클럽 대항전's clubs.
          */
         fun candidates(): List<Candidate> {
             val tops = HashMap<String, List<String>>()
@@ -286,9 +286,13 @@ object Stories {
             }.toMap()
         }
 
-        /** The best-ranked league [key] of league [own] would go to abroad ([Transfers]' rule), null for none. */
+        /**
+         * The best-ranked league [key] of league [own] would go to abroad ([Transfers]' rule, which the
+         * off-season applies to the ages of the coming season: the input's are the season in play's), null
+         * for none.
+         */
         fun abroadLeague(key: String, own: String): String? {
-            val age = input.age(key) ?: return null
+            val age = input.age(key)?.plus(1) ?: return null
             if (age !in Transfers.MIN_AGE..Transfers.MAX_AGE || input.origin(key) !in ORIGINS) return null
             val ranking = plan.ranking
             val rank = ranking.rank(own)

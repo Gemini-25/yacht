@@ -198,14 +198,17 @@ object ClubCheckpoint {
      * 1. **Fans' mood** of every club with a seat: the gap to the board's shown target and the points of
      *    the last off-season's window (stars sold, a record signing, members gone to a rival:
      *    [MarketReport.moodEvents], stars = the top 1% by the drawn ratings) and the relief of a coach
-     *    sacked at the close before (+5); the close then counts the window no more.
+     *    sacked at the close before (+5); the close then counts the window no more. The fans whose mood
+     *    fell below 25 protest (the 2 biggest fan bases, [ClubEconomy.protests]), against the coach they
+     *    have then.
      * 2. **The board's review** ([CoachMarket.review], winter) and an immediate hire for each sacking
-     *    ([CoachMarket.hire]).
+     *    ([CoachMarket.hire]); none with the test knob [ClubInput.coaches] off (as the off-season's coach
+     *    market).
      * 3. **The winter window** ([Market.winter]: its talks first, then each nation's chasing clubs), on the
      *    drawn ratings, the board's targets, the 클럽 대항전's clubs frozen; a `ws` line per move with the
      *    member's league points through W and its tier; winter rumours never turned into talks end
      *    without news.
-     * 4. The protests (fans' mood below 25, the 2 biggest fan bases), the summary line, the guard; when
+     * 4. The summary line, the guard; when
      *    the winter's moves took the move log past its cap, the book as its file reads back (the oldest
      *    moves trimmed; [ClubBook.world] is then a new object: read it again after a checkpoint).
      * The world events' winter stages run after it, on the world book ([Stories.close]'s hook).
@@ -231,8 +234,11 @@ object ClubCheckpoint {
             val points = window.moodEvents(id) { it in stars } + ClubEconomy.moodEvents(sacked = id in relieved)
             ClubEconomy.mood(book, id, ClubEconomy.gap(target, seat.place, seat.clubs), points)
         }
+        // The protests, each against the coach the club has before the review (a sacked one is replaced at once).
+        val protests = ClubEconomy.protests(book, seats.keys).map { WinterReport.Protest(it, w.clubs[it]?.mood ?: 0, w.clubs[it]?.coach) }
         // 2. The board's review and the hires.
-        val sacked = CoachMarket.review(book, plan, tables, drawn, winter = true).map { m ->
+        val reviewed = if (input.coaches) CoachMarket.review(book, plan, tables, drawn, winter = true) else emptyList()
+        val sacked = reviewed.map { m ->
             val club = m.club!!
             WinterSacking(club, m.coach, m.place, m.target, CoachMarket.hire(book, club, s, steady, plan.seed)?.id)
         }
@@ -248,8 +254,7 @@ object ClubCheckpoint {
         }
         w.winter.moves.removeIf { it.season <= s - KEEP_SEASONS || it.season > s }
         w.market.stories.removeIf { it.season == s && it.winter && it.stage == StoryStage.RUMOUR }
-        // 4. The protests, the summary and the guard.
-        val protests = ClubEconomy.protests(book, seats.keys).map { WinterReport.Protest(it, w.clubs[it]?.mood ?: 0, w.clubs[it]?.coach) }
+        // 4. The summary and the guard.
         val entries = market.deals.map { WindowLine.Entry(it.phase, it.type, it.flags, it.wage) }
         w.winter.line = WinterLine(s, week, offset, entries, market.record, sacked, protests)
         w.checkpoint = s
@@ -261,14 +266,20 @@ object ClubCheckpoint {
         return report(book, s).events(book)
     }
 
-    /** The winter checkpoint of [season] as the book keeps it (the `ws C` line, the season's moves and its winter stories); empty when it did not run. */
+    /**
+     * The winter checkpoint of [season] as the book keeps it (the `ws C` line, the season's moves and its
+     * winter stories); empty when it did not run. Its deals (and the record among them) are left out when
+     * the move log no longer holds them as the window made them (a later off-season trimmed the season's
+     * oldest moves while the line was still this season's: the `ws` lines tell who moved in which order).
+     */
     fun report(book: ClubBook, season: Int): WinterReport {
         val w = book.world ?: return WinterReport(season)
         val x = w.winter.line?.takeIf { it.season == season } ?: return WinterReport(season)
-        val moves = book.history.filter { it.season == season }.drop(x.offset)
-        val deals = moves.zip(x.deals) { m, e -> MarketDeal(e.phase, e.type, m.ai, m.from, m.to, m.amount, e.flags, e.wage) }
+        val moves = book.history.filter { it.season == season }.drop(x.offset).take(x.deals.size)
+        val kept = moves.size == x.deals.size && moves.filter { it.from != null }.map { it.ai } == w.winter.of(season).map { it.key }
+        val deals = if (kept) moves.zip(x.deals) { m, e -> MarketDeal(e.phase, e.type, m.ai, m.from, m.to, m.amount, e.flags, e.wage) } else emptyList()
         val stories = w.market.stories(season).filter { it.winter && it.stage != StoryStage.RUMOUR && it.stage != StoryStage.TALKS }
-        return WinterReport(season, x.week, deals, x.record, x.sacked, x.protests, stories)
+        return WinterReport(season, x.week, deals, x.record.takeIf { kept }, x.sacked, x.protests, stories)
     }
 
     /** A winter move's [WinterMove.to] for a member let go (no club). */
