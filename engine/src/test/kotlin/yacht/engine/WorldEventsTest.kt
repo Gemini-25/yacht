@@ -305,7 +305,9 @@ class WorldEventsTest {
 
     @Test
     fun aCrisisHitsTheMoneyTwoSeasonsRecoversAndEndsWithItsAdministrations() {
-        val book = book()
+        // Two Korean clubs dissolved for money: at the off-season after the close the crisis starts at (6), and at the one before.
+        val book = ClubBook.decode(book().encode() + "gone c998 KR 가람 0 ff112233 ff445566 가 0 1 6 F\ngone c997 KR 나래 0 ff112233 ff445566 나 0 1 5 F\n")
+        assertEquals(listOf(6, 5), listOf("c998", "c997").map { book.gone(it)!!.dissolved })
         val w = book.world!!
         // Some debt in Asia only, so a confederation's crisis falls there.
         for ((i, id) in w.clubs.keys.filter { book.nationOf(it)?.let(Nations::confedOf) == Confed.ASIA }.withIndex()) if (i % 3 == 0) w.clubs.getValue(id).balance = -500
@@ -344,6 +346,7 @@ class WorldEventsTest {
         assertEquals(9, ended.end)
         assertTrue(admin.id in ended.args.single().split(','))
         assertTrue(rescued.id in ended.args.single().split(','), "a club rescued at once still went into administration")
+        assertTrue("c998" in ended.args.single().split(',') && "c997" !in ended.args.single().split(','), ended.args.single())
         assertEquals(LeagueEvent("crisis_ends", 9, emptyList(), listOf("3", "${ended.args.single().split(',').size}", scope)), end.single { it.kind == "crisis_ends" })
         assertEquals(18, world.events.cooldown(ArcKind.CRISIS))
     }

@@ -522,7 +522,8 @@ object WorldEvents {
             book.world?.clubs?.values?.filter {
                 (it.admin > 0 || it.deduction >= ClubEconomy.ADMIN_DEDUCTION) && book.club(it.id) != null && (scope == null || book.nationOf(it.id) in scope)
             }?.forEach { admin += it.id }
-            book.gone.filter { it.reason == 'F' && it.dissolved > a.start && (scope == null || it.nation in scope) }.forEach { admin += it.id }
+            // Dissolved at an off-season of the crisis: those after closes start .. c − 1 (a dissolution's season is the closing one).
+            book.gone.filter { it.reason == 'F' && it.dissolved >= a.start && (scope == null || it.nation in scope) }.forEach { admin += it.id }
         }
         // None: no args at all, as the file gives them back.
         val args = if (admin.isEmpty()) emptyList() else listOf(admin.sortedWith(ClubBook.ID_ORDER).joinToString(","))
