@@ -117,6 +117,14 @@ class WorldEventsTest {
         }
         Cw.play(p4)
         val before = world.encode()
+        // With the 요트협회's assembly off the rules never change by themselves: the same compromise, without the reform.
+        val offWorld = WorldBook.decode(before)
+        val off = config.copy(federation = false)
+        WorldEvents.close(offWorld, ArcContext(p4, off, book, Cw.ranking(p4), Big.league.honours, book.valuer(Cw::rating)))
+        assertEquals('P' to "-", offWorld.events.ended.single().let { it.outcome to it.args[1] })
+        assertEquals(emptyList(), WorldEvents.effects(offWorld, 4).emergency)
+        assertEquals("-", WorldEvents.opening(offWorld, 4).single().args[1])
+        assertTrue(WorldEvents.effects(offWorld, 5).clPrizeFactor > 1.0, "the prize money still rises")
         val news = WorldEvents.close(world, ctx(book, p4))
         assertTrue(world.events.arcs.isEmpty())
         val ended = world.events.ended.single()
@@ -261,6 +269,14 @@ class WorldEventsTest {
             WorldEvents.effects(exit, 7),
         )
         assertEquals(ArcEffects(injections = mapOf("c1" to 0.8)), WorldEvents.effects(exit, 6))
+        // A club gone by the verdict: lapsed, with no verdict; what the investor did before stays as it was.
+        val gone = WorldBook()
+        gone.events.active += WorldArc(6, ArcKind.INVESTOR, ArcStage.ACTIVE, 3, 7, false, listOf("c999"), listOf("P", "모나코 파트너스"))
+        val before = (3..7).map { WorldEvents.effects(gone, it) }
+        assertEquals(emptyList(), WorldEvents.close(gone, ctx(book, p7)).filter { it.kind.startsWith("investor") })
+        assertEquals('L', gone.events.ended.single().outcome)
+        assertEquals(before, (3..7).map { WorldEvents.effects(gone, it) })
+        assertEquals(listOf("investor_takeover"), kinds(WorldEvents.closeNews(gone, 4)))
         // Lapsed (the club was gone by the takeover): no effect at all.
         val lapsed = WorldBook()
         lapsed.events.endedList += EndedArc(5, ArcKind.INVESTOR, 3, 4, 'L', listOf("c1"), listOf("S", "카타르 인베스트먼트"))
@@ -316,12 +332,18 @@ class WorldEventsTest {
         WorldEvents.close(world, quiet(book, bare(7)))
         assertEquals(ArcStage.ACTIVE, world.events.arcs.single().stage)
         admin.admin = 0
+        // Most are rescued at the off-season they go into administration (admin back to 0): the season's
+        // 법정관리 deduction tells them.
+        val rescued = w.clubs.values.first { it.id != admin.id && it.admin == 0 && it.deduction == 0 && book.club(it.id) != null && (nations == null || book.nationOf(it.id) in nations) }
+        rescued.deduction = ClubEconomy.ADMIN_DEDUCTION
         WorldEvents.close(world, quiet(book, bare(8)))
+        rescued.deduction = 0
         assertEquals(ArcStage.RECOVERY to 9, world.events.arcs.single().let { it.stage to it.next })
         val end = WorldEvents.close(world, quiet(book, bare(9)))
         val ended = world.events.ended.single()
         assertEquals(9, ended.end)
         assertTrue(admin.id in ended.args.single().split(','))
+        assertTrue(rescued.id in ended.args.single().split(','), "a club rescued at once still went into administration")
         assertEquals(LeagueEvent("crisis_ends", 9, emptyList(), listOf("3", "${ended.args.single().split(',').size}", scope)), end.single { it.kind == "crisis_ends" })
         assertEquals(18, world.events.cooldown(ArcKind.CRISIS))
     }
@@ -503,11 +525,16 @@ class WorldEventsTest {
             // Below 500 members: no merger before it; no club world: no crisis or investor.
             assertEquals(n >= 6 && roll(plan, ArcKind.BOOM) < 0.08, world.events.arcs.any { it.kind == ArcKind.BOOM }, "season $n")
         }
-        // A nation below half of leagueMin is no candidate, forced or not.
+        // A nation below half of leagueMin is no candidate, forced or not; nor one with enough members for
+        // a league of its own next season anyway.
         force(ArcKind.BOOM to 6)
         val none = WorldBook()
         WorldEvents.close(none, smallCtx(6, counts + ("IN" to 11)))
         assertTrue(none.events.arcs.isEmpty())
+        assertEquals("IN", NationalLeagues.plan(counts + ("IN" to 24), config, small.leagues.list.map { it.id }.toSet())["IN"])
+        val already = WorldBook()
+        WorldEvents.close(already, smallCtx(6, counts + ("IN" to 24)))
+        assertTrue(already.events.arcs.isEmpty())
     }
 
     // ---- the rules for all ---------------------------------------------------------------------

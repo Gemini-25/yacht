@@ -36,7 +36,7 @@ enum class ArcStage(val code: Char) {
  * - INVESTOR: RUMOUR ([subjects] the target club) → ANNOUNCED (인수 협상) at the next winter, [args]
  *   the investor's owner type code and name → ACTIVE (the takeover) at that season's close → its
  *   verdict three closes later, outcome S, E (args + the new 지역 기업 owner's `ambition:patience`) or
- *   F (it stays); L when the club was gone by the takeover.
+ *   F (it stays); L when the club was gone by the takeover (no takeover) or by the verdict.
  * - CRISIS: ACTIVE ([subjects] the scope: a [Confed] name or [WorldEvents.WORLD]) → RECOVERY two
  *   closes on → ends a close later; [args] the clubs in administration during it (','-joined).
  * - MERGER: VOTE ([subjects] the two nations) → at the next close ACTIVE (merged; [args] yes and
@@ -411,8 +411,8 @@ object WorldEvents {
     /**
      * The showdown at the close after the announcement: each founder still there stays with its
      * owner type's chance × (1 − 0.3 × mood / 100); [SL_COMPROMISE] or more stayers make a
-     * compromise (the 챔피언스 리그 reform when `clDirect` can go up, prize money up), fewer a collapse
-     * (the stayers' owners sell with [SL_SELL]). The arc ends here.
+     * compromise (the 챔피언스 리그 reform when `clDirect` can go up and the 요트협회's assembly is on,
+     * prize money up), fewer a collapse (the stayers' owners sell with [SL_SELL]). The arc ends here.
      */
     private fun showdown(e: ArcBook, a: WorldArc, ctx: ArcContext) {
         val book = ctx.clubs
@@ -432,7 +432,8 @@ object WorldEvents {
         }
         val compromise = stayers.size >= SL_COMPROMISE
         val cl = ctx.config.clDirect
-        val reform = if (compromise && ctx.config.with(ProposalKind.CL_DIRECT_UP.lever.key, "${cl + 1}") != null) "$cl" else "-"
+        // The reform is the 요트협회's decision: none with its assembly off (the rules then never change by themselves).
+        val reform = if (compromise && ctx.config.federation && ctx.config.with(ProposalKind.CL_DIRECT_UP.lever.key, "${cl + 1}") != null) "$cl" else "-"
         val sales = ArrayList<String>()
         if (!compromise && book != null) for (id in stayers) {
             val old = ownerOf(book, id).type
@@ -477,7 +478,7 @@ object WorldEvents {
      * The verdict three closes after the takeover: a club-table title or a member's 챔피언스 리그 /
      * 대륙 챔피언스 title in those seasons is a success; otherwise the investor leaves with
      * [INV_EXIT] (a new 지역 기업 owner; a 투자 펀드 sells its [INV_SELL_OFF] most valuable members),
-     * else it stays.
+     * else it stays. A club gone by then has no verdict: lapsed (L), as one gone by the takeover.
      */
     private fun verdict(e: ArcBook, a: WorldArc, ctx: ArcContext) {
         val c = ctx.plan.number
@@ -493,8 +494,9 @@ object WorldEvents {
         }
         val rng = rng(ctx, a.id)
         val outcome = when {
+            book != null && book.club(club) == null -> 'L'
             success -> 'S'
-            book?.club(club) != null && rng.nextDouble() < INV_EXIT -> 'E'
+            book != null && rng.nextDouble() < INV_EXIT -> 'E'
             else -> 'F'
         }
         val args = if (outcome == 'E') a.args.take(2) + "${draw(ClubEconomy.ambitions(OwnerType.LOCAL), rng)}:${draw(ClubEconomy.patiences(OwnerType.LOCAL), rng)}" else a.args.take(2)
@@ -504,7 +506,12 @@ object WorldEvents {
 
     // ---- CRISIS -------------------------------------------------------------------------------
 
-    /** The crisis at every close after it began: the clubs in administration (or dissolved for money) noted, RECOVERY after two closes, the end after three. */
+    /**
+     * The crisis at every close after it began: the clubs that were in administration at the off-season
+     * before it (or dissolved for money since it began) noted, RECOVERY after two closes, the end after
+     * three. Most clubs in administration are rescued at that same off-season (their `admin` back to 0),
+     * so the season's 법정관리 deduction tells them too.
+     */
     private fun crisis(e: ArcBook, a: WorldArc, ctx: ArcContext) {
         val c = ctx.plan.number
         if (c <= a.start) return
@@ -512,7 +519,9 @@ object WorldEvents {
         val scope = scopeNations(a.subjects.firstOrNull())
         val admin = LinkedHashSet(list(a.args.firstOrNull()))
         if (book != null) {
-            book.world?.clubs?.values?.filter { it.admin > 0 && book.club(it.id) != null && (scope == null || book.nationOf(it.id) in scope) }?.forEach { admin += it.id }
+            book.world?.clubs?.values?.filter {
+                (it.admin > 0 || it.deduction >= ClubEconomy.ADMIN_DEDUCTION) && book.club(it.id) != null && (scope == null || book.nationOf(it.id) in scope)
+            }?.forEach { admin += it.id }
             book.gone.filter { it.reason == 'F' && it.dissolved > a.start && (scope == null || it.nation in scope) }.forEach { admin += it.id }
         }
         // None: no args at all, as the file gives them back.
@@ -620,10 +629,12 @@ object WorldEvents {
     private fun superLeague(e: ArcBook, ctx: ArcContext, roll: Double, forced: Boolean): WorldArc? {
         val c = ctx.plan.number
         val book = ctx.clubs ?: return null
+        // The chance first: the clubs' values cost a valuation of every member.
+        if (!forced && (c < SL_SEASON || roll >= SL_CHANCE)) return null
         val values = values(ctx)
         if (values.size < SL_FOUNDERS) return null
         if (!forced) {
-            if (values.size < SL_CLUBS || c < SL_SEASON || roll >= SL_CHANCE) return null
+            if (values.size < SL_CLUBS) return null
             val top = values.take(SL_FOUNDERS)
             val total = values.sumOf { it.second.toLong() }
             val share = if (total <= 0) 0.0 else top.sumOf { it.second.toLong() }.toDouble() / total
@@ -712,14 +723,20 @@ object WorldEvents {
         return newArc(e, ArcKind.MERGER, ArcStage.VOTE, c, false, listOf(a, b))
     }
 
-    /** A nation playing in a 연합 리그 with ≥ [BM_SHARE] × leagueMin members (drawn by members); season ≥ [BM_SEASON], [BM_CHANCE]. */
+    /**
+     * A nation playing in a 연합 리그 with ≥ [BM_SHARE] × leagueMin members (drawn by members), and not
+     * about to have a league of its own next season anyway; season ≥ [BM_SEASON], [BM_CHANCE].
+     */
     private fun boomNation(e: ArcBook, ctx: ArcContext, rng: Random, roll: Double, forced: Boolean): WorldArc? {
         val c = ctx.plan.number
         if (!forced && (c < BM_SEASON || roll >= BM_CHANCE)) return null
         val leagues = ctx.plan.league.leagues
         val merged = effectsAt(e, c).merged
         val floor = BM_SHARE * ctx.config.leagueMin
-        val nations = Nations.ALL.map { it.code }.filter { n -> leagues.byId(n) == null && n !in merged && (ctx.counts[n] ?: 0) >= floor }
+        val next = NationalLeagues.plan(ctx.counts, ctx.config, leagues.list.map { it.id }.toSet(), merged)
+        val nations = Nations.ALL.map { it.code }.filter { n ->
+            leagues.byId(n) == null && n !in merged && (ctx.counts[n] ?: 0) >= floor && next[n] != n
+        }
         if (nations.isEmpty()) return null
         var x = rng.nextDouble() * nations.sumOf { ctx.counts.getValue(it) }
         val nation = nations.firstOrNull { x -= ctx.counts.getValue(it); x < 0 } ?: nations.last()
@@ -764,6 +781,9 @@ object WorldEvents {
 
     private fun list(s: String?): List<String> = LineParts.items(s.orEmpty().ifEmpty { "-" })
 
+    /** An INVESTOR arc whose takeover happened (under way since it, or ended after it; not lapsed at it: the club was gone). */
+    private fun tookOver(r: Rec): Boolean = r.stage == ArcStage.ACTIVE || (r.end != null && (r.outcome != 'L' || r.end > r.start + 1))
+
     private fun effectsOf(r: Rec, c: Int): ArcEffects = when (r.kind) {
         ArcKind.SUPER_LEAGUE -> {
             val e = r.end
@@ -796,7 +816,7 @@ object WorldEvents {
         ArcKind.INVESTOR -> {
             val club = r.subjects.firstOrNull()
             val type = r.args.getOrNull(0)?.singleOrNull()?.let { OwnerType.of(it) }
-            val took = r.outcome != 'L' && (r.stage == ArcStage.ACTIVE || r.end != null)
+            val took = tookOver(r)
             when {
                 club == null || type == null || !took -> ArcEffects.NONE
                 c == r.end && r.outcome == 'E' -> {
@@ -879,7 +899,7 @@ object WorldEvents {
                 val club = r.subjects.take(1)
                 val name = r.args.getOrNull(1).orEmpty()
                 val type = r.args.getOrNull(0).orEmpty()
-                if (r.start == c - 1 && r.outcome != 'L' && (r.stage == ArcStage.ACTIVE || r.end != null)) news("investor_takeover", club, name, type)
+                if (r.start == c - 1 && tookOver(r)) news("investor_takeover", club, name, type)
                 if (r.end == c && r.outcome in "SEF") news("investor_verdict", club, r.outcome.toString(), name, type)
             }
             ArcKind.CRISIS -> {

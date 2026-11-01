@@ -520,16 +520,18 @@ data class FederationStats(
          * [book] holding accounts of the season ([ClubEconomy.report], clubs dissolved since left
          * out), those in the red, and the mean operating income of the clubs of the season's [TOP]
          * best-ranked leagues ([NationalLeagues.bestRanked], else the federation's `top` line) and of
-         * the others'. A club's league is its members' in [plan] (its nation's when none of them
-         * played). Unchanged without a club world.
+         * the others'. A club's league is the one its nation played in during [plan] (where most of
+         * its nation's clubs' members played, [Transfers.leagues], as the market reads it): the
+         * statistics are read after the off-season, whose transfers brought some members in from
+         * other leagues. Unchanged without a club world.
          */
         private fun money(stats: FederationStats, plan: SeasonPlan, federation: Federation, book: ClubBook?): FederationStats {
             if (book?.world == null) return stats
             val report = ClubEconomy.report(book, plan.number)
             if (report.clubs.isEmpty()) return stats
             val top = NationalLeagues.bestRanked(plan, Federation.TOP).ifEmpty { federation.top(plan.number).orEmpty() }.toSet()
-            fun leagueOf(id: String): String =
-                book.members(id).firstNotNullOfOrNull { plan.league.leagueOf(it)?.id } ?: book.nationOf(id)?.takeIf { plan.league.leagues.byId(it) != null }.orEmpty()
+            val leagues = Transfers.leagues(plan.league, book::clubOf, book::nationOf)
+            fun leagueOf(id: String): String = book.nationOf(id)?.let { leagues[it] }.orEmpty()
             val (inTop, rest) = report.clubs.map { it.first }.partition { top.isNotEmpty() && leagueOf(it) in top }
             fun mean(ids: List<String>): Int = if (ids.isEmpty()) 0 else Math.round(ids.sumOf { (report.incomes[it] ?: 0).toLong() }.toDouble() / ids.size).toInt()
             return stats.copy(clubs = report.clubs.size, red = report.red, topIncome = mean(inTop), restIncome = mean(rest))

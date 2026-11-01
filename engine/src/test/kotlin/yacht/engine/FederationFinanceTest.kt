@@ -6,6 +6,7 @@ import yacht.engine.league.FamilyStats
 import yacht.engine.league.Federation
 import yacht.engine.league.FederationStats
 import yacht.engine.league.LeagueConfig
+import yacht.engine.league.LeagueIds
 import yacht.engine.league.Lever
 import yacht.engine.league.MetaBook
 import yacht.engine.league.NationalLeagues
@@ -298,8 +299,17 @@ class FederationFinanceTest {
         val first = plan.league.leagues.list.first().id
         val f = Federation().also { it.putTop(plan.number, listOf(first)) }
         val split = FederationStats.of(plan, honours, f, config, clubs = l.book)
-        val (inTop, rest) = report.clubs.map { it.first }.partition { id -> l.book.members(id).firstNotNullOfOrNull { plan.league.leagueOf(it)?.id } == first }
+        // A club's league is its nation's of the season (where most of its nation's clubs' members played), not
+        // where its first member played: the off-season's transfers have brought some in from other leagues.
+        val votes = HashMap<String, HashMap<String, Int>>()
+        for (k in plan.league.standings.keys) {
+            val nation = l.book.clubOf(k)?.let { l.book.nationOf(it) } ?: continue
+            votes.getOrPut(nation) { HashMap() }.merge(plan.league.leagueOf(k)!!.id, 1, Int::plus)
+        }
+        fun leagueOf(id: String) = votes[l.book.nationOf(id)]?.maxWith(compareBy<Map.Entry<String, Int>> { it.value }.thenByDescending { LeagueIds.order(it.key) })?.key
+        val (inTop, rest) = report.clubs.map { it.first }.partition { leagueOf(it) == first }
         assertTrue(inTop.isNotEmpty() && rest.isNotEmpty())
+        assertTrue(inTop.none { id -> rest.any { l.book.nationOf(it) == l.book.nationOf(id) } }, "a nation's clubs are on one side")
         fun mean(ids: List<String>) = Math.round(ids.sumOf { report.incomes.getValue(it).toLong() }.toDouble() / ids.size).toInt()
         assertEquals(mean(inTop) to mean(rest), split.topIncome to split.restIncome)
         assertEquals(split.topIncome.toDouble() / split.restIncome, split.incomeGap!!, 1e-9)
