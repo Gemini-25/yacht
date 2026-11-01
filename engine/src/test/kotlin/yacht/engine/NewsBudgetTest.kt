@@ -65,6 +65,9 @@ class NewsBudgetTest {
 
     private val budgeted = NewsBudget.ROLLOVER.toSet()
 
+    /** The market's singles that tell a deal (a `transfer` of it is told once). */
+    private val deals = setOf("record_fee", "rival_move", "release_clause", "forced_sale")
+
     @Test
     fun theRolloverTellsTenAndOneMoreEveryFiveHundredMembers() {
         assertEquals(10, NewsBudget.rolloverCap(200))
@@ -75,9 +78,12 @@ class NewsBudgetTest {
             val out = NewsBudget.rollover(events, members)
             val told = out.filter { it.kind in budgeted }
             assertEquals(NewsBudget.rolloverCap(members), told.size, "$members: ${told.map { it.kind }}")
-            // Today's news stays whole and in its place (the duplicate `transfer` of a clause aside).
-            val todays = events.filter { it.kind !in budgeted && !(it.kind == "transfer" && it.keys[0] == "a2") }
+            // Today's news stays whole and in its place, but a `transfer` of a deal a kept market single tells.
+            val toldDeals = out.filter { it.kind in deals }.map { it.keys.take(3) }.toSet()
+            val todays = events.filter { it.kind !in budgeted && !(it.kind == "transfer" && it.keys.take(3) in toldDeals) }
             assertEquals(todays, out.filter { it.kind !in budgeted })
+            // The clause's deal is told once: by the clause when it is kept, else by the plain transfer.
+            assertEquals(1, out.count { it.keys.take(3) == listOf("a2", "c3", "c4") }, "$members")
             // The digests are always told; the singles kept are the most important ones, ties by the table's order.
             assertTrue(out.any { it.kind == NewsBudget.CLUB_DIGEST } && out.any { it.kind == NewsBudget.COACH_DIGEST })
             val keptSingles = told.filter { it.kind != NewsBudget.CLUB_DIGEST && it.kind != NewsBudget.COACH_DIGEST }
@@ -150,6 +156,48 @@ class NewsBudgetTest {
         assertEquals(deals.drop(1), NewsBudget.rollover(deals, 200))
         val winter = e("transfer", listOf("a1", "c1", "c2"), listOf("300", "0", "W"), week = 22)
         assertEquals(listOf(winter, deals[2]), NewsBudget.rollover(listOf(winter, deals[2]), 200))
+    }
+
+    /** A transfer whose market single the budget leaves out is still told; one deal two singles tell is told by the better ranked. */
+    @Test
+    fun aDealIsToldOnceNeverTwiceNorNever() {
+        // Twelve singles more important than the clause: at 200 members (10) it is left out, so its transfer stays.
+        val ahead = (1..12).map { e("administration", listOf("c$it")) }
+        val transfer = e("transfer", listOf("a2", "c3", "c4"), listOf("300"))
+        val clause = e("release_clause", listOf("a2", "c3", "c4"), listOf("300"))
+        val small = NewsBudget.rollover(listOf(transfer) + ahead + clause, 200)
+        assertTrue(transfer in small && clause !in small, small.map { it.kind }.toString())
+        assertEquals(small, NewsBudget.rollover(small, 200))
+        // With room for it, the clause tells the deal and the transfer goes.
+        val big = NewsBudget.rollover(listOf(transfer) + ahead + clause, 3000)
+        assertTrue(transfer !in big && clause in big, big.map { it.kind }.toString())
+        // A clause paid by a rival: the rival move (the table's earlier kind) tells it, the clause goes; a record fee to a rival is the record's.
+        val rival = e("rival_move", listOf("a2", "c3", "c4"), listOf("300"))
+        assertEquals(listOf(rival), NewsBudget.rollover(listOf(rival, clause), 1000))
+        assertEquals(listOf(rival), NewsBudget.rollover(listOf(clause, rival), 1000))
+        val record = e("record_fee", listOf("a2", "c3", "c4"), listOf("300", "200", "KR"))
+        val once = NewsBudget.rollover(listOf(transfer, rival, record, clause), 1000)
+        assertEquals(listOf(record), once)
+        assertEquals(once, NewsBudget.rollover(once, 1000))
+        // Other deals of the same player (another club) are other stories.
+        val other = e("rival_move", listOf("a2", "c5", "c6"), listOf("90"))
+        assertEquals(listOf(record, other), NewsBudget.rollover(listOf(record, other), 1000))
+    }
+
+    /** A club world's digest names six clubs of its own most off-seasons: the clubs left out still get named, after its first three. */
+    @Test
+    fun theClubsLeftOutAreNamedInAFullDigest() {
+        val digest = e("club_world_digest", listOf("c1", "c2", "c3", "c4", "c5", "c6"), listOf("34", "2", "3"))
+        val ahead = (1..12).map { e("one_club_man", listOf("p$it", "c$it"), listOf("14", "-")) }
+        val life = listOf(e("sponsor_exit", listOf("c8"), listOf("휘담전자", "0")), e("fan_protest", listOf("c9", "k9"), listOf("18")))
+        val out = NewsBudget.rollover(listOf(digest) + ahead + life, 200)
+        val named = out.single { it.kind == NewsBudget.CLUB_DIGEST }
+        assertEquals(listOf("c1", "c2", "c3", "c8", "c9", "c4"), named.keys)
+        assertEquals(digest.args, named.args)
+        assertTrue(life.none { it in out })
+        assertEquals(out, NewsBudget.rollover(out, 200))
+        // A quiet off-season (everything told) leaves its digest as it was.
+        assertEquals(listOf(digest) + life, NewsBudget.rollover(listOf(digest) + life, 200))
     }
 
     @Test

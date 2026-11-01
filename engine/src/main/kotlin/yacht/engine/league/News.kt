@@ -1423,13 +1423,14 @@ object News {
      */
     private fun clubTemplates(e: LeagueEvent, v: MutableMap<String, String>, arg: (Int) -> String?, x: Ctx): Pair<List<T>, Int> = when (e.kind) {
         "club_accounts" -> {
-            // [richest, biggest loss?] (its income, the loss, clubs in the red).
+            // [richest, biggest loss?] (its income, the season's biggest loss, clubs whose balance ended below 0).
+            // The red count is of balances (빚), the loss of the season's accounts: a club can lose money and keep a balance.
             moneyOf(arg(0))?.let { v["inc"] = it }
             moneyOf(arg(1)?.takeIf { it != "0" })?.let { v["loss"] = it }
             val red = arg(2)?.toIntOrNull() ?: 0
-            v["red"] = if (red > 0) "적자로 시즌을 마친 클럽은 ${red}곳이에요." else "적자로 시즌을 마친 클럽은 한 곳도 없어요."
+            v["red"] = if (red > 0) "빚을 안고 시즌을 마친 클럽은 ${red}곳이에요." else "빚을 안고 시즌을 마친 클럽은 한 곳도 없어요."
             listOf(
-                T("클럽 재정 결산: 수입 1위 {a}", "시즌 {season}에 가장 많이 번 클럽은 수입 {inc|을} 올린 {a|이에요}. {red}[[ 적자가 가장 큰 클럽은 {loss} 손실을 본 {b|이에요}.]]"),
+                T("클럽 재정 결산: 수입 1위 {a}", "시즌 {season}에 가장 많이 번 클럽은 수입 {inc|을} 올린 {a|이에요}. {red}[[ 이번 시즌 손실이 가장 큰 클럽은 {loss|을} 잃은 {b|이에요}.]]"),
             ) to 2
         }
         "club_trouble" -> {
@@ -2105,7 +2106,7 @@ object News {
                 when (arg(0)) {
                     "S" -> T("투자의 결실: {a}", "{owner}의 투자를 받은 {a|이} 마침내 정상에 올랐어요. 세 시즌 동안 쏟아부은 돈이 결실을 맺었어요.")
                     "E" -> T("투자 실패: {owner}, {a}에서 철수", "기대한 성과를 내지 못하자 {owner|이} {a}에서 손을 떼요. {a|은} 새 주인과 다시 시작해요.")
-                    else -> T("투자 실패: {a}", "{owner}의 돈을 쏟아붓고도 {a|은} 우승하지 못했어요. 투자자는 남았지만 분위기는 무거워요.")
+                    else -> T("투자 실패: {a}", "{owner|이} 돈을 쏟아부었지만 {a|은} 우승하지 못했어요. 투자자는 남았지만 분위기는 무거워요.")
                 },
             ) to 3
         }
@@ -2627,27 +2628,32 @@ object NewsBudget {
      * digests first, then the singles by importance ([News.importance]), then the table's order,
      * then their own; the ones left out are folded into the digests: a coach move's into
      * `coach_digest` (one is made from the told moves when there is none), a club life single's
-     * club among `club_world_digest`'s names (≤ [DIGEST_CLUBS]). Before that, the life step's
-     * `takeover` of a club that an `investor_takeover` of the rollover (in [events] or in [told], the
-     * close's) tells is dropped, and so is an off-season `transfer` that a `record_fee`,
-     * `rival_move`, `release_clause` or `forced_sale` tells. Every other event stays as it is, in
-     * its place; the kept ones keep their order. Applied again to its result it changes nothing.
+     * club among `club_world_digest`'s names (after its own first [DIGEST_CLUBS] / 2, ≤
+     * [DIGEST_CLUBS] in all). Before that, the life step's `takeover` of a club that an
+     * `investor_takeover` of the rollover (in [events] or in [told], the close's) tells is dropped,
+     * and of two market singles (`record_fee`, `rival_move`, `release_clause`, `forced_sale`) telling
+     * one deal (a record fee or a release clause paid by a rival) the better ranked is the one kept.
+     * An off-season `transfer` of a deal such a single tells is dropped when that single is kept.
+     * Every other event stays as it is, in its place; the kept ones keep their order. Applied again
+     * to its result it changes nothing.
      */
     fun rollover(events: List<LeagueEvent>, members: Int, told: List<LeagueEvent> = emptyList()): List<LeagueEvent> {
         val invested = (events + told).filter { it.kind == "investor_takeover" }.mapNotNullTo(HashSet()) { it.keys.firstOrNull() }
-        val deals = events.filter { it.kind in DEALS && it.keys.size >= 3 }.mapTo(HashSet()) { it.keys.take(3) }
-        val list = events.filterNot { e ->
-            (e.kind == "takeover" && e.keys.firstOrNull() in invested) ||
-                (e.kind == "transfer" && !inSeasonWeek(e.week) && e.keys.size >= 3 && e.keys.take(3) in deals)
-        }
+        val list = events.filterNot { e -> e.kind == "takeover" && e.keys.firstOrNull() in invested }
         val order = ROLLOVER.withIndex().associate { it.value to it.index }
         val budgeted = list.withIndex().filter { it.value.kind in order }
         val digests = budgeted.filter { it.value.kind == CLUB_DIGEST || it.value.kind == COACH_DIGEST }
-        val singles = budgeted.filter { it.value.kind != CLUB_DIGEST && it.value.kind != COACH_DIGEST }
-        val importance = singles.associate { it.index to News.importance(it.value) }
-        val ranked = singles.sortedWith(
+        val all = budgeted.filter { it.value.kind != CLUB_DIGEST && it.value.kind != COACH_DIGEST }
+        val importance = all.associate { it.index to News.importance(it.value) }
+        val byRank = all.sortedWith(
             compareByDescending<IndexedValue<LeagueEvent>> { importance.getValue(it.index) }.thenBy { order.getValue(it.value.kind) }.thenBy { it.index },
         )
+        fun deal(e: LeagueEvent): List<String>? = e.keys.takeIf { e.kind in DEALS && it.size >= 3 }?.take(3)
+        // A deal two market singles tell (a record fee or a clause paid by a rival): the better ranked tells it.
+        val seen = HashSet<List<String>>()
+        val twice = byRank.filter { x -> deal(x.value)?.let { !seen.add(it) } == true }.mapTo(HashSet()) { it.index }
+        val singles = all.filter { it.index !in twice }
+        val ranked = byRank.filter { it.index !in twice }
         val cap = rolloverCap(members)
         var room = maxOf(0, cap - digests.size)
         var kept = ranked.take(room).mapTo(HashSet()) { it.index }
@@ -2659,16 +2665,24 @@ object NewsBudget {
             room--
             kept = ranked.take(room).mapTo(HashSet()) { it.index }
         }
-        if (kept.size == singles.size) return list
+        // An off-season transfer of a deal a kept market single tells is not told again (a dropped one's is).
+        val toldDeals = singles.filter { it.index in kept }.mapNotNullTo(HashSet()) { deal(it.value) }
+        fun retold(e: LeagueEvent) = e.kind == "transfer" && !inSeasonWeek(e.week) && e.keys.size >= 3 && e.keys.take(3) in toldDeals
+        if (kept.size == singles.size && twice.isEmpty()) return list.filterNot(::retold)
         val dropped = singles.filter { it.index !in kept }
-        val lifeClubs = dropped.filter { it.value.kind in CLUB_LIFE }.mapNotNull { it.value.keys.firstOrNull() }
+        val lifeClubs = dropped.filter { it.value.kind in CLUB_LIFE }.mapNotNull { it.value.keys.firstOrNull()?.takeIf { k -> k != "-" } }
         val out = ArrayList<LeagueEvent>(list.size)
         val firstCoach = coachMoves.firstOrNull()?.index
         for ((i, e) in list.withIndex()) {
             if (makeDigest && i == firstCoach) out += coachDigest(coachMoves.map { it.value })
             when {
-                e.kind == CLUB_DIGEST -> out += e.copy(keys = (e.keys + lifeClubs).filter { it != "-" }.distinct().take(DIGEST_CLUBS))
-                e.kind in order && e.kind != COACH_DIGEST && i !in kept -> {}
+                // Its own first clubs stay first; the clubs left out come next, so they are named even when it names six already.
+                e.kind == CLUB_DIGEST && lifeClubs.isNotEmpty() -> {
+                    val own = e.keys.filter { it != "-" }
+                    out += e.copy(keys = (own.take(DIGEST_CLUBS / 2) + lifeClubs + own.drop(DIGEST_CLUBS / 2)).distinct().take(DIGEST_CLUBS))
+                }
+                e.kind in order && e.kind != COACH_DIGEST && e.kind != CLUB_DIGEST && i !in kept -> {}
+                retold(e) -> {}
                 else -> out += e
             }
         }

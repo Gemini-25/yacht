@@ -1027,7 +1027,10 @@ class MediaTest {
         val fee = News.article(LeagueEvent("release_clause", 3, listOf("ai1", "c1", "c2"), listOf("300")), name, club)
         assertTrue("30.0억을 내고" in fee.body, fee.body)
         val accounts = News.article(LeagueEvent("club_accounts", 3, listOf("c1", "c2"), listOf("322", "45", "7"), Comp.CLUB), name, club)
-        assertTrue("수입 32.2억을 올린 서울 타이거즈예요" in accounts.body && "4.5억 손실을 본 부산 갈매기예요" in accounts.body && "7곳" in accounts.body, accounts.body)
+        assertTrue("수입 32.2억을 올린 서울 타이거즈예요" in accounts.body && "4.5억을 잃은 부산 갈매기예요" in accounts.body && "7곳" in accounts.body, accounts.body)
+        // The red count is of balances, the loss of the season: a season's loser with no club in debt reads without contradiction.
+        val noDebt = News.article(LeagueEvent("club_accounts", 3, listOf("c1", "c2"), listOf("322", "45", "0"), Comp.CLUB), name, club).body
+        assertTrue("빚을 안고 시즌을 마친 클럽은 한 곳도 없어요" in noDebt && "손실이 가장 큰 클럽은 4.5억을 잃은 부산 갈매기예요" in noDebt && "적자" !in noDebt, noDebt)
     }
 
     @Test
@@ -1065,6 +1068,9 @@ class MediaTest {
         // Eras with their particles; 춘추전국 has no family.
         assertTrue("‘보너스파의 시대’가 열렸어요" in text(e("era_begins", emptyList(), listOf("B", "5", "8", "보너스파의 시대"), null)))
         assertTrue("어느 스타일도" in text(e("era_begins", emptyList(), listOf("-", "0", "6", "춘추전국 시대"), null)))
+        // An investor that stays after a failure poured the money, not the club.
+        val failed = text(e("investor_verdict", listOf("c1"), listOf("F", "오르비스 인베스트먼트", "S"), null))
+        assertTrue("오르비스 인베스트먼트가 돈을 쏟아부었지만 서울 타이거즈는 우승하지 못했어요" in failed, failed)
         // The 요트협회's emergency decision and the proposal it voided.
         assertTrue("슈퍼리그 사태로" in text(e("federation_decision", emptyList(), listOf("챔피언스 리그 직행 7개 → 8개", "A", "E", "0", "0", "4"), null)))
         assertTrue("긴급 결정으로 무효가 됐어요" in text(e("federation_decision", emptyList(), listOf("챔피언스 리그 직행 7개 → 8개", "V", "E", "3", "2", "4"), null)))
