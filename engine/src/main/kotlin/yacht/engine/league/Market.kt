@@ -1024,7 +1024,8 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
             override val free: Map<String, String> = LinkedHashMap(this@MarketWindow.free)
             override fun talk(key: String, buyer: String, open: Boolean): Int? {
                 val st = abroadTalks.first { it.key == key && it.buyer == buyer }
-                if (!open && book.clubOf(key) != st.seller && this@MarketWindow.free[key] != st.seller) return null
+                // A player no longer at the seller (a loanee gone home, a player bought first): the talks step tells what became of it.
+                if (book.clubOf(key) != st.seller && this@MarketWindow.free[key] != st.seller) return null
                 val (fee, reason) = decide(st, open && underCaps(buyer) && Market.allowed(book, key, buyer, rating))
                 if (reason != null) {
                     end(st, reason)
@@ -1083,8 +1084,9 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
                 }
                 continue
             }
-            if (book.nationOf(st.buyer) != book.nationOf(st.seller) || frozen(st.seller)) {
-                // An abroad talk the abroad step could not take (its caps; the winter is domestic), or a seller whose squad is drawn: 규정.
+            if (book.nationOf(st.buyer) != book.nationOf(st.seller) || frozen(st.seller) || w.terms[st.key]?.loanFrom != null) {
+                // An abroad talk the abroad step could not take (its caps; the winter is domestic), a seller whose squad is drawn,
+                // or a member on loan there (its club is another, and a loan club does not sell it): 규정.
                 end(st, 'R')
                 continue
             }

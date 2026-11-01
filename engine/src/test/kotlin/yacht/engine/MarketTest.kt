@@ -700,6 +700,20 @@ class MarketTest {
     }
 
     @Test
+    fun aLoanClubDoesNotSellItsLoanee() {
+        // c02's member plays the season on loan at c08; winter talks with c03 name c08 as the seller.
+        val m = Mk.market(clubs = 8)
+        val k = Mk.key(2, 8)
+        m.book.place(k, "c08")
+        m.setTerms(k) { it.copy(loanFrom = "c02") }
+        m.story(1, k, "c03", winter = true)
+        Market.winter(m.book, m.plan(s), m.input(), { 1 })
+        assertEquals(StoryStage.COLLAPSED to 'R', m.story(1).stage to m.story(1).reason)
+        assertEquals("c08", m.book.clubOf(k))
+        assertEquals("c02", m.terms(k).loanFrom)
+    }
+
+    @Test
     fun aPlayersTraitsAreReadOncePerWindow() {
         // The off-season's traits come from the genes: the window asks for each player's once, however
         // many buyers score it.
