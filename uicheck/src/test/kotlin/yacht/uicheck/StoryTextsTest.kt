@@ -300,6 +300,7 @@ class StoryTextsTest {
             Case("coach player days", type.bodySmall, PAGE_DP, 2) { CoachTexts.playerDays(14, 6) },
             Case("contract line", type.labelMedium, PAGE_DP - 78 - 12 - 18, 1) { n -> PlayerClubTexts.line(n.club, 10, true) },
             Case("coach line", type.labelMedium, PAGE_DP - 78 - 12, 1) { n -> PlayerClubTexts.coach(n.club) },
+            Case("coach line (retired)", type.labelMedium, PAGE_DP - 78 - 12, 1) { n -> PlayerClubTexts.coach(null, n.season) },
             Case("contract", type.bodySmall, SHEET_DP, 2) { PlayerClubTexts.contract(9, "1.2억", "18.5억", "40.0억") },
             Case("academy", type.bodySmall, SHEET_DP, 1) { n -> PlayerClubTexts.academy(n.club, n.season) },
             Case("loan", type.bodySmall, SHEET_DP, 1) { n -> PlayerClubTexts.loan(n.club) },

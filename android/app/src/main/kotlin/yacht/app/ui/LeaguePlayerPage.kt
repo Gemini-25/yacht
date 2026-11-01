@@ -265,7 +265,7 @@ private fun PlayerHeader(lg: LeagueController, v: LeagueView, p: PlayerPage, row
             val coach = card?.coach
             if (coach != null && terms == null) {
                 Text(
-                    PlayerClubTexts.coach(card.coachClub?.name), style = MaterialTheme.typography.labelMedium, color = cs.secondary, fontWeight = FontWeight.Bold,
+                    PlayerClubTexts.coach(card.coachClub?.name, card.coachRetired), style = MaterialTheme.typography.labelMedium, color = cs.secondary, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable { nav.open(Page.Coach(coach)) },
                 )
             }
@@ -1015,7 +1015,8 @@ internal fun playerClubList(lg: LeagueController, card: PlayerClubCard): SheetLi
     card.club?.let { c -> rows += "${c.name} 클럽 페이지" to "c:${c.id}" }
     card.terms?.let { t ->
         rows += PlayerClubTexts.contract(t.until, Money.text(t.wage), Money.text(t.value), t.clause.takeIf { it > 0 }?.let(Money::text)) to null
-        if (t.academy) card.club?.let { c -> rows += PlayerClubTexts.academy(c.name, t.gradSeason) to "c:${c.id}" }
+        // The academy it came out of, its club's or another's.
+        (t.academyClub ?: card.club?.takeIf { t.academy })?.let { c -> rows += PlayerClubTexts.academy(c.name, t.gradSeason) to "c:${c.id}" }
         t.loanFrom?.let { c -> rows += PlayerClubTexts.loan(c.name) to "c:${c.id}" }
     }
     card.clubCoach?.let { id -> rows += PlayerClubTexts.clubCoach(lg.view?.coaches?.get(id) ?: id) to "k:$id" }
@@ -1033,8 +1034,15 @@ internal object PlayerClubTexts {
     /** "{club} · {no}번 · © ›". */
     fun line(club: String, number: Int, captain: Boolean): String = "$club · ${number}번" + (if (captain) " · ©" else "") + " ›"
 
-    /** A retired player's coaching job: "👔 지금은 {club} 감독이에요 ›" (a free coach: 쉬고 있는 감독). */
-    fun coach(club: String?): String = if (club != null) "👔 지금은 $club 감독이에요 ›" else "👔 지금은 쉬고 있는 감독이에요 ›"
+    /**
+     * A retired player's coaching job: "👔 지금은 {club} 감독이에요 ›" (a free coach: 쉬고 있는 감독; a coach
+     * who has retired too: "시즌 {r}에 감독에서 은퇴했어요").
+     */
+    fun coach(club: String?, retired: Int = 0): String = when {
+        retired > 0 -> "👔 시즌 ${retired}에 감독에서 은퇴했어요 ›"
+        club != null -> "👔 지금은 $club 감독이에요 ›"
+        else -> "👔 지금은 쉬고 있는 감독이에요 ›"
+    }
 
     fun contract(until: Int, wage: String, value: String, clause: String?): String =
         "시즌 ${until}까지 · 연봉 $wage · 몸값 $value" + (clause?.let { " · 바이아웃 $it" } ?: "")

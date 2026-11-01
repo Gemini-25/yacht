@@ -11,10 +11,12 @@ import yacht.app.core.Page
 import yacht.app.core.PressureLevel
 import yacht.app.core.WorldPages
 import yacht.app.core.accountItems
+import yacht.app.ui.PlayerClubTexts
 import yacht.app.ui.memberMarks
 import yacht.engine.OppModel
 import yacht.engine.Tables
 import yacht.engine.league.CustomAiSpec
+import yacht.engine.league.Derbies
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
@@ -78,6 +80,12 @@ class ClubPagesTest {
                 assertNotNull(r.record, "${c.id} vs ${r.badge.id}")
                 assertTrue(r.name.isNotEmpty() && r.season.size == 3, "${c.id} vs ${r.badge.id}")
             }
+            // Each member's academy, its club's or another's (the 💼 details' "🌱 {club} 유스 출신").
+            for (m in p.members) {
+                val t = b.terms(m.key) ?: continue
+                assertEquals(t.academy, m.terms?.academyClub?.id, "${c.id} ${m.key}")
+                assertEquals(t.academy != null && t.academy == c.id, m.terms?.academy, "${c.id} ${m.key}")
+            }
             // The coach and the board's outlook of a national club.
             val coach = assertNotNull(life.coach, c.id)
             assertEquals(b.coachOf(c.id)?.id, coach.id)
@@ -85,6 +93,49 @@ class ClubPagesTest {
             assertTrue(board.target in 1..board.clubs && board.place in 1..board.clubs, "${c.id}: $board")
             assertNotNull(coach.pressure)
         }
+    }
+
+    @Test
+    fun theRivalRecordsAreTheEngines() {
+        // 통산 and 이번 시즌 come from one pass over the season's matches (kept for the next pages):
+        // the same numbers as the engine's Derbies.allTime and Derbies.series, also on a second load.
+        val w = scene.world
+        val b = scene.book
+        val p = w.plan!!
+        val through = p.week - 1
+        val series = Derbies.series(b, p, through)
+        var added = 0
+        repeat(2) {
+            val pages = WorldPages(Host(w))
+            for (c in b.clubs) {
+                pages.loadClub(c.id)
+                val life = assertNotNull(wait { pages.club(Page.Club(c.id)) }.life, c.id)
+                for (r in life.rivals) {
+                    val engine = Derbies.allTime(b, p, c.id, r.badge.id, through)
+                    assertEquals(engine, r.record, "${c.id} vs ${r.badge.id}")
+                    val now = series.values.firstOrNull { setOf(it.a, it.b) == setOf(c.id, r.badge.id) }?.of(c.id)
+                    assertEquals(now?.toList() ?: listOf(0, 0, 0), r.season, "${c.id} vs ${r.badge.id}")
+                    if (engine != b.derby(c.id, r.badge.id)) added++
+                }
+            }
+        }
+        assertTrue(added > 0, "no rival pair met this season: the records are the stored ones only")
+    }
+
+    @Test
+    fun theWinterCheckpointIsWeekHalfPlusOne() {
+        // ENG 3.3: the winter checkpoint runs once week ⌊R / 2⌋ + 1 closes (22 of 42, 11 of 20).
+        assertEquals(22, WorldPages.winterWeek(42))
+        assertEquals(11, WorldPages.winterWeek(20))
+        assertEquals(20, WorldPages.winterWeek(38))
+        // The scene's season is past it, so the board's next checkpoint is the season's end.
+        val p = scene.world.plan!!
+        assertTrue(p.week > WorldPages.winterWeek(p.calendar.leagueWeeks))
+        val pages = WorldPages(Host(scene.world))
+        pages.loadClub(scene.club)
+        assertEquals(false, wait { pages.club(Page.Club(scene.club)) }.life?.winterNext)
+        pages.loadCoach(scene.coach)
+        assertEquals(false, wait { pages.coach(Page.Coach(scene.coach)) }.winterNext)
     }
 
     @Test
@@ -203,7 +254,29 @@ class ClubPagesTest {
             assertNull(c.terms)
             assertEquals(ex.id, c.coach)
             assertEquals(ex.club, c.coachClub?.id)
+            assertEquals(0, c.coachRetired)
         }
+        // A player whose coaching days are over too: the coach line says so (not "쉬고 있는 감독"). The
+        // scene's retired coach was a legend another coach was made from too, so it is moved to a
+        // retired player no coach was.
+        val b = scene.book
+        val player = scene.world.players.retired.first { r -> b.coaches.none { it.player == r.key } && b.retiredCoaches.none { it.player == r.key } }.key
+        val files = StoryWorld.variant(scene.files) {
+            clubs = clubs?.lines()?.joinToString("\n") { l ->
+                if (l.startsWith("kr ${ClubScene.RETIRED_COACH} ")) l.split(' ').toMutableList().also { it[9] = player }.joinToString(" ") else l
+            }
+        }
+        val w = ClubStory.decode(files)
+        val moved = WorldPages(Host(w))
+        val retired = w.clubs!!.retiredCoaches.first { it.id == ClubScene.RETIRED_COACH }
+        assertEquals(player, retired.player)
+        moved.loadPlayerClub(player)
+        val r = wait { moved.playerClub(player) }
+        assertNull(r.terms)
+        assertEquals(ClubScene.RETIRED_COACH, r.coach)
+        assertNull(r.coachClub)
+        assertEquals(retired.retired, r.coachRetired)
+        assertEquals("👔 시즌 ${retired.retired}에 감독에서 은퇴했어요 ›", PlayerClubTexts.coach(r.coachClub?.name, r.coachRetired))
     }
 
     @Test

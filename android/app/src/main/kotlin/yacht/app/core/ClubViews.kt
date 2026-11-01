@@ -68,9 +68,14 @@ data class StoryView(
 /**
  * A member's contract (the 선수단 rows and the 💼 details): shirt [number], captain, the season it
  * runs [until], wage, value and release [clause] (0: none), an academy graduate of [gradSeason],
- * on loan from [loanFrom], at the club [since].
+ * on loan from [loanFrom], at the club [since]. [academy] is a graduate of the club it plays for;
+ * appended by P8: the club whose academy it came out of ([academyClub], also another club's: the 💼
+ * details' "🌱 {club} 유스 출신").
  */
-data class TermsView(val number: Int, val captain: Boolean, val until: Int, val wage: Int, val value: Int, val clause: Int, val academy: Boolean, val gradSeason: Int, val loanFrom: ClubBadge?, val since: Int)
+data class TermsView(
+    val number: Int, val captain: Boolean, val until: Int, val wage: Int, val value: Int, val clause: Int, val academy: Boolean, val gradSeason: Int, val loanFrom: ClubBadge?, val since: Int,
+    val academyClub: ClubBadge? = null,
+)
 
 /** One item of a club's accounts ("중계권" and its amount). */
 data class AccountItem(val label: String, val amount: Int)
@@ -121,12 +126,13 @@ data class ClubHistoryView(
  * The player page's 💼 line (UX 4.7): the club, the contract ([terms] null for a retired player or
  * one without a club: the coach line still shows), an open [story] about the player, its club's
  * coach ([clubCoach], an id) and the coach it became ([coach], an id); [key] is its load key
- * ("pc:{player}"). Appended by P8: the player's style [family] (the 🎨 line's "(요트파)") and the
- * club of the coach it became ([coachClub]; null while that coach is free or retired).
+ * ("pc:{player}"). Appended by P8: the player's style [family] (the 🎨 line's "(요트파)"), the
+ * club of the coach it became ([coachClub]; null while that coach is free or retired) and the
+ * season that coach retired in ([coachRetired]; 0 while it coaches or waits for a club).
  */
 data class PlayerClubCard(
     val key: String, val club: ClubBadge?, val terms: TermsView?, val story: StoryView?, val clubCoach: String?, val coach: String?,
-    val family: StyleFamily? = null, val coachClub: ClubBadge? = null,
+    val family: StyleFamily? = null, val coachClub: ClubBadge? = null, val coachRetired: Int = 0,
 )
 
 /**

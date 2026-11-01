@@ -29,6 +29,7 @@ import yacht.engine.league.Coefficients
 import yacht.engine.league.Comp
 import yacht.engine.league.CompetitionView
 import yacht.engine.league.Derbies
+import yacht.engine.league.DerbyRecord
 import yacht.engine.league.HonourBook
 import yacht.engine.league.HonourKind
 import yacht.engine.league.LeagueEconomy
@@ -359,12 +360,12 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
         val favourites = host.favourites()
 
         /**
-         * Whether the board's next checkpoint is the winter's (UX 4.2's warning): its week ⌈0.6 R⌉ of the
-         * R league weeks still to close and its checkpoint not yet run (else the season's end is next).
+         * Whether the board's next checkpoint is the winter's (UX 4.2's warning): its week ⌊R / 2⌋ + 1 of
+         * the R league weeks still to close and its checkpoint not yet run (else the season's end is next).
          */
         val winterNext: Boolean by lazy {
             val plan = p ?: return@lazy false
-            (b.world?.checkpoint ?: 0) < plan.number && plan.week <= Math.ceil(WINTER * plan.calendar.leagueWeeks).toInt()
+            (b.world?.checkpoint ?: 0) < plan.number && plan.week <= winterWeek(plan.calendar.leagueWeeks)
         }
 
         fun badge(id: String?): ClubBadge? = id?.let { badgeOf(b, it) }
@@ -377,7 +378,7 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
         fun terms(k: String, captain: String?): TermsView? {
             val t = b.terms(k) ?: return null
             val club = b.clubOf(k)
-            return TermsView(t.number, k == captain, t.until, t.wage, value(k), t.clause, t.academy != null && t.academy == club, t.gradSeason, badge(t.loanFrom), t.since)
+            return TermsView(t.number, k == captain, t.until, t.wage, value(k), t.clause, t.academy != null && t.academy == club, t.gradSeason, badge(t.loanFrom), t.since, badge(t.academy))
         }
 
         /** The board's outlook of club [club] through the last closed week of the season in play (none in a legacy season). */
@@ -416,11 +417,14 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
         val board = coach?.let { r.outlook(id) }
         val byFans = ranks.fans.map { it.first }
         val nation = byFans.filter { b.nationOf(it) == club.nation }
-        val series = p?.let { Derbies.series(b, it, it.week - 1) }.orEmpty()
+        // This season's series through the closed weeks, and the all-time records with them added
+        // ([Derbies.allTime], from the one pass over the season's matches [seriesOf] keeps).
+        val series = p?.let { seriesOf(b, it) }.orEmpty()
         val rivals = life.rivals.mapNotNull { rv ->
             val badge = r.badge(rv.club) ?: return@mapNotNull null
-            val all = p?.let { Derbies.allTime(b, it, id, rv.club, it.week - 1) } ?: b.derby(id, rv.club)
-            val now = series[pairKey(id, rv.club)]?.of(id)
+            val season = series[pairKey(id, rv.club)]
+            val all = p?.let { allTime(b.derby(id, rv.club), season, it.number, b.isRival(id, rv.club)) } ?: b.derby(id, rv.club)
+            val now = season?.of(id)
             RivalView(badge, rv.kind, Derbies.name(b, id, rv.club).orEmpty(), rv.since, all, now?.let { listOf(it.first, it.second, it.third) } ?: listOf(0, 0, 0))
         }
         val stories = b.stories(r.season).filter { (it.stage == StoryStage.RUMOUR || it.stage == StoryStage.TALKS) && (it.buyer == id || it.seller == id) }
@@ -440,6 +444,24 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
             ClubEconomy.squadValue(b, id, r.value), members.mapNotNull { k -> r.w.players[k]?.age(r.season)?.takeIf { it > 0 } }.average().takeIf { !it.isNaN() } ?: 0.0,
             r.winterNext,
         )
+    }
+
+    /**
+     * The season's series of rival pairs read last ([seriesOf]) and what it was read from: the plan, its
+     * week, the book's version and the matches played (under the lock).
+     */
+    private var series: Pair<List<Any>, Map<String, DerbyRecord>>? = null
+
+    /**
+     * [Derbies.series] of [p] through its closed weeks: one pass over every match of the season, the
+     * dearest part of a club page (≈ 5 ms at 300 players), so kept for the next club pages until a
+     * result comes in, the week moves on or the book changes.
+     */
+    private fun seriesOf(b: ClubBook, p: SeasonPlan): Map<String, DerbyRecord> {
+        val played = p.league.fixturesPlayed + (p.comps + p.post).sumOf { c -> c.stageCounts().sumOf { it.played } }
+        val key = listOf(p, p.week, b.version, played)
+        series?.takeIf { it.first == key }?.let { return it.second }
+        return Derbies.series(b, p, p.week - 1).also { series = key to it }
     }
 
     /** A rival match of club [id]'s members in the week in play or the next (UX 4.2: 다음 라이벌전), the earliest. */
@@ -605,13 +627,15 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
         val b = book(w)?.let { shown(w, it) } ?: return null
         val r = WorldRead(w, b)
         val club = b.clubOf(key)
-        val became = b.coaches.firstOrNull { it.player == key }?.id ?: b.retiredCoaches.firstOrNull { it.player == key }?.id
+        val retired = b.retiredCoaches.firstOrNull { it.player == key }
+        val became = b.coaches.firstOrNull { it.player == key }?.id ?: retired?.id
         if (club == null && became == null) return null
         val story = b.stories(r.season).filter { it.key == key && (it.stage == StoryStage.RUMOUR || it.stage == StoryStage.TALKS) }
             .maxWithOrNull(compareBy<MarketStory> { it.stage == StoryStage.TALKS }.thenBy { it.id })
         return PlayerClubCard(
             playerClubKey(key), r.badge(club), club?.let { r.terms(key, b.life(it)?.captain) }, story?.let(r::story),
             club?.let { b.coachOf(it)?.id }, became, StyleFamily.of(w.players[key]?.spec?.play), r.badge(became?.let { b.coach(it)?.club }),
+            if (became != null && b.coach(became) == null) retired?.retired ?: 0 else 0,
         )
     }
 
@@ -736,8 +760,11 @@ class WorldPages internal constructor(private val host: LeagueHost, private val 
         private const val NOTABLE = 10
         private const val RANK_ROWS = 50
 
-        /** The winter checkpoint's week, as a share of the league weeks (ENG 3.3: after the tick of week ⌈0.6 R⌉). */
-        private const val WINTER = 0.6
+        /**
+         * The winter checkpoint's week of a season of [leagueWeeks] league weeks (ENG 3.3: it runs once week
+         * `⌊R / 2⌋ + 1` closes, 22 at R = 42; ⌈0.6 R⌉ is when the rumours start, not the checkpoint).
+         */
+        internal fun winterWeek(leagueWeeks: Int): Int = leagueWeeks / 2 + 1
 
         /** Fans this unhappy (below 25: 😡, as [yacht.app.ui.moodWord] reads it) mark their club on the club table. */
         const val ANGRY = 25
@@ -822,6 +849,16 @@ internal fun accountItems(a: Accounts): Pair<List<AccountItem>, List<AccountItem
         }
     }
     return income.sortedByDescending { it.amount } to expenses.sortedByDescending { it.amount }
+}
+
+/**
+ * [Derbies.allTime] from the pair's series this season ([now], [Derbies.series]'s): the [stored] record
+ * with this season's matches added, unless it holds season [season] already or the clubs are no
+ * longer [rival]s (the close folds only rivals); null without a stored record.
+ */
+internal fun allTime(stored: DerbyRecord?, now: DerbyRecord?, season: Int, rival: Boolean): DerbyRecord? {
+    if (stored == null || now == null || stored.last >= season || !rival) return stored
+    return stored.copy(winsA = stored.winsA + now.winsA, draws = stored.draws + now.draws, winsB = stored.winsB + now.winsB, games = stored.games + now.games, last = season)
 }
 
 /** The key of rival pair [a]-[b] in [Derbies.series] (its ids in the book's order). */
