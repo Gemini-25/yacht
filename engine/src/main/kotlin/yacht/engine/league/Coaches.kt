@@ -122,9 +122,10 @@ data class CoachReport(val season: Int, val moves: List<CoachMove>, val retired:
      * target, far: 1 when the place is 2 or more below the target) for the 2 biggest clubs (by fans),
      * `coach_poached` [club, coach, from] (fee) for 1, `coach_hired` [club, coach, from?] (philosophy
      * code) for 2, `coach_retired` [coach] (seasons, titles) for the kept retiree with the most titles,
-     * `player_to_coach` [player, coach] (its style family's code or "-", philosophy code) for the best
-     * reputation, and one `coach_digest` [≤ 6 clubs] (sacked, hired, poached, clubs with a new coach)
-     * when there were more moves than told. Clubs rank by fans in [book], then id.
+     * `player_to_coach` [player, coach] (its style family's code, or "-" for a player whose genes the
+     * roster no longer keeps, i.e. any but a legend; philosophy code) for the best reputation, and one
+     * `coach_digest` [≤ 6 clubs] (sacked, hired, poached, clubs with a new coach) when there were more
+     * moves than told. Clubs rank by fans in [book], then id.
      */
     fun events(book: ClubBook, family: (String) -> StyleFamily? = { null }): List<LeagueEvent> {
         val w = book.world ?: return emptyList()
