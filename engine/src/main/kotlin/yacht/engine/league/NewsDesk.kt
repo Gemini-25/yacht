@@ -351,8 +351,8 @@ class NewsDesk(
     }
 
     /**
-     * With [media], weeks [from]..[to] (closed now) one by one: each week's `derby_result` and, in
-     * the league's weeks of a national season, its power ranking (the top 10 kept, its #1's week
+     * With [media], in a national season, the league's weeks of [from]..[to] (closed now) one by
+     * one: each week's `derby_result` and its power ranking (the top 10 kept, its #1's week
      * counted); the column `power_ranking` of the last week ranked. Needs [Context.drawn]. A week
      * counts the same however many close at once.
      */
@@ -364,12 +364,12 @@ class NewsDesk(
         val book = ctx.clubs?.takeIf { it.world != null }
         var column: LeagueEvent? = null
         val days = p.league.matchdays
-        for (w in maxOf(from, 1)..to) {
+        // The league's weeks only (the post-season's have no league matchday, no derby to tell).
+        for (w in maxOf(from, 1)..minOf(to, days)) {
             if (book != null) runCatching { Derbies.weekResult(book, p, w, drawn, derbies, ctx.rivals) }.getOrNull()?.let { e ->
                 derbies++
                 if (e.ref == null || !ctx.written(e.ref)) out += e
             }
-            if (w > days) continue
             val ranked = runCatching { Media.ranking(p, drawn, w) }.getOrDefault(emptyList())
             if (ranked.isEmpty()) continue
             val now = ranked.take(Media.WORLD_TOP).map { it.key }

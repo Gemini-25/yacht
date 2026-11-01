@@ -211,6 +211,9 @@ class PredictionsTest {
         assertEquals(best, sc.over!!.predicted - sc.over!!.final)
         assertEquals(worst, sc.flop!!.predicted - sc.flop!!.final)
         assertTrue(best > 0 && worst < 0)
+        // Every season's honours passed: only this season's titles count (another season's JP title is no hit).
+        val older = listOf(Honour(0, HonourKind.of("L0", "JP"), Media.prediction(p, ::drawn, "JP")!!.favourites[0].key), Honour(2, HonourKind.of("L0", "KR"), "kr2-09"))
+        assertEquals(sc, Media.scorecard(p, ::drawn, older + honours))
         // The close's news.
         val e = Media.scorecardEvent(sc)
         assertEquals("prediction_scorecard", e.kind)

@@ -77,6 +77,8 @@ class PowerRankingTest {
             assertTrue(r.played >= Media.MIN_PLAYED)
             assertEquals(exp.sum(), r.expected, 1e-9)
             assertEquals(pts.takeLast(5).average(), r.form5, 1e-9)
+            // "최근 5경기 {n}승": the wins of the same 5.
+            assertEquals(pts.takeLast(5).count { it >= 3 }, r.wins5)
             assertEquals(exp.takeLast(5).average(), r.expected5, 1e-9)
             val stage = if (r.key.startsWith("br")) Media.STAGE else Media.TOP_STAGE
             assertEquals(stage, r.stage, r.key)

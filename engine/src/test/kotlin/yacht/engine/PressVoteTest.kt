@@ -146,6 +146,28 @@ class PressVoteTest {
     }
 
     @Test
+    fun aSigningsClubGainsPlacesInItsOwnTableOnLastSeasonsBestThree() {
+        val c = close()
+        val tables = ClubTable.all(c.plan.league, c.book, c.honours)
+        val kr = tables.getValue("KR").map { it.club }
+        val (first, second, third) = kr
+        val fifth = kr[4]
+        // Last season's best 3 of KR (the `cs` line) and of JP, which lists the 5th first.
+        val back = ClubBook.decode(c.book.encode() + "cs 0 KR:$fifth,$second,$first:900;JP:$third,$fifth:800\n")
+        assertEquals(listOf(fifth, second, first), back.places(0).first { it.league == "KR" }.clubs)
+        val t = ClubTable.all(c.plan.league, back, c.honours)
+        // Listed last season in its own table: the places from there (up and down).
+        assertEquals(3 - 1, PressVotes.placesGained(back, t, 0, first))
+        assertEquals(0, PressVotes.placesGained(back, t, 0, second))
+        assertEquals(1 - 5, PressVotes.placesGained(back, t, 0, fifth), "its own table's place, not JP's")
+        // Not among last season's best 3 of its own table (JP's list does not count): now 3rd, it came up from the 4th at least.
+        assertEquals(1, PressVotes.placesGained(back, t, 0, third))
+        // Neither season among the best, or no table last season: not known.
+        assertEquals(0, PressVotes.placesGained(back, t, 0, kr[3]))
+        assertEquals(0, PressVotes.placesGained(c.book, tables, 0, first))
+    }
+
+    @Test
     fun theHonoursComeFromTheTalliesAndGoThroughTheClosesOneAdd() {
         val c = close()
         val tallies = PressVotes.vote(input(c))

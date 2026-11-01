@@ -7,11 +7,13 @@ import java.util.TreeMap
  * member [key] at [rank] (last week's [prev], null when new), its [score] `R0 + 6 (P − E) + 12
  * (form5 − e5) + S` from the rating it was [drawn] with, league [points] and [expected] points
  * through the week, its last 5 matches' mean points and expected points, the stage bonus [stage]
- * (20 / 10 / 0), league matches [played] and weeks at #1 this season ([weeksTop]).
+ * (20 / 10 / 0), league matches [played], weeks at #1 this season ([weeksTop]) and the wins of
+ * its last 5 matches ([wins5]: "최근 5경기 {n}승").
  */
 data class PowerRow(
     val key: String, val rank: Int, val prev: Int?, val score: Double, val drawn: Double, val points: Int,
     val expected: Double, val form5: Double, val expected5: Double, val stage: Int, val played: Int, val weeksTop: Int,
+    val wins5: Int = 0,
 )
 
 /** A candidate's votes in a press award: [points] (5-3-1 a ballot) and first-place votes. */
@@ -276,7 +278,7 @@ object Media {
 
     // ---- the power ranking ---------------------------------------------------------------------
 
-    /** One member's league matches through the week: points, expected points, and its matches (matchday, id, points, expected). */
+    /** One member's league matches through the week: points, expected points, and its matches (matchday, id, points, expected, 1 for a win). */
     private class Form {
         var points = 0
         var expected = 0.0
@@ -326,7 +328,7 @@ object Media {
                 val x = forms.getOrPut(k) { Form() }
                 x.points += p
                 x.expected += e
-                x.matches += doubleArrayOf(f.matchday.toDouble(), f.id.toDouble(), p.toDouble(), e)
+                x.matches += doubleArrayOf(f.matchday.toDouble(), f.id.toDouble(), p.toDouble(), e, if (p >= 3) 1.0 else 0.0)
             }
         }
         val rows = ArrayList<PowerRow>()
@@ -339,7 +341,7 @@ object Media {
             val e5 = last.sumOf { it[3] } / last.size
             val drawnK = r0(drawn, k)
             val score = drawnK + POINTS_WEIGHT * (x.points - x.expected) + FORM_WEIGHT * (form - e5) + s
-            rows += PowerRow(k, 0, null, score, drawnK, x.points, x.expected, form, e5, s, x.matches.size, 0)
+            rows += PowerRow(k, 0, null, score, drawnK, x.points, x.expected, form, e5, s, x.matches.size, 0, last.count { it[4] > 0.0 })
         }
         return rows.sortedWith(compareByDescending<PowerRow> { it.score }.thenBy { it.key }).mapIndexed { i, r -> r.copy(rank = i + 1) }
     }
@@ -473,7 +475,7 @@ object Media {
      * The predictions' scorecard of closing season [plan] (예측 성적표, design ENG 5.2; `psc`): every
      * national league's predictions computed again from the same plan and [drawn] ratings (so they
      * are the open's, [promoted] as the open had it) against how it ended: the favourite won the
-     * league title ("L0.<id>" of [honours], else of the title playoff, else the regular season's
+     * league title ("L0.<id>" of [honours] of this season, else of the title playoff, else the regular season's
      * leader), the champion among the favourites, the relegation picks that went down
      * ([Offseason.moves]; AIs in [gone] do not move), Spearman's ρ of the predicted against the
      * final regular-season order of the 1부; over every league, the biggest overachiever and flop
@@ -490,6 +492,8 @@ object Media {
         val season = plan.league
         if (!season.leagues.national) return null
         val moves = runCatching { Offseason.moves(plan, gone) }.getOrDefault(emptyList())
+        // The season's own titles (a caller may pass every season's honours).
+        val titles = honours.filter { it.season == plan.number }
         val playoff = runCatching { plan.competition(Comp.TITLE_PLAYOFF)?.honours() }.getOrNull().orEmpty()
         val per = ArrayList<LeagueScorecard>()
         val rhos = ArrayList<Double>()
@@ -510,7 +514,7 @@ object Media {
             val lg = season.leagues.byId(id) ?: continue
             val final = season.table(lg.top).map { it.key }
             val kind = HonourKind.of("L0", id)
-            val champion = (honours.firstOrNull { it.kind == kind } ?: playoff.firstOrNull { it.kind == kind })?.key ?: final.first()
+            val champion = (titles.firstOrNull { it.kind == kind } ?: playoff.firstOrNull { it.kind == kind })?.key ?: final.first()
             val hit = p.favourites.first().key == champion
             val inTop = p.favourites.any { it.key == champion }
             val down = moves.filter { it.league == id && it.from == 0 && it.to > 0 }.map { it.key }.toSet()
@@ -767,7 +771,8 @@ object PressVotes {
     /**
      * 올해의 영입's candidates: the [SIGNINGS] biggest fees of the last off-season's notable transfers
      * (`tx` of the season before, no winter move) of members still in the league. Rating: its change
-     * since the season was drawn; statistic: its new club's club-table places gained on last season.
+     * since the season was drawn; statistic: its new club's places gained in its own club table on
+     * last season ([placesGained]).
      */
     private fun signings(input: PressInput, book: ClubBook, tables: Map<String, List<ClubStanding>>, majors: Map<String, Int>): List<Candidate> {
         val plan = input.plan
@@ -777,18 +782,35 @@ object PressVotes {
             .sortedWith(compareByDescending<NotableMove> { it.fee }.thenBy { it.key }).distinctBy { it.key }.take(SIGNINGS)
         if (moves.isEmpty()) return emptyList()
         val home = homes(book, tables)
-        val last = HashMap<String, Int>()
-        for (p in book.places(plan.number - 1)) for ((i, c) in p.clubs.withIndex()) last.putIfAbsent(c, i + 1)
+        val last = book.places(plan.number - 1).associate { it.league to it.clubs }
         val rise = moves.map { m -> input.rating(m.key) - input.drawn(m.key) }
-        val gains = moves.map { m ->
-            val now = home[m.to]?.second
-            val was = last[m.to]
-            if (now == null || was == null) 0.0 else (was - now).toDouble()
-        }
+        val gains = moves.map { m -> gained(m.to!!, home[m.to], last).toDouble() }
         val rz = z(rise)
         val gz = z(gains)
         return moves.mapIndexed { i, m ->
             Candidate(m.key, rz[i], (majors[m.key] ?: 0).toDouble(), gz[i], 0.0, input.nation(m.key), season.leagueOf(m.key)?.id, input.rating(m.key))
+        }
+    }
+
+    /**
+     * Club [club]'s places gained on last season in its own club table of [tables] ([homes]), from
+     * season [previous]'s best clubs of that table (the `cs` line, which keeps a table's best 3): its
+     * place there, or, not among them, from below them (a club now among the best 3 rose at least
+     * to its place from the 4th); 0 when not known (no such table last season, or neither season
+     * among the best).
+     */
+    internal fun placesGained(book: ClubBook, tables: Map<String, List<ClubStanding>>, previous: Int, club: String): Int =
+        gained(club, homes(book, tables)[club], book.places(previous).associate { it.league to it.clubs })
+
+    /** [placesGained] with [home] (the club's table and place now) and [last] (each table's best clubs last season). */
+    private fun gained(club: String, home: Pair<String, Int>?, last: Map<String, List<String>>): Int {
+        val (league, now) = home ?: return 0
+        val best = last[league] ?: return 0
+        val was = best.indexOf(club)
+        return when {
+            was >= 0 -> was + 1 - now
+            now <= best.size -> best.size + 1 - now
+            else -> 0
         }
     }
 
