@@ -19,17 +19,28 @@ import kotlin.math.roundToInt
  *   [GROUP_SINGLES] top seeds out as articles and make one `group_digest` of their qualifiers;
  *   the week's milestones keep [MILESTONE_SINGLES] as articles (the top of a ladder, a first
  *   300-point game) and make one `milestones_week`.
+ * With [media] (design ENG 5.1, off until the club world is wired) each closed week also ranks the
+ * power ranking (파워 랭킹, [Media.ranking]): its world top 10 and last week's (`pw` lines), this
+ * season's weeks at #1 (`p1`) and the week's column `power_ranking`; and it slots the week's
+ * `derby_result` ([Derbies.weekResult], at most one a week, [Derbies.SEASON_RESULTS] a season).
  * Everything pending is saved in news.txt ([encode], lines older readers skip) and a week is
  * closed once ([close]): read back after a kill, the desk goes on as it was. Pure and
  * deterministic given the results; not thread-safe (the world's lock).
  */
-class NewsDesk {
+class NewsDesk(
+    /** The media's weekly steps (the power ranking, the derby slot); off: the desk writes what it wrote before them. */
+    var media: Boolean = false,
+) {
     /** What a week's close reads. */
     class Context(
         val plan: SeasonPlan,
         val stats: StatsBook,
-        /** The national clubs (null without them): the club race. */
+        /** The national clubs (null without them): the club race (and with [media], the derby slot). */
         val clubs: ClubBook? = null,
+        /** The ratings the season was drawn with: the power ranking and the derby slot read them ([media]; null: neither runs). */
+        val drawn: ((String) -> Double)? = null,
+        /** The season's rival matches ([Derbies.matches] over [clubs] and [drawn]), when the caller keeps them; null: made for the week. */
+        val rivals: RivalMatches? = null,
         /** True for a match an article already links: a week played again after a kill is not written twice. */
         val written: (String) -> Boolean = { false },
     )
@@ -65,6 +76,26 @@ class NewsDesk {
     /** Record chases told this season ("KIND:key"). */
     private val told = java.util.TreeSet<String>()
 
+    /** The last week the power ranking ranked ([media]; 0: none yet this season) and its world top 10, best first. */
+    var powerWeek = 0
+        private set
+    var power: List<String> = emptyList()
+        private set
+
+    /** The week ranked before [powerWeek] (0: none) and its top 10: last week's places (▲▼, NEW). */
+    var powerPrevWeek = 0
+        private set
+    var powerPrev: List<String> = emptyList()
+        private set
+
+    /** This season's weeks at #1 of the power ranking, by key (folded into the world book's `pr1` at the close). */
+    private val top = java.util.TreeMap<String, Int>()
+    val weeksTop: Map<String, Int> get() = top
+
+    /** `derby_result` articles this season ([Derbies.weekResult]'s `told`). */
+    var derbies = 0
+        private set
+
     /**
      * What this season's digests already told: the knockout stages released ("code:stage"), the
      * group stages ("code" + their section's tag) digested. A tie or a group stage's end played
@@ -95,6 +126,12 @@ class NewsDesk {
         told.clear()
         released.clear()
         digested.clear()
+        powerWeek = 0
+        power = emptyList()
+        powerPrevWeek = 0
+        powerPrev = emptyList()
+        top.clear()
+        derbies = 0
         // Points the international competitions start with (a 챔피언스 리그 place) are no week's news.
         if (plan.league.leagues.national) for (c in plan.comps) {
             if (c !is International) continue
@@ -292,6 +329,7 @@ class NewsDesk {
         out += qualifiers(through)
         out += milestonesOf(through)
         out += runCatching { chase(ctx, through) }.getOrDefault(emptyList())
+        out += mediaWeeks(ctx, week, through)
         week = now
         return out
     }
@@ -307,7 +345,42 @@ class NewsDesk {
         for (s in stages.values.toList()) out += release(s, p)
         out += qualifiers(Int.MAX_VALUE)
         out += milestonesOf(Int.MAX_VALUE)
+        out += mediaWeeks(ctx, week, last)
         week = maxOf(week, last + 1)
+        return out
+    }
+
+    /**
+     * With [media], weeks [from]..[to] (closed now) one by one: each week's `derby_result` and, in
+     * the league's weeks of a national season, its power ranking (the top 10 kept, its #1's week
+     * counted); the column `power_ranking` of the last week ranked. Needs [Context.drawn]. A week
+     * counts the same however many close at once.
+     */
+    private fun mediaWeeks(ctx: Context, from: Int, to: Int): List<LeagueEvent> {
+        val p = ctx.plan
+        val drawn = ctx.drawn
+        if (!media || drawn == null || !p.league.leagues.national) return emptyList()
+        val out = ArrayList<LeagueEvent>()
+        val book = ctx.clubs?.takeIf { it.world != null }
+        var column: LeagueEvent? = null
+        val days = p.league.matchdays
+        for (w in maxOf(from, 1)..to) {
+            if (book != null) runCatching { Derbies.weekResult(book, p, w, drawn, derbies, ctx.rivals) }.getOrNull()?.let { e ->
+                derbies++
+                if (e.ref == null || !ctx.written(e.ref)) out += e
+            }
+            if (w > days) continue
+            val ranked = runCatching { Media.ranking(p, drawn, w) }.getOrDefault(emptyList())
+            if (ranked.isEmpty()) continue
+            val now = ranked.take(Media.WORLD_TOP).map { it.key }
+            powerPrevWeek = powerWeek
+            powerPrev = power
+            powerWeek = w
+            power = now
+            top.merge(now.first(), 1, Int::plus)
+            column = Media.powerEvent(season, w, now, powerPrev)
+        }
+        column?.let { out += it }
         return out
     }
 
@@ -540,6 +613,11 @@ class NewsDesk {
         if (told.isNotEmpty()) append("x ").append(told.joinToString(",")).append('\n')
         if (released.isNotEmpty()) append("y ").append(released.joinToString(",")).append('\n')
         if (digested.isNotEmpty()) append("z ").append(digested.joinToString(",") { Field.esc(it) }).append('\n')
+        // The media's (none without them): last week's and this week's top 10, the weeks at #1, the derbies told.
+        if (powerPrevWeek > 0) append("pw ").append(season).append(' ').append(powerPrevWeek).append(' ').append(LineParts.list(powerPrev) { Field.esc(it) }).append('\n')
+        if (powerWeek > 0) append("pw ").append(season).append(' ').append(powerWeek).append(' ').append(LineParts.list(power) { Field.esc(it) }).append('\n')
+        if (top.isNotEmpty()) append("p1 ").append(top.entries.joinToString(",") { "${Field.esc(it.key)}:${it.value}" }).append('\n')
+        if (derbies > 0) append("dd ").append(derbies).append('\n')
     }
 
     /** The held ties of a big knockout stage of [comp], and its counts beyond those kept. */
@@ -667,8 +745,8 @@ class NewsDesk {
         /** The group stage's name in a `group_digest`. */
         const val GROUP_STAGE = "조별 리그"
 
-        /** Every kind the desk writes (besides the events it lets through). */
-        val KINDS = setOf("league_upset", "comeback", "club_race", "intl_week", "cup_digest", "group_digest", "milestones_week", "record_chase")
+        /** Every kind the desk writes (besides the events it lets through); the last two with [media] only. */
+        val KINDS = setOf("league_upset", "comeback", "club_race", "intl_week", "cup_digest", "group_digest", "milestones_week", "record_chase", "power_ranking", "derby_result")
 
         private val UNOFFICIAL = setOf(Comp.FRIENDLY, Comp.LAB, Comp.LEGEND, Comp.ALL_STAR)
         private val CUP_HELD = setOf("cup_round", "upset", "eliminated")
@@ -686,9 +764,9 @@ class NewsDesk {
         private val NOTABLE = compareBy<TieItem> { if (it.seed <= TOP_SEEDS) it.seed else Int.MAX_VALUE }
             .thenByDescending { it.gap }.thenBy { it.winner.orEmpty() }.thenBy { it.loser.orEmpty() }
 
-        /** The desk of news.txt's lines (an empty desk without any; a bad line is skipped). */
-        fun decode(text: String): NewsDesk {
-            val d = NewsDesk()
+        /** The desk of news.txt's lines (an empty desk without any; a bad line is skipped), its media steps on with [media]. */
+        fun decode(text: String, media: Boolean = false): NewsDesk {
+            val d = NewsDesk(media)
             for (line in text.lines()) {
                 runCatching {
                     val tag = line.substringBefore(' ')
@@ -739,6 +817,22 @@ class NewsDesk {
                         "x" -> d.told += f[0].split(',').filter { it.isNotEmpty() }
                         "y" -> d.released += f[0].split(',').filter { ':' in it }
                         "z" -> d.digested += f[0].split(',').map(Field::unesc)
+                        "pw" -> {
+                            if (f[0].toInt() != d.season) return@runCatching
+                            val w = f[1].toInt()
+                            val keys = LineParts.items(f[2]).map(Field::unesc)
+                            if (w > d.powerWeek) {
+                                d.powerPrevWeek = d.powerWeek
+                                d.powerPrev = d.power
+                                d.powerWeek = w
+                                d.power = keys
+                            } else if (w in (d.powerPrevWeek + 1) until d.powerWeek) {
+                                d.powerPrevWeek = w
+                                d.powerPrev = keys
+                            }
+                        }
+                        "p1" -> for (e in LineParts.items(f[0])) d.top[Field.unesc(e.substringBeforeLast(':'))] = e.substringAfterLast(':').toInt()
+                        "dd" -> d.derbies = f[0].toInt()
                     }
                 }
             }

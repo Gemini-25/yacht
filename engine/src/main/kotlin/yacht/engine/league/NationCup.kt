@@ -504,13 +504,23 @@ class NationCup private constructor(
 
         private fun confedOf(code: String): Confed? = Nations.of(code)?.confed
 
-        /** 요트 월드컵 of this season; null when off, not due, or with fewer than 4 teams. */
-        fun world(start: SeasonStart): NationCup? {
+        /** 요트 월드컵 of this season; null when off, not due, or with fewer than 4 teams. The host by today's rule ([hosted] with no vote). */
+        fun world(start: SeasonStart): NationCup? = hosted(start) { null }
+
+        /**
+         * 요트 월드컵 of this season with the host [hostOf] gives for its season (월드컵 개최지 투표,
+         * design ENG 5.5; [WcHosts.vote]), when that nation has a team; else (null: no vote was
+         * held, a save from before) today's rule. Today's host draw is made either way and a voted
+         * host ignores it, so the group draw takes the same random numbers: a vote that elects the
+         * host the rule would have drawn gives today's cup exactly.
+         */
+        fun hosted(start: SeasonStart, hostOf: (Int) -> String?): NationCup? {
             if (!start.config.nationCup || !worldDue(start.number)) return null
             val (teams, absent) = teams(start)
             if (teams.size < MIN_TEAMS) return null
             val rng = Random(Knockout.drawSeed(start.seed, Comp.WORLD_CUP))
-            val host = host(start, teams, rng)
+            val drawn = host(start, teams, rng)
+            val host = hostOf(start.number)?.takeIf { v -> teams.any { it.id == v } } ?: drawn
             val ordered = teams.filter { it.id == host } + teams.filter { it.id != host }
             val entries = ordered.mapIndexed { i, t -> DrawEntry(t.id, i + 1, t.strength) }
             val g = groupCount(teams.size)
@@ -518,6 +528,19 @@ class NationCup private constructor(
             val sections = listOf(NationSection(null, Comp.WORLD_CUP.label, 0, g, knockoutSize(teams.size)))
             return build(Comp.WORLD_CUP, start, host, ordered, sections, groups, absent)
         }
+
+        /**
+         * [factories] (a season's builders, [Competitions.factories]) with the 요트 월드컵 hosted by
+         * [hostOf]'s nation for its season ([hosted]); every other builder, and a World Cup season
+         * without a voted host, as they are.
+         */
+        fun withHosts(factories: List<(SeasonStart) -> Competition?>, hostOf: (Int) -> String?): List<(SeasonStart) -> Competition?> =
+            factories.map { f ->
+                { s: SeasonStart ->
+                    val c = f(s)
+                    if (c is NationCup && c.comp == Comp.WORLD_CUP && hostOf(s.number) != null) hosted(s, hostOf) else c
+                }
+            }
 
         /** 대륙컵 of this season: one tournament per confederation with 3 teams or more; null when none. */
         fun continental(start: SeasonStart): NationCup? {

@@ -323,4 +323,80 @@ class NewsDeskTest {
         assertTrue(desk.flush(ctx(p)).isEmpty())
         assertEquals(0, desk.held)
     }
+
+    // ---- the media's weeks (design ENG 5.1, 11.2) ------------------------------------------------
+
+    /** KR's 1부 of 7 (two clubs' counted members and one of a third) and 2부 of 4 over the clubs of a club world, its rivals made. */
+    private fun clubWorld(): Pair<SeasonPlan, yacht.engine.league.ClubBook> {
+        val a = (1..8).map { "a$it" }
+        val b = (1..8).map { "b$it" }
+        val book = Eco.world(Eco.book(listOf(Eco.Spec("c01", "KR", a), Eco.Spec("c02", "KR", b, city = 1), Eco.Spec("c04", "KR", listOf("d1"), city = 3))))
+        yacht.engine.league.Derbies.recompute(book, 0, start = 1)
+        val s = Season.start(1, 9L, listOf(listOf("a1", "a2", "a7", "b1", "b2", "b7", "d1"), listOf("a3", "a8", "b3", "b8")), true, Leagues.national(listOf("KR"), listOf(2)))
+        return SeasonPlan(s, LeagueConfig(national = true, doubleRoundRobin = true)) to book
+    }
+
+    private fun drawn(k: String): Double = if (k == "d1") 1700.0 else 1700.0 - 10 * k.drop(1).toInt()
+
+    @Test
+    fun withoutMediaTheDeskWritesWhatItWroteBefore() {
+        val (p, book) = clubWorld()
+        val off = NewsDesk()
+        off.begin(p)
+        val plain = NewsDesk()
+        plain.begin(p)
+        Hist.play(p.league)
+        val days = p.league.matchdays
+        val withDrawn = NewsDesk.Context(p, StatsBook(), book, drawn = ::drawn)
+        val before = NewsDesk.Context(p, StatsBook(), book)
+        val e = off.close(withDrawn, days + 1)
+        assertEquals(plain.close(before, days + 1), e)
+        assertTrue(e.none { it.kind == "power_ranking" || it.kind == "derby_result" })
+        assertEquals(plain.encode(), off.encode())
+        assertTrue(off.encode().lines().none { it.startsWith("pw ") || it.startsWith("p1 ") || it.startsWith("dd ") })
+        assertEquals(0, off.powerWeek)
+        assertTrue(off.weeksTop.isEmpty())
+    }
+
+    @Test
+    fun withMediaEachWeekRanksThePowerRankingAndSlotsItsDerby() {
+        val (p, book) = clubWorld()
+        val desk = NewsDesk(media = true)
+        desk.begin(p)
+        val c = NewsDesk.Context(p, StatsBook(), book, drawn = ::drawn)
+        val days = p.league.matchdays
+        val derbies = ArrayList<LeagueEvent>()
+        val columns = ArrayList<LeagueEvent>()
+        for (md in 0 until days) {
+            Hist.play(p.league, last = md)
+            val e = desk.close(c, md + 2)
+            assertTrue(e.count { it.kind == "derby_result" } <= 1, "one a week")
+            derbies += e.filter { it.kind == "derby_result" }
+            columns += e.filter { it.kind == "power_ranking" }
+        }
+        // Each week's derby is the week's pick, while fewer than six were told.
+        var told = 0
+        val expected = ArrayList<LeagueEvent>()
+        for (w in 1..days) yacht.engine.league.Derbies.weekResult(book, p, w, ::drawn, told)?.let { expected += it; told++ }
+        assertTrue(expected.isNotEmpty())
+        assertEquals(expected, derbies)
+        assertTrue(derbies.size <= yacht.engine.league.Derbies.SEASON_RESULTS)
+        assertEquals(derbies.size, desk.derbies)
+        // A column every ranked week; the desk's lines read back as they were.
+        assertEquals((yacht.engine.league.Media.firstWeek(p)..days).toList(), columns.map { it.week })
+        assertTrue(desk.encode().lines().count { it.startsWith("pw 1 ") } == 2)
+        assertTrue(desk.encode().contains("\np1 ") && desk.encode().contains("\ndd ${desk.derbies}\n"))
+        val back = NewsDesk.decode(desk.encode(), media = true)
+        assertEquals(desk.encode(), back.encode())
+        assertEquals(desk.power, back.power)
+        assertEquals(desk.powerPrev, back.powerPrev)
+        assertEquals(desk.weeksTop, back.weeksTop)
+        assertEquals(desk.derbies, back.derbies)
+        // Read by an older reader's rules (no media): the lines are kept as data, nothing new is told.
+        assertTrue(NewsDesk.decode(desk.encode()).close(c, days + 2).none { it.kind == "power_ranking" || it.kind == "derby_result" })
+        // A new season clears them.
+        back.begin(SeasonPlan(Season.start(2, 9L, p.league.divisions, true, p.league.leagues), p.config))
+        assertEquals(0, back.powerWeek)
+        assertTrue(back.weeksTop.isEmpty() && back.derbies == 0)
+    }
 }
