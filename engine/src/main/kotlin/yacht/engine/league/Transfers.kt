@@ -36,7 +36,8 @@ class TransferInput(
  * count, candidates, destination leagues, caps and destination club (the most room, then the richer),
  * and reads the money here instead: a buyer's transfer [budget] only filters (a club with less than half
  * the [asked] fee is passed over for the next with room; the fee is the asked one capped at the budget),
- * [allows] refuses a buyer (the concentration guard, the wage rules), [talks] for an abroad move are
+ * [allows] refuses a buyer (an embargo or its buys cap, the concentration guard, the wage rules: a free
+ * agent costs no fee, so the budget alone does not stop it), [talks] for an abroad move are
  * tried first and count toward the caps, [free] agents are candidates from the club they left (no fee),
  * and every planned move is handed to [moved] at once, so the next budgets and the guard see it.
  */
@@ -47,7 +48,7 @@ interface TransferMoney {
     /** The fee [buyer] is asked for [key] (0 for a free agent). */
     fun asked(key: String, buyer: String): Int
 
-    /** Whether [buyer] may sign [key]. */
+    /** Whether [buyer] may sign [key] (also for no fee). */
     fun allows(key: String, buyer: String): Boolean
 
     /** Talks for a move abroad (key, buyer), tried first in this order. */
