@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,14 +25,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import yacht.app.core.EraView
+import yacht.app.core.ShareSeason
+import yacht.engine.league.StyleFamily
 
 /** Distinct line colours for a few highlighted AIs (readable on light and dark backgrounds). */
 val chartColors = listOf(
@@ -305,3 +314,147 @@ fun H2hGrid(m: yacht.app.core.H2hMatrix) {
         }
     }
 }
+
+// ---- 시대와 메타 and 기자단 (UX 7-8) ---------------------------------------------------------------------
+
+/** A thin bar filled to [fraction] (0..1) in [color]: a vote's points, a favourite's chance. */
+@Composable
+fun PointsBar(fraction: Double, color: Color, modifier: Modifier = Modifier, height: Dp = 6.dp) {
+    val f = if (fraction.isNaN()) 0f else fraction.toFloat().coerceIn(0f, 1f)
+    Box(modifier.height(height).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        if (f > 0f) Box(Modifier.fillMaxWidth(f).height(height).clip(CircleShape).background(color))
+    }
+}
+
+/**
+ * Where season i of [count] seasons sits across a chart [width] wide: its slot `[i, i + 1) × width
+ * / count`. The share chart and the era strip above it lay their seasons out alike.
+ */
+private fun slot(i: Int, count: Int, width: Float): ClosedFloatingPointRange<Float> = (width * i / count)..(width * (i + 1) / count)
+
+/** The era of [eras] that season [s] belongs to (null: none, or the seasons between two eras). */
+private fun eraOf(eras: List<EraView>, s: Int): EraView? = eras.firstOrNull { s >= it.from && (it.to == null || s <= it.to) }
+
+/**
+ * The era strip (UX 8.1): one band per era over [seasons] (oldest first, laid out as the share
+ * chart lays its seasons), coloured by its family at 60% (춘추전국 and the seasons between eras
+ * grey), [height] tall, a white line where one era hands over to the next; [endPadding] keeps it
+ * over the share chart's plot (left of its labels' column).
+ */
+@Composable
+fun EraStrip(eras: List<EraView>, seasons: List<Int>, dark: Boolean, modifier: Modifier = Modifier, height: Dp = 14.dp, endPadding: Dp = SHARE_LABELS) {
+    if (seasons.isEmpty()) return
+    val gap = familyColor(null, dark).copy(alpha = 0.35f)
+    Canvas(modifier.fillMaxWidth().padding(end = endPadding).height(height)) {
+        // One band per run of seasons in the same era (or between eras), a white line between runs.
+        var from = 0
+        for (i in 1..seasons.size) {
+            val era = eraOf(eras, seasons[from])
+            if (i < seasons.size && eraOf(eras, seasons[i]) == era) continue
+            val c = if (era == null || era.family == null) gap else familyColor(era.family, dark).copy(alpha = 0.6f)
+            val x0 = slot(from, seasons.size, size.width).start
+            val x1 = slot(i - 1, seasons.size, size.width).endInclusive
+            drawRect(c, topLeft = Offset(x0, 0f), size = Size(x1 - x0, size.height))
+            if (from > 0) drawLine(Color.White.copy(alpha = 0.85f), Offset(x0, 0f), Offset(x0, size.height), strokeWidth = 2f)
+            from = i
+        }
+    }
+}
+
+/**
+ * 스타일 점유율 추이 (UX 8.1): each season's family shares of [shares] (per mille; of the best
+ * leagues' 1부 with [elite], else of every player) stacked bottom to top in family order, as areas
+ * through the seasons' middles ([AREA_FROM] seasons and more, else bars), each in its family's
+ * colour; at the right edge the families of at least [LABEL_SHARE] of the last season, named with
+ * their share; the season numbers under the plot (each bar's, else the first, the last and every
+ * fifth); the smaller families in a legend row. Shares are scaled to each season's own total.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ShareChart(shares: List<ShareSeason>, elite: Boolean, dark: Boolean, modifier: Modifier = Modifier, height: Dp = 200.dp) {
+    if (shares.isEmpty()) return
+    val families = StyleFamily.entries
+    val seasons = shares.sortedBy { it.season }
+    val rows = seasons.map { s ->
+        val xs = (if (elite) s.elite else s.all).map { it.toDouble() }
+        val t = xs.sum()
+        if (t <= 0) xs.map { 0.0 } else xs.map { it / t }
+    }
+    val last = rows.last()
+    val cs = MaterialTheme.colorScheme
+    val measurer = rememberTextMeasurer()
+    val labelStyle = MaterialTheme.typography.labelSmall.copy(color = cs.onSurface)
+    val n = seasons.size
+    Column(modifier) {
+        Canvas(Modifier.fillMaxWidth().height(height)) {
+            val plotW = size.width - SHARE_LABELS.toPx()
+            val h = size.height
+            // The bottom and the top of family f's band in season i (y grows downwards).
+            fun band(i: Int, f: Int): Pair<Float, Float> {
+                val below = (0 until f).sumOf { rows[i][it] }
+                return (h * (1 - below)).toFloat() to (h * (1 - below - rows[i][f])).toFloat()
+            }
+            val mids = (0 until n).map { i -> slot(i, n, plotW).let { (it.start + it.endInclusive) / 2 } }
+            for (f in families.indices) {
+                val color = familyColor(families[f], dark)
+                if (n < AREA_FROM) {
+                    for (i in 0 until n) {
+                        val x = slot(i, n, plotW)
+                        val (bottom, top) = band(i, f)
+                        val pad = (x.endInclusive - x.start) * 0.12f
+                        if (bottom - top > 0.5f) drawRect(color, topLeft = Offset(x.start + pad, top), size = Size(x.endInclusive - x.start - 2 * pad, bottom - top))
+                    }
+                    continue
+                }
+                // The top edge left to right (flat out to the plot's edges), then the bottom edge back.
+                val path = Path()
+                path.moveTo(0f, band(0, f).second)
+                for (i in 0 until n) path.lineTo(mids[i], band(i, f).second)
+                path.lineTo(plotW, band(n - 1, f).second)
+                path.lineTo(plotW, band(n - 1, f).first)
+                for (i in n - 1 downTo 0) path.lineTo(mids[i], band(i, f).first)
+                path.lineTo(0f, band(0, f).first)
+                path.close()
+                drawPath(path, color)
+            }
+            for (f in families.indices) {
+                if (last[f] < LABEL_SHARE) continue
+                val (bottom, top) = band(n - 1, f)
+                val layout = measurer.measure("${families[f].label} ${Math.round(last[f] * 100)}%", labelStyle)
+                val y = ((bottom + top) / 2 - layout.size.height / 2f).coerceIn(0f, maxOf(0f, h - layout.size.height))
+                drawText(layout, topLeft = Offset(plotW + 4.dp.toPx(), y))
+            }
+        }
+        Box(Modifier.fillMaxWidth().padding(end = SHARE_LABELS).height(16.dp)) {
+            for ((i, s) in seasons.withIndex()) {
+                if (n >= AREA_FROM && i != 0 && i != n - 1 && s.season % 5 != 0) continue
+                Text("${s.season}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, modifier = Modifier.layoutOffset(i, n))
+            }
+        }
+        val small = families.indices.filter { last[it] < LABEL_SHARE && last[it] > 0 }
+        if (small.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 2.dp)) {
+                for (f in small) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(familyColor(families[f], dark)))
+                        Text(" ${families[f].label} ${Math.round(last[f] * 100)}%", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Places a season's number under the middle of its slot ([i] of [n]) in the share chart's axis row. */
+private fun Modifier.layoutOffset(i: Int, n: Int): Modifier = layout { measurable, constraints ->
+    val p = measurable.measure(constraints.copy(minWidth = 0))
+    val x = (constraints.maxWidth * (i + 0.5f) / n - p.width / 2f).toInt().coerceIn(0, maxOf(0, constraints.maxWidth - p.width))
+    layout(constraints.maxWidth, p.height) { p.place(x, 0) }
+}
+
+/** The share chart draws areas from this many seasons (stacked bars below), and names at its right edge the families of this share. */
+const val AREA_FROM = 6
+const val LABEL_SHARE = 0.08
+
+/** The share chart's column of direct labels (the era strip stops where it starts). */
+val SHARE_LABELS = 76.dp

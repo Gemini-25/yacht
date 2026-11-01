@@ -32,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -327,7 +328,9 @@ private fun ColumnScope.SettingsSheet(c: AppController, v: LeagueView?, onReset:
         nav.sheet = Sheet.NONE
         c.screen = s
     }
-    Text(countsLine(c, v), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    // The era going on joins the counts once the meta names one (UX 8: the footer's era line).
+    LaunchedEffect(v?.season?.number, v?.clock?.week) { lg.storyPages.loadStatus() }
+    Text(countsLine(c, v, lg.storyPages.status?.era), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SheetHeading("진행 방식")
     Segments(LeagueRunMode.entries.map { it.label }, lg.runMode.ordinal) { lg.changeRunMode(LeagueRunMode.entries[it]) }
     SheetNote(if (lg.runMode == LeagueRunMode.WEEK) "1주씩: ▶를 누를 때마다 한 주를 치르고 멈춰요." else "계속: ■를 누를 때까지 시즌을 이어가요.")

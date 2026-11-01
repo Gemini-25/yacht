@@ -225,6 +225,7 @@ internal fun LeaguePageBody(lg: LeagueController, v: LeagueView, page: Page.Leag
     val cs = MaterialTheme.colorScheme
     val season = v.season
     LaunchedEffect(page.loadKey, season?.number, (season?.played ?: 0) / CLUB_REFRESH) { lg.worldPages.loadLeague(page.id) }
+    LaunchedEffect(season?.number, v.clock?.week) { lg.storyPages.loadStatus() }
     val p = lg.worldPages.league(page)
     if (p == null) {
         CenterText(if (season?.leagues?.any { it.id == page.id } == true) "리그 기록을 불러오는 중…" else "이번 시즌에는 이 리그가 없어요.")
@@ -237,6 +238,8 @@ internal fun LeaguePageBody(lg: LeagueController, v: LeagueView, page: Page.Leag
             listOfNotNull("${info.nations}개국".takeIf { info.union }, "선수 ${"%,d".format(info.members)}명", "${info.tiers}개 부").joinToString(" · "),
             style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant,
         )
+        // 🧭 its 1부's strongest style (UX 9.4), once the meta measures its closes.
+        p.style?.let { (f, pct) -> LinkLine(WorldPageTexts.style(f, pct)) { lg.nav.open(Page.Meta()) } }
         p.rank?.let { r ->
             Heading("🌍 리그 랭킹")
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -264,6 +267,11 @@ internal fun LeaguePageBody(lg: LeagueController, v: LeagueView, page: Page.Leag
                 lg.nav.tableMode = TableMode.TABLE
                 lg.nav.selectLeague(info.id)
             }
+        }
+        // This league's 기자단 (UX 9.4): its predictions and top 5, the league the tabs show left as it is.
+        if (lg.storyPages.status?.press == true) {
+            LinkLine("🔮 시즌 전망", "우승 후보, 다크호스, 강등 후보") { lg.nav.open(Page.Press(info.id)) }
+            LinkLine("📈 파워 랭킹", "이 리그의 톱 5와 세계 톱 10") { lg.nav.open(Page.Press(info.id)) }
         }
         if (p.clubs.isNotEmpty()) {
             Heading("🛡 클럽 순위")
@@ -310,6 +318,12 @@ internal fun LeaguePageBody(lg: LeagueController, v: LeagueView, page: Page.Leag
 
 /** The first moves of a league page's window. */
 private const val MOVES = 12
+
+/** The league page's texts of the phase (UX 9.4). */
+internal object WorldPageTexts {
+    /** "🧭 강세 스타일: 보너스파 (1부의 31%)". */
+    fun style(f: yacht.engine.league.StyleFamily, pct: Int): String = "🧭 강세 스타일: ${f.label} (1부의 $pct%)"
+}
 
 /** A group's numbers in one line: players, average rating and score, yachts, bonus rate, sweeps. */
 private fun aggregateLine(a: AggregateStats): String = listOfNotNull(

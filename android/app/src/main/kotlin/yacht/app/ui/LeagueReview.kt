@@ -43,14 +43,17 @@ import yacht.app.core.LeagueView
 import yacht.app.core.Page
 import yacht.app.core.ReviewGameView
 import yacht.app.core.ReviewPage
+import yacht.app.core.ReviewStories
 import yacht.app.core.Screen
+import yacht.app.core.pageOf
 import yacht.engine.league.LeaderStat
 import yacht.engine.league.MatchRef
 import yacht.engine.league.SeasonReview
 
 // The season review page (Page.Review, re-openable for every kept season; a summary for an older
-// one): Season Wrapped's swipeable cards first, then the whole review (UX 4.7): sentences, 우승,
-// 수상, 리더, 숫자로 본 시즌, 최고의 경기, 레이팅 상승·하락, 기록 경신, 메타 변화, 리그 랭킹 변화 and 요트협회 결정.
+// one): the season's big stories once the close keeps them (📰 이번 시즌의 큰 이야기), Season
+// Wrapped's swipeable cards, then the whole review (UX 4.7): sentences, 우승, 수상, 리더, 숫자로 본
+// 시즌, 최고의 경기, 레이팅 상승·하락, 기록 경신, 메타 변화, 리그 랭킹 변화 and 요트협회 결정.
 
 /** [Page.Review]: loads season [Page.Review.season]'s review (again when the season moves on: the amendments) and draws it. */
 @Composable
@@ -74,7 +77,60 @@ internal fun ReviewPageBody(c: AppController, v: LeagueView, page: Page.Review) 
             }
         },
         onLeague = { id -> nav.open(Page.League(id)) },
+        onLink = { link -> pageOf(link)?.takeIf(::linkable)?.let { nav.open(it) } },
     )
+}
+
+/**
+ * "📰 이번 시즌의 큰 이야기" (UX 3.5), the review's first card: the close's big stories (≤ 4, each
+ * with › when its page is there to open), 골든 다이스's top 3 with their points and "투표 전체 ›"
+ * (기자단), the market's and the coaches' season in a line. Without big stories the era, the
+ * record fee and the predictions stand in.
+ */
+@Composable
+private fun StoriesCard(s: ReviewStories, onLink: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp), colors = CardDefaults.cardColors(containerColor = cs.primaryContainer, contentColor = cs.onPrimaryContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(ReviewTexts.STORIES, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            val lines = s.big.ifEmpty {
+                listOfNotNull(
+                    s.era?.let { "🧭 $it" to "meta" },
+                    s.record?.let { yacht.app.core.StoryLines.recordFee(yacht.engine.league.Money.text(it.fee), it.shown) to "p:${it.key}" },
+                    s.predict?.let { "🔮 기자단 예측 $it" to "pr" },
+                )
+            }
+            for ((text, link) in lines) StoryLine(text, link.takeIf { it.isNotEmpty() && pageOf(it)?.let(::linkable) == true }, onLink)
+            if (s.goldenDice.isNotEmpty()) {
+                Text("🎙 골든 다이스", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                for ((i, g) in s.goldenDice.withIndex()) StoryLine(ReviewTexts.golden(i + 1, g.shown, g.points), g.link, onLink)
+                StoryLine("투표 전체", "pr", onLink)
+            }
+            ReviewTexts.season(s.deals, s.sackings, s.coachOfYear)?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+        }
+    }
+}
+
+/** A line of the big-story card: its text and › when [link] opens a page. */
+@Composable
+private fun StoryLine(text: String, link: String?, onLink: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = link != null) { link?.let(onLink) }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (link != null) Text(" ›", style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** The review's texts of the phase (UX 3.5, 7.5, 해요체). */
+internal object ReviewTexts {
+    const val STORIES = "📰 이번 시즌의 큰 이야기"
+
+    /** "1 🇨🇦 루카스 시우바 · 42점". */
+    fun golden(rank: Int, name: String, points: Int) = "$rank $name · ${points}점"
+
+    /** "✍ 이적 23건 · 👔 감독 경질 2명 · 올해의 감독 🇰🇷 이민수"; null when the season had none of them. */
+    fun season(deals: Int, sackings: Int, coach: String?): String? =
+        listOfNotNull("✍ 이적 ${deals}건".takeIf { deals > 0 }, "👔 감독 경질 ${sackings}명".takeIf { sackings > 0 }, coach?.let { "올해의 감독 $it" })
+            .takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
 /**
@@ -89,10 +145,13 @@ internal fun ReviewBody(
     onMatch: (String) -> Unit = {},
     onWatch: (String) -> Unit = {},
     onLeague: (String) -> Unit = {},
+    onLink: (String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     fun name(k: String) = r.names[k] ?: k
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // The season's big stories open the review (UX 3.5).
+        r.stories?.let { StoriesCard(it, onLink) }
         val cards = wrappedCards(r)
         if (cards.isNotEmpty()) WrappedPager(r, cards, onPlayer, onMatch, onWatch)
         Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -233,16 +292,18 @@ private fun GameCard(g: ReviewGameView, onMatch: (String) -> Unit, onWatch: (Str
 
 // ---- Season Wrapped -----------------------------------------------------------------------------------
 
-/** Season Wrapped's cards, in order; only those the review has data for. */
-internal enum class WrappedCard { HEROES, TOP_GAME, UPSET, RECORDS, RANKING, FOLLOWED }
+/** Season Wrapped's cards, in order; only those the review has data for (골든 다이스 and 기자단 예측 once the press votes and predicts). */
+internal enum class WrappedCard { HEROES, GOLDEN, TOP_GAME, UPSET, RECORDS, RANKING, PREDICT, FOLLOWED }
 
 /** The cards [r] can fill. */
 internal fun wrappedCards(r: ReviewPage): List<WrappedCard> = buildList {
     if (r.champions.isNotEmpty() || r.world.isNotEmpty() || r.review?.awards?.isNotEmpty() == true) add(WrappedCard.HEROES)
+    if (r.stories?.goldenDice?.isNotEmpty() == true) add(WrappedCard.GOLDEN)
     if (r.topRated != null) add(WrappedCard.TOP_GAME)
     if (r.upset != null) add(WrappedCard.UPSET)
     if (r.review?.records?.isNotEmpty() == true) add(WrappedCard.RECORDS)
     if (r.review?.ranking?.isNotEmpty() == true) add(WrappedCard.RANKING)
+    if (r.stories?.predict != null) add(WrappedCard.PREDICT)
     if (r.followed.isNotEmpty()) add(WrappedCard.FOLLOWED)
 }
 
@@ -312,6 +373,21 @@ internal fun WrappedCardView(r: ReviewPage, kind: WrappedCard, onPlayer: (String
                 WrappedCard.FOLLOWED -> {
                     head("★", "내가 응원한 선수들")
                     for (f in r.followed.take(4)) FollowedLine(f, name(f.key), onPlayer)
+                }
+                WrappedCard.GOLDEN -> {
+                    val gd = r.stories?.goldenDice.orEmpty()
+                    head("🎙", "골든 다이스")
+                    gd.firstOrNull()?.let { g ->
+                        Text(g.shown, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth().clickable { onPlayer(g.link.removePrefix("p:")) })
+                        Text("기자단 투표 ${g.points}점 · 1위 표 ${g.firsts}표", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    for ((i, g) in gd.drop(1).withIndex()) item("${i + 2}위 ${g.shown} · ${g.points}점", g.link.removePrefix("p:"))
+                }
+                WrappedCard.PREDICT -> r.stories?.predict?.let { p ->
+                    head("🔮", "기자단 예측")
+                    Text(p, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text("시즌을 시작할 때 기자단이 고른 우승 후보가 맞았는지 세었어요.", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }

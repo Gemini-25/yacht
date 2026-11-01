@@ -3,10 +3,21 @@ package yacht.uicheck
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import yacht.app.core.ClubBadge
 import yacht.app.core.ClubRankKind
+import yacht.app.core.EraView
 import yacht.app.core.HomeBanner
 import yacht.app.core.HomeFeed
 import yacht.app.core.InfoTopic
@@ -15,13 +26,19 @@ import yacht.app.core.LeagueView
 import yacht.app.core.NewsFilter
 import yacht.app.core.Page
 import yacht.app.core.PressureLevel
+import yacht.app.core.StoryLines
 import yacht.app.core.UiPrefs
 import yacht.app.core.pageOf
 import yacht.app.core.storyReason
 import yacht.app.ui.ClubRankTexts
 import yacht.app.ui.ClubTexts
 import yacht.app.ui.CoachTexts
+import yacht.app.ui.MetaTexts
 import yacht.app.ui.PlayerClubTexts
+import yacht.app.ui.PressTexts
+import yacht.app.ui.ReviewTexts
+import yacht.app.ui.VOTE_POINTS
+import yacht.app.ui.WorldPageTexts
 import yacht.app.ui.arcIcon
 import yacht.app.ui.articleLink
 import yacht.app.ui.familyColor
@@ -48,20 +65,11 @@ import yacht.engine.league.CustomAiSpec
 import yacht.engine.league.LeagueAi
 import yacht.engine.league.LeagueTables
 import yacht.engine.league.LeagueWorld
+import yacht.engine.league.MetaBook
 import yacht.engine.league.OwnerType
 import yacht.engine.league.StoryStage
 import yacht.engine.league.StyleFamily
 import yacht.engine.league.WinEstimate
-import java.io.File
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
-import kotlin.test.fail
 
 /**
  * The app's texts with names in them (UX 14.3, 16): every [Case] read with every [Names] — club,
@@ -164,19 +172,25 @@ class StoryTextsTest {
         // Rule 4: a page's entry points ship with its content. The stage that ships one of these
         // takes it off [linkable] (and off this list); until then no link built from data opens it.
         val waiting = listOf(
-            Page.Press(), Page.Events, Page.Event(4), Page.WcStory(3), Page.Encyclopedia("p:g001"), Page.Search,
+            Page.Events, Page.Event(4), Page.WcStory(3), Page.Encyclopedia("p:g001"), Page.Search,
         )
         for (p in waiting) assertFalse(linkable(p), "$p is linkable before its content")
-        // P8 shipped the coach page and 클럽 랭킹.
-        val shipped = listOf(Page.Player("g001"), Page.Club("c01"), Page.League("KR"), Page.Nation("KR"), Page.Market(), Page.Meta(), Page.Coach("k1"), Page.ClubRanking())
+        // P8 shipped the coach page and 클럽 랭킹, P12 기자단.
+        val shipped = listOf(
+            Page.Player("g001"), Page.Club("c01"), Page.League("KR"), Page.Nation("KR"), Page.Market(), Page.Meta(), Page.Coach("k1"), Page.ClubRanking(),
+            Page.Press(), Page.Press("KR", reveal = 2),
+        )
         for (p in shipped) assertTrue(linkable(p), "$p")
-        // So an article's story pill shows only where it can lead: 이적 센터, the meta report and 클럽 랭킹 today.
+        // So an article's story pill shows only where it can lead: 이적 센터, 시대와 메타, 클럽 랭킹 and 기자단 today.
         fun a(kind: String) = Article(3, kind, "제목", "본문", emptyList(), null, 2, scope = "KR")
         val arcs = { _: ArcKind, _: Int -> 4 }
         assertEquals("💸 이적 센터 ›" to Page.Market(), storyPill(a("record_fee"), arcs))
         assertEquals("🧭 시대 ›" to Page.Meta(), storyPill(a("era_begins"), arcs))
         assertEquals("🏅 클럽 랭킹 ›" to Page.ClubRanking(), storyPill(a("club_ranking"), arcs))
-        for (k in listOf("power_ranking", "predictions", "press_award", "wc_bids", "wc_host_vote", "wc_draw_ceremony", "superleague_announce")) {
+        assertEquals("📈 파워 랭킹 ›" to Page.Press(), storyPill(a("power_ranking"), arcs))
+        assertEquals(Page.Press("KR"), storyPill(a("predictions"), arcs)?.second)
+        assertEquals(Page.Press(), storyPill(a("press_award"), arcs)?.second)
+        for (k in listOf("wc_bids", "wc_host_vote", "wc_draw_ceremony", "superleague_announce")) {
             assertNotNull(articleLink(a(k), arcs), k)
             assertNull(storyPill(a(k), arcs), "$k leads to a page still waiting")
         }
@@ -196,6 +210,28 @@ class StoryTextsTest {
             val dark = familyColor(f, dark = true)
             assertTrue(dark != light && dark.red >= light.red && dark.green >= light.green && dark.blue >= light.blue, "$f")
         }
+    }
+
+    @Test
+    fun theStoriesWorldEventsAreTheScreensOwn() {
+        // The review's and the chronicle's arc lines (core) take the screens' icons (ui), and read each arc kind's news kinds.
+        for (k in ArcKind.entries) assertEquals(arcIcon(k), StoryLines.arcIcon(k), k.name)
+        assertEquals(ArcKind.SUPER_LEAGUE, StoryLines.arcOf("superleague_outcome"))
+        assertEquals(ArcKind.MERGER, StoryLines.arcOf("league_merged"))
+        assertEquals(ArcKind.BOOM, StoryLines.arcOf("boom_ends"))
+        assertEquals(ArcKind.INVESTOR, StoryLines.arcOf("investor_verdict"))
+        assertEquals(ArcKind.CRISIS, StoryLines.arcOf("crisis_begins"))
+        assertNull(StoryLines.arcOf("era_begins"))
+        assertEquals("📉 금융 위기가 시작됐어요", StoryLines.arcOutcome(ArcKind.CRISIS, "crisis_begins"))
+        assertEquals("🔱 슈퍼리그 분리 위협이 결말을 맞았어요", StoryLines.arcOutcome(ArcKind.SUPER_LEAGUE, "superleague_outcome"))
+        // Points with their sign; a matchup cell's value.
+        assertEquals(listOf("+3.2", "-1.0", "0"), listOf(3.24, -1.0, 0.02).map(StoryLines::signed))
+        assertEquals(listOf("+0.2", "-0.1", "0"), listOf(0.21, -0.14, -0.04).map(MetaTexts::excess))
+        assertEquals(listOf("0.42", "-0.10"), listOf(42, -10).map(PressTexts::rho))
+        // A tapped matchup cell in a sentence: more or fewer points than expected, or as many.
+        assertEquals("족보파가 요트파를 만나 기대보다 경기당 승점을 0.31점 더 땄어요 (52경기).", MetaTexts.cell("족보파", "요트파", 0.31, 52))
+        assertEquals("요트파가 족보파를 만나 기대보다 경기당 승점을 0.25점 덜 땄어요 (52경기).", MetaTexts.cell("요트파", "족보파", -0.25, 52))
+        assertEquals("정석파가 신중파를 만나 기대만큼 승점을 땄어요 (40경기).", MetaTexts.cell("정석파", "신중파", 0.001, 40))
     }
 
     @Test
@@ -249,7 +285,75 @@ class StoryTextsTest {
                     Case("info $t", type.bodySmall, SHEET_DP, INFO_LINES) { infoText(t) },
                 )
             } +
-            CLUB_CASES
+            CLUB_CASES + STORY_CASES
+
+        /** 기자단's and 시대·스타일's card text width at 360 dp (the page's 12 dp sides and the card's 12), and a title's beside its ⓘ. */
+        private const val CARD_DP = 360f - 2 * 12 - 2 * 12
+        private const val CARD_TITLE_DP = CARD_DP - 24
+
+        /** An era of the longest family name (심리전파, its second era). */
+        private fun era(n: Names) = EraView(2, StyleFamily.MIND, "두 번째 심리전파의 시대", n.season, null, n.player to n.player)
+
+        /** 기자단's, 시대와 메타's, the review's and the league page's texts of P12 (UX 7-9.4). */
+        private val STORY_CASES: List<Case> get() = listOf(
+            Case("press power title", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 1) { PressTexts.powerTitle(38) },
+            Case("press last power title", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 1) { n -> PressTexts.lastPowerTitle(n.season, 38) },
+            Case("press not ranked", type.bodySmall, CARD_DP, 2) { PressTexts.notRanked(6) },
+            Case("press power line 2", type.labelSmall, CARD_DP - 22 - 36 - 18 - 44, 2) { "아프리카·중동 연합 1부 · " + StoryLines.powerSub(-12.34, 3) },
+            Case("press weeks at no. 1", type.bodySmall, CARD_DP, 3) { n -> "이번 시즌 · " + listOf(n.player, n.player, n.player).joinToString(" · ") { PressTexts.weeks("🇨🇦 $it", 12) } },
+            Case("press prediction title", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 2) { n -> PressTexts.predictionTitle("🌍 아프리카·중동 연합 리그", n.season) },
+            Case("press versus title", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 2) { PressTexts.versusTitle("🌍 아프리카·중동 연합 리그") },
+            Case("press favourite", type.bodySmall, CARD_DP - 120, 1) { n -> PressTexts.favourite(1, "🇨🇦 ${n.player}") },
+            Case("press dark horse", type.bodySmall, CARD_DP, 2) { n -> PressTexts.dark("🇨🇦 ${n.player}", 12, 21, 11) },
+            Case("press relegation", type.bodySmall, CARD_DP, 2) { n -> PressTexts.relegation("🇨🇦 ${n.player}", 34, 13) },
+            Case("press order", type.bodySmall, CARD_DP, 2) { n -> PressTexts.order(3, "🇨🇦 ${n.player}", 15) },
+            Case("press scorecard title", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 1) { n -> PressTexts.scorecardTitle(n.season) },
+            Case("press no scorecard", type.bodySmall, CARD_DP, 2) { n -> PressTexts.noScorecard(n.season) },
+            Case("press scorecard lead", type.bodyMedium, CARD_DP, 2) { PressTexts.scorecardLead(5, 24) },
+            Case("press scorecard line", type.bodySmall, CARD_DP, 2) { PressTexts.scorecardLine(13, 24, 31, 72, -8) },
+            Case("press over", type.bodySmall, CARD_DP, 2) { n -> PressTexts.over("🇨🇦 ${n.player}", 14, 2) },
+            Case("press flop", type.bodySmall, CARD_DP, 2) { n -> PressTexts.flop("🇨🇦 ${n.player}", 1, 16) },
+            Case("press league score", type.bodySmall, CARD_DP, 2) { PressTexts.leagueScore("🌍 아프리카·중동 연합 리그", false, true, 2, -12) },
+            Case("press vote title", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 1) { n -> PressTexts.voteTitle(n.season, 40) },
+            Case("press ballot", type.bodySmall, CARD_DP, 2) { PressTexts.BALLOT },
+            Case("press no vote (first)", type.bodySmall, CARD_DP, 2) { n -> PressTexts.noVote(n.season, first = true) },
+            Case("press no vote", type.bodySmall, CARD_DP, 2) { n -> PressTexts.noVote(n.season, first = false) },
+            Case("press points", type.labelMedium.copy(fontWeight = FontWeight.Bold), VOTE_POINTS.value, 1) { PressTexts.points(150, 30) },
+            Case("press legacy", type.bodyMedium, PAGE_DP, 2) { PressTexts.LEGACY },
+            Case("meta now", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 2) { n -> MetaTexts.now(era(n), chaos = false) },
+            Case("meta chaos", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 2) { MetaTexts.CHAOS },
+            Case("meta none", type.titleSmall.copy(fontWeight = FontWeight.Bold), CARD_TITLE_DP, 1) { MetaTexts.NONE },
+            Case("meta since", type.bodySmall, CARD_DP, 3) { n -> MetaTexts.since(era(n), n.season + 11, 9 to 18, chaos = false) },
+            Case("meta candidate", type.labelMedium, CARD_DP, 2) { MetaTexts.candidate(StyleFamily.MIND, "두 번째 심리전파의 시대") },
+            Case("meta share", type.bodySmall, CARD_DP - 16, 1) { MetaTexts.share(StyleFamily.MIND, 33, 30, -12) },
+            Case("meta timeline", type.bodySmall, CARD_DP - 12, 1) { n -> MetaTexts.timeline(era(n).copy(from = n.season + 10)) },
+            Case("meta cap", type.labelSmall, CARD_DP, 2) { MetaTexts.cap(17) },
+            Case("meta fashion", type.bodySmall, CARD_DP, 2) { MetaTexts.FASHION },
+            Case("meta grid", type.labelSmall, CARD_DP, 2) { MetaTexts.GRID },
+            Case("meta cell", type.labelSmall, CARD_DP, 2) { MetaTexts.cell("심리전파", "정석파", -0.214, 52) },
+            Case("meta cell (few)", type.labelSmall, CARD_DP, 2) { MetaTexts.cell("심리전파", "정석파", Double.NaN, 12) },
+            Case("meta cell (even)", type.labelSmall, CARD_DP, 2) { MetaTexts.cell("심리전파", "정석파", 0.0, 152) },
+            Case("meta empty", type.bodyMedium, PAGE_DP, 2) { MetaTexts.EMPTY },
+            Case("meta counter", type.bodySmall, CARD_DP, 2) { StoryLines.counter(StyleFamily.MIND, StyleFamily.CAUTION, 0.31) },
+            Case("counts line with the era", type.bodySmall, SHEET_DP, 2) { n -> "선수 3,000명 · 총 123,456경기 · " + StoryLines.eraLine("두 번째 심리전파의 시대", n.season) },
+            Case("league page style", type.bodyMedium.copy(fontWeight = FontWeight.SemiBold), PAGE_DP - 24, 1) { WorldPageTexts.style(StyleFamily.MIND, 31) },
+            Case("review stories title", type.titleSmall.copy(fontWeight = FontWeight.Bold), PAGE_DP, 1) { ReviewTexts.STORIES },
+            Case("review era begins", type.bodySmall, PAGE_DP - 16, 2) { StoryLines.eraBegins("두 번째 심리전파의 시대") },
+            Case("review era ends", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.eraEnds("두 번째 심리전파의 시대", n.season) },
+            Case("review wc host", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.wcHost(n.season, "🇨🇦 ${n.nation}") },
+            Case("review record fee", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.recordFee("1,240.0억", "🇨🇦 ${n.player}") },
+            Case("review league record fee", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.recordFee("1,240.0억", "🇨🇦 ${n.player}", "🌍 아프리카·중동 연합 리그") },
+            Case("review golden dice", type.bodySmall, PAGE_DP - 16, 2) { n -> StoryLines.goldenDice("🇨🇦 ${n.player}", 142) },
+            Case("review golden row", type.bodySmall, PAGE_DP - 16, 1) { n -> ReviewTexts.golden(1, "🇨🇦 ${n.player}", 142) },
+            Case("review season", type.labelSmall, PAGE_DP, 2) { n -> ReviewTexts.season(23, 2, "🇨🇦 ${n.player}")!! },
+            Case("review era (began)", type.bodySmall, PAGE_DP - 16, 2) { StoryLines.era("두 번째 심리전파의 시대", 'B') },
+            Case("review era", type.bodySmall, PAGE_DP - 16, 2) { StoryLines.era(MetaBook.CHAOS, '-') },
+            Case("wrapped predict", type.bodyMedium, PAGE_DP - 40 - 32, 3) { n -> StoryLines.predict(5, 24, "🇨🇦 ${n.player}") },
+        ) + ArcKind.entries.flatMap { k ->
+            listOf("${k.name.lowercase()}_begins", "${k.name.lowercase()}_outcome").map { kind ->
+                Case("review arc $kind", type.bodySmall, PAGE_DP - 16, 2) { StoryLines.arcOutcome(k, kind) }
+            }
+        }
 
         /** A club or coach page's text width at 360 dp (its 16 dp sides), a line's beside its "›", the club header's beside its 48 dp emblem. */
         private const val PAGE_DP = 360f - 2 * 16

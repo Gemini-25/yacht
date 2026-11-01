@@ -52,8 +52,9 @@ import yacht.app.core.Page
 import yacht.app.core.Sheet
 import yacht.app.core.StatScope
 
-// 기록 › 리더: the leaderboard hub (eight boards as cards with their top 3, the other four folded,
-// one row of filters: 이번 시즌 / 통산 / 최근 10경기 and 내 리그 / 전체 / 국가 / 클럽), each board's page
+// 기록 › 리더: the leaderboard hub (eight boards as cards with their top 3, the other four folded with
+// the club world's 💰 몸값 and 🌱 유스 출신 once there is one, one row of filters: 이번 시즌 / 통산 /
+// 최근 10경기 and 내 리그 / 전체 / 국가 / 클럽), each board's page
 // (Page.Leaderboard), the filter sheet, and 탐구 (Page.Facts: fun facts and the league comparison).
 
 /** A board's icon on its card and page. */
@@ -84,9 +85,14 @@ internal fun LeadersHub(lg: LeagueController, v: LeagueView) {
     val nav = lg.nav
     val cs = MaterialTheme.colorScheme
     val filter = nav.leaders
-    LaunchedEffect(filter, v.season?.number, v.clock?.week) { lg.analytics.loadLeaders(filter) }
+    LaunchedEffect(filter, v.season?.number, v.clock?.week) {
+        lg.analytics.loadLeaders(filter)
+        lg.analytics.loadClubBoards(filter)
+    }
     // While another filter loads, the boards loaded before stay (the area line waits for the new ones).
     val view = lg.analytics.leaders(filter) ?: lg.analytics.anyLeaders()
+    // 💰 몸값 and 🌱 유스 출신 (UX 7.5): with a club world, in "다른 부문".
+    val club = lg.analytics.clubBoards(filter)?.takeIf { it.value.isNotEmpty() || it.graduates.isNotEmpty() }
     LazyColumn(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { FilterRow(lg, filter, view?.takeIf { it.filter == filter }?.area) }
         if (view == null) {
@@ -114,10 +120,16 @@ internal fun LeadersHub(lg: LeagueController, v: LeagueView) {
                 var open by remember { mutableStateOf(false) }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        if (open) "다른 부문 접기 ▴" else "다른 부문 ${LeagueAnalytics.OTHERS.size}개 ▾", style = MaterialTheme.typography.labelLarge,
+                        if (open) "다른 부문 접기 ▴" else "다른 부문 ${LeagueAnalytics.OTHERS.size + if (club != null) 2 else 0}개 ▾", style = MaterialTheme.typography.labelLarge,
                         color = cs.primary, modifier = Modifier.clickable { open = !open }.padding(vertical = 4.dp),
                     )
                     if (open) for (row in LeagueAnalytics.OTHERS.chunked(2)) CardRow(row, boards, view, onBoard = { nav.open(Page.Leaderboard(it)) })
+                    if (open && club != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ClubBoardCard("💰 몸값", club.value, Modifier.weight(1f)) { nav.open(Page.Player(it)) }
+                            ClubBoardCard("🌱 유스 출신", club.graduates, Modifier.weight(1f)) { nav.open(Page.Player(it)) }
+                        }
+                    }
                 }
             }
         }
@@ -174,6 +186,35 @@ internal fun LeaderCard(kind: LeaderKind, lines: List<LeaderLine>, missing: Bool
                         if (kind == LeaderKind.MVP) RatingText(l.value, digits = 2) else Text(l.text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, maxLines = 1)
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A club-world board's card (💰 몸값, 🌱 유스 출신): its top 3 (rank, name, value, the line under
+ * it), unfolded in the card to all its [lines] ([LeagueAnalytics.CLUB_BOARD]); a row opens the player.
+ */
+@Composable
+private fun ClubBoardCard(title: String, lines: List<LeaderLine>, modifier: Modifier, onPlayer: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var all by remember { mutableStateOf(false) }
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = cs.surface)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1)
+            if (lines.isEmpty()) Text("아직 선수가 없어요.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, minLines = 3)
+            for ((i, l) in lines.take(if (all) lines.size else LeagueAnalytics.HUB_TOP).withIndex()) {
+                Column(Modifier.fillMaxWidth().clickable { onPlayer(l.key) }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("${i + 1}", style = MaterialTheme.typography.labelSmall, color = if (i == 0) cs.primary else cs.onSurfaceVariant, fontWeight = FontWeight.Bold, modifier = Modifier.width(14.dp))
+                        Text(l.shown, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text(l.text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
+                    Text(l.sub, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 14.dp))
+                }
+            }
+            if (lines.size > LeagueAnalytics.HUB_TOP) {
+                Text(if (all) "접기 ▴" else "전체 보기 ▾", style = MaterialTheme.typography.labelMedium, color = cs.primary, modifier = Modifier.clickable { all = !all }.padding(vertical = 2.dp))
             }
         }
     }
