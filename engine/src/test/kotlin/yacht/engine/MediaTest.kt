@@ -20,10 +20,12 @@ import yacht.engine.league.LeagueMatch
 import yacht.engine.league.LiveBoard
 import yacht.engine.league.MatchFormat
 import yacht.engine.league.MatchRef
+import yacht.engine.league.Nations
 import yacht.engine.league.News
 import yacht.engine.league.NewsBook
 import yacht.engine.league.RecordKind
 import yacht.engine.league.Season
+import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.TieRule
 import yacht.engine.league.TitleRaceWatch
 import yacht.engine.league.WinEstimate
@@ -237,10 +239,18 @@ class MediaTest {
 
     // ---- news ----------------------------------------------------------------------------------
 
-    private val names = mapOf("ai1" to "김민준", "ai2" to "승률 AI (앱 기본)", "ai3" to "목표 180점", "ai4" to "이서연", "e3_1" to "박하람", "e3_2" to "최별")
-    private val clubs = mapOf("c1" to "서울 타이거즈", "c2" to "부산 갈매기")
+    private val names = mapOf(
+        "ai1" to "김민준", "ai2" to "승률 AI (앱 기본)", "ai3" to "목표 180점", "ai4" to "이서연", "e3_1" to "박하람", "e3_2" to "최별",
+        "p1" to "김하나", "p2" to "이준혁",
+    )
+    private val clubs = mapOf("c1" to "서울 타이거즈", "c2" to "부산 갈매기", "c3" to "부산 갈매기", "c4" to "광주 불곰")
+    private val coaches = mapOf("k1" to "오세나", "k2" to "장도윤")
 
-    private fun samples(s: Int): List<LeagueEvent> {
+    /** Every kind's samples: today's and the club world's. */
+    private fun samples(s: Int): List<LeagueEvent> = oldSamples(s) + clubWorldSamples(s)
+
+    /** The samples of the kinds 3ce4b93 had (their articles are pinned by [oldKindsReadAsBefore]). */
+    private fun oldSamples(s: Int): List<LeagueEvent> {
         fun e(kind: String, keys: List<String>, args: List<String> = emptyList(), comp: Comp? = null) = LeagueEvent(kind, s, keys, args, comp)
         val two = listOf("ai1", "ai2")
         val four = listOf("ai1", "ai2", "ai3", "ai4")
@@ -375,6 +385,104 @@ class MediaTest {
         ) + deskSamples(s)
     }
 
+    /**
+     * The club world's, the media's and the world events' kinds (design ENG 11.2) as their engine
+     * stages make them: players p1/p2, clubs c1-c4, coaches k1/k2, nations [na] and [nb].
+     */
+    private fun clubWorldSamples(s: Int, na: String = "CA", nb: String = "MX"): List<LeagueEvent> {
+        fun e(kind: String, keys: List<String>, args: List<String> = emptyList(), comp: Comp? = Comp.CLUB, week: Int = SeasonCalendar.NONE) =
+            LeagueEvent(kind, s, keys, args, comp, week)
+        val pair = listOf("c3", "c4")
+        val two = listOf("p1", "p2")
+        val w = 22
+        return listOf(
+            // Money and club life (P3), the dissolving (P11).
+            e("club_accounts", pair, listOf("322", "45", "7")), e("club_accounts", listOf("c3"), listOf("322", "0", "0")),
+            e("club_trouble", listOf("c3"), listOf("-45")), e("club_trouble", listOf("c4"), listOf("12")),
+            e("forced_sale", listOf("p1", "c3", "c4"), listOf("85")), e("administration", listOf("c4")),
+            e("rescue", listOf("c3"), listOf("한빛건설")), e("club_folded", listOf("c4"), listOf("6")), e("club_folded", listOf("c3"), listOf("0")),
+            e("takeover", listOf("c3"), listOf("김도현 회장", "T")), e("takeover", listOf("c4"), listOf("벨로렌 파트너스", "P")),
+            e("takeover", listOf("c3"), listOf("한빛건설", "L")), e("takeover", listOf("c4"), listOf("오르비스 인베스트먼트", "S")),
+            e("owner_exit", listOf("c3"), listOf("김도현 회장")),
+            e("sponsor_deal", listOf("c3"), listOf("휘담전자", "46", "3", "1")), e("sponsor_deal", listOf("c4"), listOf("벨로렌 텔레콤", "12", "2", "0")),
+            e("sponsor_exit", listOf("c3"), listOf("휘담전자", "0")), e("sponsor_exit", listOf("c4"), listOf("벨로렌 텔레콤", "1")),
+            e("stadium_project", listOf("c3"), listOf("18000", "24000", "1", "160", "E")), e("stadium_project", listOf("c4"), listOf("12000", "35000", "2", "900", "N")),
+            e("stadium_open", listOf("c3"), listOf("부산 아레나", "24000", "E")), e("stadium_open", listOf("c4"), listOf("불곰 스타디움", "35000", "N")),
+            e("fan_protest", listOf("c3", "k1"), listOf("18")), e("fan_protest", listOf("c4"), listOf("20")), e("fan_party", listOf("c3")),
+            e("club_ranking", pair, listOf("1240")), e("club_ranking", listOf("c4", "c4"), listOf("980")), e("club_ranking", listOf("c3"), listOf("0")),
+            e("club_world_digest", pair, listOf("5", "2", "3")), e("club_world_digest", listOf("c4"), listOf("1", "0", "0")),
+            // Coaches (P5) and the winter checkpoint's (P13, week 22).
+            e("coach_sacked", listOf("c3", "k1"), listOf("7", "3", "1")), e("coach_sacked", listOf("c4", "k2"), listOf("2", "3", "0")),
+            e("coach_sacked", listOf("c3", "k1", "k2"), listOf("6", "4", "1", "1"), week = w), e("coach_sacked", listOf("c4", "k2"), listOf("5", "4", "0", "0"), week = w),
+            e("coach_hired", listOf("c3", "k1", "c4"), listOf("A")), e("coach_hired", listOf("c4", "k2"), listOf("Y")), e("coach_hired", listOf("c3", "k2"), listOf("-")),
+            e("coach_poached", listOf("c3", "k2", "c4"), listOf("25")),
+            e("coach_retired", listOf("k1"), listOf("14", "3")), e("coach_retired", listOf("k2"), listOf("9", "0")),
+            e("player_to_coach", listOf("p1", "k1"), listOf("Y", "A")), e("player_to_coach", listOf("p2", "k2"), listOf("-", "S")),
+            e("player_to_coach", listOf("p2", "k2"), listOf("-", "-")),
+            e("coach_digest", pair, listOf("4", "5", "1", "5")), e("coach_digest", pair, listOf("3", "2", "0", "3"), week = w),
+            // The market (P7, P11, P13).
+            e("market_week", listOf("p1", "c3", "c4"), listOf("27", "65", "2"), week = 27), e("market_week", listOf("p2", "c4", "c3"), listOf("30", "40", "1"), week = 30),
+            e("market_week", listOf("p1", "c3", "c4", "c4", "k2"), listOf("31", "65", "1"), week = 31),
+            e("deal_collapsed", listOf("p1", "c3", "c4"), listOf("P")), e("deal_collapsed", listOf("p2", "c4", "c3"), listOf("S")),
+            e("deal_collapsed", listOf("p1", "c3", "c4"), listOf("M")), e("deal_collapsed", listOf("p2", "c4", "c3"), listOf("F")),
+            e("deal_collapsed", listOf("p1", "c3", "c4"), listOf("R")), e("deal_collapsed", listOf("p2", "c3", "c4", "c1"), listOf("H")),
+            e("deal_collapsed", listOf("p2", "c3", "c4", "c1"), listOf("H"), week = w),
+            e("record_fee", listOf("p1", "c4", "c3"), listOf("520", "480", "W")), e("record_fee", listOf("p2", "c3", "c4"), listOf("210", "0", "KR")),
+            e("rival_move", listOf("p1", "c3", "c4"), listOf("140")), e("release_clause", listOf("p2", "c4", "c3"), listOf("300")),
+            e("free_agent", listOf("p1", "c3", "c4"), listOf("18")), e("free_agent", listOf("p2", "-", "c3"), listOf("0")),
+            e("contract_renewal", listOf("p1", "c3"), listOf("3", "25")),
+            e("winter_window", two, listOf("9", "p1", "c3", "c4", "120"), week = w), e("winter_window", listOf("p2"), listOf("1", "p2", "c4", "c3", "0"), week = w),
+            e("deadline_day", two, listOf("2")), e("deadline_day", two, listOf("7")), e("loan_digest", two, listOf("2")), e("loan_digest", listOf("p1"), listOf("5")),
+            e("transfer", listOf("p1", "c3", "c4"), listOf("85", "1")), e("transfer", listOf("p2", "c4", "c3"), listOf("40", "0", "W"), week = w),
+            e("transfer", listOf("p1", "c3", "c4"), listOf("120", "1", "W"), week = w),
+            // Academies and club history (P6).
+            e("wonderkid", listOf("p1", "c3"), listOf("92", "17")), e("academy_graduates", listOf("p1", "p2", "c3", "c4"), listOf("14", "2")),
+            e("one_club_man", listOf("p1", "c3"), listOf("14", "7")), e("one_club_man", listOf("p2", "c4"), listOf("11", "-")),
+            e("club_legend", listOf("p1", "c3")), e("captain", listOf("p2", "c4")),
+            e("derby_result", listOf("p1", "p2", "c3", "c4"), listOf("2-0", "5", "1", "3", "부산-광주 라이벌전"), Comp.LEAGUE, 12),
+            e("rivalry_born", pair, listOf("P")), e("rivalry_born", pair, listOf("F")), e("rivalry_born", pair, listOf("X")), e("rivalry_born", pair, listOf("K")),
+            // The meta (P9).
+            e("era_begins", emptyList(), listOf("B", "5", "8", "보너스파의 시대"), null), e("era_begins", emptyList(), listOf("Y", "4", "6", "두 번째 요트파의 시대"), null),
+            e("era_begins", emptyList(), listOf("-", "0", "6", "춘추전국 시대"), null), e("era_ends", emptyList(), listOf("B", "보너스파의 시대", "6"), null),
+            e("counter_style", emptyList(), listOf("S", "Y", "0.18"), null),
+            e("imitation", two, listOf("2", "B", "2"), null), e("imitation", two, listOf("7", "Y", "12"), null),
+            // The media (P10).
+            e("power_ranking", listOf("p1", "p2", "ai1", "ai2"), listOf("14", "p2", "4", "-", "0"), null, 14),
+            e("power_ranking", listOf("p2", "p1", "ai1"), listOf("15", "-", "-", "ai1", "1"), null, 15),
+            e("power_ranking", listOf("p1", "p2", "ai1"), listOf("16", "-", "-", "-", "0"), null, 16),
+            e("predictions", listOf("p1", "p2", "ai1", "ai2"), listOf("KR", "34"), Comp.LEAGUE, SeasonCalendar.PRESEASON),
+            e("predictions", listOf("p2", "-"), listOf("JP", "51"), Comp.LEAGUE, SeasonCalendar.PRESEASON),
+            e("predictions", two, listOf("*", "JP:31", "CN:25"), null, SeasonCalendar.PRESEASON),
+            e("prediction_scorecard", two, listOf("3", "8", "9", "2", "1", "11", "5", "7", "24", "41"), null, SeasonCalendar.CLOSING),
+            e("prediction_scorecard", listOf("-", "-"), listOf("0", "1", "-", "-", "-", "-", "0", "2", "3", "12"), null, SeasonCalendar.CLOSING),
+            e("press_award", listOf("p1", "p2", "ai1"), listOf("183", "21", "40", "121", "64"), null), e("press_award", listOf("p2"), listOf("40", "8", "8", "-", "-"), null),
+            e("press_awards", listOf("c3", "p1"), listOf("k1"), null), e("press_awards", listOf("c4", "-"), listOf("k2"), null),
+            e("press_awards", listOf("-", "p2"), listOf("-"), null),
+            e("wc_bids", listOf(na, nb), listOf("${s + 1}"), Comp.WORLD_CUP, w),
+            e("wc_host_vote", listOf(na, nb), listOf("2", "13", "11"), Comp.WORLD_CUP), e("wc_host_vote", listOf(na, nb), listOf("1", "16", "8"), Comp.WORLD_CUP),
+            e("wc_host_vote", listOf(na, "-"), listOf("0", "-", "-"), Comp.WORLD_CUP),
+            e("wc_draw_ceremony", listOf("p1", na, nb, "KR", "JP"), listOf("C"), Comp.WORLD_CUP), e("wc_draw_ceremony", listOf("-", na, nb, "KR"), listOf("A"), Comp.WORLD_CUP),
+            // World events (P14) and the 요트협회's emergency decision.
+            e("superleague_rumour", emptyList(), listOf("12"), null),
+            e("superleague_announce", listOf("c3", "c4", "c1", "c2", "c3", "c4"), listOf("12"), null),
+            e("superleague_announce", pair, listOf("2"), null),
+            e("superleague_showdown", pair, listOf("2", "12"), null), e("superleague_showdown", emptyList(), listOf("0", "12"), null),
+            e("superleague_outcome", listOf("c3"), listOf("C", "-", "100"), null), e("superleague_outcome", pair, listOf("P", "7>8", "125"), null),
+            e("superleague_outcome", listOf("c4"), listOf("P", "-", "125"), null),
+            e("investor_rumour", listOf("c3"), emptyList(), null), e("investor_talks", listOf("c4"), listOf("벨로렌 파트너스", "P"), null),
+            e("investor_takeover", listOf("c3"), listOf("오르비스 인베스트먼트", "S"), null),
+            e("investor_verdict", listOf("c3"), listOf("S", "오르비스 인베스트먼트", "S"), null), e("investor_verdict", listOf("c4"), listOf("E", "벨로렌 파트너스", "P"), null),
+            e("investor_verdict", listOf("c3"), listOf("F", "오르비스 인베스트먼트", "S"), null),
+            e("crisis_begins", emptyList(), listOf("WORLD"), null), e("crisis_begins", emptyList(), listOf("ASIA"), null),
+            e("crisis_ends", emptyList(), listOf("3", "4", "WORLD"), null), e("crisis_ends", emptyList(), listOf("3", "0", "EUROPE"), null),
+            e("merger_proposed", emptyList(), listOf(na, nb), null), e("league_merged", emptyList(), listOf(na, nb), null),
+            e("merger_failed", emptyList(), listOf(na, nb, "3", "8", "5", "6"), null), e("league_split", emptyList(), listOf(na, nb), null),
+            e("boom_begins", emptyList(), listOf(na, "30"), null), e("boom_ends", emptyList(), listOf(na, "N"), null), e("boom_ends", emptyList(), listOf(nb, "L"), null),
+            e("federation_decision", emptyList(), listOf("챔피언스 리그 직행 7개 → 8개", "A", "E", "0", "0", "4"), null),
+            e("federation_decision", emptyList(), listOf("챔피언스 리그 직행 7개 → 8개", "V", "E", "3", "2", "4"), null),
+        )
+    }
+
     /** The news desk's kinds, as [yacht.engine.league.NewsDesk] makes them. */
     private fun deskSamples(s: Int): List<LeagueEvent> {
         fun e(kind: String, keys: List<String>, args: List<String> = emptyList(), comp: Comp? = null) = LeagueEvent(kind, s, keys, args, comp)
@@ -478,19 +586,20 @@ class MediaTest {
         val club = { k: String -> clubs[k] ?: k }
         // ai4 is the underdog: its cup wins are giant killings.
         val rating = { k: String -> if (k == "ai4") 1300.0 else 1500.0 }
+        val coach = { k: String -> coaches[k] ?: k }
         assertTrue(News.KINDS.all { kind -> samples(1).any { it.kind == kind } })
         val upsets = HashSet<String>()
         for (s in 1..8) {
             for (e in samples(s)) {
-                val a = News.article(e, name, club, rating = rating)
+                val a = News.article(e, name, club, rating = rating, coach = coach)
                 val text = a.headline + " " + a.body
-                for (bad in listOf("{", "}", "[[", "]]", "null")) assertFalse(bad in text, "$e: $text")
+                for (bad in listOf("{", "}", "[[", "]]", "|", "null")) assertFalse(bad in text, "$e: $text")
                 assertTrue(a.headline.isNotBlank() && a.body.any { it in '가'..'힣' }, "$e: $text")
                 assertTrue(a.headline != News.PLAIN_HEADLINE, "$e fell back: $text")
                 val sentences = sentenceEnd.findAll(a.body).count()
                 assertTrue(sentences in 2..3 && a.body.trimEnd().last() in ".?!", "$e: ${a.body}")
                 assertTrue(a.importance in 1..5)
-                assertEquals(a, News.article(e, name, club, rating = rating), "deterministic")
+                assertEquals(a, News.article(e, name, club, rating = rating, coach = coach), "deterministic")
                 // The first key shows by its display name.
                 val shown = e.keys.firstOrNull()?.let { k -> names[k] ?: clubs[k] ?: Family.entries.firstOrNull { it.name == k }?.label ?: if (k == "TOP") "1부 올스타" else null }
                 if (shown != null) assertTrue(shown in text, "$e: $text")
@@ -843,5 +952,137 @@ class MediaTest {
         assertEquals(plain.hashCode(), linked.hashCode())
         assertEquals(linked.ref, linked.at(3).ref)
         assertEquals(linked.ref, linked.copy(args = linked.args + "@아시아컵").ref)
+    }
+
+    // ---- the club world's, the media's and the world events' kinds (design ENG 11.2) -----------
+
+    /** Every old sample's article (seasons 1-8, a book without a club world) is the one 3ce4b93 wrote (its text hashed, measured before P15). */
+    @Test
+    fun oldKindsReadAsBefore() {
+        val name = { k: String -> names[k] ?: k }
+        val club = { k: String -> clubs[k] ?: k }
+        val rating = { k: String -> if (k == "ai4") 1300.0 else 1500.0 }
+        val sb = StringBuilder()
+        for (s in 1..8) for (e in oldSamples(s)) {
+            val a = News.article(e, name, club, rating = rating)
+            sb.append(a.kind).append('|').append(a.headline).append('|').append(a.body).append('|').append(a.importance).append('\n')
+        }
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(sb.toString().toByteArray()).joinToString("") { "%02x".format(it) }
+        assertEquals(154_474, sb.length)
+        assertEquals("b172b9680275ae554c9bafd66fa2ffd47e5e4d2f6c783dc4a341d57006c281b9", sha)
+    }
+
+    /**
+     * Every new kind's article in two worlds, seasons 2 and 3: every player, club, coach and nation
+     * named with a final consonant (이준혁, 광주 불곰, 장도윤, 일본/중국) and without one (김하나, 부산 갈매기,
+     * 오세나, 캐나다/멕시코): each particle after a name agrees with it, nothing is left unfilled.
+     */
+    @Test
+    fun everyNewKindReadsWithNamesEndingWithAndWithoutAFinalConsonant() {
+        class World(val player: String, val club: String, val coach: String, val na: String, val nb: String)
+        val worlds = listOf(World("김하나", "부산 갈매기", "오세나", "CA", "MX"), World("이준혁", "광주 불곰", "장도윤", "JP", "CN"))
+        val vowelWrong = listOf("이", "은", "을", "과", "으로", "이에요", "이었어요", "이고")
+        val consonantWrong = listOf("가", "는", "를", "와", "로", "예요", "였어요")
+        for (wd in worlds) {
+            val name = { k: String -> if (k.startsWith("p") || k.startsWith("ai")) wd.player else k }
+            val club = { k: String -> if (k.startsWith("c")) wd.club else k }
+            val coach = { k: String -> if (k.startsWith("k")) wd.coach else k }
+            val shown = listOf(wd.player, wd.club, wd.coach, Nations.of(wd.na)!!.short, Nations.of(wd.nb)!!.short)
+            for (s in 2..3) for (e in clubWorldSamples(s, wd.na, wd.nb)) {
+                val a = News.article(e, name, club, coach = coach, money = true)
+                val text = a.headline + " " + a.body
+                for (bad in listOf("{", "}", "[[", "]]", "|", "null", "k1", "k2", "c3", "c4", "p1", "p2")) assertFalse(bad in text, "$e: $text")
+                assertTrue(a.headline != News.PLAIN_HEADLINE, "$e fell back: $text")
+                val sentences = sentenceEnd.findAll(a.body).count()
+                assertTrue(sentences in 2..3 && a.body.trimEnd().last() in ".?!", "$e: ${a.body}")
+                for (n in shown) {
+                    val consonant = Josa.ending(n) != 0
+                    for (p in if (consonant) consonantWrong else vowelWrong) {
+                        val at = Regex(Regex.escape(n + p) + "(?![가-힣])").find(text)
+                        assertNull(at, "$e: '$n$p' in $text")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aClubWorldsFeesAreMoneyAndTodaysStayNumbers() {
+        val name = { k: String -> names[k] ?: k }
+        val club = { k: String -> clubs[k] ?: k }
+        fun texts(e: LeagueEvent, money: Boolean) = (1..8).map { s -> News.article(e.copy(season = s), name, club, money = money).let { it.headline + " / " + it.body } }
+        val abroad = LeagueEvent("transfer_abroad", 3, listOf("ai1", "c1", "c2"), listOf("KR", "GB", "120"), Comp.CLUB)
+        assertTrue(texts(abroad, true).all { "12.0억" in it }, texts(abroad, true).toString())
+        assertTrue(texts(abroad, false).all { "12.0억" !in it && "120" in it })
+        val digest = LeagueEvent("market_digest", 3, listOf("ai1", "ai3"), listOf("12", "34", "ai2", "c1", "c2", "1350"), Comp.CLUB)
+        assertTrue(texts(digest, true).all { "이적료 135.0억에" in it }, texts(digest, true).toString())
+        assertTrue(texts(digest, false).all { "이적료 1,350에" in it })
+        val domestic = LeagueEvent("transfer", 3, listOf("ai1", "c1", "c2"), listOf("85"), Comp.CLUB)
+        assertTrue(texts(domestic, true).all { "8.5억" in it } && texts(domestic, false).all { "85" in it && "억" !in it })
+        // Talks that came true say so; a winter move says where it happened.
+        assertTrue(texts(domestic.copy(args = listOf("85", "1")), true).all { "소문이 사실이 됐어요" in it })
+        val winter = texts(LeagueEvent("transfer", 3, listOf("ai1", "c1", "c2"), listOf("40", "0", "W"), Comp.CLUB, 22), true)
+        assertTrue(winter.all { "겨울 이적시장에서 서울 타이거즈를 떠나 부산 갈매기로" in it && "4.0억" in it }, winter.toString())
+        // Every money arg reads in 억, with 을 / 이에요 after it.
+        val fee = News.article(LeagueEvent("release_clause", 3, listOf("ai1", "c1", "c2"), listOf("300")), name, club)
+        assertTrue("30.0억을 내고" in fee.body, fee.body)
+        val accounts = News.article(LeagueEvent("club_accounts", 3, listOf("c1", "c2"), listOf("322", "45", "7"), Comp.CLUB), name, club)
+        assertTrue("수입 32.2억을 올린 서울 타이거즈예요" in accounts.body && "4.5억 손실을 본 부산 갈매기예요" in accounts.body && "7곳" in accounts.body, accounts.body)
+    }
+
+    @Test
+    fun theClubWorldsArticlesNameTheirCoachesClubsAndNumbers() {
+        val name = { k: String -> names[k] ?: k }
+        val club = { k: String -> clubs[k] ?: k }
+        val coach = { k: String -> coaches[k] ?: k }
+        fun text(e: LeagueEvent) = News.article(e, name, club, coach = coach).let { it.headline + " / " + it.body }
+        fun e(kind: String, keys: List<String>, args: List<String> = emptyList(), comp: Comp? = Comp.CLUB, week: Int = SeasonCalendar.NONE) =
+            LeagueEvent(kind, 3, keys, args, comp, week)
+        // Coaches by their names; the winter's sacking names its successor, a far miss reads 한참.
+        val sacked = text(e("coach_sacked", listOf("c4", "k1", "k2"), listOf("7", "3", "1", "1"), week = 22))
+        assertTrue("오세나 감독" in sacked && "장도윤 감독이 곧바로" in sacked && "시즌 도중" in sacked && "목표였던 3위에 한참 못 미쳤어요" in sacked, sacked)
+        assertTrue("팬들의 항의" in sacked, sacked)
+        val close = text(e("coach_sacked", listOf("c3", "k2"), listOf("4", "4", "0")))
+        assertTrue("장도윤 감독과 결별했어요" in close && "인내심" in close && "시즌 도중" !in close, close)
+        assertEquals(3, News.article(e("coach_hired", listOf("c3", "k1", "c4"), listOf("A")), name, club, coach = coach).importance)
+        assertTrue("공격형 감독 오세나를" in text(e("coach_hired", listOf("c3", "k1", "c4"), listOf("A"))))
+        assertTrue("서울 타이거즈의 오세나 감독이에요" in text(e("press_awards", listOf("c1", "p1"), listOf("k1"), null)))
+        assertTrue("오세나 감독을 향한" in text(e("fan_protest", listOf("c1", "k1"), listOf("18"))))
+        // A derby names both clubs and its all-time record, the score in brackets.
+        val derby = text(e("derby_result", listOf("p1", "p2", "c1", "c4"), listOf("2-0", "5", "1", "3", "서울-광주 라이벌전"), Comp.LEAGUE, 12))
+        assertTrue("서울 타이거즈의 김하나가 광주 불곰의 이준혁을 이겼어요(2-0)." in derby && "5승 1무 3패" in derby, derby)
+        // Record fees: the world's and a league's.
+        val world = News.article(e("record_fee", listOf("p1", "c4", "c1"), listOf("520", "480", "W")), name, club)
+        assertTrue("요트 역사상 최고 이적료" in world.body && "종전 기록 48.0억을 넘어선" in world.body && world.importance == 5, world.toString())
+        val league = News.article(e("record_fee", listOf("p1", "c4", "c1"), listOf("210", "0", "KR")), name, club)
+        assertTrue("한국 리그 역대 최고 이적료" in league.body && "종전" !in league.body && league.importance == 4, league.toString())
+        // An owner's type before its name, and its promise.
+        val takeover = text(e("takeover", listOf("c1"), listOf("오르비스 인베스트먼트", "S")))
+        assertTrue("국부 펀드 오르비스 인베스트먼트가 서울 타이거즈를 인수했어요" in takeover && "과감한 투자" in takeover, takeover)
+        // A collapsed deal's reason, a hijack by its club.
+        assertTrue("가격이 맞지 않았어요" in text(e("deal_collapsed", listOf("ai1", "c1", "c4"), listOf("P"))))
+        assertTrue("서울 타이거즈가 공들이던 김민준 영입을 마지막 순간 부산 갈매기가 가로챘어요" in text(e("deal_collapsed", listOf("ai1", "c1", "c4", "c2"), listOf("H"))))
+        // Eras with their particles; 춘추전국 has no family.
+        assertTrue("‘보너스파의 시대’가 열렸어요" in text(e("era_begins", emptyList(), listOf("B", "5", "8", "보너스파의 시대"), null)))
+        assertTrue("어느 스타일도" in text(e("era_begins", emptyList(), listOf("-", "0", "6", "춘추전국 시대"), null)))
+        // The 요트협회's emergency decision and the proposal it voided.
+        assertTrue("슈퍼리그 사태로" in text(e("federation_decision", emptyList(), listOf("챔피언스 리그 직행 7개 → 8개", "A", "E", "0", "0", "4"), null)))
+        assertTrue("긴급 결정으로 무효가 됐어요" in text(e("federation_decision", emptyList(), listOf("챔피언스 리그 직행 7개 → 8개", "V", "E", "3", "2", "4"), null)))
+        // A super league's compromise with its reform and prize.
+        val deal = text(e("superleague_outcome", listOf("c1"), listOf("P", "7>8", "125"), null))
+        assertTrue("7개에서 8개로" in deal && "25%" in deal, deal)
+        // The World Cup's vote: a lone bid, the next season's cup.
+        val lone = text(e("wc_host_vote", listOf("KR", "-"), listOf("0", "-", "-"), Comp.WORLD_CUP))
+        assertTrue("단독 후보" in lone && "시즌 4 요트 월드컵" in lone, lone)
+        // The predictions digest puts the particle after the last name, not after its brackets.
+        val digest = text(e("predictions", listOf("ai1", "ai4"), listOf("*", "JP:31", "CN:25"), null, SeasonCalendar.PRESEASON))
+        assertTrue("김민준(일본 31%), 이서연(중국 25%)이 각 리그의" in digest, digest)
+        // A crisis of a confederation names it; the world's is the world.
+        assertTrue("아시아 경제가" in text(e("crisis_begins", emptyList(), listOf("ASIA"), null)))
+        assertTrue("세계 경제가" in text(e("crisis_begins", emptyList(), listOf("WORLD"), null)))
+        // Importance by the table: a world record 5, a power ranking with a new #1 3.
+        assertEquals(3, News.article(e("power_ranking", listOf("ai1", "ai2"), listOf("15", "-", "-", "-", "1"), null, 15), name).importance)
+        assertEquals(2, News.article(e("power_ranking", listOf("ai1", "ai2"), listOf("15", "-", "-", "-", "0"), null, 15), name).importance)
+        assertEquals(5, News.importance(e("club_folded", listOf("c1"), listOf("6"))))
     }
 }
