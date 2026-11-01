@@ -487,13 +487,20 @@ class StatsBook(
      * returned, is [fs] as its `fm` line gives it back (residuals to the tenth, excess to the
      * hundredth): the meta's update reads that copy, so a close replayed after a kill (which finds
      * the line in stats.txt) weighs the families as the first run did. Throws for numbers the line
-     * cannot hold (not 8 counts or residuals).
+     * cannot hold (not 8 counts or residuals). Only the newest season keeps its matchups (the
+     * counter rule and the screens read the last close's; about 900 B a line at 1000 members): an
+     * older one's are dropped here, so the book holds what its file does.
      */
     internal fun putFamilies(fs: FamilyStats, keep: Int): FamilyStats {
         val kept = requireNotNull(FamilyStats.decode(fs.encode().trimEnd('\n').split(' '))) { "family stats of ${fs.season}" }
         familyLines[kept.season] = kept
         while (familyLines.size > keep.coerceAtLeast(1)) familyLines.pollFirstEntry()
-        return kept
+        val newest = familyLines.lastKey()
+        for (s in familyLines.keys.toList()) {
+            val line = familyLines.getValue(s)
+            if (s != newest && line.matchups.isNotEmpty()) familyLines[s] = line.copy(matchups = emptyList())
+        }
+        return familyLines[kept.season] ?: kept
     }
 
     /** Keeps [tallies] as [season]'s press votes in place of any before, and the newest [keep] seasons. */
@@ -921,6 +928,10 @@ class StatsBook(
      * The review also keeps the boards' leaders ([SeasonReview.REVIEW_STATS]), the season in
      * numbers, its best games ([highlights]' [HighlightBook.best]), its best-rated game and its
      * biggest upset; the season's rating scale for the next one ([ratingScale]) is measured here.
+     *
+     * With [familyStats] (off: nothing more, as before) it also measures the style families of
+     * the season ([Meta.measure] with [families]' inputs, the `fm` line, design ENG 4.2), kept for
+     * the newest [Meta.kept] seasons ([families] then reads them; a failed measure keeps none).
      */
     fun endSeason(
         plan: SeasonPlan,
@@ -940,6 +951,10 @@ class StatsBook(
         major: (season: Int, league: String) -> Boolean = { _, _ -> true },
         /** The season's highlights: the review names its best games. */
         highlights: HighlightBook? = null,
+        /** Whether to measure the style families (`fm`). */
+        familyStats: Boolean = false,
+        /** What the family measure reads besides the plan, titles and ratings (needed with [familyStats]). */
+        families: FamilyInput? = null,
     ): SeasonEnd {
         val n = plan.number
         if (n <= ended) {
@@ -1093,6 +1108,9 @@ class StatsBook(
                 careerStats.getOrPut(s.key) { AiStats() }.seasons++
             }
         }
+
+        // The style families of the season (design ENG 4.2), under the same guard as the rest.
+        if (familyStats && families != null) runCatching { putFamilies(Meta.measure(plan, titles, rating, families), Meta.kept(keys.size)) }
 
         // League meta: boxes over the season, traits among the generated and evolved AIs.
         val report = boxMeta(n, traitShares(keys, rating, traits, meta))
