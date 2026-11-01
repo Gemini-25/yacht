@@ -208,7 +208,8 @@ class ClubWorldMigrationTest {
         plan.startPost(emptyList())
         val next = keys.drop(4)
         val input = ClubInput(next, Cw::rating, Cw::nation, Cw.config)
-        v1.offseason(plan, input)
+        val converted = v1.offseason(plan, input)
+        assertTrue(converted.any { it.kind == "club_reform" }, converted.toString())
         assertEquals(ClubBook.AFFILIATION, v1.format)
         assertNull(v1.world)
         val kept = v1.history.filter { it.amount > 0 && it.type == ClubMoveType.TRANSFER }
@@ -222,7 +223,42 @@ class ClubWorldMigrationTest {
         // The club league's fees became money too.
         val after = v1.history.filter { it.amount > 0 && it.type == ClubMoveType.TRANSFER }
         assertEquals(kept.map { Math.round(it.amount * 0.6).toInt() }, after.map { it.amount })
-        assertEquals(v1.encode(), ClubBook.decode(v1.encode()).encode())
+        val text = v1.encode()
+        assertEquals(text, ClubBook.decode(text).encode())
+        // That off-season asked again (a rollover replayed after a kill) tells the conversion's news as it did and changes nothing.
+        assertEquals(converted, v1.offseason(plan, input))
+        assertEquals(text, v1.encode())
+        assertEquals(converted, ClubBook.decode(text).offseason(plan, input))
+    }
+
+    /**
+     * The start is all or nothing (ENG 1b.10's rollback, for the load that migrates): a failure leaves
+     * the book without a club world and its fees in their old units, and the next attempt migrates it
+     * as a clean one does.
+     */
+    @Test
+    fun aFailedMigrationLeavesTheBookAsItWas() {
+        val l = Cw.league(300, v2 = 2)
+        val book = l.book
+        val before = book.encode()
+        val plan = Cw.fresh(l.members, 3)
+        val input = l.input(l.members, plan)
+        book.fault = { n -> if (n == ClubBook.MIGRATION) error("injected after the migration") }
+        assertFalse(ClubWorld.migrate(book, input, ClubStart(3, plan)))
+        assertNull(book.world)
+        assertEquals(before, book.encode())
+        book.fault = null
+        assertTrue(ClubWorld.migrate(book, input, ClubStart(3, plan)))
+        val clean = ClubBook.decode(before)
+        assertTrue(ClubWorld.migrate(clean, input, ClubStart(3, plan)))
+        assertEquals(clean.encode(), book.encode())
+        // A new league's founding too.
+        val fresh = ClubBook.found(Cw.keys.take(200), Cw::nation, Cw::rating, 0, 9L, Cw.config)
+        val founded = fresh.encode()
+        val first = Cw.fresh(Cw.keys.take(200), 1)
+        fresh.fault = { n -> if (n == ClubBook.MIGRATION) error("injected after the founding") }
+        assertFalse(ClubWorld.found(fresh, Cw.League(fresh, Cw.keys.take(200), 200).input(Cw.keys.take(200), first), ClubStart(1, first)))
+        assertEquals(founded, fresh.encode())
     }
 
     @Test

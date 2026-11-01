@@ -1,6 +1,7 @@
 package yacht.engine
 
 import yacht.engine.league.ClubBook
+import yacht.engine.league.ClubEconomy
 import yacht.engine.league.ClubInput
 import yacht.engine.league.ClubMoveType
 import yacht.engine.league.ClubStart
@@ -26,6 +27,7 @@ import yacht.engine.league.PlayerTraits
 import yacht.engine.league.SeasonPlan
 import yacht.engine.league.StoryStage
 import yacht.engine.league.StyleFamily
+import yacht.engine.league.valuer
 import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -254,6 +256,11 @@ class ClubBookV3Test {
         assertTrue(events.all { it.comp == Comp.CLUB && it.season == s }, events.toString())
         val kinds = events.map { it.kind }.toSet()
         for (k in listOf("club_title", "club_accounts", "club_ranking", "market_digest")) assertTrue(k in kinds, "$k in $kinds")
+        // The club ranking's news names the top club by value with its club value (not a member's).
+        val ranking = events.single { it.kind == "club_ranking" }
+        val valuer = book.valuer(input.rating, input.age, input.potential, input.overall)
+        assertEquals(book.rankLines.last().value.first(), ranking.keys.first())
+        assertEquals(ClubEconomy.clubValue(book, ranking.keys.first(), valuer).toString(), ranking.args.single())
         assertEquals(s, book.digest!!.season)
         // A repeat (a rollover replayed after a kill) changes nothing and tells the same news; so does the book read back.
         val text = book.encode()
@@ -290,6 +297,51 @@ class ClubBookV3Test {
         }
         val types = l.book.history.map { it.type }.toSet()
         assertTrue(ClubMoveType.FREE_AGENT in types || ClubMoveType.GRADUATE in types, types.toString())
+    }
+
+    /**
+     * Step 10's dissolution for money (ENG 1.4, 1b.10): a club in its second season of 법정관리 that no
+     * owner rescues is dissolved after the market, its `gone` line saying why ('F'); its members are
+     * released and drafted, its coach goes to the pool and its money lines go; one `club_folded` tells it
+     * (no `club_dissolved`), the same when asked again and from the book read back.
+     */
+    @Test
+    fun aClubLeftInAdministrationIsDissolvedForMoney() {
+        val (l, plan) = Cw.migrated()
+        val book = l.book
+        val w = book.world!!
+        val s = plan.number
+        Cw.play(plan)
+        l.close(plan)
+        val next = l.next(s)
+        // Every club of a nation with two or more in its second season of administration, deep in debt: the life
+        // step rescues seven in ten and dissolves one at most a season.
+        val doomed = book.clubs.groupBy { it.nation }.values.filter { it.size >= 2 }.flatten().map { it.id }
+        assertTrue(doomed.size >= 6, doomed.toString())
+        for (id in doomed) w.clubs.getValue(id).apply {
+            admin = 1
+            balance = -100_000
+        }
+        val coach = doomed.associateWith { book.coachOf(it)?.id }
+        val input = l.input(next, plan)
+        val events = book.offseason(plan, input)
+        val g = book.gone.filter { it.dissolved == s }.single { it.reason == ClubBook.MONEY }
+        assertTrue(g.id in doomed && book.club(g.id) == null)
+        Cw.assertWhole(book, next)
+        val released = book.history.count { it.season == s && it.type == ClubMoveType.RELEASED && it.from == g.id }
+        assertTrue(released > 0)
+        assertTrue(book.coaches.none { it.club == g.id })
+        assertTrue(book.coaches.single { it.id == coach.getValue(g.id) }.let { it.club == null || it.club != g.id })
+        assertTrue(CoachMarket.report(book, s).moves.any { it.kind == 'L' && it.club == g.id })
+        assertTrue(g.id !in w.economy.accounts && g.id !in w.economy.owners && g.id !in w.economy.sponsors)
+        assertEquals(listOf(listOf(g.id) to listOf(released.toString())), events.filter { it.kind == "club_folded" }.map { it.keys to it.args })
+        assertTrue(events.none { it.kind == "club_dissolved" && g.id in it.keys } && events.none { it.kind == "club_digest" && g.id in it.keys })
+        val text = book.encode()
+        assertEquals(events, book.offseason(plan, input))
+        assertEquals(text, book.encode())
+        val back = ClubBook.decode(text)
+        assertEquals(ClubBook.MONEY, back.gone.single { it.id == g.id }.reason)
+        assertEquals(events, back.offseason(plan, input))
     }
 
     @Test

@@ -16,8 +16,7 @@ internal object ClubWorldMigrate {
 
     private const val CONTRACT_SALT = 0xC0A7L
 
-    fun migrate(book: ClubBook, input: ClubInput, start: ClubStart): Boolean {
-        if (book.world != null || book.format != ClubBook.AFFILIATION) return false
+    fun migrate(book: ClubBook, input: ClubInput, start: ClubStart): Boolean = whole(book) {
         val s = start.season
         book.convertFees { Math.round(it * FEE_FACTOR).toInt() }
         val w = book.startWorld()
@@ -27,17 +26,33 @@ internal object ClubWorldMigrate {
         val order = book.places(s - 1).associate { p -> p.league to p.clubs.filter { book.club(it) != null } }.filterValues { it.isNotEmpty() }
         val money = ClubEconomy.migrate(book, s - 1, input.economy, order, value, start.plan)
         begin(book, input, start, money, value)
-        return true
     }
 
-    fun found(book: ClubBook, input: ClubInput, start: ClubStart): Boolean {
-        if (book.world != null || book.format != ClubBook.AFFILIATION) return false
+    fun found(book: ClubBook, input: ClubInput, start: ClubStart): Boolean = whole(book) {
         val w = book.startWorld()
         setAnchor(w, input)
         val value = book.valuer(input.rating, input.age, input.potential, input.overall)
         val money = ClubEconomy.found(book, start.season - 1, value, LeagueEconomy.NEUTRAL, start.plan)
         begin(book, input, start, money, value)
-        return true
+    }
+
+    /**
+     * [steps] start [book]'s club world, all or nothing (as the off-season, ENG 1b.10): nothing for a
+     * book that has one or a club league's book; on an exception the book goes back to what it was
+     * (the fees in their old units, no `cw` line) and false, so a later load starts it whole. True
+     * when it made one.
+     */
+    private fun whole(book: ClubBook, steps: () -> Unit): Boolean {
+        if (book.world != null || book.format != ClubBook.AFFILIATION) return false
+        val saved = book.encode()
+        return try {
+            steps()
+            book.fault?.invoke(ClubBook.MIGRATION)
+            true
+        } catch (e: Exception) {
+            book.restore(saved)
+            false
+        }
     }
 
     /** The steps after the money, shared by [migrate] and [found]. */

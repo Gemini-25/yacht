@@ -597,9 +597,9 @@ class ClubBook private constructor(
     }
 
     /**
-     * Test-only: called between the steps of a club world's off-season with the step's number (1..14)
-     * and after the checkpoint ([CHECKPOINT]), so a test can change the book and throw there (the
-     * rollback, ENG 1b.10). Never set in production.
+     * Test-only: called between the steps of a club world's off-season with the step's number (0..14),
+     * after the checkpoint ([CHECKPOINT]) and after a club world's start ([MIGRATION]), so a test can
+     * change the book and throw there (the rollback, ENG 1b.10). Never set in production.
      */
     internal var fault: ((Int) -> Unit)? = null
 
@@ -1787,11 +1787,14 @@ class ClubBook private constructor(
      * true, clubs dissolved by the count, founded and `club_folded` [club] (members) for a club dissolved
      * for money, rookies drafted or at their mentor's club, the market digest), then the club world's:
      * the accounts, the club life's news as told, the coaches, history, the window, the academies, the
-     * rivalries born and the club rankings.
+     * rivalries born and the club rankings (the top club's value). The off-season that made a club
+     * league's book a national one ([ClubDigest.reform]: its club world was started right after it, in
+     * the same off-season) tells today's `club_reform` news, as it did.
      */
     private fun news3(closing: SeasonPlan, input: ClubInput, value: (String) -> Int): List<LeagueEvent> {
         val s = closing.number
         val d = digest?.takeIf { it.season == s } ?: return emptyList()
+        if (d.reform) return news(s)
         val out = ArrayList<LeagueEvent>()
         fun event(kind: String, keys: List<String>, args: List<String> = emptyList()) {
             out += LeagueEvent(kind, s, keys, args, Comp.CLUB)
@@ -1848,7 +1851,7 @@ class ClubBook private constructor(
         out += market.events()
         out += Academy.report(this, s, input, AcademyInput(input.hometown, input.potential)).events()
         out += Derbies.events(s, Derbies.born(this, s, input.honours, market.captainLinks))
-        out += ClubRanks.events(world?.economy?.ranks?.get(s), value)
+        out += ClubRanks.events(world?.economy?.ranks?.get(s)) { ClubEconomy.clubValue(this, it, value) }
         return out
     }
 
@@ -1951,8 +1954,9 @@ class ClubBook private constructor(
         /** [GoneClub.reason] of a club dissolved for money (법정관리 without a rescue). */
         const val MONEY = 'F'
 
-        /** The [fault] hook's number after the winter checkpoint. */
+        /** The [fault] hook's numbers after the winter checkpoint and after a club world's start ([ClubWorld.migrate], [ClubWorld.found]). */
         internal const val CHECKPOINT = 100
+        internal const val MIGRATION = 101
 
         /** `tx` flags of a record fee: world, league, club. */
         private const val RECORD_FLAGS = "WLC"

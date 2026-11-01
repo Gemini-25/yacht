@@ -345,15 +345,18 @@ class ClubWorld internal constructor(book: ClubBook) {
          * record fees from the kept moves, and the in-season guards (a season whose winter week closed
          * skips its checkpoint, the market's tick starts after [ClubStart.week]). Nothing for a book that
          * has a club world (so a second call changes nothing) or a club league's book; true when it made
-         * one. It does not look at [LeagueConfig.clubWorld]: a club world made while it is off stays
-         * frozen until it is on ([ClubBook.offseason]).
+         * one. All or nothing: on an exception the book stays as it was (no club world, the fees in their
+         * old units) and the result is false, so the next load migrates it whole. It does not look at
+         * [LeagueConfig.clubWorld]: a club world made while it is off stays frozen until it is on
+         * ([ClubBook.offseason]).
          */
         fun migrate(book: ClubBook, input: ClubInput, start: ClubStart): Boolean = ClubWorldMigrate.migrate(book, input, start)
 
         /**
          * The club world of a new league's book [book] (design ENG 8.2: right after [ClubBook.found]),
          * as [migrate] with every league at λ = 1, a balance of 10억 for every club, fans at the fan
-         * base and both facilities at level 2 ([ClubEconomy.found]). True when it made one.
+         * base and both facilities at level 2 ([ClubEconomy.found]). True when it made one; all or
+         * nothing, as [migrate].
          */
         fun found(book: ClubBook, input: ClubInput, start: ClubStart): Boolean = ClubWorldMigrate.found(book, input, start)
     }
