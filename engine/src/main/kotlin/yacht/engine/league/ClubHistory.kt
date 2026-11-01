@@ -571,13 +571,19 @@ object ClubHistory {
     /**
      * Member [key], on loan, goes back to the club that loaned it out (임대 복귀): its terms lose
      * `loanFrom` and it gets a number there again (most often its own, the first of its list). The
-     * club it went back to; null when it is not on loan or that club is gone (it stays where it is).
+     * club it went back to; null when it is not on loan or that club is gone (it stays where it is,
+     * on loan from nobody any more, so it plays and counts there as a member of its own).
      */
     fun loanBack(book: ClubBook, key: String, star: Boolean): String? {
         val w = book.world ?: return null
         val t = w.terms[key] ?: return null
         val home = t.loanFrom ?: return null
-        if (book.club(home) == null || !book.place(key, home)) return null
+        if (book.club(home) == null) {
+            w.terms[key] = t.copy(loanFrom = null)
+            book.touch()
+            return null
+        }
+        if (!book.place(key, home)) return null
         w.terms[key] = t.copy(loanFrom = null, number = number(book, home, key, star))
         book.touch()
         return home

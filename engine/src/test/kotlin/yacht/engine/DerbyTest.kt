@@ -289,27 +289,36 @@ class DerbyTest {
         assertNull(rm.name(s, "a1", "b3"))
         // Any competition: counted members of rival clubs.
         assertEquals("서울-부산 클래식", rm.of("a3", "b3"))
-        // The week's derby_result: the first rival match with a winner, the all-time series from the winner's club.
+        // The week's derby_result: the first rival match with a winner, the all-time series from the winner's club through the week.
         Hist.play(s, last = 0)
-        val week1 = s.matchday(0).filter { s.result(it.id) != null }
-        val rival = week1.filter { rm.name(s, it.a, it.b) != null && Hist.aWins(it.id) == 1 }.minByOrNull { it.id }
-        val e = Derbies.weekResult(book, plan, 1, rating)
-        if (rival == null) {
-            assertNull(e)
-        } else {
-            val ev = assertNotNull(e)
+        assertNull(Derbies.weekResult(book, plan, 2, rating), "nothing played in week 2")
+        Hist.play(s)
+        // c02-c04 is a regional derby too (부산, 대구): the classic goes first, then the fixture id.
+        assertEquals("영남 더비", rm.of("b1", "d1"))
+        fun kind(f: yacht.engine.league.LeagueFixture) = "NRHT".indexOf(book.rivals(book.clubOf(f.a)!!).first { it.club == book.clubOf(f.b) }.kind)
+        var told = 0
+        for (week in 1..s.matchdays) {
+            val rival = s.matchday(week - 1).filter { rm.name(s, it.a, it.b) != null && Hist.aWins(it.id) == 1 }
+                .minWithOrNull(compareBy<yacht.engine.league.LeagueFixture> { kind(it) }.thenBy { it.id })
+            val e = Derbies.weekResult(book, plan, week, rating)
+            if (rival == null) {
+                assertNull(e, "week $week")
+                continue
+            }
+            val ev = assertNotNull(e, "week $week")
             assertEquals("derby_result", ev.kind)
             val wc = book.clubOf(rival.a)!!
             val lc = book.clubOf(rival.b)!!
             assertEquals(listOf(rival.a, rival.b, wc, lc), ev.keys)
-            val series = Derbies.series(book, plan, through = 1).getValue("c01 c02")
-            val (w, d, l) = series.of(wc)
-            assertEquals(listOf(if (rival.id % 3 == 0) "2-0" else "1.5-0.5", w.toString(), d.toString(), l.toString(), "서울-부산 클래식"), ev.args)
-            assertEquals(1, ev.week)
+            val (w, d, l) = Derbies.series(book, plan, through = week).getValue(listOf(wc, lc).sorted().joinToString(" ")).of(wc)
+            assertEquals(listOf(if (rival.id % 3 == 0) "2-0" else "1.5-0.5", w.toString(), d.toString(), l.toString(), rm.name(s, rival.a, rival.b)), ev.args)
+            assertEquals(week, ev.week)
             assertEquals("1:L:${rival.id}", ev.ref)
+            assertNull(Derbies.weekResult(book, plan, week, rating, told = Derbies.SEASON_RESULTS))
+            told++
         }
-        assertNull(Derbies.weekResult(book, plan, 1, rating, told = Derbies.SEASON_RESULTS))
-        assertNull(Derbies.weekResult(book, plan, 2, rating), "nothing played in week 2")
+        assertTrue(told > 0, "no week had a rival match with a winner")
+        assertNull(Derbies.weekResult(book, plan, s.matchdays + 1, rating))
     }
 
     @Test

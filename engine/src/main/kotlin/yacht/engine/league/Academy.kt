@@ -3,7 +3,12 @@ package yacht.engine.league
 import yacht.engine.DiceStream
 import java.util.Random
 
-/** How a member without a club found one in the academy and draft step ([Academy.draft]). [code] names it for the moves the caller logs. */
+/**
+ * How a member without a club found one in the academy and draft step ([Academy.draft]). [code] is
+ * its own letter, no [ClubMoveType] code ('H' there is 귀국): the caller logs [MENTOR] as
+ * [ClubMoveType.YOUTH], [HOMETOWN] and [LOTTERY] as 유스 졸업 ('G', DRAFT kind, ENG 1b.8) and [DRAFT]
+ * as [ClubMoveType.DRAFT].
+ */
 enum class Intake(val code: Char, val label: String) {
     /** An evolved rookie at its mentor's club (유스 입단, as before). */
     MENTOR('Y', "유스 입단"),

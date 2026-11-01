@@ -344,6 +344,14 @@ class ClubHistoryTest {
         assertTrue(ClubHistory.loanBuy(book, "y2"))
         assertNull(book.terms("y2")!!.loanFrom)
         assertTrue(ClubHistory.loanedOut(book, "c01").isEmpty())
+        // The club that loaned it out is gone: it stays at its loan club, on loan from nobody.
+        val gone = book("c01" to listOf("g1"), "c02" to listOf("h1"))
+        gone.world!!.terms["g1"] = Hist.terms()
+        assertTrue(ClubHistory.loanOut(gone, "g1", "c02", star = false))
+        val left = ClubBook.decode(gone.encode().lines().filter { !it.startsWith("club c01 ") }.joinToString("\n"))
+        assertNull(ClubHistory.loanBack(left, "g1", star = false))
+        assertEquals("c02", left.clubOf("g1"))
+        assertNull(left.terms("g1")!!.loanFrom)
         // Without a club world nothing happens.
         val plain = Eco.book(listOf(Eco.Spec("c01", "KR", listOf("q"))))
         assertFalse(ClubHistory.loanOut(plain, "q", "c01", false))
