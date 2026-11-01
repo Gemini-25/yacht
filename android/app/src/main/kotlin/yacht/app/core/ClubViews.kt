@@ -68,9 +68,14 @@ data class StoryView(
 /**
  * A member's contract (the 선수단 rows and the 💼 details): shirt [number], captain, the season it
  * runs [until], wage, value and release [clause] (0: none), an academy graduate of [gradSeason],
- * on loan from [loanFrom], at the club [since].
+ * on loan from [loanFrom], at the club [since]. [academy] is a graduate of the club it plays for;
+ * appended by P8: the club whose academy it came out of ([academyClub], also another club's: the 💼
+ * details' "🌱 {club} 유스 출신").
  */
-data class TermsView(val number: Int, val captain: Boolean, val until: Int, val wage: Int, val value: Int, val clause: Int, val academy: Boolean, val gradSeason: Int, val loanFrom: ClubBadge?, val since: Int)
+data class TermsView(
+    val number: Int, val captain: Boolean, val until: Int, val wage: Int, val value: Int, val clause: Int, val academy: Boolean, val gradSeason: Int, val loanFrom: ClubBadge?, val since: Int,
+    val academyClub: ClubBadge? = null,
+)
 
 /** One item of a club's accounts ("중계권" and its amount). */
 data class AccountItem(val label: String, val amount: Int)
@@ -79,7 +84,9 @@ data class AccountItem(val label: String, val amount: Int)
  * The club page's club-world parts (UX 4.2-4.4); null in a legacy season, before the league's
  * club world exists (a save not yet migrated) and for a gone club. [health] is the grade A..E,
  * [trouble] 0 none, 1 적자, 2 재정 위기, 3 법정관리; [last] the last accounts with their three
- * biggest items a side ([incomeTop], [expenseTop]), [years] the kept seasons (≤ 5).
+ * biggest items a side ([incomeTop], [expenseTop]), [years] the kept seasons (≤ 5). Appended by P8:
+ * the members' value together ([squadValue]) and their average age (0: unknown), and whether the
+ * board's next checkpoint is the winter's ([winterNext]; else the season's end).
  */
 data class ClubLifeView(
     val nickname: String, val colours: String, val foundedYear: Int,
@@ -91,6 +98,7 @@ data class ClubLifeView(
     val coach: CoachLine?, val board: BoardOutlook?, val captain: String?,
     val rivals: List<RivalView>, val nextRivalMatch: FollowMatch?, val stories: List<StoryView>,
     val graduates: Int,
+    val squadValue: Int = 0, val averageAge: Double = 0.0, val winterNext: Boolean = false,
 )
 
 /** A legend of a club's 명예의 전당 (≤ 5): its retired [number] when it has one, seasons and titles at the club, a one-club player. */
@@ -117,15 +125,25 @@ data class ClubHistoryView(
 /**
  * The player page's 💼 line (UX 4.7): the club, the contract ([terms] null for a retired player or
  * one without a club: the coach line still shows), an open [story] about the player, its club's
- * coach ([clubCoach], an id) and the coach it became ([coach], an id).
+ * coach ([clubCoach], an id) and the coach it became ([coach], an id); [key] is its load key
+ * ("pc:{player}"). Appended by P8: the player's style [family] (the 🎨 line's "(요트파)"), the
+ * club of the coach it became ([coachClub]; null while that coach is free or retired) and the
+ * season that coach retired in ([coachRetired]; 0 while it coaches or waits for a club).
  */
-data class PlayerClubCard(val key: String, val club: ClubBadge?, val terms: TermsView?, val story: StoryView?, val clubCoach: String?, val coach: String?)
+data class PlayerClubCard(
+    val key: String, val club: ClubBadge?, val terms: TermsView?, val story: StoryView?, val clubCoach: String?, val coach: String?,
+    val family: StyleFamily? = null, val coachClub: ClubBadge? = null, val coachRetired: Int = 0,
+)
 
 /**
  * A coach's page (UX 5); [key] equals its page's load key. [club] null while free ([freeRank] its
  * reputation's place among the free coaches) or retired (in season [retired]); [player] the player
  * it was; [tenures] the newest spells, the older summed into [olderClubs] and [olderSeasons];
- * [signings] its clubs' signings while in charge, by family.
+ * [signings] its clubs' signings while in charge, by family. Appended by P8: its [name] alone (the
+ * page title's "{name} 감독"; [shown] has the flag) and its international [cups] (members' 챔피언스
+ * 리그 and continental titles and its clubs' 클럽 대항전 cups while in charge). A retired coach has
+ * no development skill ([dev] 0) and its counts from its summary; [winterNext] as [ClubLifeView.winterNext];
+ * [league] its club's league ("한국 리그", "" without one).
  */
 data class CoachPage(
     val key: String, val id: String, val shown: String, val age: Int, val gender: Gender,
@@ -135,6 +153,7 @@ data class CoachPage(
     val tenures: List<TenureView>, val olderClubs: Int, val olderSeasons: Int,
     val clubTitles: Int, val leagueTitles: Int, val awards: Int, val sacked: Int,
     val signings: List<Pair<StyleFamily, Int>>, val retired: Int?, val freeRank: Int?,
+    val name: String = "", val cups: Int = 0, val winterNext: Boolean = false, val league: String = "",
 )
 
 /**
@@ -146,9 +165,13 @@ data class ClubRankLine(val rank: Int, val badge: ClubBadge, val value: String, 
 
 /**
  * 클럽 랭킹 (UX 4.8); [key] equals its page's load key (the scope). [lists] by kind; [grades] the
- * clubs of each health grade, A first.
+ * clubs of each health grade, A first. Appended by P8: the lists whose top 10 carry their moves
+ * since the last close ([moved]: the world's value and results once an `rk` line is kept).
  */
-data class ClubRankingView(val key: String, val season: Int, val lists: Map<ClubRankKind, List<ClubRankLine>>, val grades: List<Int>)
+data class ClubRankingView(
+    val key: String, val season: Int, val lists: Map<ClubRankKind, List<ClubRankLine>>, val grades: List<Int>,
+    val moved: Set<ClubRankKind> = emptySet(),
+)
 
 /** A coach on the hot seat (⚠ 경질 위기): the club's [target] and [place], the board's [ratio] ([PressureLevel.of]). */
 data class HotSeatLine(val club: ClubBadge, val coach: CoachLine, val target: Int, val place: Int, val ratio: Double)

@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import yacht.app.core.ClubBadge
 import yacht.app.core.LeagueHost
 import yacht.app.core.LeagueView
+import yacht.app.core.MarketPages
 import yacht.app.core.Page
 import yacht.app.core.WorldPages
 import yacht.app.ui.mergedRules
@@ -95,15 +96,17 @@ class WorldPagesTest {
     fun anotherLeaguesViewsGoEvenWhenItHasNothingToShow() {
         val w = national()
         val host = Host(w)
-        val pages = WorldPages(host)
+        // The market's loader is its own (MarketPages); WorldPages forwards to the same one.
+        val market = MarketPages(host)
+        val pages = WorldPages(host, market)
         val lg = w.plan!!.league.leagues.list.first { it.national }.id
         pages.loadRanking()
         pages.loadFederation()
-        pages.loadMarket()
+        market.load()
         pages.loadClubTable(lg)
         wait { pages.ranking?.takeIf { it.rows.isNotEmpty() } }
         wait { pages.federation }
-        wait { pages.market }
+        wait { market.view }
         wait { pages.clubTable }
         // A reset: a new league with no season and no clubs yet. A loader with nothing to read
         // there still drops the old league's views.
@@ -111,10 +114,38 @@ class WorldPagesTest {
         pages.loadClubTable(lg)
         wait { if (pages.ranking == null) Unit else null }
         assertNull(pages.federation)
-        assertNull(pages.market)
+        assertNull(market.view)
         assertNull(pages.clubTable)
         pages.loadRanking()
         assertEquals(0, wait { pages.ranking }.season)
+    }
+
+    @Test
+    fun anotherLeaguesClubWorldViewsGo() {
+        // The club world's pages (P8) follow the same rule: a club's life, a coach, the club
+        // rankings and a player's 💼 line read from one league go as soon as another is the host's.
+        val scene = ClubScene.default
+        val host = Host(scene.world)
+        val pages = WorldPages(host)
+        pages.loadClub(scene.club)
+        pages.loadCoach(scene.coach)
+        pages.loadClubRanking(null)
+        pages.loadPlayerClub(scene.captain)
+        assertNotNull(wait { pages.club(Page.Club(scene.club)) }.life)
+        wait { pages.coach(Page.Coach(scene.coach)) }
+        wait { pages.clubRanking(Page.ClubRanking()) }
+        wait { pages.playerClub(scene.captain) }
+        // Another league (a restore): the old views are hidden at once, before any new load…
+        host.w = national()
+        assertNull(pages.club(Page.Club(scene.club)))
+        assertNull(pages.coach(Page.Coach(scene.coach)))
+        assertNull(pages.clubRanking(Page.ClubRanking()))
+        assertNull(pages.playerClub(scene.captain))
+        // …and dropped by the first load from it, which here has no club world to show.
+        pages.loadClubRanking(null)
+        val r = wait { pages.clubRanking(Page.ClubRanking()) }
+        assertTrue(r.lists.isEmpty())
+        assertTrue(pages.coaches.isEmpty() && pages.playerClubs.isEmpty() && pages.clubs.isEmpty())
     }
 
     @Test
