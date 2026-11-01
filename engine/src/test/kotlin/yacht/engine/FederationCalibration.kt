@@ -176,6 +176,9 @@ class FederationCalibration {
             ProposalKind.SIZE_DOWN, ProposalKind.SIZE_UP -> s.spread ?: Double.NaN
             ProposalKind.LONG_KO_ON, ProposalKind.LONG_KO_OFF -> s.upsetShare
             ProposalKind.CL_DIRECT_UP, ProposalKind.CL_DIRECT_DOWN -> s.clEdge
+            ProposalKind.FFP_UP, ProposalKind.FFP_DOWN -> s.redShare
+            ProposalKind.SOLIDARITY_UP, ProposalKind.SOLIDARITY_DOWN -> s.incomeGap ?: Double.NaN
+            ProposalKind.STYLE_CAP_DOWN, ProposalKind.STYLE_CAP_UP -> s.styleRatio
         }
 
         private fun pct(x: Double) = String.format(Locale.ROOT, "%.0f%%", 100 * x)

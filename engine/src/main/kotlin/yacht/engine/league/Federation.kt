@@ -7,9 +7,12 @@ import java.util.TreeMap
 import kotlin.math.roundToInt
 
 /**
- * The competition rules the 요트협회 can change: the only [LeagueConfig] keys it ever touches
- * ([key] as [LeagueConfig.encode] writes it). The match format, the population keys and national
- * leagues are not among them, and the dice scoring rules are not part of [LeagueConfig] at all.
+ * The rules the 요트협회 can change: the only [LeagueConfig] keys it ever touches ([key] as
+ * [LeagueConfig.encode] writes it): six competition rules and, since the club world (design ENG
+ * 6.8), its three money and style rules (재정 규정 [LeagueConfig.ffp], 연대 기금
+ * [LeagueConfig.solidarity], 신인 스타일 상한 [LeagueConfig.styleCap]), which the market and the
+ * meta read from the config. The match format, the population keys and national leagues are not
+ * among them, and the dice scoring rules are not part of [LeagueConfig] at all.
  */
 enum class Lever(val key: String, val label: String) {
     AUTO_SWAP("autoSwap", "자동 승강 인원"),
@@ -18,6 +21,28 @@ enum class Lever(val key: String, val label: String) {
     DIVISION_SIZE("divisionSize", "부 인원"),
     LONG_KO("longKnockouts", "긴 토너먼트"),
     CL_DIRECT("clDirect", "챔피언스 리그 직행 리그 수"),
+    FFP("ffp", "재정 규정"),
+    SOLIDARITY("solidarity", "연대 기금"),
+    STYLE_CAP("styleCap", "신인 스타일 상한"),
+    ;
+
+    companion object {
+        /** The levers of the `fs` line's `lv=` field (an older decoder requires exactly these six); the rest ride on `lv2=`. */
+        const val FIRST = 6
+
+        /**
+         * A lever value as the 요트협회's texts write it: 재정 규정 "끄기", "기본", "엄격"; 연대 기금 "10%";
+         * 신인 스타일 상한 "1.5배"; any other lever's value as it is.
+         */
+        fun text(lever: Lever, value: String): String = when (lever) {
+            FFP -> FFP_LABELS.getOrNull(value.toIntOrNull() ?: -1) ?: value
+            SOLIDARITY -> "$value%"
+            STYLE_CAP -> value.toIntOrNull()?.let { "${it / 10}.${it % 10}배" } ?: value
+            else -> value
+        }
+
+        private val FFP_LABELS = listOf("끄기", "기본", "엄격")
+    }
 }
 
 /**
@@ -76,6 +101,28 @@ enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Doub
 
     /** They do worse: clDirect - 1. */
     CL_DIRECT_DOWN(Lever.CL_DIRECT, -0.30, -0.65),
+
+    /**
+     * Many clubs ended the season in the red ([FederationStats.redShare]): ffp + 1. The floors of the
+     * club world's six kinds are first values from the design's toy model and the meta bound (ENG
+     * 6.8), to be calibrated on played club-world seasons as the six rules' were.
+     */
+    FFP_UP(Lever.FFP, 0.08, 0.15),
+
+    /** Hardly any did: ffp - 1. */
+    FFP_DOWN(Lever.FFP, 0.02, 0.005),
+
+    /** The best-ranked leagues' clubs earn far more than the others' ([FederationStats.incomeGap]): solidarity + 5. */
+    SOLIDARITY_UP(Lever.SOLIDARITY, 2.6, 3.2),
+
+    /** The gap is small: solidarity - 5. */
+    SOLIDARITY_DOWN(Lever.SOLIDARITY, 1.9, 1.6),
+
+    /** One style family crowds the elite, far above its neutral share ([FederationStats.styleRatio]): styleCap - 2 (stricter). */
+    STYLE_CAP_DOWN(Lever.STYLE_CAP, 1.6, 2.0),
+
+    /** Even the largest family is close to its neutral share: styleCap + 2 (looser). */
+    STYLE_CAP_UP(Lever.STYLE_CAP, 1.25, 1.1),
 }
 
 /**
@@ -84,8 +131,8 @@ enum class ProposalKind(val lever: Lever, val floor: Double, val threshold: Doub
  * rules of season [season] + 1). It is voted on during season [season] + 1 (투표 중) and decided at
  * its close; an adopted one applies from season [appliesFrom]. [args] are the evidence's numbers
  * ([evidence]). [choice] is the user's vote ([NONE], [YES] 찬성, [NO] 반대); [result] is [NONE]
- * while pending, then [YES] 가결, [NO] 부결 or [VOID] 무효; [by] says who decided ([USER], [COMMITTEE]),
- * [yes] and [no] are the committee's votes.
+ * while pending, then [YES] 가결, [NO] 부결 or [VOID] 무효; [by] says who decided ([USER], [COMMITTEE],
+ * [EMERGENCY] a world event's 긴급 안건, number [EMERGENCY_NUMBER]), [yes] and [no] are the committee's votes.
  */
 data class Proposal(
     val season: Int,
@@ -124,14 +171,29 @@ data class Proposal(
             ProposalKind.LONG_KO_ON -> "긴 토너먼트 켜기"
             ProposalKind.LONG_KO_OFF -> "긴 토너먼트 끄기"
             ProposalKind.CL_DIRECT_UP, ProposalKind.CL_DIRECT_DOWN -> "챔피언스 리그 직행 ${from}개 리그 → ${to}개"
+            ProposalKind.FFP_UP -> "재정 규정 강화 (${Lever.text(Lever.FFP, from)} → ${Lever.text(Lever.FFP, to)})"
+            ProposalKind.FFP_DOWN -> "재정 규정 완화 (${Lever.text(Lever.FFP, from)} → ${Lever.text(Lever.FFP, to)})"
+            ProposalKind.SOLIDARITY_UP, ProposalKind.SOLIDARITY_DOWN -> "연대 기금 ${from}% → ${to}%"
+            ProposalKind.STYLE_CAP_DOWN, ProposalKind.STYLE_CAP_UP ->
+                "신인 스타일 상한 ${Lever.text(Lever.STYLE_CAP, from)} → ${Lever.text(Lever.STYLE_CAP, to)}"
         }
 
     /** A 검토 안건: tabled short of its floor, to fill the assembly ([Federation.assemble]); its evidence says so. */
     val review: Boolean get() = pressure < Federation.FLOOR_PRESSURE
 
-    /** The 근거: what the season showed, with its real numbers, and what the change is for (a [review] one says it is no urgent matter). */
+    /**
+     * A 긴급 안건 a world event decided ([EMERGENCY], number [EMERGENCY_NUMBER]): adopted at the close it was
+     * upserted into ([Federation.upsert]), never voted on. (A pending proposal it set aside is void, by [EMERGENCY].)
+     */
+    val emergency: Boolean get() = by == EMERGENCY && number == EMERGENCY_NUMBER
+
+    /**
+     * The 근거: what the season showed, with its real numbers, and what the change is for (a [review] one says it is
+     * no urgent matter); a 긴급 안건's says who decided it.
+     */
     val evidence: String
         get() {
+            if (emergency) return "슈퍼리그 사태로 긴급 결정했어요."
             fun a(i: Int) = args.getOrNull(i) ?: "?"
             val text = when (kind) {
                 ProposalKind.SWAP_DOWN -> "1부로 올라온 ${a(0)}명 가운데 ${a(1)}명(${a(2)}%)이 한 시즌 만에 다시 내려갔어요. 승강 인원을 줄여 1부를 안정시켜요."
@@ -160,6 +222,19 @@ data class Proposal(
                 } + " 시리즈를 줄여 시즌을 가볍게 해요."
                 ProposalKind.CL_DIRECT_UP -> "랭킹 상위 리그 우승자들이 대륙 챔피언스를 거쳐 온 선수들보다 챔피언스 리그에서 경기당 승점을 ${unsigned(a(0))}점 더 땄어요. 직행 리그를 늘려요."
                 ProposalKind.CL_DIRECT_DOWN -> "대륙 챔피언스를 거쳐 온 선수들이 직행한 리그 우승자들보다 챔피언스 리그에서 경기당 승점을 ${unsigned(a(0))}점 더 땄어요. 직행 리그를 줄여 다른 리그 선수에게도 자리를 나눠요."
+                ProposalKind.FFP_UP -> "클럽 ${a(0)}곳 가운데 ${a(1)}곳(${a(2)}%)이 적자로 시즌을 마쳤어요. 쓰는 돈을 버는 돈에 맞추도록 규정을 강화해 클럽을 지켜요."
+                ProposalKind.FFP_DOWN -> when {
+                    a(1) == "0" -> "클럽 ${a(0)}곳 가운데 적자로 시즌을 마친 클럽이 한 곳도 없었어요."
+                    review -> "클럽 ${a(0)}곳 가운데 적자로 시즌을 마친 클럽은 ${a(1)}곳(${a(2)}%)이었어요."
+                    else -> "클럽 ${a(0)}곳 가운데 적자로 시즌을 마친 클럽이 ${a(1)}곳(${a(2)}%)뿐이에요."
+                } + " 규정을 풀어 클럽이 더 과감하게 투자하게 해요."
+                ProposalKind.SOLIDARITY_UP -> "상위 8개 리그 클럽의 평균 수입이 나머지 리그의 ${a(0)}배였어요. 중계권 수입을 더 나눠 격차를 줄여요."
+                ProposalKind.SOLIDARITY_DOWN ->
+                    "상위 8개 리그 클럽의 평균 수입이 나머지 리그의 ${a(0)}배${if (review) "였어요" else "로, 격차가 줄었어요"}. 기금을 줄여 상위 리그의 힘을 지켜요."
+                ProposalKind.STYLE_CAP_DOWN -> (if (a(3) == "-") "" else "${a(3)}가 ${a(4)}시즌째예요. ") +
+                    "상위 리그 1부 선수의 ${a(1)}%가 ${family(a(0))}로, 보통 비율의 ${a(2)}배예요. 신인 스타일 상한을 낮춰 다양성을 지켜요."
+                ProposalKind.STYLE_CAP_UP ->
+                    "가장 많은 ${family(a(0))}도 상위 리그 1부에서 보통 비율의 ${a(2)}배${if (review) "예요" else "뿐이에요"}. 상한을 풀어 신인들이 유행을 따르게 해요."
             }
             return if (review) "급한 안건은 아니지만 한번 검토해 보자고 올렸어요. $text" else text
         }
@@ -181,7 +256,20 @@ data class Proposal(
         const val USER = 'U'
         const val COMMITTEE = 'C'
 
+        /**
+         * Decided by a world event (긴급 안건, design ENG 6.8): the super-league compromise's reform,
+         * adopted at the close it is upserted into ([Federation.upsert]); also the decider of a pending
+         * proposal on the same rule that the reform set aside (void).
+         */
+        const val EMERGENCY = 'E'
+
+        /** The number of a 긴급 안건 among its season's proposals (the assembly's are 1..3). */
+        const val EMERGENCY_NUMBER = 9
+
         private fun unsigned(s: String) = s.removePrefix("-")
+
+        /** A style family's label by its code ("요트파": ○○파 ends in a vowel, so 가, 로 and 도 follow it as written). */
+        private fun family(code: String) = code.singleOrNull()?.let { StyleFamily.ofCode(it)?.label } ?: "?"
     }
 }
 
@@ -253,6 +341,30 @@ data class FederationStats(
      * null without such a division (or in a file from before).
      */
     val spread: Double? = null,
+    /**
+     * The club world's accounts of the season (design ENG 6.8, [ClubEconomy.report]): the clubs that
+     * have them and those that ended the season in the red (a balance below 0); 0 and 0 without a club
+     * world (or in a file from before).
+     */
+    val clubs: Int = 0,
+    val red: Int = 0,
+    /**
+     * The mean operating income ([Money] units) of those clubs in the season's best-ranked leagues
+     * ([Federation.TOP]) and of the others'; 0 where there are none.
+     */
+    val topIncome: Int = 0,
+    val restIncome: Int = 0,
+    /**
+     * The elite of the season's `fm` line ([FamilyStats.elite]: the best-ranked leagues' 1부 and the
+     * 챔피언스 리그's entrants) with a style family, its largest family's share over that family's
+     * neutral share ([StyleFamily.NEUTRAL]) × 100, and that family's code ('-' without an elite).
+     */
+    val elite: Int = 0,
+    val eliteRatio: Int = 0,
+    val eliteFamily: Char = '-',
+    /** The era of [eliteFamily] going on at the close: the n-th era of that family and its seasons so far (0 and 0: none). */
+    val eraNth: Int = 0,
+    val eraSeasons: Int = 0,
 ) {
     /** Share of [promoted] that went straight back down. */
     val elevator: Double get() = share(bounced, promoted)
@@ -267,14 +379,37 @@ data class FederationStats(
     /** League champions' 챔피언스 리그 points per match minus the 대륙 챔피언스 finalists'. */
     val clEdge: Double get() = ppm(champPoints, champMatches) - ppm(cclPoints, cclMatches)
 
-    /** The `fs` line's fields: "elevator=31/56,champPpm=0.320,...,lv=2/1/1/20/1/7". */
-    fun encode(): String = listOf(
-        "national=${if (national) 1 else 0}", "elevator=$bounced/$promoted", "champPpm=${champPpm?.let { fmt3(it) } ?: "-"}",
-        "leaderLost=$leaderLost/$playoffLeagues", "runaway=$runaway/$leagues", "sweep=$sweeps/$decided", "rounds=$rounds",
-        "projected=$projected", "legacy=$legacy", "koUpsets=$koUpsets/$koTies", "clChamp=$champPoints/$champMatches",
-        "clCcl=$cclPoints/$cclMatches", "lv=${levers.joinToString("/")}", "bonusMoved=$bonusMoved/$bonusRanked",
-        "spread=${spread?.let { fmt3(it) } ?: "-"}",
-    ).joinToString(",")
+    /** Share of the clubs that ended the season in the red ([red] of [clubs]). */
+    val redShare: Double get() = share(red, clubs)
+
+    /** The best-ranked leagues' clubs' mean income over the other clubs'; null without both. */
+    val incomeGap: Double? get() = if (topIncome > 0 && restIncome > 0) topIncome.toDouble() / restIncome else null
+
+    /** The elite's largest family share over its neutral share ([eliteRatio] / 100). */
+    val styleRatio: Double get() = eliteRatio / 100.0
+
+    /**
+     * The `fs` line's fields: "elevator=31/56,champPpm=0.320,...,lv=2/1/1/20/1/7". The club world's
+     * fields (`red=`, `income=`, `elite=`, `era=`) only when the season has them, and the three newer
+     * levers (`lv2=`) only when one of them is away from its default, so a league without a club
+     * world writes what it wrote before them; `lv=` keeps exactly the first [Lever.FIRST] values
+     * (an older decoder requires as many).
+     */
+    fun encode(): String = (
+        listOf(
+            "national=${if (national) 1 else 0}", "elevator=$bounced/$promoted", "champPpm=${champPpm?.let { fmt3(it) } ?: "-"}",
+            "leaderLost=$leaderLost/$playoffLeagues", "runaway=$runaway/$leagues", "sweep=$sweeps/$decided", "rounds=$rounds",
+            "projected=$projected", "legacy=$legacy", "koUpsets=$koUpsets/$koTies", "clChamp=$champPoints/$champMatches",
+            "clCcl=$cclPoints/$cclMatches", "lv=${levers.take(Lever.FIRST).joinToString("/")}", "bonusMoved=$bonusMoved/$bonusRanked",
+            "spread=${spread?.let { fmt3(it) } ?: "-"}",
+        ) + listOfNotNull(
+            "red=$red/$clubs".takeIf { clubs > 0 },
+            "income=$topIncome/$restIncome".takeIf { topIncome > 0 || restIncome > 0 },
+            "elite=$eliteFamily:$eliteRatio/$elite".takeIf { elite > 0 },
+            "era=$eraNth/$eraSeasons".takeIf { eraNth > 0 },
+            levers.drop(Lever.FIRST).takeIf { it.isNotEmpty() && it != NEWER_DEFAULTS.take(it.size) }?.let { "lv2=${it.joinToString("/")}" },
+        )
+        ).joinToString(",")
 
     companion object {
         /** Points by which a 1부 leader is a runaway. */
@@ -289,6 +424,9 @@ data class FederationStats(
         /** Members a division needs for its [spread]. */
         const val SPREAD_MIN = 6
 
+        /** The values of the levers after the first [Lever.FIRST] at their defaults: what an `fs` line without `lv2=` reads. */
+        private val NEWER_DEFAULTS: List<String> = LeagueConfig().let { c -> Lever.entries.drop(Lever.FIRST).map { c.valueOf(it.key)!! } }
+
         private fun share(k: Int, n: Int) = if (n <= 0) 0.0 else k.toDouble() / n
         internal fun ppm(points: Int, matches: Int) = if (matches <= 0) 0.0 else points.toDouble() / matches
         private fun fmt3(x: Double) = String.format(Locale.ROOT, "%.3f", x)
@@ -299,9 +437,22 @@ data class FederationStats(
          * [honours] holds at least this season's and the season before's ([HonourBook.all]),
          * [federation] last season's promoted players (its `up` line), [config] the rules of the
          * season to come (for [projected]); [gone] are the players who left during the season (as
-         * [Offseason.moves] takes them). Pure; O(league fixtures + cup ties).
+         * [Offseason.moves] takes them). With a club world in [clubs] (its off-season after [plan]
+         * done, so the season's accounts are made) the money statistics ([clubs], [red], [topIncome],
+         * [restIncome]); with the season's `fm` line [families] the elite's style statistic, and the
+         * era going on from [meta] (the meta's close of the season done). Pure; O(league fixtures +
+         * cup ties + clubs).
          */
-        fun of(plan: SeasonPlan, honours: List<Honour>, federation: Federation, config: LeagueConfig, gone: Set<String> = emptySet()): FederationStats {
+        fun of(
+            plan: SeasonPlan,
+            honours: List<Honour>,
+            federation: Federation,
+            config: LeagueConfig,
+            gone: Set<String> = emptySet(),
+            clubs: ClubBook? = null,
+            families: FamilyStats? = null,
+            meta: MetaBook? = null,
+        ): FederationStats {
             val n = plan.number
             val league = plan.league
             val leagues = league.leagues
@@ -354,11 +505,55 @@ data class FederationStats(
             val (koTies, koUpsets) = cupUpsets(plan)
             val cl = clPoints(plan, honours)
             val (ranked, moved) = bonusMoves(league)
-            return FederationStats(
+            val stats = FederationStats(
                 n, leagues.national, lastUp.size, lastUp.count { it in down }, edges.takeIf { it.isNotEmpty() }?.let { round3(it.average()) },
                 playoffs, lost, withTop, runaway, decided, sweeps, league.matchdays, projected(plan, config), legacy(league.divisions.sumOf { it.size }),
                 koTies, koUpsets, cl[0], cl[1], cl[2], cl[3], Lever.entries.map { plan.config.valueOf(it.key) ?: "-" }, up,
                 ranked, moved, spread(league),
+            )
+            if (!leagues.national) return stats
+            return money(stats, plan, federation, clubs).let { s -> families?.takeIf { it.season == n }?.let { style(s, it, meta) } ?: s }
+        }
+
+        /**
+         * [stats] with the club world's money statistics of closed season [plan]: the clubs of
+         * [book] holding accounts of the season ([ClubEconomy.report], clubs dissolved since left
+         * out), those in the red, and the mean operating income of the clubs of the season's [TOP]
+         * best-ranked leagues ([NationalLeagues.bestRanked], else the federation's `top` line) and of
+         * the others'. A club's league is the one its nation played in during [plan] (where most of
+         * its nation's clubs' members played, [Transfers.leagues], as the market reads it): the
+         * statistics are read after the off-season, whose transfers brought some members in from
+         * other leagues. Unchanged without a club world.
+         */
+        private fun money(stats: FederationStats, plan: SeasonPlan, federation: Federation, book: ClubBook?): FederationStats {
+            if (book?.world == null) return stats
+            val report = ClubEconomy.report(book, plan.number)
+            if (report.clubs.isEmpty()) return stats
+            val top = NationalLeagues.bestRanked(plan, Federation.TOP).ifEmpty { federation.top(plan.number).orEmpty() }.toSet()
+            val leagues = Transfers.leagues(plan.league, book::clubOf, book::nationOf)
+            fun leagueOf(id: String): String = book.nationOf(id)?.let { leagues[it] }.orEmpty()
+            val (inTop, rest) = report.clubs.map { it.first }.partition { top.isNotEmpty() && leagueOf(it) in top }
+            fun mean(ids: List<String>): Int = if (ids.isEmpty()) 0 else Math.round(ids.sumOf { (report.incomes[it] ?: 0).toLong() }.toDouble() / ids.size).toInt()
+            return stats.copy(clubs = report.clubs.size, red = report.red, topIncome = mean(inTop), restIncome = mean(rest))
+        }
+
+        /**
+         * [stats] with the elite's style statistic of the season's `fm` line [fs] (design ENG 4.6,
+         * 6.8): its members with a family, the largest family's share over its neutral share (× 100,
+         * ties to the earlier family) and that family; and the era of that family going on in [meta].
+         */
+        private fun style(stats: FederationStats, fs: FamilyStats, meta: MetaBook?): FederationStats {
+            val total = fs.elite.sum()
+            if (total <= 0) return stats
+            val best = StyleFamily.entries.maxWith(
+                compareBy<StyleFamily> { f -> fs.elite.getOrElse(f.ordinal) { 0 }.toDouble() / total / StyleFamily.NEUTRAL.getValue(f) }.thenByDescending { it.ordinal },
+            )
+            val ratio = Math.round(100.0 * fs.elite.getOrElse(best.ordinal) { 0 } / total / StyleFamily.NEUTRAL.getValue(best)).toInt()
+            val era = meta?.era?.takeIf { it.family == best }
+            val nth = era?.let { e -> meta.eras.count { it.family == best && it.n <= e.n } } ?: 0
+            return stats.copy(
+                elite = total, eliteRatio = ratio, eliteFamily = best.code,
+                eraNth = nth, eraSeasons = era?.let { maxOf(1, stats.season - it.from + 1) } ?: 0,
             )
         }
 
@@ -508,14 +703,23 @@ data class FederationStats(
             val (upsets, ties) = pair("koUpsets")
             val (cp, cm) = pair("clChamp")
             val (kp, km) = pair("clCcl")
-            val levers = f.getValue("lv").split('/')
-            require(levers.size == Lever.entries.size)
+            val first = f.getValue("lv").split('/')
+            require(first.size == Lever.FIRST)
+            // The newer levers: at their defaults without `lv2=` (a line from before them, or one that kept them).
+            val newer = f["lv2"]?.split('/')?.takeIf { it.size == NEWER_DEFAULTS.size } ?: NEWER_DEFAULTS
             // Fields a file from before has not: none.
             val (moved, ranked) = f["bonusMoved"]?.let { pair("bonusMoved") } ?: (0 to 0)
+            val (red, clubs) = f["red"]?.let { pair("red") } ?: (0 to 0)
+            val (topIncome, restIncome) = f["income"]?.let { pair("income") } ?: (0 to 0)
+            // `elite=Y:212/310`: the family, its ratio × 100 and the elite.
+            val elite = f["elite"]?.let { e -> Triple(e.substringBefore(':').single(), e.substringAfter(':').substringBefore('/').toInt(), e.substringAfter('/').toInt()) }
+            val (eraNth, eraSeasons) = f["era"]?.let { pair("era") } ?: (0 to 0)
             FederationStats(
                 season, f["national"] == "1", promoted, bounced, f.getValue("champPpm").takeIf { it != "-" }?.toDouble(),
-                playoffs, lost, leagues, runaway, decided, sweeps, int("rounds"), int("projected"), int("legacy"), ties, upsets, cp, cm, kp, km, levers,
+                playoffs, lost, leagues, runaway, decided, sweeps, int("rounds"), int("projected"), int("legacy"), ties, upsets, cp, cm, kp, km, first + newer,
                 bonusRanked = ranked, bonusMoved = moved, spread = f["spread"]?.takeIf { it != "-" }?.toDouble(),
+                clubs = clubs, red = red, topIncome = topIncome, restIncome = restIncome,
+                elite = elite?.third ?: 0, eliteRatio = elite?.second ?: 0, eliteFamily = elite?.first ?: '-', eraNth = eraNth, eraSeasons = eraSeasons,
             )
         }.getOrNull()
     }
@@ -601,6 +805,27 @@ class Federation : CoefficientStore {
     }
 
     private fun adopted(season: Int): List<Proposal> = list.filter { it.season == season && it.adopted }
+
+    /**
+     * Upserts a world event's 긴급 안건 ([ArcEffects.emergency], design ENG 6.8) by (season, number), at
+     * every close of the season it was decided and before that close's [resolve]: one not stored yet goes
+     * in as it is (adopted, by [Proposal.EMERGENCY]) and sets aside a pending proposal of its season on
+     * the same lever (void, by [Proposal.EMERGENCY]: the reform decides that rule); one stored already
+     * changes nothing. So a close replayed after a kill, which upserts it again whether or not
+     * federation.txt was written, adopts it once, and [resolve] returns it among the close's adopted
+     * proposals either way. Returns whether anything changed.
+     */
+    fun upsert(emergency: List<Proposal>): Boolean {
+        var changed = false
+        for (p in emergency) {
+            if (!p.emergency || !p.adopted || list.any { it.season == p.season && it.number == p.number }) continue
+            for ((i, x) in list.withIndex()) if (x.season == p.season && x.pending && x.lever == p.lever) list[i] = x.copy(result = Proposal.VOID, by = Proposal.EMERGENCY)
+            list += p
+            changed = true
+        }
+        if (changed) trim()
+        return changed
+    }
 
     /**
      * Records adopted [proposals] as void (무효), as [applyTo] found them: their rule had already
@@ -767,13 +992,21 @@ class Federation : CoefficientStore {
         /** Members of the division tables the bonus statistic asks for ([FederationStats.bonusRanked]). */
         const val MIN_RANKED = 100
 
+        /** Clubs with accounts the money kinds ask for, and members with a family the elite's style kinds ask for (design ENG 6.8). */
+        const val MIN_CLUBS = 40
+        const val MIN_ELITE = 80
+
+        /** 연대 기금's step and its most, in percent of the payers' TV money ([LeagueConfig.solidarity]). */
+        const val SOLIDARITY_STEP = 5
+        const val SOLIDARITY_MAX = 20
+
         /** Pressure of a kind at statistic [x]: 0.3 at its floor, 1.0 at its threshold, at most 3; below 0.3 short of the floor. */
         fun pressure(kind: ProposalKind, x: Double): Double =
             minOf(3.0, 0.3 + 0.7 * (x - kind.floor) / (kind.threshold - kind.floor))
 
         private val CHOICES = setOf(Proposal.NONE, Proposal.YES, Proposal.NO)
         private val RESULTS = setOf(Proposal.NONE, Proposal.YES, Proposal.NO, Proposal.VOID)
-        private val DECIDERS = setOf(Proposal.NONE, Proposal.USER, Proposal.COMMITTEE)
+        private val DECIDERS = setOf(Proposal.NONE, Proposal.USER, Proposal.COMMITTEE, Proposal.EMERGENCY)
 
         // Higher pressure first, then kind order.
         private val ORDER = compareByDescending<Proposal> { it.pressure }.thenBy { it.kind.ordinal }
@@ -832,6 +1065,36 @@ class Federation : CoefficientStore {
                                 num2(stats.clEdge), num2(FederationStats.ppm(stats.champPoints, stats.champMatches)), num2(FederationStats.ppm(stats.cclPoints, stats.cclMatches)),
                             )
                             Triple(stats.clEdge, "${config.clDirect + if (up) 1 else -1}", args)
+                        } else null
+                    }
+                    ProposalKind.FFP_UP, ProposalKind.FFP_DOWN -> {
+                        val up = kind == ProposalKind.FFP_UP
+                        val room = if (up) config.ffp < ClubEconomy.FFP_STRICT else config.ffp > ClubEconomy.FFP_OFF
+                        if (room && stats.clubs >= MIN_CLUBS) {
+                            Triple(stats.redShare, "${config.ffp + if (up) 1 else -1}", listOf("${stats.clubs}", "${stats.red}", pct(stats.red, stats.clubs)))
+                        } else null
+                    }
+                    ProposalKind.SOLIDARITY_UP, ProposalKind.SOLIDARITY_DOWN -> {
+                        val up = kind == ProposalKind.SOLIDARITY_UP
+                        val room = if (up) config.solidarity < SOLIDARITY_MAX else config.solidarity > 0
+                        val gap = stats.incomeGap
+                        if (room && gap != null && stats.clubs >= MIN_CLUBS) {
+                            val to = config.solidarity + if (up) SOLIDARITY_STEP else -SOLIDARITY_STEP
+                            Triple(gap, "$to", listOf(String.format(Locale.ROOT, "%.1f", gap), "${stats.topIncome}", "${stats.restIncome}"))
+                        } else null
+                    }
+                    ProposalKind.STYLE_CAP_DOWN, ProposalKind.STYLE_CAP_UP -> {
+                        // Down is stricter: a lower cap on how far a family's newcomers may outgrow its neutral share.
+                        val down = kind == ProposalKind.STYLE_CAP_DOWN
+                        val caps = LeagueConfig.STYLE_CAPS
+                        val at = caps.indexOf(config.styleCap)
+                        val next = caps.getOrNull(if (down) at - 1 else at + 1)?.takeIf { at >= 0 }
+                        val family = StyleFamily.ofCode(stats.eliteFamily)
+                        if (next != null && family != null && stats.elite >= MIN_ELITE) {
+                            val share = Math.round(stats.eliteRatio * StyleFamily.NEUTRAL.getValue(family)).toString()
+                            val era = if (stats.eraNth <= 0) "-" else if (stats.eraNth == 1) family.era else "${Ordinals.of(stats.eraNth)} ${family.era}"
+                            val args = listOf("${family.code}", share, String.format(Locale.ROOT, "%.1f", stats.styleRatio), era, "${stats.eraSeasons}")
+                            Triple(stats.styleRatio, "$next", args)
                         } else null
                     }
                 }

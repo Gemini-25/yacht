@@ -33,20 +33,23 @@ object NationalLeagues {
      * The league of every nation with members ([counts]: nation code to members), as nation
      * code to league id; [last] holds last season's league ids (an existing league keeps going
      * down to [HYSTERESIS] below [LeagueConfig.leagueMin]):
-     * 1. a nation of [LeagueConfig.leagueMin] members or more plays its own league;
+     * 1. a nation of [LeagueConfig.leagueMin] members or more plays its own league, but the
+     *    nations in [merged] (a league merger of the world events, design ENG 6.5: they keep no
+     *    league of their own however many they are);
      * 2. the rest of each confederation (in [Confed] order) form its 연합 리그 when they are as
      *    many;
      * 3. what is left forms the 국제 연합 리그 when it is as many, or when there is no league
      *    yet; otherwise each nation joins the smallest league of its confederation (of any
      *    league when its confederation has none), ties by league order.
+     * Without a merger ([merged] empty) the plan is the one before the world events.
      */
-    fun plan(counts: Map<String, Int>, config: LeagueConfig, last: Set<String>): Map<String, String> {
+    fun plan(counts: Map<String, Int>, config: LeagueConfig, last: Set<String>, merged: Set<String> = emptySet()): Map<String, String> {
         val min = config.leagueMin
         val keep = min - HYSTERESIS
         fun enough(n: Int, id: String) = n >= min || (id in last && n >= keep)
         val nations = Nations.ALL.map { it.code }.filter { (counts[it] ?: 0) > 0 }
         val out = LinkedHashMap<String, String>()
-        for (c in nations) if (enough(counts.getValue(c), c)) out[c] = c
+        for (c in nations) if (c !in merged && enough(counts.getValue(c), c)) out[c] = c
         for (confed in Confed.entries) {
             val rest = nations.filter { it !in out && Nations.confedOf(it) == confed }
             val pool = rest.sumOf { counts.getValue(it) }
@@ -94,7 +97,7 @@ object NationalLeagues {
     /** The first season's divisions: [ranking] (best first) by league, each league's members cut into its ladder in that order. */
     fun first(ranking: List<String>, ctx: Offseason.Context): Pair<List<List<String>>, Leagues> {
         val counts = counts(ranking, ctx)
-        val formed = plan(counts, ctx.config, emptySet())
+        val formed = plan(counts, ctx.config, emptySet(), ctx.merged)
         val ladders = ranking.groupBy { formed.getValue(home(it, ctx)) }.mapValues { (_, keys) ->
             val out = ArrayList<List<String>>()
             var at = 0
@@ -141,7 +144,7 @@ object NationalLeagues {
             lists.map { l -> l.filter { it in keys && it !in elsewhere } }
         }
         val counts = counts(ctx.keys, ctx)
-        val formed = this.plan(counts, ctx.config, season.leagues.list.map { it.id }.toSet())
+        val formed = this.plan(counts, ctx.config, season.leagues.list.map { it.id }.toSet(), ctx.merged)
         fun leagueOf(k: String) = formed.getValue(home(k, ctx))
         val members = HashMap<String, Int>()
         for ((c, n) in counts) members.merge(formed.getValue(c), n, Int::plus)

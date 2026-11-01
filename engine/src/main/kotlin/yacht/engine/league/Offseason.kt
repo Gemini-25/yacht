@@ -36,6 +36,12 @@ object Offseason {
         val returned: Set<String> = emptySet(),
         /** The league ranking after the closing season, which the next season is played under (null: none yet). */
         val ranking: LeagueRanking? = null,
+        /**
+         * Nations without a league of their own next season, whatever their numbers: a league merger
+         * of the world events ([ArcEffects.merged], design ENG 6.5), passed to [NationalLeagues.plan].
+         * Empty: the leagues form as before the world events.
+         */
+        val merged: Set<String> = emptySet(),
     )
 
     /** Seed of season [number] from the league's own seed. */

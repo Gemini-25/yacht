@@ -135,9 +135,12 @@ class FederationTest {
         )
     }
 
+    /** The kinds of the six competition rules (the club world's three levers' are FederationFinanceTest's). */
+    private val ruleKinds = ProposalKind.entries.filter { it.lever.ordinal < Lever.FIRST }
+
     @Test
     fun everyKindFiresFromItsFloorWithThePressureFormula() {
-        assertEquals(ProposalKind.entries.toSet(), cases.map { it.kind }.toSet())
+        assertEquals(ruleKinds.toSet(), cases.map { it.kind }.toSet())
         for (c in cases) {
             fun of(s: FederationStats) = Federation.candidates(s, c.config).filter { it.kind == c.kind }
             val floor = of(c.at(c.floor)).single()
@@ -201,7 +204,7 @@ class FederationTest {
             ProposalKind.LONG_KO_ON to (0.09 to 0.25), ProposalKind.LONG_KO_OFF to (0.0 to -0.10),
             ProposalKind.CL_DIRECT_UP to (0.30 to 0.65), ProposalKind.CL_DIRECT_DOWN to (-0.30 to -0.65),
         )
-        assertEquals(pinned, ProposalKind.entries.associateWith { it.floor to it.threshold })
+        assertEquals(pinned, ruleKinds.associateWith { it.floor to it.threshold })
         // On the ten real seasons: what passed its floor each season, and what an assembly tabled.
         val passed = realSeasons.map { s -> Federation.candidates(s, config).map { it.kind } }
         assertEquals(
@@ -423,8 +426,11 @@ class FederationTest {
     }
 
     @Test
-    fun theLeversAreExactlyTheSixCompetitionRules() {
-        assertEquals(listOf("autoSwap", "titlePlayoff", "sweepBonus", "divisionSize", "longKnockouts", "clDirect"), Lever.entries.map { it.key })
+    fun theLeversAreTheSixCompetitionRulesAndTheClubWorldsThree() {
+        assertEquals(
+            listOf("autoSwap", "titlePlayoff", "sweepBonus", "divisionSize", "longKnockouts", "clDirect", "ffp", "solidarity", "styleCap"),
+            Lever.entries.map { it.key },
+        )
         for (l in Lever.entries) assertNotNull(config.valueOf(l.key), l.key)
         for (k in ProposalKind.entries) assertTrue(k.lever in Lever.entries)
         // Not the format, the population, national leagues (nor anything outside LeagueConfig).
