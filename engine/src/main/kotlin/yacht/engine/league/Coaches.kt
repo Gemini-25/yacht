@@ -93,7 +93,8 @@ data class RetiredCoach(
  * the [expected] club-table place from the season's drawn ratings, the owner's [target] (clamped to
  * 1..[clubs]), the [place] now, `gap = (target − place) / clubs` (positive = better than asked), the
  * coach's [pressure] and sacking [threshold], and the pressure the next checkpoint would leave at
- * this gap ([projected]). Recomputed on request, never stored (P5's `CoachMarket.outlook`).
+ * this gap ([projected]; 0 for the leader after the winter checkpoint, as a club-table title at the
+ * close resets it). Recomputed on request, never stored (P5's `CoachMarket.outlook`).
  */
 data class BoardOutlook(
     val expected: Int, val target: Int, val place: Int, val clubs: Int,
@@ -1115,8 +1116,9 @@ object CoachMarket {
      * Club [club]'s board outlook through week [through] of [plan]'s season (ENG 2.2): its expected
      * place from the [drawn] ratings, the target, its place in the club table through the week (with
      * the season's winter moves, deductions and [honours]), the gap, its coach's pressure, the
-     * threshold of its next checkpoint and the pressure that checkpoint would leave at this gap. Null
-     * without a club world, a coach or a seat (a club league's season included).
+     * threshold of its next checkpoint and the pressure that checkpoint would leave at this gap (the
+     * close's: 0 in first place, the title's reset). Null without a club world, a coach or a seat (a
+     * club league's season included).
      */
     fun outlook(plan: SeasonPlan, book: ClubBook, club: String, through: Int, drawn: (String) -> Double, honours: List<Honour> = emptyList()): BoardOutlook? =
         outlooks(plan, book, through, drawn, listOf(club), honours)[club]
@@ -1159,10 +1161,8 @@ object CoachMarket {
                 val owner = w.economy.owners[row.club] ?: Owner.NONE
                 val t = target(e, owner.ambition, table.size)
                 val g = gap(t, i + 1, table.size)
-                out[row.club] = BoardOutlook(
-                    e, shown(t), i + 1, table.size, g, st.pressure, limit(book, row.club, coach, s, winter),
-                    LineParts.fixed(pressureAfter(st.pressure, g, st.mood), 10),
-                )
+                val projected = if (!winter && i == 0) 0.0 else LineParts.fixed(pressureAfter(st.pressure, g, st.mood), 10)
+                out[row.club] = BoardOutlook(e, shown(t), i + 1, table.size, g, st.pressure, limit(book, row.club, coach, s, winter), projected)
             }
         }
         return out

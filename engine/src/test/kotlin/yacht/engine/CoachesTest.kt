@@ -199,6 +199,14 @@ class CoachesTest {
         // A coach in its first season shows the first checkpoint's doubled threshold before the winter.
         Coaching.coach(lg.book, "k9", "c04", from = 1)
         assertEquals(2 * CoachMarket.threshold(4), CoachMarket.outlook(plan, lg.book, "c04", 1, lg::rating)!!.threshold)
+        // After the winter the next checkpoint is the close, where the leader's title resets the pressure.
+        w.state("c01").pressure = 1.5
+        assertEquals(1.4, CoachMarket.outlook(plan, lg.book, "c01", 1, lg::rating)!!.projected)
+        w.checkpoint = 1
+        val leader = assertNotNull(CoachMarket.outlook(plan, lg.book, "c01", 1, lg::rating))
+        assertEquals(listOf(1, 1), listOf(leader.place, leader.target))
+        assertEquals(0.0, leader.projected)
+        assertEquals(0.9, CoachMarket.outlook(plan, lg.book, "c03", 1, lg::rating)!!.projected)
     }
 
     @Test
