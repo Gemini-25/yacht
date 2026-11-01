@@ -47,6 +47,8 @@ data class AiOdds(
     val tier: Int = division,
     /** Its league ([LeagueIds.LEGACY] for the old single league). */
     val league: String = LeagueIds.LEGACY,
+    /** A top-4 finish of the regular season (division 1 only, whether or not it has a title playoff; 0 elsewhere): the dark horse's number (design ENG 5.2). */
+    val top4: Double = 0.0,
 )
 
 /** Every AI's [AiOdds] at one point of a season: an immutable snapshot for the screens. */
@@ -239,6 +241,46 @@ object Odds {
     fun compute(plan: SeasonPlan, rating: (String) -> Double, runs: Int = RUNS, seed: Long = plan.seed, leagueId: String = firstLeague(plan)): OddsTable =
         run(input(plan, rating, leagueId), runs, seed)
 
+    /** Runs of the preseason predictions ([preseason]). */
+    const val PRESEASON_RUNS = 400
+
+    /**
+     * 시즌 전망 (design ENG 5.2): league [leagueId]'s odds as they stood before its first match,
+     * whatever has been played since: [compute] on [plan] with no result counted (every league
+     * fixture still to play from empty tables in the season's own order, the draw and sweep shares
+     * at their priors, the title and promotion playoffs unplayed). On a plan nothing has been
+     * played in it equals [compute] with the same [runs] and [seed]. [rating]: the ratings the
+     * season was drawn with, so the predictions are the same whenever asked (the open, a screen, the
+     * close's scorecard). Pure.
+     */
+    fun preseason(
+        plan: SeasonPlan,
+        rating: (String) -> Double,
+        leagueId: String = firstLeague(plan),
+        runs: Int = PRESEASON_RUNS,
+        seed: Long = preseasonSeed(plan, leagueId),
+    ): OddsTable = run(preseasonInput(plan, rating, leagueId), runs, seed)
+
+    /** The predictions' seed of league [leagueId]: `mix(plan seed, 0x9EED1C, LeagueIds.code(id))` (an id without a code: its order). */
+    fun preseasonSeed(plan: SeasonPlan, leagueId: String): Long =
+        DiceStream.mix(plan.seed, 0x9EED1CL, (runCatching { LeagueIds.code(leagueId) }.getOrNull() ?: LeagueIds.order(leagueId)).toLong())
+
+    /** [input] of league [leagueId] as before its first match ([preseason]). */
+    fun preseasonInput(plan: SeasonPlan, rating: (String) -> Double, leagueId: String = firstLeague(plan)): OddsInput {
+        val leagues = plan.league.leagues
+        val lg = if (leagues.national) requireNotNull(leagues.byId(leagueId)) { "no league $leagueId this season" } else leagues.list.firstOrNull()
+        val draw = shrunk(0, 0, DRAW_PRIOR, PRIOR_WEIGHT)
+        if (lg != null && lg.national) {
+            return input(plan.league, plan.config, rating, draw, null, emptyList(), null, lg, stagePlaces(plan, lg, rating), fresh = true)
+        }
+        // The cup unplayed: its finalists unknown (none without a cup).
+        val finalists = if (plan.competition(Comp.CUP) == null) emptyList<String>() else null
+        return input(plan.league, plan.config, rating, draw, null, emptyList(), finalists, fresh = true)
+    }
+
+    /** [count] of [n] pulled towards [prior] by [weight] (the draw and sweep shares). */
+    private fun shrunk(count: Int, n: Int, prior: Double, weight: Double): Double = ((count + prior * weight) / (n + weight)).coerceIn(0.0, 1.0)
+
     /** The league [input] takes by default: a national season's first, else the old single league. */
     fun firstLeague(plan: SeasonPlan): String = plan.league.leagues.list.firstOrNull()?.id ?: LeagueIds.LEGACY
 
@@ -342,6 +384,8 @@ object Odds {
         finalists: List<String>?,
         lg: LeagueDef? = null,
         places: Int = 0,
+        /** As before the first match ([preseason]): empty tables in the divisions' order, every fixture to play. */
+        fresh: Boolean = false,
     ): OddsInput {
         val national = lg != null && lg.national
         val first = if (national) lg!!.first else 0
@@ -358,7 +402,8 @@ object Odds {
         val baseScored = IntArray(n)
         val index = HashMap<String, Int>(n * 2)
         for (d in 0 until nd) {
-            val order = divs[d].map { season.standings.getValue(it) }.sortedByDescending { it.scored }
+            // Fresh: the order of empty tables (a stable sort of equal scores keeps the division's).
+            val order = if (fresh) divs[d].map { Standing(it) } else divs[d].map { season.standings.getValue(it) }.sortedByDescending { it.scored }
             for ((j, s) in order.withIndex()) {
                 val g = start[d] + j
                 keys[g] = s.key
@@ -374,7 +419,7 @@ object Odds {
             10.0.pow((r - 1500.0) / 400.0)
         }
         val draw = drawRate.coerceIn(0.0, 1.0)
-        val left = season.unplayed()
+        val left = if (fresh) (0 until season.fixturesTotal).map { season.fixture(it) } else season.unplayed()
         val fa = IntArray(left.size)
         val fb = IntArray(left.size)
         val win = DoubleArray(left.size)
@@ -425,12 +470,13 @@ object Odds {
                 }.coerceAtMost(size[d])
             }
         }
-        val table = (0 until nd).map { d -> season.table(first + d).map { index.getValue(it.key) }.toIntArray() }
+        val table = (0 until nd).map { d -> (if (fresh) divs[d] else season.table(first + d).map { it.key }).map { index.getValue(it) }.toIntArray() }
         val byRating = (0 until n).sortedByDescending { strength[it] }.toIntArray()
+        val sweep = if (!fresh) sweepRate(season) else if (season.bonus) shrunk(0, 0, SWEEP_PRIOR, PRIOR_WEIGHT) else 0.0
         return OddsInput(
-            season.number, season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, baseScored, strength,
+            season.number, if (fresh) 0 else season.fixturesPlayed, season.fixturesTotal, draw, keys, start, basePoints, baseDiff, baseScored, strength,
             fa.copyOf(m), fb.copyOf(m), win.copyOf(m), notLose.copyOf(m), tierOf, if (season.double) 2 else 1, swapBelow, downBelow, playoffBelow, clPlaces,
-            config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating, sweepRate(season),
+            config.titlePlayoff && nd > 0 && size[0] >= TITLE_PLAYOFF, table, champion, decided, exact, byRating, sweep,
             config.doubleElimination, lg?.id ?: LeagueIds.LEGACY, first, national,
         )
     }
@@ -521,6 +567,7 @@ object Odds {
         val positionSum = LongArray(n)
         val leader = IntArray(n)
         val top = IntArray(n)
+        val top4 = IntArray(n)
         val cl = IntArray(n)
         val up = IntArray(n)
         val down = IntArray(n)
@@ -590,7 +637,10 @@ object Odds {
                     if (pos < clPlaces[d]) cl[g]++
                     if (pos < upTo) up[g]++
                     if (pos >= downFrom) down[g]++
-                    if (d == 0 && titlePlayoff && pos < TITLE_PLAYOFF) top[g]++
+                    if (d == 0 && pos < TITLE_PLAYOFF) {
+                        top4[g]++
+                        if (titlePlayoff) top[g]++
+                    }
                 }
             }
             // Pyramid boundaries whose drops do not share out evenly: the rest from the worst of
@@ -679,7 +729,7 @@ object Odds {
                     if (d == 0 && titlePlayoff) title[g] / runsD else lead,
                     top[g] / runsD, (cl[g] + clShare[g]) / runsD,
                     (up[g] + upShare[g]) / runsD, (down[g] + downShare[g]) / runsD,
-                    upSpot[g] / runsD, downSpot[g] / runsD, tierOf[d], input.league,
+                    upSpot[g] / runsD, downSpot[g] / runsD, tierOf[d], input.league, if (d == 0) top4[g] / runsD else 0.0,
                 )
                 // Playoffs already over: their winners are no longer a chance.
                 if (d == 0 && input.champion != null) x = x.copy(title = if (key == input.champion) 1.0 else 0.0)

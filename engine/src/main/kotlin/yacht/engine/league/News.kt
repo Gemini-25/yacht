@@ -1573,12 +1573,28 @@ class NewsBook {
 
     val size: Int get() = list.size
 
-    /** Adds [a] as the newest (an article equal to one of the last few is not added twice); its lane drops its oldest beyond its size. */
+    /**
+     * Adds [a] as the newest (an article equal to one of the last few is not added twice); its lane
+     * drops its oldest beyond its size. A column's article ([COLUMNS], design ENG 5.1) takes the
+     * place of the one before it: the book keeps only the newest of a column.
+     */
     fun add(a: Article) {
         if (list.take(RECENT).any { it == a }) return
+        if (a.kind in COLUMNS) dropColumn(a.kind)
         list.addFirst(a)
         if (a.major) majors++
         trim(a.major)
+    }
+
+    /** Drops every article of column [kind]. */
+    private fun dropColumn(kind: String) {
+        val it = list.iterator()
+        while (it.hasNext()) {
+            val x = it.next()
+            if (x.kind != kind) continue
+            it.remove()
+            if (x.major) majors--
+        }
     }
 
     /** Drops the oldest articles of one lane down to its size. */
@@ -1629,6 +1645,9 @@ class NewsBook {
         const val MAJOR_FROM = 3
         private const val RECENT = 10
 
+        /** Columns (연재): kinds of which only the newest article is kept (the weekly power ranking's). */
+        val COLUMNS: Set<String> = setOf("power_ranking")
+
         /**
          * Reads news.txt; throws when it is not one (the caller starts fresh), skips bad or cut
          * lines and lines of other kinds (the [NewsDesk]'s).
@@ -1652,7 +1671,8 @@ class NewsBook {
                     val a = Article(
                         f[1].toInt(), MediaText.unesc(f[2]), MediaText.unesc(f[5]), MediaText.unesc(f[6]), MediaText.unlist(f[4]), comp, importance, week, ref, scope,
                     )
-                    // Oldest first in the file: each lane keeps its newest.
+                    // Oldest first in the file: each lane keeps its newest (and a column its newest article only).
+                    if (a.kind in COLUMNS) book.dropColumn(a.kind)
                     book.list.addFirst(a)
                     if (a.major) book.majors++
                     book.trim(a.major)
