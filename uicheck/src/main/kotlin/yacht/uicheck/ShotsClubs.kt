@@ -288,10 +288,10 @@ internal class ClubScene private constructor(
             }
             b.members(others.first()).firstOrNull()?.let { k -> extra += "tx ${s - 2} T ${esc(k)} ${p.club} ${others.first()} 75 V" }
             // A retired coach who was a player: the legend with the most titles no coach was made from yet
-            // (CoachMarket.start makes coaches of legends too), else such a retired player.
+            // (CoachMarket.start makes coaches of legends too), else such a retired player with the longest career.
             val coached = (b.coaches.mapNotNull { it.player } + b.retiredCoaches.mapNotNull { it.player }).toSet()
             val legend = w.players.legends.filter { it.record.key !in coached }.maxByOrNull { it.record.titles }?.record
-                ?: w.players.retired.first { it.key !in coached }
+                ?: w.players.retired.filter { it.key !in coached }.maxWith(compareBy({ it.titles }, { it.seasons }, { it.key }))
             extra += "kr $RETIRED_COACH ${esc(legend.name)} ${legend.nation} ${(legend.gender ?: Gender.MALE).code} ${s - 1 - 64} ${s - 1} C 71 ${esc(legend.key)} CT:2,L0:5,COY:1,clubs:4,seasons:17,sacked:1,longest:8"
             return t.trimEnd('\n') + "\n" + extra.joinToString("\n") + "\n"
         }

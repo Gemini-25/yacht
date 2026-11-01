@@ -169,5 +169,7 @@ internal object CoachTexts {
     /** Under the signings: the families its philosophy looks for (★ in the bars). */
     fun fits(families: Set<StyleFamily>): String = "★ ${families.joinToString("·") { it.label }} 선수를 좋아해요."
 
-    fun playerDays(seasons: Int, titles: Int): String = "${seasons}시즌을 뛰었고 주요 우승 ${titles}회를 했어요. 선수 페이지 ›"
+    /** 🎲 선수 시절: "{n}시즌을 뛰었고 주요 우승 {t}회를 했어요." (without a major title: "{n}시즌을 뛰었어요."). */
+    fun playerDays(seasons: Int, titles: Int): String =
+        (if (titles > 0) "${seasons}시즌을 뛰었고 주요 우승 ${titles}회를 했어요." else "${seasons}시즌을 뛰었어요.") + " 선수 페이지 ›"
 }

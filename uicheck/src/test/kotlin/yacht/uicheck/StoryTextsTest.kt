@@ -298,6 +298,7 @@ class StoryTextsTest {
             Case("coach honours", type.labelSmall, PAGE_DP, 2) { CoachTexts.honours(2, 5, 1, 1) },
             Case("coach fits", type.labelSmall, PAGE_DP, 1) { CoachTexts.fits(setOf(StyleFamily.YACHT, StyleFamily.BOLD)) },
             Case("coach player days", type.bodySmall, PAGE_DP, 2) { CoachTexts.playerDays(14, 6) },
+            Case("coach player days (no title)", type.bodySmall, PAGE_DP, 1) { CoachTexts.playerDays(3, 0) },
             Case("contract line", type.labelMedium, PAGE_DP - 78 - 12 - 18, 1) { n -> PlayerClubTexts.line(n.club, 10, true) },
             Case("coach line", type.labelMedium, PAGE_DP - 78 - 12, 1) { n -> PlayerClubTexts.coach(n.club) },
             Case("coach line (retired)", type.labelMedium, PAGE_DP - 78 - 12, 1) { n -> PlayerClubTexts.coach(null, n.season) },
