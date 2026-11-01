@@ -38,15 +38,16 @@ internal object Ms {
         return l to plan
     }
 
-    /** The in-season input of [l] in [plan]: the drawn ratings are [Cw.rating]; [live] is the ladder's now. */
+    /** The in-season input of [l] in [plan]: the drawn ratings are [Cw.rating]; [live] is the ladder's now; ages are the season in play's. */
     fun input(
         l: Cw.League, plan: SeasonPlan, live: (String) -> Double = Cw::rating, config: LeagueConfig = Cw.config,
-        market: Boolean = true, winter: Boolean = true,
+        market: Boolean = true, winter: Boolean = true, coaches: Boolean = true,
+        age: (String) -> Int? = { k -> Cw.players[k]?.age(plan.number) ?: 22 },
     ): ClubInput = ClubInput(
-        l.members, live, Cw::nation, config, l.honours.toList(), age = { k -> Cw.players[k]?.age(plan.number) ?: 22 }, origin = Origin::of,
+        l.members, live, Cw::nation, config, l.honours.toList(), age = age, origin = Origin::of,
         ranking = plan.ranking, economy = LeagueEconomy.of(plan, Cw::rating), drawn = Cw::rating,
         coachInput = CoachInput(names = Cw.players.alive.mapTo(HashSet()) { it.name }), families = { k -> StyleFamily.of(Cw.players[k]?.spec?.play) },
-        market = market, winter = winter,
+        coaches = coaches, market = market, winter = winter,
         hometown = { k -> Cw.players[k]?.hometown }, potential = { k -> Cw.players[k]?.identity?.potential }, overall = { k -> Cw.players[k]?.identity?.abilities?.overall },
         traits = { k -> Cw.players[k]?.let { PlayerTraits.of(it.spec.play, it.identity) } },
     )
@@ -150,6 +151,8 @@ class MarketStoryTest {
                 } else {
                     abroad++
                     assertTrue(!st.winter)
+                    // Transfers' rule as the off-season applies it: the age in the coming season.
+                    assertTrue(Cw.players[st.key]!!.age(s + 1) in Transfers.MIN_AGE..Transfers.MAX_AGE, st.toString())
                     val from = plan.ranking.rank(season.leagueOf(st.key)!!.id)
                     val to = plan.ranking.rank(leagueOf.getValue(book.nationOf(st.buyer)!!))
                     assertTrue(to <= from - Transfers.GAP, st.toString())
@@ -158,6 +161,19 @@ class MarketStoryTest {
         }
         assertTrue(abroad <= Transfers.count(input.config, input.members.size), "abroad stories $abroad")
         assertTrue(book.stories(s).size >= 20)
+    }
+
+    @Test
+    fun aMoveAbroadIsTalkedOfForPlayersTheOffseasonWouldSend() {
+        // Everyone 30 in the season in play: 31 at the off-season, still young enough to go abroad; 31 now: too old then.
+        fun abroad(age: Int): Int {
+            val (l, plan) = Ms.league(size = 1000)
+            val book = l.book
+            Ms.season(l, plan, Ms.input(l, plan, age = { age }))
+            return book.stories(plan.number).count { book.nationOf(it.buyer) != book.nationOf(it.seller) }
+        }
+        assertTrue(abroad(Transfers.MAX_AGE - 1) > 0)
+        assertEquals(0, abroad(Transfers.MAX_AGE))
     }
 
     @Test
@@ -254,6 +270,22 @@ class MarketStoryTest {
         val earlier = Cw.fresh(l.members, plan.number - 1)
         assertEquals(emptyList(), Stories.week(book, earlier, input, 30))
         assertEquals(after, book.encode())
+    }
+
+    @Test
+    fun aBookReadBackEveryWeekPlaysOnAsOneKeptInMemory() {
+        // A league killed after each week's close and read back from its file: the same stories, checkpoint and news.
+        val (l, plan) = Ms.league()
+        val input = Ms.input(l, plan)
+        var read = Ms.copy(l.book)
+        for (k in 1..plan.leagueWeeks + 2) {
+            Ms.playThrough(plan, k)
+            val kept = Stories.close(l.book, plan, input, k, k + 1)
+            read = Ms.copy(read)
+            assertEquals(kept, Stories.close(read, plan, input, k, k + 1), "week $k")
+            assertEquals(l.book.encode(), read.encode(), "week $k")
+        }
+        assertTrue(l.book.stories(plan.number).isNotEmpty() && l.book.winterMoves(plan.number).isNotEmpty())
     }
 
     @Test

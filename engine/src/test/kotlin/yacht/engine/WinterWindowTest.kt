@@ -189,6 +189,43 @@ class WinterWindowTest {
     }
 
     @Test
+    fun aProtestNamesTheCoachTheFansHad() {
+        val (l, plan) = Ms.league()
+        val book = l.book
+        val s = plan.number
+        val w = ClubWorld.winterWeek(plan)
+        val input = Ms.input(l, plan)
+        Ms.season(l, plan, input, last = w - 1)
+        Ms.playThrough(plan, w)
+        // The two biggest fan bases behind their board's target: fans furious, boards out of patience.
+        val tables = ClubTable.all(plan.league, book, emptyList(), w, emptyList(), ClubEconomy.deductions(book))
+        val seats = ClubEconomy.seats(tables)
+        val targets = CoachMarket.targets(plan, book, Cw::rating)
+        val world = book.world!!
+        val clubs = seats.filter { (id, seat) -> (targets[id] ?: seat.place) < seat.place && book.coachOf(id) != null }.keys
+            .sortedByDescending { world.clubs.getValue(it).fans }.take(2)
+        assertEquals(2, clubs.size)
+        val old = clubs.associateWith { book.coachOf(it)!!.id }
+        for (c in clubs) world.clubs.getValue(c).apply {
+            pressure = 50.0
+            mood = 0
+        }
+        val news = Stories.close(book, plan, input, w, w + 1)
+        val report = ClubCheckpoint.report(book, s)
+        val protesting = report.protests.filter { it.club in clubs }
+        assertTrue(protesting.isNotEmpty(), report.protests.toString())
+        for (p in protesting) {
+            val sacking = report.sacked.single { it.club == p.club }
+            assertEquals(old.getValue(p.club), sacking.coach)
+            assertEquals(old.getValue(p.club), p.coach, "against the coach they had, not the one hired after: $p")
+            assertNotEquals(p.coach, sacking.hired)
+        }
+        // A sacked club's protest is told with its sacking.
+        assertTrue(news.none { it.kind == "fan_protest" && it.keys[0] in clubs }, news.toString())
+        assertTrue(news.filter { it.kind == "coach_sacked" && protesting.any { p -> p.club == it.keys[0] } }.all { it.args[3] == "1" }, news.toString())
+    }
+
+    @Test
     fun theFansMoodFollowsTheGapAndTheLastWindow() {
         // A season after a club world's off-season: its window's sales, record signings and moves to rivals count now.
         val (l, p3) = Ms.league()
@@ -255,6 +292,32 @@ class WinterWindowTest {
             assertEquals(wages.getValue(c.id) + (half[c.id] ?: 0), a.wages, c.id)
         }
         assertEquals(wages.values.sum(), book.clubs.sumOf { book.life(it.id)!!.last!!.wages })
+    }
+
+    @Test
+    fun aReportWhoseMovesTheLogLostTellsNoDeals() {
+        val (l, plan) = Ms.league()
+        val book = l.book
+        val s = plan.number
+        val input = Ms.input(l, plan)
+        throughWinter(l, plan, input)
+        val report = ClubCheckpoint.report(book, s)
+        assertTrue(report.moves.size >= 2)
+        // The season played out and its off-season run: the season's other moves follow the winter's in the log.
+        Ms.season(l, plan, input)
+        Cw.play(plan)
+        l.close(plan)
+        book.offseason(plan, l.input(l.next(s), plan))
+        assertEquals(report.deals, ClubCheckpoint.report(book, s).deals, "after the off-season")
+        // A log without the season's first winter move (a later off-season's trim drops the oldest first): no deals
+        // rather than the next moves in their place.
+        val text = book.encode()
+        val first = text.lines().first { it.startsWith("move $s W ") }
+        val cut = ClubBook.decode(text.lines().filter { it != first }.joinToString("\n"))
+        val r = ClubCheckpoint.report(cut, s)
+        assertTrue(r.deals.isEmpty() && r.record == null, r.toString())
+        assertEquals(report.sacked, r.sacked)
+        assertEquals(report.protests, r.protests)
     }
 
     @Test
@@ -366,6 +429,29 @@ class WinterWindowTest {
         val again = a.book.checkpoint(pa, ia, w)
         assertEquals(Stories.close(b.book, pb, ib, w, w + 1), again)
         assertEquals(b.book.encode(), a.book.encode())
+    }
+
+    @Test
+    fun theCoachesKnobOffLeavesTheCoachesAlone() {
+        val (l, plan) = Ms.league()
+        val book = l.book
+        val s = plan.number
+        val w = ClubWorld.winterWeek(plan)
+        val input = Ms.input(l, plan, coaches = false)
+        Ms.season(l, plan, input, last = w - 1)
+        Ms.playThrough(plan, w)
+        // Boards out of patience: with the coaches' step off (as at the off-season) nobody is sacked and no pressure moves.
+        val world = book.world!!
+        for (c in book.clubs.filter { book.coachOf(it.id) != null }.take(3)) world.clubs.getValue(c.id).pressure = 50.0
+        val coaches = book.clubs.associate { it.id to book.coachOf(it.id)?.id }
+        val pressure = world.clubs.mapValues { it.value.pressure }
+        Stories.close(book, plan, input, w, w + 1)
+        val report = ClubCheckpoint.report(book, s)
+        assertTrue(report.sacked.isEmpty(), report.sacked.toString())
+        assertEquals(coaches, book.clubs.associate { it.id to book.coachOf(it.id)?.id })
+        assertEquals(pressure, book.world!!.clubs.mapValues { it.value.pressure })
+        assertTrue(report.moves.isNotEmpty(), "the window runs")
+        assertEquals(s, book.world!!.checkpoint)
     }
 
     @Test
