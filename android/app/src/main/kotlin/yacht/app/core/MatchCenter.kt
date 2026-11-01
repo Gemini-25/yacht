@@ -46,7 +46,6 @@ import yacht.engine.league.MatchLogBook
 import yacht.engine.league.MatchRef
 import yacht.engine.league.Preview
 import yacht.engine.league.RatingScale
-import yacht.engine.league.RivalMatches
 import yacht.engine.league.SeasonCalendar
 import yacht.engine.league.SeasonMatch
 import yacht.engine.league.SeasonMatches
@@ -1725,7 +1724,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
                 s.leagues.national -> lg?.id
                 else -> s.divisionOf(f.a)?.let { "d$it" }
             }
-            val rival = if (f.comp == Comp.LEAGUE && !team) rivals?.matches?.name(s, f.a, f.b) else null
+            val rival = if (f.comp == Comp.LEAGUE && !team) rivals?.of(m.ref.encode()) else null
             BroadcastPicks.Candidate(
                 MatchRef(p.number, f.comp, f.id), week, f.comp, titleOf(p, f, p.number), f.a, f.b, keys,
                 league, BroadcastPicks.base(f, rank, tier, upperTier(s, f)),
@@ -1762,7 +1761,7 @@ class MatchCenter internal constructor(private val host: LeagueHost) {
             val f = s.fixture(id)
             matches.name(s, f.a, f.b)?.let { names[MatchRef(p.number, Comp.LEAGUE, id).encode()] = it }
         }
-        return RivalMarks(p.number, names, matches).also { rivalsRead = Triple(WeakReference(p), key, it) }
+        return RivalMarks(p.number, names).also { rivalsRead = Triple(WeakReference(p), key, it) }
     }
 
     /**
@@ -2200,7 +2199,7 @@ internal object BroadcastPicks {
  * [season] by their ref ("7:L:123") with the rivalry's name; built off the main thread once a season
  * and when the club book changes ([MatchCenter.loadRivals]), never in the 300 ms snapshot.
  */
-class RivalMarks internal constructor(val season: Int, private val names: Map<String, String>, internal val matches: RivalMatches) {
+class RivalMarks internal constructor(val season: Int, private val names: Map<String, String>) {
     /** The rivalry's name of the match of [ref] (a whole match's, or a board's or game's of it); null for any other. */
     fun of(ref: String?): String? {
         if (ref == null) return null

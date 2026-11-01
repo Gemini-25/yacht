@@ -159,8 +159,10 @@ class MarketPages internal constructor(private val host: LeagueHost) {
          * that has some: the newest off-season window's deals ([summer], after season [window]) and the
          * winter's of the season in play ([winter]) carry theirs, the other moves those of their `tx` line.
          * A season's winter moves are its winter transfers (W) and the members let go to make room for
-         * them (a release its `ws` lines name, logged before the season's last winter transfer: the
-         * off-season after the season logs its own moves under the same season, later).
+         * them, each logged right before the transfer it made room for, so before the season's last
+         * winter transfer (the off-season after the season logs its own moves under the same season,
+         * later): while the season's `ws` lines are kept (2 seasons) they name who was let go; once they
+         * are gone every release before that transfer is one, so an older winter stays one run of moves.
          */
         private fun marks(history: List<ClubMove>, window: Int, summer: List<MarketDeal>, winter: List<MarketDeal>): Pair<Set<Int>, Map<Int, String>> {
             val flags = HashMap<Int, String>()
@@ -173,16 +175,19 @@ class MarketPages internal constructor(private val host: LeagueHost) {
             val tx = HashMap<String, String>()
             for (m in b.notable) if (m.flags.isNotEmpty()) tx.putIfAbsent(txKey(m.season, m.key, m.from, m.to), m.flags)
             for ((i, m) in history.withIndex()) if (i !in flags) tx[txKey(m.season, m.ai, m.from, m.to)]?.let { flags[i] = it }
-            val letGo = HashMap<Int, Set<Pair<String, String>>>()
+            // A season's let-go members by its `ws` lines; null once the season's lines are no longer kept.
+            val letGo = HashMap<Int, Set<Pair<String, String>>?>()
             fun letGoOf(season: Int) = letGo.getOrPut(season) {
-                b.winterMoves(season).filter { it.to == ClubCheckpoint.NONE }.mapTo(HashSet()) { it.key to it.from }
+                b.winterMoves(season).takeIf { it.isNotEmpty() }?.filter { it.to == ClubCheckpoint.NONE }?.mapTo(HashSet()) { it.key to it.from }
             }
             val lastWinter = HashMap<Int, Int>()
             for ((i, m) in history.withIndex()) if (m.type == ClubMoveType.WINTER) lastWinter[m.season] = i
             val winterAt = HashSet<Int>()
             for ((i, m) in history.withIndex()) {
                 val last = lastWinter[m.season] ?: continue
-                if (m.type == ClubMoveType.WINTER || (m.type == ClubMoveType.RELEASED && i < last && m.from != null && (m.ai to m.from) in letGoOf(m.season))) winterAt += i
+                val from = m.from
+                val letGo = if (m.type == ClubMoveType.RELEASED && i < last && from != null) letGoOf(m.season)?.contains(m.ai to from) ?: true else false
+                if (m.type == ClubMoveType.WINTER || letGo) winterAt += i
             }
             return winterAt to flags
         }
@@ -280,6 +285,24 @@ class MarketPages internal constructor(private val host: LeagueHost) {
         fun tabOf(page: Page.Market, v: MarketView): MarketTab =
             page.tab ?: if (v.live.isNotEmpty() || (v.rumoursFrom > 0 && v.week >= v.rumoursFrom)) MarketTab.LIVE else MarketTab.MOVES
 
+        /**
+         * 이적 내역's window headings (UX 6.3): each run of [MarketView.moves] (newest first) of one window
+         * (its season, winter or the off-season after it) from its first index, keyed for the list. A
+         * window seen again further down (a log that no longer keeps its moves together) gets a numbered
+         * key, so no two headings share one.
+         */
+        fun blocks(v: MarketView): List<MoveBlock> {
+            val out = ArrayList<MoveBlock>()
+            val seen = HashMap<Pair<Int, Boolean>, Int>()
+            for ((i, m) in v.moves.withIndex()) {
+                val at = m.season to (i in v.winterMoves)
+                if (out.lastOrNull()?.let { it.season to it.winter } == at) continue
+                val n = seen.merge(at, 1, Int::plus)!!
+                out += MoveBlock(i, at.first, at.second, "mh-${at.first}-${at.second}" + if (n > 1) "-$n" else "")
+            }
+            return out
+        }
+
         /** ☀ 다시 보기's rounds: each round's name and the index of its first move in [window]. */
         internal fun rounds(window: List<WindowMove>): List<Pair<String, Int>> =
             window.withIndex().filter { (i, m) -> i == 0 || window[i - 1].round != m.round }.map { (i, m) -> m.round to i }
@@ -320,6 +343,9 @@ class MarketPages internal constructor(private val host: LeagueHost) {
             b.club(id)?.let { ClubBadge(it.id, it.name, it.city, it.nation, it.emblem) } ?: b.gone(id)?.let { ClubBadge(it.id, it.name, "", it.nation, it.emblem) }
     }
 }
+
+/** A window's run of 이적 내역's moves ([MarketPages.blocks]): from index [start], of [season]'s winter or the off-season after it, its list [key]. */
+data class MoveBlock(val start: Int, val season: Int, val winter: Boolean, val key: String)
 
 /**
  * How the page loaders ([MarketPages], [StoryPages], [EventPages], [EncPages]) read the league, as

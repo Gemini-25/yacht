@@ -211,9 +211,10 @@ data class WindowMove(val move: ClubMove, val flags: String, val round: String)
  * winter window, ☀ 다시 보기's rounds (name, index of its first move in [window]), the fee records
  * and the coaches. Appended by P16: the flags of [moves] by index ([flags], moves with flags only),
  * the newest off-season window move by move ([window], the replay's, after season [windowSeason]),
- * the week the rumours start ([rumoursFrom], ⌈0.6 R⌉) and the winter checkpoint's week
- * ([winterWeek]). Without a club world (a legacy season, a save not yet migrated, `clubWorld` off)
- * only the first three are filled and the page is today's 이적·드래프트 ([centre] false).
+ * the week the rumours start ([rumoursFrom]: ⌈0.6 R⌉, after the winter checkpoint at the earliest)
+ * and the winter checkpoint's week ([winterWeek]). Without a club world (a legacy season, a save
+ * not yet migrated, `clubWorld` off) only the first three are filled and the page is today's
+ * 이적·드래프트 ([centre] false).
  */
 data class MarketView(
     val season: Int, val moves: List<ClubMove>, val digest: ClubDigest?,

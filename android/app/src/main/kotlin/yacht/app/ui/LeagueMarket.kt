@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -22,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -150,10 +153,10 @@ private fun TransferCentre(lg: LeagueController, v: LeagueView, page: Page.Marke
     }
 }
 
-/** The list every tab draws in. */
+/** The list every tab draws in ([state]: the replay's, which follows its newest move). */
 @Composable
-private fun CentreList(content: LazyListScope.() -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
+private fun CentreList(state: LazyListState = rememberLazyListState(), content: LazyListScope.() -> Unit) {
+    LazyColumn(Modifier.fillMaxSize(), state, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
 }
 
 // ---- 이적설 --------------------------------------------------------------------------------------------
@@ -230,16 +233,15 @@ private fun MovesTab(lg: LeagueController, v: LeagueView, page: Page.Market, m: 
             }
         }
         if (m.moves.isEmpty()) item { Small("시즌이 끝나면 클럽마다 이적 시장이 열려요. 겨울에는 시즌 중간에 한 번 더 열려요.") }
-        var at: Pair<Int, Boolean>? = null
-        // Keys by content (the list grows at its top as windows close), a repeated move numbered.
+        // Keys by content (the list grows at its top as windows close), a repeated move or window numbered.
+        val heads = MarketPages.blocks(m).associateBy { it.start }
         val seen = HashMap<String, Int>()
         for ((i, x) in m.moves.withIndex()) {
-            val winter = i in m.winterMoves
-            if (at != (x.season to winter)) {
-                at = x.season to winter
-                item(key = "mh-${x.season}-$winter") {
-                    Heading(MarketTexts.windowHeading(x.season, winter))
-                    m.digest?.takeIf { !winter && it.season == x.season }?.let { d ->
+            heads[i]?.let { h ->
+                val winter = h.winter
+                item(key = h.key) {
+                    Heading(MarketTexts.windowHeading(h.season, winter))
+                    m.digest?.takeIf { !winter && it.season == h.season }?.let { d ->
                         Text(
                             "신인 ${d.rookies}명 · 국내 이적 ${d.domestic}건 · 해외 이적 ${d.abroad}건 · 귀국 ${d.returns}건",
                             style = MaterialTheme.typography.labelSmall, color = cs.secondary,
@@ -272,7 +274,18 @@ private fun Replay(lg: LeagueController, v: LeagueView, page: Page.Market, m: Ma
     }
     val name: (String) -> String = { id -> v.badges[id]?.name ?: id }
     val starts = m.rounds.associate { (round, i) -> i to round }
-    CentreList {
+    // The list follows the newest move as the replay plays (the header row, then each round's heading and its moves):
+    // once it is laid out below the last row in full view, the list scrolls on by as many rows.
+    val list = rememberLazyListState()
+    val newest = shown + (0 until shown).count { it in starts }
+    LaunchedEffect(shown) {
+        if (shown == 0) return@LaunchedEffect
+        withFrameNanos { }
+        val info = list.layoutInfo
+        val full = info.visibleItemsInfo.lastOrNull { it.offset + it.size <= info.viewportEndOffset }?.index ?: return@LaunchedEffect
+        if (newest > full) list.animateScrollToItem(list.firstVisibleItemIndex + (newest - full))
+    }
+    CentreList(list) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(

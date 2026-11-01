@@ -10,6 +10,7 @@ import yacht.app.core.MarketPages
 import yacht.app.core.MarketTab
 import yacht.app.core.MarketView
 import yacht.app.core.MatchCenter
+import yacht.app.core.MoveBlock
 import yacht.app.core.Page
 import yacht.app.core.drawnRatings
 import yacht.engine.OppModel
@@ -156,6 +157,56 @@ class MarketPagesTest {
             val i = m.moves.indexOfFirst { it.season == s && it.ai == d.key && it.from == d.from && it.to == d.to }
             assertEquals(d.flags, m.flags[i], "${d.key}")
         }
+    }
+
+    @Test
+    fun aWinterStaysOneRunOnceItsWsLinesAreGone() {
+        // A winter that let a member go to make room (the release logged right before the transfer it made room for, its
+        // `ws` line naming it): one run of winter moves, and still one once the season's `ws` move lines are dropped
+        // (after 2 seasons, while the move log may keep the season's moves).
+        val s = scene.world.plan!!.number
+        val week = ClubCheckpoint.report(scene.book, s).week
+        fun withRelease(ws: Boolean) = load(
+            ClubStory.decode(
+                StoryWorld.variant(scene.files) {
+                    val lines = clubs!!.lines().toMutableList()
+                    // Before the winter's last transfer, so that it sits between two of them.
+                    val at = lines.indexOfLast { it.startsWith("move $s W ") }
+                    val buyer = lines[at].split(' ')[5]
+                    lines.add(at, "move $s R letgo1 $buyer - 0")
+                    val wsAt = lines.indexOfFirst { it.startsWith("ws ") }
+                    if (ws) lines.add(wsAt, "ws $s letgo1 $buyer ${ClubCheckpoint.NONE} $week 0 0") else lines.removeAll { it.matches(Regex("ws \\d+ .*")) }
+                    clubs = lines.joinToString("\n")
+                },
+            ),
+        )
+        val kept = withRelease(ws = true)
+        val gone = withRelease(ws = false)
+        val release = kept.moves.indexOfFirst { it.ai == "letgo1" }
+        assertTrue(release >= 0 && release in kept.winterMoves, "the release is no winter move: ${kept.winterMoves}")
+        assertTrue(kept.moves.getOrNull(release + 1)?.type == ClubMoveType.WINTER, "the scene's winter made one transfer")
+        assertEquals(kept.moves, gone.moves)
+        assertEquals(kept.winterMoves, gone.winterMoves)
+        // One heading a window either way (a release left out of its winter's run split it in two "겨울" headings with
+        // one key, which the LazyColumn throws on).
+        for (v in listOf(kept, gone)) {
+            val blocks = MarketPages.blocks(v)
+            assertEquals(blocks.size, blocks.map { it.season to it.winter }.toSet().size, "$blocks")
+        }
+    }
+
+    @Test
+    fun everyWindowHeadingHasItsOwnKey() {
+        // A log whose windows do not stay together (a winter's release told apart no more, a league started over) gets
+        // a numbered second heading, never a key twice (a LazyColumn throws on one).
+        val mv = { s: Int, t: ClubMoveType -> yacht.engine.league.ClubMove(s, t, "k$s$t", "c1", "c2") }
+        val moves = listOf(mv(7, ClubMoveType.TRANSFER), mv(7, ClubMoveType.WINTER), mv(7, ClubMoveType.RELEASED), mv(7, ClubMoveType.WINTER), mv(6, ClubMoveType.TRANSFER), mv(7, ClubMoveType.DRAFT))
+        val v = MarketView(7, moves, null, winterMoves = setOf(1, 3))
+        val blocks = MarketPages.blocks(v)
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), blocks.map { it.start })
+        assertEquals(listOf("mh-7-false", "mh-7-true", "mh-7-false-2", "mh-7-true-2", "mh-6-false", "mh-7-false-3"), blocks.map { it.key })
+        assertEquals(listOf(MoveBlock(0, 7, false, "mh-7-false")), MarketPages.blocks(v.copy(moves = moves.take(1))))
+        assertEquals(emptyList(), MarketPages.blocks(v.copy(moves = emptyList(), winterMoves = emptySet())))
     }
 
     @Test
