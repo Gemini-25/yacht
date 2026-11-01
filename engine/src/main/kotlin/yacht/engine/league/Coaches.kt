@@ -685,9 +685,17 @@ object CoachMarket {
     fun release(book: ClubBook, club: String, season: Int): Coach? {
         val w = book.world ?: return null
         val c = end(book, club, season, 'L') ?: return null
-        if (w.coaches.season == season) w.coaches.active[c.id] = c.copy(moves = c.moves + CoachMove('L', c.id, club, null))
-        return c
+        if (w.coaches.season != season) return c
+        return noted(c, season, CoachMove('L', c.id, club, null)).also { w.coaches.active[it.id] = it }
     }
+
+    /**
+     * [c] with [move] among its moves of the off-season after [season] (its [Coach.done], so
+     * [report] finds it): a coach the market has not run with yet (one made after the step) starts
+     * that off-season's moves.
+     */
+    private fun noted(c: Coach, season: Int, move: CoachMove): Coach =
+        if (c.done == season) c.copy(moves = c.moves + move) else c.copy(done = season, moves = listOf(move))
 
     // ---- hiring ------------------------------------------------------------------------------------
 
@@ -856,7 +864,8 @@ object CoachMarket {
      * The coach market of the off-season after [closing] (ENG 1b.10 step 4, 2.3-2.5), once a season:
      * the close's board review ([review] against the club [tables] of the close, the [ClubInput.drawn]
      * ratings and the season's honours) and every coach's season in charge (seasons, club-table titles
-     * and places, members' league and international titles, reputation; the 올해의 감독's award);
+     * and places, members' league and international titles, reputation, whose −8 for a sacking also
+     * reaches a coach sacked at the winter checkpoint; the 올해의 감독's award);
      * retirements (62-72); expiring contracts, renewed when the pressure is below half the threshold;
      * this close's retirees who become coaches and generated coaches until the free pool holds
      * [poolSize]; then every club without a coach hires, by club value (high first), one hire a club:
@@ -889,6 +898,8 @@ object CoachMarket {
         val sacked = review(book, s, seated, winter = false, honours = honours)
         val sackedIds = sacked.mapTo(HashSet()) { it.coach }
         for (m in sacked) moveOn(w, m)
+        // Sacked this season, at the close or at the winter checkpoint (then free, or in charge elsewhere): reputation's −8.
+        fun wasSacked(c: Coach) = c.tenures.any { it.to == s && it.end == 'S' }
         for (c0 in inCharge) {
             val club = c0.club!!
             val c = w.coaches.active.getValue(c0.id)
@@ -906,12 +917,12 @@ object CoachMarket {
             val gap = boards[club]?.gap ?: 0.0
             w.coaches.active[c.id] = c.copy(
                 seasons = c.seasons + 1, clubTitles = c.clubTitles + if (title) 1 else 0, leagueTitles = c.leagueTitles + league, cups = c.cups + cups,
-                tenures = tenures, reputation = reputationAfter(c.reputation, gap, title, league > 0, champions > 0, c.id in sackedIds),
+                tenures = tenures, reputation = reputationAfter(c.reputation, gap, title, league > 0, champions > 0, wasSacked(c)),
             )
         }
         val charged = inCharge.mapTo(HashSet()) { it.id }
         for (c in w.coaches.active.values.toList()) {
-            if (c.id !in charged) w.coaches.active[c.id] = c.copy(reputation = reputationAfter(c.reputation, 0.0, false, false, false, false))
+            if (c.id !in charged) w.coaches.active[c.id] = c.copy(reputation = reputationAfter(c.reputation, 0.0, false, false, false, wasSacked(c)))
         }
         input.coachInput.coachOfYear?.let { id -> w.coaches.active[id]?.let { w.coaches.active[id] = it.copy(awards = it.awards + 1) } }
         // 2. Retirements (not a coach sacked at this close: its news stays with it).
@@ -1221,8 +1232,9 @@ object CoachMarket {
             .maxWithOrNull(compareBy<Coach> { h.score(it, club) }.thenBy { it.reputation }.thenComparing({ it.id }, CoachBook.ID_ORDER.reversed()))
             ?: cheapest(free)
             ?: generate(book, club, season, input, seed, taken(w, input))
-        val move = if (w.coaches.season == season - 1) CoachMove('H', c.id, club, lastClub(c)) else null
-        return take(book, c, club, season, season - 1 + h.contract(club), h.wageOf(c, club), move)
+        // After the off-season's coach market: the hire is one of its moves (a generated coach's too).
+        val hiring = if (w.coaches.season == season - 1) noted(c, season - 1, CoachMove('H', c.id, club, lastClub(c))) else c
+        return take(book, hiring, club, season, season - 1 + h.contract(club), h.wageOf(c, club), null)
     }
 
     // ---- records (2.5) ------------------------------------------------------------------------------

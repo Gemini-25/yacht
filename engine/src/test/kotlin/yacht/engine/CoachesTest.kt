@@ -12,6 +12,7 @@ import yacht.engine.league.CoachMaker
 import yacht.engine.league.CoachMarket
 import yacht.engine.league.CoachMove
 import yacht.engine.league.CoachRecordKind
+import yacht.engine.league.Evolution
 import yacht.engine.league.Gender
 import yacht.engine.league.Honour
 import yacht.engine.league.LeagueConfig
@@ -582,6 +583,109 @@ class CoachesTest {
         val (small, _) = longRun(3, 12)
         println("COACH_BYTES 1024 members: k=${bytes(book, "k")} kr=${bytes(book, "kr")} coaches=${book.coaches.size} retired=${book.retiredCoaches.size}; " +
             "192 members: k=${bytes(small, "k")} kr=${bytes(small, "kr")} coaches=${small.coaches.size} retired=${small.retiredCoaches.size}; sackings=$sackings")
+    }
+
+    @Test
+    fun theRostersRetireesComeWithTheirPeakShareAndStyle() {
+        // Seasons of evolution until a close sends off legends (a title for a quarter of the keys) and others.
+        val players = PlayerBook().apply { ensureGenerated(400) }
+        var season = 0
+        for (s in 1..40) {
+            val r = players.alive.associate { p -> p.key to (p.identity?.let { 1100.0 + 6.0 * it.abilities.overall } ?: Double.NaN) }
+            Evolution.run(players, s, { r[it] ?: Double.NaN }, { k -> if (Math.floorMod(k.hashCode(), 4) == 0) 1 else 0 }, 5L, 400)
+            val legends = players.legends.count { it.record.retired == s }
+            if (legends >= 2 && players.retired.count { it.retired == s } > legends) {
+                season = s
+                break
+            }
+        }
+        assertTrue(season > 0)
+        val gone = (players.retired + players.legends.map { it.record }).filter { it.retired == season }.distinctBy { it.key }
+        val majors = { k: String -> Math.floorMod(k.hashCode(), 3) }
+        val rs = CoachInput.retirees(players, season, majors, captain = { 3 })
+        assertEquals(gone.map { it.key }.sorted(), rs.map { it.key })
+        // The peak's share: of the alive players' best ratings and the retirees', those above its own.
+        val peaks = (players.alive.map { it.peak } + gone.map { it.bestRating }).filter { it.isFinite() }
+        for (x in rs) {
+            val rec = gone.single { it.key == x.key }
+            assertEquals(listOf(rec.name, rec.nation, rec.retiredAge, season, rec.seasons, majors(x.key), 3), listOf(x.name, x.nation, x.age, x.retired, x.seasons, x.majors, x.captain))
+            assertEquals(peaks.count { it > rec.bestRating }.toDouble() / peaks.size, x.peak, 1e-12, x.key)
+            // A legend's genes give its style family (the coach's philosophy); the others' are gone.
+            assertEquals(players.legend(x.key)?.spec?.play?.let { StyleFamily.of(it) }, x.family, x.key)
+        }
+        assertTrue(rs.any { it.family != null } && rs.any { it.family == null })
+        assertTrue(rs.minOf { it.peak } < 0.5)
+        // The migration's ex-player coaches: legends retired in the last 15 seasons, 60 or younger now.
+        val later = season + 10
+        val ls = CoachInput.legends(players, later, majors)
+        val want = players.legends.filter { it.record.retired >= later - 15 && it.record.retiredAge > 0 && it.record.retiredAge + later - it.record.retired <= 60 }
+        assertEquals(want.map { it.key }.sorted(), ls.map { it.key })
+        assertTrue(ls.isNotEmpty() && ls.all { it.family != null })
+    }
+
+    @Test
+    fun aCoachSackedInTheWinterLosesReputationAtTheClose() {
+        val lg = market()
+        val w = lg.book.world!!
+        w.economy.owners["c04"] = Owner(OwnerType.TYCOON, "회장", 5, 1, 0, 0)
+        w.state("c04").pressure = 5.0
+        val plan = lg.plan(1)
+        val table = lg.table(*lg.ids.toTypedArray())
+        assertEquals(listOf("k4"), CoachMarket.review(lg.book, plan, table, lg::rating, winter = true).map { it.coach })
+        assertNotNull(CoachMarket.hire(lg.book, "c04", 1, lg.input(), plan.seed))
+        w.checkpoint = 1
+        CoachMarket.offseason(lg.book, plan, lg.input(), table)
+        // Free at the close: 0.95 × 40 + 2, and − 8 for the sacking.
+        assertEquals(32, lg.book.coach("k4")!!.reputation)
+        assertEquals(CoachMarket.reputationAfter(40, 0.0, false, false, false, true), lg.book.coach("k4")!!.reputation)
+    }
+
+    @Test
+    fun theClosesSackingsAreToldForTheBiggestClubsAndTheRestInTheDigest() {
+        val lg = Coaching.league(6)
+        val w = lg.book.world!!
+        for ((i, id) in lg.ids.withIndex()) {
+            w.economy.owners[id] = Owner(OwnerType.TYCOON, "회장", 5, 1, 0, 0)
+            w.state(id).fans = 50_000 - 1_000 * i
+            Coaching.coach(lg.book, "k${i + 1}", id, reputation = 40, from = 0, until = 9)
+        }
+        // The table upside down: c06 the champion, c01 last of six though expected first (target 1: "한참" below it).
+        for (id in listOf("c01", "c02", "c03", "c04")) w.state(id).pressure = 5.0
+        val report = CoachMarket.offseason(lg.book, lg.plan(1), lg.input(), lg.table("c06", "c05", "c04", "c03", "c02", "c01"))
+        assertEquals(listOf("c01", "c02", "c03", "c04"), report.of('S').map { it.club })
+        assertEquals(listOf("c01", "c02", "c03", "c04"), report.of('H').mapNotNull { it.club }.sorted())
+        val events = report.events(lg.book)
+        assertEquals(listOf("coach_sacked", "coach_sacked", "coach_hired", "coach_hired", "coach_digest"), events.map { it.kind })
+        assertEquals(listOf("c01", "k1"), events[0].keys)
+        assertEquals(listOf("6", "1", "1"), events[0].args)
+        assertEquals(listOf("c02", "k2"), events[1].keys)
+        assertEquals(listOf("5", "1", "1"), events[1].args)
+        assertEquals(listOf("c01", "c02"), events.filter { it.kind == "coach_hired" }.map { it.keys[0] })
+        val digest = events.last()
+        assertEquals(listOf("c01", "c02", "c03", "c04"), digest.keys)
+        assertEquals(listOf("4", "4", "0", "4"), digest.args)
+        assertTrue(events.all { it.season == 1 && it.comp == yacht.engine.league.Comp.CLUB })
+        // The champion's and the one above its target keep theirs.
+        assertEquals(listOf("k5", "k6"), listOf(lg.book.coachOf("c05")!!.id, lg.book.coachOf("c06")!!.id))
+    }
+
+    @Test
+    fun aClubFoundedAfterTheMarketHiresAsOneOfItsMoves() {
+        val lg = market()
+        CoachMarket.offseason(lg.book, lg.plan(1), lg.input(), lg.table(*lg.ids.toTypedArray()))
+        val w = lg.book.world!!
+        val gone = assertNotNull(CoachMarket.release(lg.book, "c06", 1))
+        assertEquals(gone, lg.book.coach(gone.id))
+        assertTrue(CoachMarket.report(lg.book, 1).moves.contains(CoachMove('L', gone.id, "c06", null)))
+        // An empty pool: the new club's coach is generated, and its hire is still one of the off-season's moves.
+        for (c in lg.book.freeCoaches) w.coaches.active.remove(c.id)
+        val hired = assertNotNull(CoachMarket.newClub(lg.book, "c06", 2, lg.input()))
+        assertEquals(1, hired.done)
+        assertEquals(listOf(CoachMove('H', hired.id, "c06", null)), hired.moves)
+        val report = CoachMarket.report(lg.book, 1)
+        assertTrue(report.moves.contains(hired.moves.single()))
+        assertEquals(report, CoachMarket.report(ClubBook.decode(lg.book.encode()), 1))
+        assertEquals(1, lg.book.world!!.coaches.season)
     }
 
     @Test
