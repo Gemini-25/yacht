@@ -4,8 +4,9 @@ package yacht.engine.league
  * A leaderboard's statistic (리더보드, design UX 4.1): what the board ranks, its name and the
  * one-line rule its page opens with. [career]: whether it has a career board (완승왕 is per
  * season only); [lowFirst]: smaller is better (꾸준함). 행운아 and 불운 are [LUCK] read both ways.
+ * [club]: a board of the club world, made by [Leaders.club] (몸값, 유스 출신), not from the stats.
  */
-enum class LeaderStat(val label: String, val rule: String, val career: Boolean = true, val lowFirst: Boolean = false) {
+enum class LeaderStat(val label: String, val rule: String, val career: Boolean = true, val lowFirst: Boolean = false, val club: Boolean = false) {
     SCORER("득점왕", "리그 경기 평균 점수예요. 가장 많이 뛴 선수의 절반 이상 뛰어야 올라가요."),
     YACHTS("요트왕", "리그 경기에서 만든 요트 수예요."),
     BONUS("보너스왕", "공식 경기에서 윗칸 보너스를 받은 판의 비율이에요."),
@@ -17,13 +18,16 @@ enum class LeaderStat(val label: String, val rule: String, val career: Boolean =
     GIANT("거인 사냥꾼", "레이팅이 100점 이상 높은 상대를 이긴 경기 수예요."),
     STEADY("꾸준함", "판 점수의 표준편차예요. 작을수록 꾸준해요.", lowFirst = true),
     OVER300("300점 클럽", "300점 이상을 낸 판 수예요."),
+    VALUE("몸값", "선수의 시장 가치예요. 레이팅과 나이, 성장 여지로 매겨요.", career = false, club = true),
+    GRADUATE("유스 출신", "클럽 유스 아카데미 출신 선수의 레이팅이에요.", career = false, club = true),
 }
 
 /**
  * One line of a leaderboard: [key]'s [value] over [games] (the board's sample: league matches,
  * official games or matches, decider and close games for [LeaderStat.CLUTCH]) and an [extra]
  * where the board shows one (요트왕's Yachts per game played, 요트율; 보너스왕's bonus games;
- * 행운아's 운 보정 승점; 클러치's wins; 역전의 명수's share of its wins; NaN without one).
+ * 행운아's 운 보정 승점; 클러치's wins; 역전의 명수's share of its wins; 몸값's rating; 유스 출신's
+ * graduation season; NaN without one).
  */
 data class LeaderEntry(val key: String, val value: Double, val games: Int, val extra: Double = Double.NaN)
 
@@ -94,6 +98,8 @@ object Leaders {
                 val ok = if (s != null) s.played > 0 && s.played >= Awards.MVP_SHARE * league.fixturesOf(k) else st.matches >= OUTSIDE_RATING_MATCHES
                 if (ok) out += LeaderEntry(k, st.avgRating, st.matches)
             }
+            // The club world's boards come from the club book ([club]).
+            LeaderStat.VALUE, LeaderStat.GRADUATE -> {}
             else -> for (k in ks) entry(stat, k, stats(k) ?: continue, career = false)?.let { out += it }
         }
         return sorted(stat, out, ascending)
@@ -114,6 +120,31 @@ object Leaders {
             }
         }
         return sorted(stat, out, ascending)
+    }
+
+    /**
+     * A board of the club world over [keys] (design ENG 1b.3, 1b.9): [LeaderStat.VALUE] (몸값) every
+     * player by its market [value] (money units; [ClubBook.valuer] at the book's anchor), its rating
+     * as the extra; [LeaderStat.GRADUATE] (유스 출신) the academy graduates playing for a club of
+     * [book] ([Terms.academy]) by [rating], the season they came out as the extra. Best first, level
+     * lines by key; a player without a rating is left out. Empty for another stat, and for
+     * [LeaderStat.GRADUATE] without a club world.
+     */
+    fun club(stat: LeaderStat, keys: Collection<String>, book: ClubBook, rating: (String) -> Double, value: (String) -> Int): List<LeaderEntry> {
+        val out = ArrayList<LeaderEntry>()
+        when (stat) {
+            LeaderStat.VALUE -> for (k in keys.distinct()) {
+                val r = rating(k)
+                if (!r.isNaN()) out += LeaderEntry(k, value(k).toDouble(), 0, r)
+            }
+            LeaderStat.GRADUATE -> for (k in keys.distinct()) {
+                val t = book.terms(k)?.takeIf { it.academy != null } ?: continue
+                val r = rating(k)
+                if (!r.isNaN()) out += LeaderEntry(k, r, 0, t.gradSeason.toDouble())
+            }
+            else -> return emptyList()
+        }
+        return sorted(stat, out, ascending = false)
     }
 
     /** The boards both scopes read from [AiStats] alone. */
