@@ -686,4 +686,91 @@ class MarketTest {
         val after = m.run(plan = plan)
         assertTrue(after.deals.none { it.type == MarketReport.WINTER })
     }
+
+    @Test
+    fun randomWindowsKeepTheirRules() {
+        val all = listOf("GB", "ES", "DE", "KR", "JP")
+        for (seed in 1L..40L) {
+            val rnd = java.util.Random(seed)
+            val nations = all.take(1 + rnd.nextInt(all.size))
+            val m = Mk.market(clubs = 2 + rnd.nextInt(9), size = 4 + rnd.nextInt(6), nations = nations, rating = { _, _ -> 1300.0 + rnd.nextInt(500) })
+            val w = m.book.world!!
+            val keys = m.book.clubs.flatMap { it.squad }
+            val types = OwnerType.entries
+            for (c in m.book.clubs) {
+                w.clubs.getValue(c.id).balance = rnd.nextInt(1200) - 300
+                if (w.clubs.getValue(c.id).balance < 0 && rnd.nextInt(3) == 0) w.clubs.getValue(c.id).trouble = 1
+                w.economy.owners[c.id] = Owner(types[rnd.nextInt(types.size)], "주인", 1 + rnd.nextInt(5), 3, 1, 0)
+                Eco.closed(m.book, c.id, s, 100 + rnd.nextInt(600), c.squad.size * 10)
+                if (rnd.nextInt(3) == 0) Coaching.coach(m.book, "k${c.id.drop(1).toInt()}", c.id, philosophy = Philosophy.entries[rnd.nextInt(Philosophy.entries.size)])
+            }
+            for (k in keys) {
+                m.ages[k] = 18 + rnd.nextInt(18)
+                m.setTerms(k) { it.copy(until = s - 1 + rnd.nextInt(5), wage = 3 + rnd.nextInt(30), clause = if (rnd.nextInt(5) == 0) 50 + rnd.nextInt(400) else 0) }
+                // Some play abroad: their nation is another one.
+                m.nationOf[k] = if (nations.size > 1 && rnd.nextInt(8) == 0) nations[rnd.nextInt(nations.size)] else m.book.nationOf(m.book.clubOf(k)!!)!!
+            }
+            // Loans of the season before: a young member of one club plays for another of its nation.
+            for (n in nations) {
+                val cs = m.nations.getValue(n)
+                val k = m.book.members(cs.first()).lastOrNull() ?: continue
+                m.ages[k] = 19
+                m.book.place(k, cs.last())
+                m.setTerms(k) { it.copy(loanFrom = cs.first()) }
+            }
+            // Stories of the season: talks and rumours, at home and abroad.
+            var id = 1
+            for (k in keys.shuffled(rnd).take(6)) {
+                val seller = m.book.clubOf(k) ?: continue
+                val buyer = m.book.clubs.map { it.id }.filter { it != seller }.shuffled(rnd).firstOrNull() ?: continue
+                val st = MarketStory(id++, s, if (rnd.nextBoolean()) StoryStage.TALKS else StoryStage.RUMOUR, k, buyer, seller, 50, 28, 30, '-', false, null)
+                w.market.stories += st
+            }
+            val input = m.input(config = LeagueConfig(ffp = rnd.nextInt(3)))
+            val plan = m.plan()
+            val copy = ClubBook.decode(m.book.encode())
+            val before = m.book.clubs.associate { it.id to it.squad.toSet() }
+            val balances = m.book.clubs.associate { it.id to w.clubs.getValue(it.id).balance }
+            val offset = m.book.history.count { it.season == s }
+            val r = m.run(input, plan)
+            val why = "seed $seed: ${r.deals}"
+            // Every deal is one logged move, in order.
+            val logged = m.book.history.filter { it.season == s }.drop(offset)
+            assertEquals(r.deals.size, logged.size, why)
+            assertEquals(r.deals.map { Triple(it.key, it.from, it.to) }, logged.map { Triple(it.ai, it.from, it.to) }, why)
+            // Rebuilt after a reload, asked again: the same; the same book gives the same window.
+            assertEquals(r, Market.report(ClubBook.decode(m.book.encode()), s), why)
+            assertEquals(r, m.run(input, plan), why)
+            Market.offseason(copy, plan, input)
+            assertEquals(m.book.encode(), copy.encode(), why)
+            // Each fee leaves the buyer and reaches the seller.
+            for (c in m.book.clubs) {
+                val fees = r.deals.filter { it.from == c.id }.sumOf { it.fee } - r.deals.filter { it.to == c.id }.sumOf { it.fee }
+                assertEquals(balances.getValue(c.id) + fees, w.clubs.getValue(c.id).balance, "${c.id} $why")
+            }
+            // At most 2 buys a club, ⌊C/2⌋ + ⌈C/4⌉ domestic deals a nation.
+            val buying = setOf(MarketPhase.ABROAD, MarketPhase.TALKS, MarketPhase.PARITY, MarketPhase.FORCED, MarketPhase.MONEY, MarketPhase.DEADLINE, MarketPhase.BACK)
+            val buys = r.deals.filter { it.phase in buying && it.to != null && it.type !in "${MarketReport.RELEASE}${MarketReport.LOAN_BACK}" && it.type != 'H' }
+            for ((club, ds) in buys.groupBy { it.to }) assertTrue(ds.size <= Market.MAX_BUYS, "$club $why")
+            for (n in nations) {
+                val home = buys.filter { m.book.nationOf(it.to!!) == n && m.book.nationOf(it.from ?: "") == n && it.phase != MarketPhase.ABROAD }
+                assertTrue(home.size <= Market.dealCap(m.nations.getValue(n).size), "$n $why")
+            }
+            // Every member has terms, a newcomer a contract from next season; no club grew past its ceiling.
+            for (c in m.book.clubs) {
+                val members = m.book.members(c.id).size
+                val all = m.nations.getValue(c.nation).sumOf { before.getValue(it).size }
+                assertTrue(members <= maxOf(before.getValue(c.id).size, ClubBook.maxSize(all, m.nations.getValue(c.nation).size)), "${c.id} $why")
+                for (k in m.book.members(c.id)) {
+                    val t = w.terms[k]
+                    assertNotNull(t, "$k $why")
+                    val back = r.deals.any { it.key == k && it.type == MarketReport.LOAN_BACK }
+                    if (k !in before.getValue(c.id) && t.loanFrom == null && !back) assertTrue(t.since == s + 1 && t.until > s, "$k $t $why")
+                }
+            }
+            // No talks are left open; a story that came true has its player at the buyer.
+            assertTrue(m.book.stories(s).none { it.stage == StoryStage.TALKS || it.stage == StoryStage.RUMOUR }, why)
+            for (st in m.book.stories(s).filter { it.stage == StoryStage.DONE }) assertEquals(st.buyer, m.book.clubOf(st.key), "$st $why")
+        }
+    }
 }
