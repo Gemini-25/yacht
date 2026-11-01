@@ -116,6 +116,12 @@ enum class ClubMoveType(val code: Char, val label: String, val kind: ClubMoveKin
 
     /** A rookie out of its club's academy (유스 졸업): its hometown club or the academy lottery. */
     GRADUATE('G', "유스 졸업", ClubMoveKind.DRAFT),
+
+    /** A young member lent to another club of its nation for a season (임대); no fee. */
+    LOAN('L', "임대", ClubMoveKind.TRANSFER),
+
+    /** A loan's end: the member back at the club that lent it (임대 복귀); no fee. */
+    LOAN_BACK('B', "임대 복귀", ClubMoveKind.TRANSFER),
     ;
 
     companion object {

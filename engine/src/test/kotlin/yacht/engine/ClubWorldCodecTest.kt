@@ -96,7 +96,7 @@ class ClubWorldCodecTest {
         append("cs 3 KR:c01,c02:812;JP:c03:401\n")
         append("od 3 4 2 1 0 g4 c01 c02 33 g2 g4 j1:JP:KR - 0\n")
         append("move 3 T g4 c01 c02 33\nmove 3 D g2 - c01 1\nmove 3 F j9 c03 - 40\nmove 3 H j1 - c03 0\nmove 3 Y g3 - c01 0\n")
-        append("move 3 L g5 c01 c02 0\n")
+        append("move 3 Q g5 c01 c02 0\n")
     }
 
     /** [oldText]'s book with every club-world part filled. */
@@ -318,7 +318,7 @@ class ClubWorldCodecTest {
     fun aBookWithoutTheMarkerHasNoClubWorldAndWritesWhatItRead() {
         val book = ClubBook.decode(oldText)
         assertNull(book.world)
-        assertEquals(oldText.lines().filter { !it.startsWith("move 3 L ") }.joinToString("\n"), book.encode())
+        assertEquals(oldText.lines().filter { !it.startsWith("move 3 Q ") }.joinToString("\n"), book.encode())
         assertNull(book.life("c01"))
         assertNull(book.terms("g1"))
         assertTrue(book.rivals("c01").isEmpty() && book.coaches.isEmpty() && book.freeCoaches.isEmpty() && book.retiredCoaches.isEmpty())

@@ -632,17 +632,17 @@ class ClubsTest {
         assertEquals(ranking.toSet() - gone, national.clubs.flatMap { it.squad }.toSet())
         assertNotEquals(version, national.version)
         assertEquals(0, national.season)
-        // The moves of national leagues (and of the club world: 자유계약 이적, 바이아웃, 강제 매각, 겨울 이적, 유스 졸업) belong to the card's four kinds.
+        // The moves of national leagues (and of the club world: 자유계약 이적, 바이아웃, 강제 매각, 겨울 이적, 유스 졸업, 임대, 임대 복귀) belong to the card's four kinds.
         assertEquals(
             listOf(ClubMoveKind.TRANSFER, ClubMoveKind.DRAFT, ClubMoveKind.RELEASED, ClubMoveKind.RETIRED, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.DRAFT) +
-                listOf(ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.DRAFT),
+                listOf(ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER, ClubMoveKind.DRAFT, ClubMoveKind.TRANSFER, ClubMoveKind.TRANSFER),
             ClubMoveType.entries.map { it.kind },
         )
-        assertEquals("TDRXFHYAKSWG", ClubMoveType.entries.joinToString("") { it.code.toString() })
+        assertEquals("TDRXFHYAKSWGLB", ClubMoveType.entries.joinToString("") { it.code.toString() })
         // The market's own codes are the move types' (Market.kt logs them as they are).
         assertEquals(
-            listOf(ClubMoveType.FREE_AGENT, ClubMoveType.RELEASE_CLAUSE, ClubMoveType.FORCED_SALE, ClubMoveType.WINTER, ClubMoveType.RELEASED),
-            listOf(MarketReport.FREE, MarketReport.CLAUSE, MarketReport.FORCED, MarketReport.WINTER, MarketReport.RELEASE).map { ClubMoveType.of(it) },
+            listOf(ClubMoveType.FREE_AGENT, ClubMoveType.RELEASE_CLAUSE, ClubMoveType.FORCED_SALE, ClubMoveType.WINTER, ClubMoveType.RELEASED, ClubMoveType.LOAN, ClubMoveType.LOAN_BACK),
+            listOf(MarketReport.FREE, MarketReport.CLAUSE, MarketReport.FORCED, MarketReport.WINTER, MarketReport.RELEASE, MarketReport.LOAN, MarketReport.LOAN_BACK).map { ClubMoveType.of(it) },
         )
         assertEquals(ClubMoveKind.TRANSFER, ClubMove(2, ClubMoveType.ABROAD, "a", "c01", "c02", 50).kind)
     }

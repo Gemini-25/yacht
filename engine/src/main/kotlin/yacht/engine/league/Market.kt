@@ -80,9 +80,8 @@ enum class MarketPhase(val code: Char, val label: String) {
 
 /**
  * One move of a transfer window: member [key] from club [from] (a free agent's: the club it left) to
- * [to] (null: none, to the draft) for [fee] in [phase]. [type] is a [ClubMoveType] code, also the
- * market's own codes before Clubs.kt has them (A 자유계약 이적, K 바이아웃, S 강제 매각, L 임대, B 임대
- * 복귀; the move log writes those as [ClubMoveType.TRANSFER] until then). [flags] are the `tx` flags
+ * [to] (null: none, to the draft) for [fee] in [phase]. [type] is a [ClubMoveType] code (A 자유계약
+ * 이적, K 바이아웃, S 강제 매각, L 임대, B 임대 복귀, W 겨울 이적, R a release). [flags] are the `tx` flags
  * ([NotableMove.flags]) and P when the member was its old club's captain. [wage] is the new
  * contract's wage a season (0 for a release, a loan and a loan's return).
  */
@@ -950,7 +949,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
                 continue
             }
             val back = ClubHistory.loanBack(book, k, k in stars) ?: continue
-            book.logMove(ClubMove(s, ClubMoveType.TRANSFER, k, c.id, back, 0))
+            book.logMove(ClubMove(s, ClubMoveType.LOAN_BACK, k, c.id, back, 0))
             deals += MarketDeal(MarketPhase.BACK, MarketReport.LOAN_BACK, k, c.id, back, 0, "", 0)
             moved += k
         }
@@ -1430,7 +1429,7 @@ internal class MarketWindow(val book: ClubBook, val closing: SeasonPlan, val inp
                 .sortedWith(compareByDescending<Club> { placeOf(it.id) }.thenComparing({ it.id }, ClubBook.ID_ORDER))
                 .firstOrNull { Market.allowed(book, k, it.id, rating) } ?: continue
             if (!ClubHistory.loanOut(book, k, to.id, k in stars)) continue
-            book.logMove(ClubMove(s, ClubMoveType.TRANSFER, k, lender.id, to.id, 0))
+            book.logMove(ClubMove(s, ClubMoveType.LOAN, k, lender.id, to.id, 0))
             deals += MarketDeal(MarketPhase.LOANS, MarketReport.LOAN, k, lender.id, to.id, 0, "", 0)
             moved += k
             took += to.id
