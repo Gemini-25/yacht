@@ -86,7 +86,9 @@ data class AccountItem(val label: String, val amount: Int)
  * [trouble] 0 none, 1 적자, 2 재정 위기, 3 법정관리; [last] the last accounts with their three
  * biggest items a side ([incomeTop], [expenseTop]), [years] the kept seasons (≤ 5). Appended by P8:
  * the members' value together ([squadValue]) and their average age (0: unknown), and whether the
- * board's next checkpoint is the winter's ([winterNext]; else the season's end).
+ * board's next checkpoint is the winter's ([winterNext]; else the season's end). Appended by P16: the
+ * club's open stories in all ([openStories]; [stories] holds the first 3; 0 until its loader counts
+ * them, so read the larger of the two).
  */
 data class ClubLifeView(
     val nickname: String, val colours: String, val foundedYear: Int,
@@ -99,6 +101,7 @@ data class ClubLifeView(
     val rivals: List<RivalView>, val nextRivalMatch: FollowMatch?, val stories: List<StoryView>,
     val graduates: Int,
     val squadValue: Int = 0, val averageAge: Double = 0.0, val winterNext: Boolean = false,
+    val openStories: Int = 0,
 )
 
 /** A legend of a club's 명예의 전당 (≤ 5): its retired [number] when it has one, seasons and titles at the club, a one-club player. */
@@ -195,10 +198,23 @@ data class CoachMarketView(val hotSeat: List<HotSeatLine>, val moves: List<Coach
 data class FeeRecordsView(val world: FeeLine?, val progression: List<FeeLine>, val top: List<FeeLine>, val leagues: List<Pair<String, FeeLine>>, val lastSummer: List<FeeLine>)
 
 /**
+ * One move of ☀ 이적시장 다시 보기 (UX 6.3, appended by P16): the [move], its [flags] (`tx`'s W L C V K
+ * D F, and P when the member was its old club's captain) and the name of the window's round it
+ * was made in ("1라운드", "마감일", …).
+ */
+data class WindowMove(val move: ClubMove, val flags: String, val round: String)
+
+/**
  * 이적 센터 ([MarketPages.view], UX 6): the national clubs' kept moves (newest first) and the last
  * window's numbers, as 이적·드래프트 shows them; then the week it was read at, the open stories
  * ([live]) and those that ended in the last window ([ended]), the indexes of [moves] made in a
- * winter window, ☀ 다시 보기's rounds (name, index of its first move), the fee records and the coaches.
+ * winter window, ☀ 다시 보기's rounds (name, index of its first move in [window]), the fee records
+ * and the coaches. Appended by P16: the flags of [moves] by index ([flags], moves with flags only),
+ * the newest off-season window move by move ([window], the replay's, after season [windowSeason]),
+ * the week the rumours start ([rumoursFrom]: ⌈0.6 R⌉, after the winter checkpoint at the earliest)
+ * and the winter checkpoint's week ([winterWeek]). Without a club world (a legacy season, a save
+ * not yet migrated, `clubWorld` off) only the first three are filled and the page is today's
+ * 이적·드래프트 ([centre] false).
  */
 data class MarketView(
     val season: Int, val moves: List<ClubMove>, val digest: ClubDigest?,
@@ -206,7 +222,13 @@ data class MarketView(
     val winterMoves: Set<Int> = emptySet(),
     val rounds: List<Pair<String, Int>> = emptyList(),
     val records: FeeRecordsView? = null, val coaches: CoachMarketView? = null,
-)
+    val flags: Map<Int, String> = emptyMap(),
+    val window: List<WindowMove> = emptyList(), val windowSeason: Int = 0,
+    val rumoursFrom: Int = 0, val winterWeek: Int = 0,
+) {
+    /** Whether the page is the 이적 센터 (a club world shown): its records and coaches are read then. */
+    val centre: Boolean get() = records != null
+}
 
 /** A match report's rival line (`MatchReport.rival`, UX 6.6): the rivalry's name and [a]'s all-time record against [b] before the match. */
 data class RivalLine(val name: String, val a: ClubBadge, val b: ClubBadge, val w: Int, val d: Int, val l: Int)

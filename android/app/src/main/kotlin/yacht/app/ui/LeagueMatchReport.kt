@@ -39,6 +39,7 @@ import yacht.app.core.Accuracy
 import yacht.app.core.AppController
 import yacht.app.core.BoardReport
 import yacht.app.core.ClockView
+import yacht.app.core.ClubTab
 import yacht.app.core.GameReport
 import yacht.app.core.LeagueView
 import yacht.app.core.MatchReport
@@ -79,6 +80,7 @@ internal fun MatchReportPage(c: AppController, v: LeagueView, page: Page.Match) 
         onWatch = { game -> watchReport(c, report, page.board, game) },
         onPlayer = { k -> if (!report.team || report.boards.any { it.a == k || it.b == k }) lg.nav.open(Page.Player(k)) },
         onNews = { lg.nav.open(Page.News) },
+        onRival = { id -> lg.nav.open(Page.Club(id, ClubTab.HISTORY)) },
     )
 }
 
@@ -111,10 +113,11 @@ internal fun MatchReportBody(
     onWatch: (Int) -> Unit = {},
     onPlayer: (String) -> Unit = {},
     onNews: () -> Unit = {},
+    onRival: (String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Header(r, clock, onPlayer)
+        Header(r, clock, onPlayer, onRival)
         ReplayLine(r, onWatch)
         val bd = r.boards.getOrNull(board) ?: r.boards.firstOrNull()
         if (r.boards.size > 1) {
@@ -146,9 +149,13 @@ internal fun MatchReportBody(
     }
 }
 
-/** "{icon} {competition} {round} · {week}", both sides (flag, name, rating, place), the result large, the state. */
+/**
+ * "{icon} {competition} {round} · {week}", both sides (flag, name, rating, place), the result large, the
+ * state; under the score a rival match's line (UX 6.6: "⚔ {name} · 통산 {a} {w}승 {d}무 {l}패", a tap
+ * opens club a's 역사 by [onRival]).
+ */
 @Composable
-private fun Header(r: MatchReport, clock: ClockView?, onPlayer: (String) -> Unit) {
+private fun Header(r: MatchReport, clock: ClockView?, onPlayer: (String) -> Unit, onRival: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cs.surface)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -169,6 +176,13 @@ private fun Header(r: MatchReport, clock: ClockView?, onPlayer: (String) -> Unit
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
                 Side(r.nameB, r.ratingB, r.placeB, r.deltaB, r.winner < 0, TextAlign.End, Modifier.weight(1f).clickable(enabled = !r.team) { onPlayer(r.sideB) })
+            }
+            r.rival?.let { rv ->
+                Text(
+                    MarketTexts.rivalLine(rv.name, rv.a.name, rv.w, rv.d, rv.l), style = MaterialTheme.typography.labelMedium, color = cs.secondary,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { onRival(rv.a.id) }.padding(vertical = 2.dp),
+                )
             }
             if (r.week > 0 && clock != null) {
                 val wk = weekLabel(r.week, r.season, clock, r.comp)
