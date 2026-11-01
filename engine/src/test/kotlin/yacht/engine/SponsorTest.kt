@@ -40,7 +40,7 @@ class SponsorTest {
         "노바티스", "로슈", "화이자", "모더나", "바이엘", "바스프", "에어버스", "보잉", "롤스로이스", "페라리", "람보르기니", "포르쉐", "마세라티",
         "벤틀리", "재규어", "랜드로버", "티모바일", "도이치", "에어프랑스", "싱가포르항공", "캐세이", "콴타스", "에어캐나다", "터키항공",
         "아에로플로트", "라탐", "아비앙카", "에어아시아", "라이언에어", "이지젯", "구찌", "프라다", "루이비통", "샤넬", "에르메스", "디올",
-        "버버리", "아르마니", "베르사체", "로레알", "랑콤", "시세이도", "콜게이트", "킴벌리",
+        "버버리", "아르마니", "베르사체", "로레알", "랑콤", "시세이도", "콜게이트", "킴벌리", "미레나",
     )
 
     /** Every name a club world can coin: both forms, the 지역 기업 and naming companies (the same forms) and the funds. */
@@ -180,6 +180,29 @@ class SponsorTest {
         assertTrue(r.left.isEmpty())
         // Clubs without a sponsor sign one at 0.85 × the formula (club-table titles of the last 5 seasons count).
         assertEquals(setOf("c02", "c03"), r.signed.map { it.club }.toSet())
+    }
+
+    @Test
+    fun aSponsorThatWalksOutIsReplacedByAnotherCompany() {
+        // Every Korean name but the leaving sponsor's is taken: the replacement comes from the other forms, never the same company.
+        val old = Sponsor("솔채통신", 1, 40, 1, 3, false)
+        var walked = 0
+        for (seed in 1L..60L) {
+            val book = Eco.world(Eco.book(listOf(Eco.Spec("c01", "KR", listOf("a", "b")))))
+            val e = book.world!!.economy
+            e.sponsors["c01"] = old
+            for ((i, f) in Sponsors.forms(true).filter { it.first != old.name }.withIndex()) e.sponsors["x$i"] = Sponsor(f.first, f.second, 10, 1, 9, false)
+            Eco.closed(book, "c01", 3, 100)
+            e.years["c01"] = (3 downTo 1).map { ClubYear(it, 0, 100, 20_000, 1) }
+            val plan = Eco.plan(3, listOf("KR" to listOf("a", "b")), seed)
+            val r = ClubEconomy.life(book, plan, Eco.input(book), mapOf("KR" to Eco.table("KR", listOf("c01"))))
+            if (r.left.none { it.club == "c01" }) continue
+            walked++
+            val now = book.life("c01")!!.sponsor!!
+            assertTrue(now.name != old.name, "seed $seed: ${now.name}")
+            assertTrue(' ' in now.name, "the first free name of the other forms")
+        }
+        assertTrue(walked > 0)
     }
 
     @Test

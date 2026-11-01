@@ -74,6 +74,11 @@ class TroubleTest {
             assertEquals(-20, st.balance)
             assertEquals(-20, book.life("c01")!!.last!!.balance)
             assertEquals(130, book.life("c01")!!.last!!.owner)
+            // The write-off is booked as owner money but is no income: the wage caps, FFP and the health still read 10억.
+            assertEquals(100, ClubEconomy.income(book, "c01"))
+            assertEquals(85, ClubEconomy.wageRoom(book, "c01"))
+            assertEquals('D', ClubEconomy.health(book, "c01"))
+            assertEquals(100, ClubEconomy.report(book, 3).richest!!.second)
             assertEquals(listOf(0, 0, 10), listOf(st.admin, st.trouble, st.deduction))
             assertTrue(o.owner.type == OwnerType.LOCAL || o.owner.type == OwnerType.TYCOON)
             assertEquals(4, o.owner.since)

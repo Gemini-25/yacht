@@ -107,6 +107,12 @@ class FansStadiumTest {
         val ev = r.events({ 0 }, { w.clubs.getValue(it).mood }, { if (it == "c04") "k7" else null })
         assertEquals(listOf("c04", "k7"), ev.single { it.kind == "fan_protest" }.keys)
         assertEquals(listOf("c01"), ev.single { it.kind == "fan_party" }.keys)
+        // Without the board's targets the middle of the table is the target: 2.5 of 4, so the second is a little above it.
+        val plain = book(4)
+        close(plain, 3)
+        assertEquals(ClubEconomy.moodAfter(50, 0.375, 25), plain.world!!.clubs.getValue("c01").mood)
+        assertEquals(ClubEconomy.moodAfter(50, 0.125, 0), plain.world!!.clubs.getValue("c02").mood)
+        assertEquals(ClubEconomy.moodAfter(50, -0.125, 0), plain.world!!.clubs.getValue("c03").mood)
         // The checkpoint's update.
         assertTrue(ClubEconomy.mood(book, "c02", 0.25, 0))
         assertEquals(ClubEconomy.moodAfter(ClubEconomy.moodAfter(50, 0.0, 10), 0.25, 0), w.clubs.getValue("c02").mood)
@@ -146,7 +152,7 @@ class FansStadiumTest {
         assertEquals(275, st.balance)
         assertEquals('E', r.stadiums.single().kind)
         val ev = r.events({ 0 }, { 0 }, { null }).single { it.kind == "stadium_project" }
-        assertEquals(listOf("10000", "12500", "2", "50"), ev.args)
+        assertEquals(listOf("10000", "12500", "2", "50", "E"), ev.args)
         // Built through seasons 4 and 5: nothing more to pay after 4; it opens after 5 with the rest paid.
         close(book, 4)
         assertEquals(project, book.life("c01")!!.stadium.project)
@@ -158,7 +164,7 @@ class FansStadiumTest {
         assertEquals(name, stadium.name)
         assertEquals(25, book.life("c01")!!.last!!.building)
         assertEquals('O', opened.stadiums.single().kind)
-        assertEquals(listOf(name, "12500"), opened.events({ 0 }, { 0 }, { null }).single { it.kind == "stadium_open" }.args)
+        assertEquals(listOf(name, "12500", "E"), opened.events({ 0 }, { 0 }, { null }).single { it.kind == "stadium_open" }.args)
         // No expansion without the money: cost + half the income.
         val poor = book(1, balance = 99, fans = 40_000)
         poor.world!!.clubs.getValue("c01").apply { training = 5; academy = 5 }
@@ -174,6 +180,7 @@ class FansStadiumTest {
         val r = close(book, 3)
         assertEquals(StadiumProject(ClubEconomy.NEW_STADIUM, 15_000, 8, 450, 180), book.life("c01")!!.stadium.project)
         assertEquals('N', r.stadiums.single().kind)
+        assertEquals(listOf("5000", "15000", "4", "450", "N"), r.events({ 0 }, { 0 }, { null }).single { it.kind == "stadium_project" }.args, "a new stadium, not an expansion")
         for (s in 4..6) {
             close(book, s)
             assertEquals(68, book.life("c01")!!.last!!.building, "season $s")
@@ -188,6 +195,7 @@ class FansStadiumTest {
         assertEquals("$naming 아레나", stadium.name)
         assertTrue(naming != book.life("c01")!!.sponsor?.name)
         assertEquals('O', opened.stadiums.single().kind)
+        assertEquals(listOf(stadium.name, "15000", "N"), opened.events({ 0 }, { 0 }, { null }).single { it.kind == "stadium_open" }.args)
         // The naming rights pay 0.5 × λ × capacity / 20,000 억 a season on top of the main deal.
         assertEquals(4, Sponsors.naming(1.0, 15_000))
         val plan = Eco.plan(8, listOf("KR" to listOf("a0", "b0")))

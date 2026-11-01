@@ -20,10 +20,11 @@ data class RankLine(val season: Int, val value: List<String>, val results: List<
  * rankings' top 10 of each close (`rk`). The season logic is [ClubEconomy]'s (and [Sponsors]',
  * ClubRankings.kt's).
  *
- * Two facts ride on these lines beyond P1's types: each `ah` season's result points
- * ([results], a sixth field `:points×10`; [ClubRanks]) and whether the club-life step of the last
- * accounts' season ran ([lived], an 18th field `1` on the `ac` line), the step's guard. Older
- * readers stop before them.
+ * Two facts ride on these lines beyond P1's types: each season's result points ([results];
+ * [ClubRanks]) as a sixth field `:points×10` of its `ah` season, and for the seasons older than the
+ * money history keeps (3 below 500 members, the ranking counts 5) as a last token `season:points,…`
+ * of the `ah` line; and whether the club-life step of the last accounts' season ran ([lived], an
+ * 18th field `1` on the `ac` line), the step's guard. Older readers stop before them.
  */
 class ClubEconomyBook {
     internal val owners = TreeMap<String, Owner>(ClubBook.ID_ORDER)
@@ -33,7 +34,7 @@ class ClubEconomyBook {
     internal val years = TreeMap<String, List<ClubYear>>(ClubBook.ID_ORDER)
     internal val ranks = TreeMap<Int, RankLine>()
 
-    /** Club → season → result points × 10 ([ClubRanks.resultPoints]), for the seasons of its [years]. */
+    /** Club → season → result points × 10 ([ClubRanks.resultPoints]), the newest [ClubRanks.SEASONS] seasons. */
     internal val results = TreeMap<String, TreeMap<Int, Int>>(ClubBook.ID_ORDER)
 
     /** Clubs whose club-life step ([ClubEconomy.life]) ran for the season of their last [accounts]. */
@@ -88,7 +89,11 @@ class ClubEconomyBook {
                     ys.joinToString(";") { y ->
                         "${y.season}:${y.balance}:${y.income}:${y.fans}:${y.place}" + (points?.get(y.season)?.let { ":$it" } ?: "")
                     },
-                ).append('\n')
+                )
+                val seasons = ys.mapTo(HashSet()) { it.season }
+                val older = points?.entries?.filter { it.key !in seasons }.orEmpty()
+                if (older.isNotEmpty()) out.append(' ').append(older.reversed().joinToString(",") { "${it.key}:${it.value}" })
+                out.append('\n')
             }
         }) { w, f ->
             val points = TreeMap<Int, Int>()
@@ -97,6 +102,7 @@ class ClubEconomyBook {
                 p.getOrNull(5)?.toIntOrNull()?.let { points[p[0].toInt()] = it }
                 ClubYear(p[0].toInt(), p[1].toInt(), p[2].toInt(), p[3].toInt(), p[4].toInt())
             }
+            for (e in LineParts.items(f.getOrNull(3) ?: "-")) points[e.substringBefore(':').toInt()] = e.substringAfter(':').toInt()
             if (points.isEmpty()) w.economy.results.remove(f[1]) else w.economy.results[f[1]] = points
             true
         }
@@ -169,12 +175,19 @@ data class ClubSeat(val league: String, val place: Int, val clubs: Int) {
 }
 
 /**
- * The accounts of [season] (the `club_accounts` news, design ENG 11.2): every club whose accounts of
- * that season the book holds, by id. Rebuilt from the book whenever asked ([ClubEconomy.report]).
+ * The accounts of [season] (the `club_accounts` news, design ENG 11.2): every club of the book whose
+ * accounts of that season it holds, by id, with each one's operating income ([incomes],
+ * [ClubEconomy.operating] with its owner; the recurring income when not given). Rebuilt from the book
+ * whenever asked ([ClubEconomy.report]).
  */
-data class AccountsReport(val season: Int, val clubs: List<Pair<String, Accounts>>) {
-    /** The club with the largest operating income ([ClubEconomy.operating]) and that income. */
-    val richest: Pair<String, Int>? get() = clubs.map { it.first to ClubEconomy.operating(it.second) }.maxWithOrNull(compareBy<Pair<String, Int>> { it.second }.thenComparing({ it.first }, ClubBook.ID_ORDER.reversed()))
+data class AccountsReport(
+    val season: Int,
+    val clubs: List<Pair<String, Accounts>>,
+    val incomes: Map<String, Int> = clubs.associate { it.first to ClubEconomy.recurring(it.second) },
+) {
+    /** The club with the largest operating income and that income. */
+    val richest: Pair<String, Int>? get() = clubs.map { it.first to (incomes[it.first] ?: ClubEconomy.recurring(it.second)) }
+        .maxWithOrNull(compareBy<Pair<String, Int>> { it.second }.thenComparing({ it.first }, ClubBook.ID_ORDER.reversed()))
 
     /** The club with the largest loss of the season (a negative net) and the loss, positive; null when no club lost money. */
     val loss: Pair<String, Int>? get() = clubs.filter { it.second.net < 0 }.map { it.first to -it.second.net }
@@ -199,8 +212,11 @@ data class SponsorChange(val club: String, val sponsor: Sponsor, val renewed: Bo
 /** A new owner of [club]: [owner] after [previous]; [reason] W the old 재벌 walked out, Q a quiet takeover, A an arc's takeover, R a rescue from administration. */
 data class OwnerChange(val club: String, val owner: Owner, val previous: Owner, val reason: Char)
 
-/** A stadium step of [club]: [kind] E an expansion started, N a new stadium started, O a project opened; [from] the capacity before; [stadium] after. */
-data class StadiumChange(val club: String, val kind: Char, val from: Int, val stadium: Stadium)
+/**
+ * A stadium step of [club]: [kind] E an expansion started, N a new stadium started, O a project
+ * opened ([opened]: the kind of that project, E or N); [from] the capacity before; [stadium] after.
+ */
+data class StadiumChange(val club: String, val kind: Char, val from: Int, val stadium: Stadium, val opened: Char? = null)
 
 /** A facility level change of [club]: [kind] 'T' training or 'A' academy, to [level]; [up] an upgrade, else a level lost after two seasons in trouble. */
 data class FacilityChange(val club: String, val kind: Char, val level: Int, val up: Boolean = true)
@@ -232,7 +248,8 @@ data class LifeReport(
      * [club] (balance) ≤ 2, `administration` [club] ≤ 1, `rescue` [club] (owner), `takeover` [club]
      * (owner, type code), `owner_exit` [club] (owner), `sponsor_deal` [club] (sponsor, value, seasons,
      * record 0/1) ≤ 1, `sponsor_exit` [club] (sponsor, mid 0/1) ≤ 1, `stadium_project` [club] (from, to,
-     * seasons, cost) ≤ 1, `stadium_open` [club] (name, capacity) ≤ 1, `fan_protest` [club, coach] (mood)
+     * seasons, cost, kind E 증축 / N 신구장) ≤ 1, `stadium_open` [club] (name, capacity, kind E an
+     * expansion finished / N a new stadium) ≤ 1, `fan_protest` [club, coach] (mood)
      * ≤ 2, `fan_party` [club] ≤ 1, and one `club_world_digest` [≤ 6 clubs] (sponsor deals, building
      * projects, facility investments). [balance], [mood] and [coach] read the book as it is now.
      * `club_folded` is the dissolving step's.
@@ -257,9 +274,13 @@ data class LifeReport(
         left.firstOrNull()?.let { x -> event("sponsor_exit", listOf(x.club), x.sponsor.name, LineParts.bit(x.mid)) }
         stadiums.firstOrNull { it.kind != 'O' }?.let { p ->
             val project = p.stadium.project
-            if (project != null) event("stadium_project", listOf(p.club), p.from.toString(), project.target.toString(), (project.opens - season - 1).toString(), project.cost.toString())
+            if (project != null) {
+                event("stadium_project", listOf(p.club), p.from.toString(), project.target.toString(), (project.opens - season - 1).toString(), project.cost.toString(), project.kind.toString())
+            }
         }
-        stadiums.firstOrNull { it.kind == 'O' }?.let { o -> event("stadium_open", listOf(o.club), o.stadium.name, o.stadium.capacity.toString()) }
+        stadiums.firstOrNull { it.kind == 'O' }?.let { o ->
+            event("stadium_open", listOf(o.club), o.stadium.name, o.stadium.capacity.toString(), (o.opened ?: ClubEconomy.EXPAND).toString())
+        }
         for (c in protests.take(2)) event("fan_protest", listOfNotNull(c, coach(c)), mood(c).toString())
         for (c in parties.take(1)) event("fan_party", listOf(c))
         val ns = signed.size
@@ -464,8 +485,15 @@ object ClubEconomy {
     /** Recurring income (the spending cap's, ENG 1.5): TV, prize, international, sponsor, match-day and solidarity money; no sales, no owner money. */
     fun recurring(a: Accounts): Int = a.tv + a.prize + a.intl + a.sponsor + a.matchday + a.solidarity
 
-    /** Operating income: [recurring] and the owner's money paid in (no sales): what the health, the trouble rules and the wage caps measure against. */
-    fun operating(a: Accounts): Int = recurring(a) + maxOf(0, a.owner)
+    /**
+     * Operating income: [recurring] and the owner's money paid in, at most what [owner]'s type pays a
+     * season ([ownerMoney] on the accounts' wages), and no sales: what the health, the trouble rules,
+     * the wage caps and the richest clubs measure against. A rescue's write-off and an investor's
+     * injection are booked as owner money too ([MoneyItem.OWNER]) but are one-offs, so they do not
+     * count: a club just rescued from 법정관리 is no richer for it.
+     */
+    fun operating(a: Accounts, owner: Owner): Int =
+        recurring(a) + minOf(maxOf(0, a.owner), maxOf(0, ownerMoney(owner, a.wages, recurring(a), 0)))
 
     /** Seasons of money history (`ah`) a book of [members] keeps: 5, 3 below 500 members. */
     fun yearsKept(members: Int): Int = if (members < 500) 3 else 5
@@ -514,7 +542,9 @@ object ClubEconomy {
 
     /**
      * The transfer budget (이적 예산): `min(max(0, balance − 0.25 × wages) × (0.4 + 0.1 × ambition) +
-     * 0.8 × [sales] this window + [injection], [cap] − [paid] this window)`, never below 0.
+     * 0.8 × [sales] this window + [injection], [cap] − [paid] this window)`, never below 0. [balance]
+     * leaves out this window's [sales] and the [injection], which count as written (the fees already
+     * paid are out of it).
      */
     fun budget(balance: Int, wages: Int, ambition: Int, sales: Int = 0, injection: Int = 0, cap: Int = Int.MAX_VALUE, paid: Int = 0): Int {
         val own = maxOf(0.0, balance - 0.25 * wages) * (0.4 + 0.1 * ambition)
@@ -714,11 +744,12 @@ object ClubEconomy {
 
     /**
      * Club [id]'s income for its health, the trouble rules and the wage cap: the operating income of its
-     * last accounts, else the newest money history's (a migrated club before its first accounts), else 0.
+     * last accounts with its owner now, else the newest money history's (a migrated club before its
+     * first accounts), else 0.
      */
     fun income(book: ClubBook, id: String): Int {
         val e = book.world?.economy ?: return 0
-        e.accounts[id]?.let { return operating(it) }
+        e.accounts[id]?.let { return operating(it, e.owners[id] ?: Owner.NONE) }
         return e.years[id]?.firstOrNull()?.income ?: 0
     }
 
@@ -766,9 +797,10 @@ object ClubEconomy {
 
     /**
      * Club [id]'s transfer budget (이적 예산, ENG 1.5) under FFP level [ffp], having had [sales] and
-     * paid [paid] in fees this window, with an investor's [injection]: [budget] (× 0.7 under strict
-     * FFP, plus [borrowing] with FFP off) within the spending cap; 0 under an embargo or without a club
-     * world state.
+     * paid [paid] in fees this window, with an investor's [injection] this off-season: [budget] (× 0.7
+     * under strict FFP, plus [borrowing] with FFP off) within the spending cap; 0 under an embargo or
+     * without a club world state. The sales ([transfer]) and the injection ([life]) are in the balance
+     * already, so they are taken out of it before the share: a sale of x adds 0.8 × x, not more.
      */
     fun transferBudget(book: ClubBook, id: String, ffp: Int = 1, sales: Int = 0, paid: Int = 0, injection: Int = 0): Int {
         val w = book.world ?: return 0
@@ -777,7 +809,7 @@ object ClubEconomy {
         val owner = w.economy.owners[id] ?: Owner.NONE
         val income = income(book, id)
         val cap = spendCap(book, id, injection > 0)
-        val own = budget(st.balance, wageBill(book, id), owner.ambition, sales, injection)
+        val own = budget(st.balance - maxOf(0, sales) - maxOf(0, injection), wageBill(book, id), owner.ambition, sales, injection)
         val scaled = if (ffp >= FFP_STRICT) Math.round(own * FFP_STRICT_BUDGET) else own.toLong() + borrowing(owner, income, ffp)
         return minOf(scaled, cap.toLong() - paid).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
     }
@@ -875,9 +907,16 @@ object ClubEconomy {
 
     // ---- step 2: the season's accounts --------------------------------------------------------------
 
-    /** The accounts of [season] the book holds (rebuilt news). */
-    fun report(book: ClubBook, season: Int): AccountsReport =
-        AccountsReport(season, book.world?.economy?.accounts?.entries?.filter { it.value.season == season }?.map { it.key to it.value }.orEmpty())
+    /**
+     * The accounts of [season] the book holds (rebuilt news): its clubs' (a club dissolved since keeps
+     * its state but is left out, so the news rebuilt after the off-season's dissolutions names only
+     * clubs that exist), with their operating incomes.
+     */
+    fun report(book: ClubBook, season: Int): AccountsReport {
+        val e = book.world?.economy ?: return AccountsReport(season, emptyList())
+        val clubs = e.accounts.entries.filter { it.value.season == season && book.club(it.key) != null }.map { it.key to it.value }
+        return AccountsReport(season, clubs, clubs.associate { (id, a) -> id to operating(a, e.owners[id] ?: Owner.NONE) })
+    }
 
     /**
      * The accounts of the season [closing] closed (design ENG 1.2-1.3, the club off-season's step 2),
@@ -890,8 +929,9 @@ object ClubEconomy {
      * the club rankings), and each league's ω pulled toward [LeagueEconomy.WAGE_SHARE] of its revenue.
      * [winterSales] and [winterBuys] are the winter window's fees per club, which moved the balances
      * then: they show in the items but not again in the balance. The window steps of the off-season
-     * add their fees through [charge]. A club whose accounts of the season exist is left as it is, so
-     * a repeat returns the same report and changes nothing.
+     * add their fees through [charge]. The step's guard is the season's accounts: once a club has
+     * them, a repeat returns the same report and changes nothing (also after the off-season founded a
+     * club, [newClub], which has none: it played no part in the season, and ω moves once).
      */
     fun accounts(
         book: ClubBook,
@@ -908,7 +948,8 @@ object ClubEconomy {
         val arcs = input.arcs
         val season = closing.league
         val seats = seats(tables)
-        val todo = w.clubs.keys.filter { id -> e.accounts[id]?.season != s && book.club(id) != null }
+        if (w.clubs.keys.any { e.accounts[it]?.season == s }) return report(book, s)
+        val todo = w.clubs.keys.filter { book.club(it) != null }
         if (todo.isEmpty()) return report(book, s)
         val doing = todo.toHashSet()
         // International money and points (the club rankings' results), and the honours' prize money.
@@ -981,10 +1022,11 @@ object ClubEconomy {
             val rec = recurring(a)
             // Seasons from s on belong to an abandoned timeline (a league that started over): they go.
             e.years[id] = (listOf(ClubYear(s, st.balance, rec, st.fans, seat?.place ?: 0)) + e.years[id].orEmpty().filter { it.season < s }).take(keep)
+            // The 결과 순위's 5 seasons, also where the money history keeps 3.
             val pts = e.results.getOrPut(id) { TreeMap() }
+            pts.keys.removeIf { it > s }
             pts[s] = Math.round(10 * ClubRanks.resultPoints(seat?.place ?: 0, lambda, points[id] ?: 0)).toInt()
-            val kept = e.years.getValue(id).mapTo(HashSet()) { it.season }
-            pts.keys.retainAll(kept)
+            while (pts.size > ClubRanks.SEASONS) pts.pollFirstEntry()
             revenue.merge(league, rec.toLong(), Long::plus)
             bills.merge(league, wg.toLong(), Long::plus)
         }
@@ -1050,7 +1092,8 @@ object ClubEconomy {
             val title = seat?.place == 1
             val base = fanBase(economy.lambdaOf(leagueOf(id)), cityIndex(club))
             st.fans = grow(st.fans, base, seat?.perf ?: 0.0, title, majors[id] ?: 0, stars[id] ?: 0, seat != null && seat.clubs > 1 && seat.place == seat.clubs, crisis)
-            val gap = seat?.let { gap(extra.target(id) ?: (it.clubs + 1) / 2, it.place, it.clubs) } ?: 0.0
+            // Without a board's target, the middle of the table ((C + 1) / 2, a half place for an even C): the place score.
+            val gap = if (seat == null) 0.0 else extra.target(id)?.let { gap(it, seat.place, seat.clubs) } ?: seat.perf
             st.mood = moodAfter(st.mood, gap, (if (title) TITLE_MOOD else 0) + extra.moodEvents(id) + (arcs.moodShocks[id] ?: 0))
             e.years[id]?.let { ys -> if (ys.firstOrNull()?.season == s) e.years[id] = listOf(ys.first().copy(fans = st.fans)) + ys.drop(1) }
             if (st.mood < PROTEST) protests += id
@@ -1085,8 +1128,9 @@ object ClubEconomy {
                         signed += SponsorChange(id, sign(1.0, deal), renewed = true)
                     } else {
                         left += SponsorChange(id, deal)
-                        taken -= deal.name
+                        // The new sponsor is another company: the old name is free only after the draw.
                         signed += SponsorChange(id, sign(Sponsors.REPLACEMENT))
+                        taken -= deal.name
                     }
                 }
                 (crisis || st.mood < Sponsors.MOOD_FLOOR) && rng.nextDouble() < Sponsors.WALK_MID * arcs.walkoutFactor -> {
@@ -1145,7 +1189,7 @@ object ClubEconomy {
                     val naming = if (project.kind == NEW_STADIUM) Sponsors.namingName(club.nation, book.seed, number(id), s, taken).also { taken += it } else stadium.naming
                     val opened = Stadium(if (project.kind == NEW_STADIUM) "$naming 아레나" else stadium.name, project.target, null, naming)
                     e.stadiums[id] = opened
-                    stadiums += StadiumChange(id, 'O', stadium.capacity, opened)
+                    stadiums += StadiumChange(id, 'O', stadium.capacity, opened, project.kind)
                 } else if (project.kind == NEW_STADIUM) {
                     val due = minOf(project.cost - project.paid, Math.round(NEW_INSTALMENT * project.cost).toInt())
                     charge(book, id, MoneyItem.BUILDING, due, s)
@@ -1319,6 +1363,13 @@ object ClubEconomy {
         st.mood = 50
         st.training = 1
         st.academy = 1
+        // An id reused from a club dissolved long ago (ClubBook's next id) starts clean of its money.
+        st.trouble = 0
+        st.admin = 0
+        st.deduction = 0
+        e.accounts.remove(id)
+        e.results.remove(id)
+        e.lived -= id
         e.stadiums[id] = Stadium(stadiumName(book.seed, club), MIN_SEATS, null, null)
         val rng = rng(book.seed, OWNER_SALT, n.toLong() + season)
         val type = if (Math.floorMod(DiceStream.mix(book.seed, OWNER_SALT, 2L, n.toLong()), 100L) < 64L) OwnerType.LOCAL else OwnerType.FANS

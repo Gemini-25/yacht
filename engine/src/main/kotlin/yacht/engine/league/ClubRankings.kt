@@ -15,6 +15,9 @@ object ClubRanks {
     const val TOP = 10
     const val KEEP = 30
 
+    /** The seasons the results score adds (최근 5시즌). */
+    const val SEASONS = 5
+
     /** Points of club-table place [place] (1 = champion); 0 for none. */
     fun placePoints(place: Int): Int = if (place <= 0) 0 else PLACE_POINTS.getOrNull(place - 1) ?: PLACE_REST
 
@@ -25,7 +28,7 @@ object ClubRanks {
      */
     fun resultPoints(place: Int, lambda: Double, intl: Int): Double = placePoints(place) * lambda + maxOf(0, intl) / 2.0
 
-    /** Club [id]'s results score: its result points over the seasons its money history keeps (5; 3 below 500 members). */
+    /** Club [id]'s results score: its result points over its newest [SEASONS] seasons of accounts. */
     fun results(book: ClubBook, id: String): Double = book.world?.economy?.results?.get(id)?.values?.sum()?.div(10.0) ?: 0.0
 
     /**

@@ -79,12 +79,22 @@ class ClubRankingsTest {
         assertEquals(7 * 1.6 + 10 * 1.6, ClubRanks.results(book, "c02"), 1e-9)
         val r = book.rankings(::value)
         assertEquals(listOf("c01", "c02", "c03"), r.results.take(3).map { it.first })
-        // Kept as the money history: 3 seasons below 500 members, so season 1 leaves after season 4; the `ah` line holds them.
-        for (s in 3..4) ClubEconomy.accounts(book, Eco.plan(s, listOf("KR" to members)), Eco.input(book, economy), mapOf("KR" to Eco.table("KR", ids.drop(2) + listOf("c01", "c02"))))
-        assertEquals(7 * 1.6 + 1.6 + 1.6, ClubRanks.results(book, "c01"), 1e-9)
+        // Five seasons count (최근 5시즌), also where the money history keeps 3 (below 500 members): season 1 leaves after season 6.
+        for (s in 3..5) ClubEconomy.accounts(book, Eco.plan(s, listOf("KR" to members)), Eco.input(book, economy), mapOf("KR" to Eco.table("KR", ids.drop(2) + listOf("c01", "c02"))))
+        assertEquals(listOf(5, 4, 3), book.life("c01")!!.history.map { it.season })
+        assertEquals(10 * 1.6 + 3 + 7 * 1.6 + 3 * 1.6, ClubRanks.results(book, "c01"), 1e-9)
+        val ah = book.encode().lines().first { it.startsWith("ah c01 ") }.split(' ')
+        assertTrue(ah[2].split(';').all { it.split(':').size == 6 })
+        assertEquals("2:112,1:190", ah[3], "the seasons older than the money history")
         val back = ClubBook.decode(book.encode())
         assertEquals(ClubRanks.results(book, "c01"), ClubRanks.results(back, "c01"))
-        assertTrue(book.encode().lines().first { it.startsWith("ah c01 ") }.split(' ')[2].split(';').all { it.split(':').size == 6 })
+        assertEquals(book.encode(), back.encode())
+        ClubEconomy.accounts(book, Eco.plan(6, listOf("KR" to members)), Eco.input(book, economy), mapOf("KR" to Eco.table("KR", ids.drop(2) + listOf("c01", "c02"))))
+        assertEquals(7 * 1.6 + 4 * 1.6, ClubRanks.results(book, "c01"), 1e-9)
+        assertEquals(4, book.encode().lines().first { it.startsWith("ah c01 ") }.split(' ').size, "season 2 still counts, season 1 is gone")
+        // A league that started over drops the seasons of the abandoned timeline.
+        ClubEconomy.accounts(book, Eco.plan(4, listOf("KR" to members)), Eco.input(book, economy), mapOf("KR" to Eco.table("KR", ids)))
+        assertEquals(10 * 1.6 + 7 * 1.6 + 1.6, ClubRanks.results(book, "c01"), 1e-9)
     }
 
     @Test

@@ -326,6 +326,27 @@ class EconomyTest {
     }
 
     @Test
+    fun aSaleAddsEightyPercentOfItsFeeToTheBudget() {
+        val book = Eco.world(Eco.book(listOf(Eco.Spec("c01", "KR", listOf("a", "b")))), balance = 200)
+        Eco.terms(book, "a", 60)
+        Eco.terms(book, "b", 60)
+        val e = book.world!!.economy
+        e.owners["c01"] = Owner(OwnerType.TYCOON, "", 4, 1, 1, 0)
+        Eco.closed(book, "c01", 3, 1_000, 120)
+        assertEquals(136, book.transferBudget("c01"), "(200 − 30) × 0.8")
+        // The fee is in the balance once it is booked; the budget counts it at 0.8, not at 0.8 + the share.
+        ClubEconomy.transfer(book, null, "c01", 50, 3)
+        assertEquals(250, book.life("c01")!!.balance)
+        assertEquals(136 + 40, ClubEconomy.transferBudget(book, "c01", sales = 50))
+        // A fee paid comes out of the balance (and of the spending cap).
+        ClubEconomy.transfer(book, "c01", null, 30, 3)
+        assertEquals(Math.round((220 - 50 - 30) * 0.8).toInt() + 40, ClubEconomy.transferBudget(book, "c01", sales = 50, paid = 30))
+        // An investor's injection, booked in the club-life step, counts once and in full.
+        ClubEconomy.charge(book, "c01", MoneyItem.OWNER, 100, 3)
+        assertEquals(Math.round((320 - 150 - 30) * 0.8).toInt() + 40 + 100, ClubEconomy.transferBudget(book, "c01", sales = 50, paid = 30, injection = 100))
+    }
+
+    @Test
     fun clubValueAndHealthGrades() {
         // Squad + 1.5억 per 1,000 seats + (training + academy) × 2.5억 + 5억 per 10,000 fans + balance.
         assertEquals(500 + 180 + 125 + 125 - 40, ClubEconomy.clubValue(500, 12_000, 3, 2, 25_000, -40))
@@ -375,6 +396,24 @@ class EconomyTest {
         assertEquals(a.income.toString(), ev.args[0])
         // The book reads back with every number.
         assertEquals(text, ClubBook.decode(text).encode())
+        // A club dissolved since keeps its state and accounts, but the rebuilt news leaves it out.
+        book.world!!.state("c50").balance = -999
+        book.world!!.economy.accounts["c50"] = Accounts(1, 900, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -999)
+        assertEquals(again, ClubEconomy.report(book, 1))
+    }
+
+    @Test
+    fun theAccountsAreMadeOnceAlsoAfterAClubIsFounded() {
+        val (book, _) = workedExample()
+        val grown = ClubBook.decode(book.encode().replace("club c02 ", "club c07 KR 대구 c07 대구%20c07 0 ffc62828 ffffffff 가 100 0 2 -\nclub c02 "))
+        assertTrue(ClubEconomy.newClub(grown, "c07", 1, LeagueEconomy.NEUTRAL))
+        val text = grown.encode()
+        val plan = Eco.plan(1, listOf("KR" to (1..22).map { "k$it" }, "VN" to listOf("v1", "v2", "v3", "v4")))
+        val tables = mapOf("KR" to Eco.table("KR", listOf("c01", "c02", "c03", "c04", "c05", "c07")), "VN" to Eco.table("VN", listOf("c06")))
+        val again = ClubEconomy.accounts(grown, plan, Eco.input(grown, Eco.economy(mapOf("KR" to 2, "VN" to 20))), tables)
+        assertEquals(text, grown.encode(), "no accounts of a season the new club did not play, and ω moves once")
+        assertNull(grown.life("c07")!!.last)
+        assertEquals(ClubEconomy.report(grown, 1), again)
     }
 
     @Test
@@ -538,8 +577,13 @@ class EconomyTest {
         w.economy.accounts["c01"] = Accounts(3, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100)
         w.economy.accounts["c02"] = Accounts(3, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100)
         val grown = ClubBook.decode(book.encode().replace("club c02 ", "club c04 KR 대구 c04 대구%20c04 0 ffc62828 ffffffff 가 100 0 4 -\nclub c02 "))
+        // The id was a club's dissolved long ago, whose state is still there: the new club starts clean of it.
+        grown.world!!.state("c04").apply { trouble = 3; admin = 2; deduction = 10; balance = -500 }
+        grown.world!!.economy.accounts["c04"] = Accounts(3, 10, 0, 0, 0, 0, 0, 0, 0, 90, 0, 0, 0, 0, -500)
         assertTrue(ClubEconomy.newClub(grown, "c04", 3, LeagueEconomy.NEUTRAL))
         val st = grown.world!!.clubs.getValue("c04")
+        assertEquals(listOf(0, 0, 0), listOf(st.trouble, st.admin, st.deduction))
+        assertNull(grown.life("c04")!!.last)
         assertEquals(50, st.balance, "half of the median of 100 and 60 (the upper middle)")
         assertEquals(listOf(1, 1, 50), listOf(st.training, st.academy, st.mood))
         assertEquals(Math.round(0.6 * ClubEconomy.fanBase(1.0, ClubEconomy.cityIndex(grown.club("c04")!!))).toInt(), st.fans)
