@@ -493,13 +493,19 @@ class MetaTest {
         val plan = season()
         val titles = listOf(Honour(4, "L0.KR", "k1"), Honour(4, "L0.JP", "j2"))
         val clubs = mapOf("k1" to "c01", "k2" to "c01", "k5" to "c01", "j1" to "c02", "j6" to "c02")
-        val recipes = mapOf("k1" to "hunter", "k2" to "purist", "j1" to "timid", "j2" to "fourkind", "j6" to "small")
+        val given = mapOf("k1" to "hunter", "k2" to "purist", "j1" to "timid", "j2" to "fourkind", "j6" to "small")
+        val recipes = HashMap(given)
         val im = Imitation.of(plan, titles, ::rating, clubs::get) { recipes[it] }
+        // Read when it is built: the KR champion retiring at the close (gone from the roster before
+        // the imitations) and a model's rule-learning during growth change none of the models.
+        recipes.remove("k1")
+        recipes["j6"] = "ev"
         // The lower half of each table of 6 by points: the three last (the higher keys lost every time).
         assertEquals(setOf("k4", "k5", "k6", "j4", "j5", "j6"), (kr + jp).filter(im.bottomHalf).toSet())
         // The club's best-rated other member; the league champion (its L0 title, not the table's top when they differ).
         fun bestOther(k: String) = clubs.keys.filter { clubs[it] == clubs[k] && it != k }.maxBy { rating(it) }
-        for (k in listOf("k1", "k2", "k5", "j1", "j6")) assertEquals(recipes[bestOther(k)], im.clubModel(k), k)
+        for (k in listOf("k1", "k2", "k5", "j1", "j6")) assertEquals(given[bestOther(k)], im.clubModel(k), k)
+        assertEquals("small", im.clubModel("j1"), "j6's main style as the season ended")
         assertEquals("hunter", im.championModel("k6"))
         assertNull(im.championModel("k1"), "the champion is no model of itself")
         assertEquals("fourkind", im.championModel("j5"))

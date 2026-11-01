@@ -130,6 +130,23 @@ class EraTest {
     }
 
     @Test
+    fun closesHoldInARowOnly() {
+        // 보너스파 is the candidate at closes 1, 3 and 4; season 2 has no family line (its measure
+        // failed, or the league was not national then), so the meta skipped it: 1 and 3 are not
+        // two closes in a row, and the era begins with 4.
+        val fms = mapOf(1 to fm(1, all9(BONUS)), 3 to fm(3, all9(BONUS)), 4 to fm(4, all9(BONUS)))
+        val world = WorldBook()
+        Meta.close(world, fms, 1)
+        assertTrue(Meta.close(world, fms, 2).isEmpty())
+        assertEquals(1, world.metaSeason)
+        assertTrue(Meta.close(world, fms, 3).isEmpty())
+        assertEquals(EraCandidate(BONUS, 1), world.meta.candidate)
+        assertTrue(world.meta.eras.isEmpty())
+        assertEquals(listOf("era_begins"), Meta.close(world, fms, 4).map { it.kind })
+        assertEquals(listOf(Era(1, BONUS, 4, 0, world.meta.era!!.peak)), world.meta.eras)
+    }
+
+    @Test
     fun theStepsOfTheEraMachine() {
         fun score(f: StyleFamily, x: Double) = Meta.EraScore(f, 9, 27, 0.1, x)
         val book = MetaBook()

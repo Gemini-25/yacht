@@ -368,7 +368,9 @@ class Imitation(
          * The imitation's inputs from the closing season: the division tables (the bottom half:
          * the lower ⌊n/2⌋ places), each club's best-rated member by [rating] among the season's
          * members ([clubOf]), and each league's champion (its `L0` title in [titles], else the top
-         * of its 1부); [recipe] is a player's primary recipe (null without genes), read now.
+         * of its 1부); [recipe] is a player's primary recipe (null without genes). Everything is
+         * read here, once: a model who retires at this close, or whose rule-learning changes its
+         * main style while the season evolves, is still the model it was when the season ended.
          */
         fun of(plan: SeasonPlan, titles: List<Honour>, rating: (String) -> Double, clubOf: (String) -> String?, recipe: (String) -> String?): Imitation {
             val season = plan.league
@@ -377,12 +379,14 @@ class Imitation(
                 val table = season.table(d)
                 for (s in table.drop(table.size - table.size / 2)) bottom += s.key
             }
+            val club = HashMap<String, String>()
+            for (k in season.standings.keys) clubOf(k)?.let { club[k] = it }
             // Each club's two best-rated members, so every member's model is another one.
             val best = HashMap<String, MutableList<String>>()
             val ranked = season.standings.keys.filter { !rating(it).isNaN() }
                 .sortedWith(compareByDescending<String> { rating(it) }.thenBy { it })
             for (k in ranked) {
-                val c = clubOf(k) ?: continue
+                val c = club[k] ?: continue
                 val top = best.getOrPut(c) { ArrayList(2) }
                 if (top.size < 2) top += k
             }
@@ -392,11 +396,11 @@ class Imitation(
                 (h?.key ?: season.table(lg.top).firstOrNull()?.key)?.let { champion[lg.id] = it }
             }
             val recipes = HashMap<String, String?>()
-            fun recipeOf(k: String) = recipes.getOrPut(k) { recipe(k) }
+            for (k in best.values.flatten() + champion.values) if (k !in recipes) recipes[k] = recipe(k)
             return Imitation(
                 bottomHalf = { it in bottom },
-                clubModel = { k -> clubOf(k)?.let { best[it] }?.firstOrNull { it != k }?.let(::recipeOf) },
-                championModel = { k -> season.leagueOf(k)?.id?.let { champion[it] }?.takeIf { it != k }?.let(::recipeOf) },
+                clubModel = { k -> club[k]?.let { best[it] }?.firstOrNull { it != k }?.let { recipes[it] } },
+                championModel = { k -> season.leagueOf(k)?.id?.let { champion[it] }?.takeIf { it != k }?.let { recipes[it] } },
             )
         }
     }
@@ -693,10 +697,11 @@ object Meta {
      * era's X for its peak): the candidate's closes held count on (or start at 1); a family that
      * has held [ERA_BEGIN] closes begins its era with season [season] (the era going on ends with
      * the season before); [ERA_NONE] closes of none end a family's era and 춘추전국 begins. No era
-     * begins from nothing but a family's.
+     * begins from nothing but a family's. Closes are held in a row only: when the meta's last
+     * close [last] was not the season before (a season it could not measure), the count starts again.
      */
-    internal fun stepEras(book: MetaBook, season: Int, c: EraScore?, scores: List<EraScore>) {
-        val prev = book.candidate
+    internal fun stepEras(book: MetaBook, season: Int, c: EraScore?, scores: List<EraScore>, last: Int = season - 1) {
+        val prev = book.candidate?.takeIf { last == season - 1 }
         val held = if (prev != null && prev.family == c?.family) prev.held + 1 else 1
         book.candidate = EraCandidate(c?.family, held)
         val i = book.eraList.indexOfLast { it.to == 0 }
@@ -738,7 +743,7 @@ object Meta {
         book.shareLines[season] = shares(fs)
         while (book.shareLines.size > SHARES_KEPT) book.shareLines.pollFirstEntry()
         val scores = scores(families, season)
-        stepEras(book, season, candidate(families, season), scores)
+        stepEras(book, season, candidate(families, season), scores, world.metaSeason)
         world.metaSeason = season
         return events(book, families, season)
     }
